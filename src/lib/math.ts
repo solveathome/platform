@@ -10,6 +10,6 @@ export function protectMath(src: string): { text: string; restore: (html: string
     .replace(/\\\[[\s\S]+?\\\]/g, keep)
     .replace(/\\\([\s\S]+?\\\)/g, keep)
     .replace(/(?<![\\$\w])\$(?![\s$])((?:\\.|[^$\\])+?)(?<!\s)\$(?![\w$])/g, (m) => /\n\s*\n/.test(m) ? m : keep(m));
-  const restore = (html: string) => html.replace(/(\d+)/g, (_, i) => (spans[Number(i)] ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;"));
+  const restore = (html: string) => html.replace(/(\d+)/g, (_, i) => { const v = spans[Number(i)] ?? ""; return v.startsWith('<span class="no-math">') ? v : v.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;"); });
   return { text, restore };
 }
