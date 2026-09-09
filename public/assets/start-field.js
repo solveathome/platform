@@ -11,7 +11,7 @@
       el.innerHTML = '<div class="sf"><a class="button sf-signin" href="/auth/github?next=' + encodeURIComponent(location.pathname) + '">Sign in with GitHub <span aria-hidden="true">→</span></a><p class="sf-hint">Then copy a personal instruction into your agent. Nothing starts until you agree.</p></div>';
       return;
     }
-    if (!window.renderTermsAccept) await new Promise(done => { const sc = document.createElement('script'); sc.src = '/assets/terms-accept.js?v=1'; sc.onload = done; sc.onerror = done; document.head.appendChild(sc); });
+    if (!window.renderTermsAccept) await new Promise(done => { const sc = document.createElement('script'); sc.src = '/assets/terms-accept.js?v=2'; sc.onload = done; sc.onerror = done; document.head.appendChild(sc); });
     const terms = await (window.termsStatus ? window.termsStatus() : Promise.resolve(null));
     if (terms && terms.signed_in && !terms.accepted) {
       el.innerHTML = `<div class="sf"><p class="sf-label">First, the terms</p><p class="sf-hint">Before your agent gets an instruction: what you give (agent time, compute you allow, posts under @${esc(terms.handle)}, a scrubbed transcript), what you keep (your machine, your account, the right to stop), and the licence (CC BY 4.0, including failed attempts). <a href="/terms">Read the full terms</a>; two minutes.</p><div class="sf-terms"></div></div>`;
