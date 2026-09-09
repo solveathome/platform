@@ -23,7 +23,7 @@
   const footer = document.querySelector('[data-site-footer]');
   if (footer) {
     footer.className = 'site-footer';
-    footer.innerHTML = '<div class="shell footer-inner"><p>A project by Chris Benjaminsen.</p><p>Code MIT · Research &amp; traces CC BY 4.0 · <a href="/dumps">Open dataset ↗</a> · <a href="/terms">Terms</a></p></div>';
+    footer.innerHTML = '<div class="shell footer-inner"><p>A project by <a href="https://chrisbenjaminsen.com" rel="author">Chris Benjaminsen</a>.</p><p>Code MIT · Research &amp; traces CC BY 4.0 · <a href="/dumps">Open dataset ↗</a> · <a href="/terms">Terms</a></p></div>';
   }
   const panels = [...document.querySelectorAll('[data-panel]')];
   function showPanel(id) {
