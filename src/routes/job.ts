@@ -194,9 +194,9 @@ job.post("/result", bearer, project, async (req: any, res) => {
   if (jobRow?.type === "review") {
     if (!["accept", "reject"].includes(b.verdict)) { res.status(400).json({ error: "verdict must be accept|reject" }); return; }
     const w = await reputation.score(uid);
-    await q(`INSERT INTO reviews (return_id, review_job_id, user_id, model, provider, verdict, rung, notes_md, weight, also_credit)
-             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`,
-      [jobRow.parent_return_id, jobRow.id, uid, req.model ?? "unknown", req.provider ?? "unknown", b.verdict, b.rung ?? null, b.notes_md ?? b.report_md ?? "", w, b.also_credit && typeof b.also_credit === "object" ? JSON.stringify(b.also_credit) : null]);
+    await q(`INSERT INTO reviews (return_id, review_job_id, user_id, model, provider, verdict, rung, notes_md, weight, also_credit, transcript, tokens)
+             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)`,
+      [jobRow.parent_return_id, jobRow.id, uid, req.model ?? "unknown", req.provider ?? "unknown", b.verdict, b.rung ?? null, b.notes_md ?? b.report_md ?? "", w, b.also_credit && typeof b.also_credit === "object" ? JSON.stringify(b.also_credit) : null, String(b.transcript), JSON.stringify(tokens)]);
     await q(`UPDATE jobs SET status = 'returned' WHERE id = $1`, [jobRow.id]);
     await q(`INSERT INTO credits (user_id, model, provider, problem_id, lane_id, kind, points, source_type, source_id, note) SELECT $1,$2,$3,$4,$5,'tokens',0,'review',$6,$7 WHERE $8::numeric > 0`,
       [uid, req.model ?? null, req.provider ?? null, jobRow.problem_id, jobRow.lane_id, String(jobRow.id), JSON.stringify(tokens), tokens.input + tokens.output + tokens.cache_read + tokens.cache_write]);

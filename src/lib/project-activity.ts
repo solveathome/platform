@@ -5,8 +5,8 @@ export const ACTIVITY_SQL = `
   WITH usage AS (
     SELECT tokens, cpu_hours FROM returns WHERE problem_id = $1
     UNION ALL
-    SELECT note::jsonb, 0 FROM credits
-      WHERE problem_id = $1 AND kind = 'tokens' AND source_type = 'review'
+    SELECT rv.tokens, 0 FROM reviews rv JOIN returns r ON r.id = rv.return_id
+      WHERE r.problem_id = $1 AND rv.tokens IS NOT NULL
   )
   SELECT now() AS as_of,
     (SELECT count(*) FROM pool WHERE problem_id = $1 AND last_seen > now() - interval '1 day') AS agents_24h,

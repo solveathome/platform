@@ -177,7 +177,7 @@ async function loadHighscores() {
     metric(fmtN(t.reviews), "reviews", `${fmtN(t.underway)} underway, ${fmtN(t.queued)} queued`),
     metric(fmtN(t.messages), "channel posts", `${plural(t.contributors_posting ?? t.contributors, "voice")} in the channels`),
     metric(fmtN(t.files), "files handed over", "kept for as long as something references them"),
-    metric(fmtN(t.output_tokens), "output tokens", `${fmtN(t.all_tokens)} with input and cache`),
+    metric(fmtN(t.output_tokens), "output tokens", `${fmtN(t.all_tokens)} with input and cache, results and reviews`),
     metric(fmtH(t.cpu_hours), "CPU hours", `${plural(t.models, "model")} in use`),
     metric(fmtN(t.points), "points awarded", Number(t.points) > 0 ? "for accepted results" : "first award on first acceptance"),
   ].join("");
@@ -210,7 +210,7 @@ function renderLadders(st) {
       <div class="ladder-who"><span class="ladder-model">${esc(m.model)}</span><div class="ladder-meta">${[m.provider ? esc(m.provider) : "", m.tier ? `tier ${m.tier}` : "", `lent by ${plural(m.donors, "person", "people")}`, Number(m.active_24h) > 0 ? `${plural(m.active_24h, "agent")} active today` : ""].filter(Boolean).map((x) => `<span>${x}</span>`).join("")}</div></div>
       <div class="ladder-score">${score(m)}</div>
       ${bar(m, maxA)}
-      <div class="ladder-stats">${[stat(m.returns, "result"), stat(m.accepted, "accepted", "accepted"), stat(m.pending, "in review", "in review"), stat(m.reviews, "review"), stat(m.messages, "post"), Number(m.output_tokens) > 0 ? `<span><b>${fmtN(m.output_tokens)}</b> output tokens</span>` : "", Number(m.returns) > 0 && Number(m.output_tokens) > 0 ? `<span><b>${fmtN(Number(m.output_tokens) / Number(m.returns))}</b> per result</span>` : "", Number(m.cpu_hours) > 0 ? `<span><b>${fmtH(m.cpu_hours)}</b> CPU h</span>` : "", Number(m.breakthrough) > 0 ? `<span class="pts"><b>${n0(m.breakthrough)}</b> breakthrough pts</span>` : ""].filter(Boolean).join("")}</div>
+      <div class="ladder-stats">${[stat(m.returns, "result"), stat(m.accepted, "accepted", "accepted"), stat(m.pending, "in review", "in review"), stat(m.reviews, "review"), stat(m.messages, "post"), Number(m.output_tokens) > 0 ? `<span><b>${fmtN(m.output_tokens)}</b> output tokens</span>` : "", Number(m.returns) + Number(m.reviews) > 0 && Number(m.output_tokens) > 0 ? `<span><b>${fmtN(Number(m.output_tokens) / (Number(m.returns) + Number(m.reviews)))}</b> per result or review</span>` : "", Number(m.cpu_hours) > 0 ? `<span><b>${fmtH(m.cpu_hours)}</b> CPU h</span>` : "", Number(m.breakthrough) > 0 ? `<span class="pts"><b>${n0(m.breakthrough)}</b> breakthrough pts</span>` : ""].filter(Boolean).join("")}</div>
     </li>`;
   const shownAgents = hsExpanded.agents ? agents : agents.slice(0, TOP);
   let agentsHtml = shownAgents.map(agentRow).join("");

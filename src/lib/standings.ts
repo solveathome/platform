@@ -27,8 +27,10 @@ export async function standings(problemId: number, w: Window, limit = 100, meHan
       (SELECT count(*) FROM reviews rv JOIN returns r ON r.id = rv.return_id WHERE r.problem_id = $1 AND rv.created_at >= ${S}) AS reviews,
       (SELECT count(*) FROM messages m JOIN channels c ON c.id = m.channel_id WHERE c.problem_id = $1 AND m.created_at >= ${S} AND m.user_id IS NOT NULL) AS messages,
       (SELECT count(*) FROM files f JOIN file_refs x ON x.file_sha = f.sha256 AND x.ref_type = 'return' JOIN returns r ON r.id = x.ref_id WHERE r.problem_id = $1 AND f.created_at >= ${S} AND f.deleted_at IS NULL) AS files,
-      (SELECT coalesce(sum((tokens->>'output')::numeric), 0) FROM returns WHERE problem_id = $1 AND created_at >= ${S} AND tokens IS NOT NULL) AS output_tokens,
-      (SELECT coalesce(sum((tokens->>'input')::numeric + (tokens->>'output')::numeric + (tokens->>'cache_read')::numeric + (tokens->>'cache_write')::numeric), 0) FROM returns WHERE problem_id = $1 AND created_at >= ${S} AND tokens IS NOT NULL) AS all_tokens,
+      (SELECT coalesce(sum((tokens->>'output')::numeric), 0) FROM (SELECT tokens FROM returns WHERE problem_id = $1 AND created_at >= ${S} AND tokens IS NOT NULL
+         UNION ALL SELECT rv.tokens FROM reviews rv JOIN returns r ON r.id = rv.return_id WHERE r.problem_id = $1 AND rv.created_at >= ${S} AND rv.tokens IS NOT NULL) u) AS output_tokens,
+      (SELECT coalesce(sum((tokens->>'input')::numeric + (tokens->>'output')::numeric + (tokens->>'cache_read')::numeric + (tokens->>'cache_write')::numeric), 0) FROM (SELECT tokens FROM returns WHERE problem_id = $1 AND created_at >= ${S} AND tokens IS NOT NULL
+         UNION ALL SELECT rv.tokens FROM reviews rv JOIN returns r ON r.id = rv.return_id WHERE r.problem_id = $1 AND rv.created_at >= ${S} AND rv.tokens IS NOT NULL) u) AS all_tokens,
       (SELECT coalesce(sum(cpu_hours), 0) FROM returns WHERE problem_id = $1 AND created_at >= ${S}) AS cpu_hours,
       (SELECT coalesce(sum(points), 0) FROM credits WHERE problem_id = $1 AND created_at >= ${S}) AS points,
       (SELECT count(*) FROM jobs WHERE problem_id = $1 AND status = 'queued') AS queued,
@@ -45,7 +47,8 @@ export async function standings(problemId: number, w: Window, limit = 100, meHan
       FROM (SELECT r.*, count(*) OVER (PARTITION BY r.user_id, r.type) AS n FROM returns r WHERE r.problem_id = $1 AND r.created_at >= ${S}) t
       GROUP BY user_id),
     rev AS (
-      SELECT rv.user_id, count(*) AS reviews, count(*) FILTER (WHERE rv.agreed_with_outcome) AS reviews_agreed, count(*) FILTER (WHERE rv.agreed_with_outcome IS NOT NULL) AS reviews_scored, max(rv.created_at) AS last_review
+      SELECT rv.user_id, count(*) AS reviews, count(*) FILTER (WHERE rv.agreed_with_outcome) AS reviews_agreed, count(*) FILTER (WHERE rv.agreed_with_outcome IS NOT NULL) AS reviews_scored, max(rv.created_at) AS last_review,
+             coalesce(sum((rv.tokens->>'output')::numeric), 0) AS rev_output_tokens, coalesce(sum((rv.tokens->>'input')::numeric + (rv.tokens->>'output')::numeric + (rv.tokens->>'cache_read')::numeric + (rv.tokens->>'cache_write')::numeric), 0) AS rev_all_tokens
       FROM reviews rv JOIN returns r ON r.id = rv.return_id WHERE r.problem_id = $1 AND rv.created_at >= ${S} GROUP BY rv.user_id),
     msg AS (
       SELECT m.user_id, count(*) AS messages, count(*) FILTER (WHERE m.kind = 'found') AS found, max(m.created_at) AS last_message
@@ -61,7 +64,7 @@ export async function standings(problemId: number, w: Window, limit = 100, meHan
       coalesce(cr.points, 0) AS points, coalesce(cr.result, 0) AS result, coalesce(cr.breakthrough, 0) AS breakthrough, coalesce(cr.insight, 0) AS insight,
       coalesce(cr.direction, 0) AS direction, coalesce(cr.review, 0) AS review_points, coalesce(cr.compute, 0) AS compute_points, coalesce(cr.tokens, 0) AS token_points,
       coalesce(ret.submitted, 0) AS submitted, coalesce(ret.accepted, 0) AS accepted, coalesce(ret.pending, 0) AS pending, coalesce(ret.rejected, 0) AS rejected, coalesce(ret.contested, 0) AS contested,
-      coalesce(ret.output_tokens, 0) AS output_tokens, coalesce(ret.all_tokens, 0) AS all_tokens, coalesce(ret.cpu_hours, 0) AS cpu_hours,
+      coalesce(ret.output_tokens, 0) + coalesce(rev.rev_output_tokens, 0) AS output_tokens, coalesce(ret.all_tokens, 0) + coalesce(rev.rev_all_tokens, 0) AS all_tokens, coalesce(ret.cpu_hours, 0) AS cpu_hours,
       coalesce(ret.types, '{}'::jsonb) AS types, coalesce(ret.models, '{}') AS models,
       coalesce(rev.reviews, 0) AS reviews, coalesce(rev.reviews_agreed, 0) AS reviews_agreed, coalesce(rev.reviews_scored, 0) AS reviews_scored,
       coalesce(msg.messages, 0) AS messages, coalesce(msg.found, 0) AS found,
@@ -84,7 +87,8 @@ export async function standings(problemId: number, w: Window, limit = 100, meHan
              coalesce(sum((tokens->>'input')::numeric + (tokens->>'output')::numeric + (tokens->>'cache_read')::numeric + (tokens->>'cache_write')::numeric), 0) AS all_tokens,
              coalesce(sum(cpu_hours), 0) AS cpu_hours, max(created_at) AS last_return
       FROM returns WHERE problem_id = $1 AND created_at >= ${S} AND model IS NOT NULL GROUP BY model),
-    rev AS (SELECT rv.model, count(*) AS reviews, count(*) FILTER (WHERE rv.agreed_with_outcome) AS reviews_agreed, count(*) FILTER (WHERE rv.agreed_with_outcome IS NOT NULL) AS reviews_scored
+    rev AS (SELECT rv.model, count(*) AS reviews, count(*) FILTER (WHERE rv.agreed_with_outcome) AS reviews_agreed, count(*) FILTER (WHERE rv.agreed_with_outcome IS NOT NULL) AS reviews_scored,
+                   coalesce(sum((rv.tokens->>'output')::numeric), 0) AS rev_output_tokens, coalesce(sum((rv.tokens->>'input')::numeric + (rv.tokens->>'output')::numeric + (rv.tokens->>'cache_read')::numeric + (rv.tokens->>'cache_write')::numeric), 0) AS rev_all_tokens
             FROM reviews rv JOIN returns r ON r.id = rv.return_id WHERE r.problem_id = $1 AND rv.created_at >= ${S} AND rv.model IS NOT NULL GROUP BY rv.model),
     msg AS (SELECT m.model, count(*) AS messages FROM messages m JOIN channels c ON c.id = m.channel_id WHERE c.problem_id = $1 AND m.created_at >= ${S} AND m.model IS NOT NULL GROUP BY m.model),
     cr AS (SELECT model, sum(points) AS points, sum(points) FILTER (WHERE kind = 'breakthrough') AS breakthrough FROM credits WHERE problem_id = $1 AND created_at >= ${S} AND model IS NOT NULL GROUP BY model),
@@ -92,7 +96,7 @@ export async function standings(problemId: number, w: Window, limit = 100, meHan
     SELECT ids.model, mt.provider, mt.tier,
       coalesce(cr.points, 0) AS points, coalesce(cr.breakthrough, 0) AS breakthrough,
       coalesce(ret.returns, 0) AS returns, coalesce(ret.accepted, 0) AS accepted, coalesce(ret.pending, 0) AS pending, coalesce(ret.donors, 0) AS donors,
-      coalesce(ret.output_tokens, 0) AS output_tokens, coalesce(ret.all_tokens, 0) AS all_tokens, coalesce(ret.cpu_hours, 0) AS cpu_hours,
+      coalesce(ret.output_tokens, 0) + coalesce(rev.rev_output_tokens, 0) AS output_tokens, coalesce(ret.all_tokens, 0) + coalesce(rev.rev_all_tokens, 0) AS all_tokens, coalesce(ret.cpu_hours, 0) AS cpu_hours,
       coalesce(rev.reviews, 0) AS reviews, coalesce(rev.reviews_agreed, 0) AS reviews_agreed, coalesce(rev.reviews_scored, 0) AS reviews_scored,
       coalesce(msg.messages, 0) AS messages,
       (SELECT count(*) FROM pool WHERE pool.problem_id = $1 AND pool.model = ids.model AND pool.last_seen > now() - interval '1 day') AS active_24h,
