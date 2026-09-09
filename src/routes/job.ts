@@ -92,7 +92,7 @@ async function start(req: any, res: any): Promise<void> {
     await client.query(`UPDATE pool SET session_jobs = session_jobs + 1 WHERE problem_id = $1 AND user_id = $2`, [req.project.id, uid]);
     await client.query("COMMIT");
     row.expires_at = upd.rows[0].expires_at;
-    const sess = { id: String(member.session), jobs: Number(member.session_jobs) + 1, max: Number(member.session_max_jobs), maxHours: Number(member.ai?.max_hours_per_assignment ?? 2) };
+    const sess = { id: String(member.session), jobs: Number(member.session_jobs) + 1, max: Number(member.session_max_jobs), maxHours: Number(member.ai?.max_hours_per_assignment ?? 2), compute: member.compute ? `${member.compute.cpu_hours ?? 0} CPU h / ${member.compute.ram_gb ?? "?"} GB` : "not offered", transcriptPreapproved: member.ai?.transcript_preapproved === true };
     let md = renderBrief(row, `${BASE()}/projects/${req.project.slug}`, sess);
     if (req.justRegistered) md = (await orientation(req.project, BASE(), member, true)) + "\n\n---\n\n" + md;
     md = ownerNote + md;
@@ -120,20 +120,23 @@ job.post("/release", bearer, project, async (req: any, res: any) => {
 
 /**
  * POST /start : the person agreed to the terms; register what they contribute and open a session.
- * Body: { agreed: true, ai: {max_hours_per_assignment, max_assignments}, compute: {...}|null, input: {...}|null }.
- * A returning handle may send only { agreed, ai: { max_assignments } } to keep its previous settings.
+ * Body: { agreed: true, ai: {max_hours_per_assignment, max_assignments}, transcript_preapproved?, compute: {...}|null, input: {...}|null }.
+ * A returning handle sends only what changes; omitted fields keep their recorded values.
  * Replies with orientation + session id + first assignment.
  */
 job.post("/start", bearer, project, async (req: any, res: any) => {
   const b = req.body ?? {};
   if (b.agreed !== true) { res.status(400).json({ error: "agreed:true is required: show your person the terms from GET /start and register only after they agree" }); return; }
   const prev = await one(`SELECT * FROM pool WHERE problem_id = $1 AND user_id = $2`, [req.project.id, req.user!.id]);
-  const keep = !!prev && b.ai?.max_hours_per_assignment === undefined && b.compute === undefined && b.input === undefined;
-  const ai = keep ? { ...prev.ai } : { max_hours_per_assignment: Math.min(24, Math.max(0.25, Number(b.ai?.max_hours_per_assignment ?? 2))) };
+  // Partial overrides: any field given replaces only that field; the rest stays as recorded (returning handles change one thing in one step).
+  const ai: any = { ...(prev?.ai ?? {}) };
+  if (b.ai?.max_hours_per_assignment !== undefined || !prev) ai.max_hours_per_assignment = Math.min(24, Math.max(0.25, Number(b.ai?.max_hours_per_assignment ?? ai.max_hours_per_assignment ?? 2)));
+  const pre = b.transcript_preapproved ?? b.ai?.transcript_preapproved;
+  if (pre !== undefined || !prev) ai.transcript_preapproved = pre === true;
   const maxJobs = Math.min(50, Math.max(1, Math.floor(Number(b.ai?.max_assignments ?? 1)) || 1));
-  const compute = keep ? prev.compute : (b.compute && typeof b.compute === "object" ? { cpu_hours: Math.max(0, Number(b.compute.cpu_hours ?? 0)), ram_gb: Number(b.compute.ram_gb ?? 0) || null, mathlib_cache: !!b.compute.mathlib_cache } : null);
-  const input = keep ? prev.input : (b.input && typeof b.input === "object" && (b.input.lane || b.input.direction) ? { lane: b.input.lane ? String(b.input.lane).slice(0, 80) : null, direction: b.input.direction ? String(b.input.direction).slice(0, 4000) : null } : null);
-  if (!keep && input?.lane) { const l = await one(`SELECT 1 FROM lanes WHERE problem_id = $1 AND slug = $2`, [req.project.id, input.lane]); if (!l) { res.status(400).json({ error: `unknown lane '${input.lane}'` }); return; } }
+  const compute = b.compute === undefined && prev ? prev.compute : (b.compute && typeof b.compute === "object" ? { cpu_hours: Math.max(0, Number(b.compute.cpu_hours ?? 0)), ram_gb: Number(b.compute.ram_gb ?? 0) || null, mathlib_cache: !!b.compute.mathlib_cache } : null);
+  const input = b.input === undefined && prev ? prev.input : (b.input && typeof b.input === "object" && (b.input.lane || b.input.direction) ? { lane: b.input.lane ? String(b.input.lane).slice(0, 80) : null, direction: b.input.direction ? String(b.input.direction).slice(0, 4000) : null } : null);
+  if (b.input !== undefined && input?.lane) { const l = await one(`SELECT 1 FROM lanes WHERE problem_id = $1 AND slug = $2`, [req.project.id, input.lane]); if (!l) { res.status(400).json({ error: `unknown lane '${input.lane}'` }); return; } }
   const session = randomBytes(12).toString("hex");
   await q(`INSERT INTO pool (problem_id, user_id, model, ai, compute, input, session, session_started, session_max_jobs, session_jobs, agreed_at)
            VALUES ($1,$2,$3,$4,$5,$6,$7,now(),$8,0,now())
@@ -160,7 +163,10 @@ job.post("/result", bearer, project, async (req: any, res) => {
   const b = req.body ?? {};
   const uid = req.user!.id;
   if (!b.transcript || typeof b.transcript !== "string") { res.status(400).json({ error: "transcript is required" }); return; }
-  if (b.transcript_approved !== true) { res.status(400).json({ error: "transcript_approved:true is required: show your person the scrubbed transcript and send only if they approve; if they decline, POST /release instead" }); return; }
+  if (b.transcript_approved !== true) {
+    const pm = await one(`SELECT ai FROM pool WHERE problem_id = $1 AND user_id = $2`, [req.project.id, uid]);
+    if (pm?.ai?.transcript_preapproved !== true) { res.status(400).json({ error: "transcript_approved:true is required: show your person the scrubbed transcript and send only if they approve; if they decline, POST /release instead. (They can pre-approve for a whole session at registration with transcript_preapproved: true.)" }); return; }
+  }
   if (!b.report_md && !b.verdict) { res.status(400).json({ error: "report_md is required" }); return; }
 
   let jobRow: any = null;

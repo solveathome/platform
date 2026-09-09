@@ -26,21 +26,7 @@ function safePath(root: string, rel: string): string | null {
 }
 
 function chrome(slug: string, title: string, crumbs: string, body: string, extra = ""): string {
-  return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>${esc(title)} · ${esc(slug)} · solveathome</title>
-<style>
-:root{--bg:#fbfaf7;--fg:#1a1a1a;--mut:#6b6b66;--line:#e4e2dc;--card:#fff;--acc:#1f5fbf;color-scheme:light dark}
-@media(prefers-color-scheme:dark){:root{--bg:#111;--fg:#ececec;--mut:#9a9a94;--line:#2a2a2a;--card:#181818;--acc:#7fb0ff}}
-body{margin:0;background:var(--bg);color:var(--fg);font:15px/1.6 -apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif}
-header{display:flex;gap:1rem;align-items:baseline;padding:1rem 1.25rem;border-bottom:1px solid var(--line);flex-wrap:wrap}header a{color:inherit;text-decoration:none;font-weight:600}.muted{color:var(--mut)}
-main{max-width:56rem;margin:0 auto;padding:1rem 1.25rem 4rem}article{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:1.25rem 1.5rem;overflow-wrap:anywhere}
-article h1{font-size:1.6rem;margin:.2rem 0 .8rem}article h2{font-size:1.2rem;margin:1.6rem 0 .5rem}article h3{font-size:1.05rem}article a{color:var(--acc)}
-pre{background:rgba(127,127,127,.12);padding:.8rem 1rem;border-radius:8px;overflow-x:auto;font-size:.88rem;line-height:1.45}code{background:rgba(127,127,127,.12);padding:.05em .3em;border-radius:4px;font-size:.92em}pre code{background:none;padding:0}
-table{border-collapse:collapse;width:100%;font-size:.92rem;display:block;overflow-x:auto}th,td{text-align:left;padding:.35rem .5rem;border-bottom:1px solid var(--line);vertical-align:top}th{color:var(--mut)}
-blockquote{border-left:3px solid var(--line);margin:0;padding:.1rem 1rem;color:var(--mut)}
-.ledger{border:1px solid var(--line);border-radius:8px;padding:.6rem .9rem;margin:0 0 1rem;font-size:.9rem;background:rgba(127,127,127,.06)}.ledger b{margin-right:.4rem}.ledger div{margin:.15rem 0}
-.status{display:inline-block;padding:.05em .5em;border-radius:99px;font-size:.8rem;font-weight:600;border:1px solid var(--line)}
-ul.tree{list-style:none;padding:0;margin:0}ul.tree li{padding:.25rem 0;border-bottom:1px solid var(--line)}ul.tree a{color:var(--acc);text-decoration:none}ul.tree small{color:var(--mut);margin-left:.5rem}
-</style></head><body><header><a href="/projects/${esc(slug)}">solveathome / ${esc(slug)}</a><span class="muted">/ docs / ${crumbs}</span>${extra}</header><main><article>${body}</article></main></body></html>`;
+  return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>${esc(title)} · ${esc(slug)} · solveathome</title><link rel="icon" href="/favicon.ico"><link rel="stylesheet" href="/assets/app.css?v=4"></head><body data-page="docs"><header data-site-header></header><main class="shell document-main" id="main"><nav class="breadcrumb" aria-label="Breadcrumb"><a href="/projects/${esc(slug)}">${esc(slug)}</a><span>/ documents /</span>${crumbs}</nav>${extra ? `<p class="panel-note">${extra}</p>` : ""}<article class="document">${body}</article></main><footer data-site-footer></footer><script src="/assets/ui.js?v=4"></script><script src="/assets/who.js?v=3"></script><script>loadWho(document.querySelector("#who"));</script></body></html>`;
 }
 
 function crumbsFor(slug: string, rel: string): string {
@@ -83,6 +69,11 @@ docs.get("/docs{/*path}", async (req: any, res) => {
   const abs = safePath(root, rel);
   if (!abs || !existsSync(abs)) { res.status(404).type("text/plain").send("not found\n"); return; }
   const st = statSync(abs);
+  const browser = (req.header("accept") ?? "").includes("text/html");
+  if (st.isDirectory() && !browser) {
+    const entries = readdirSync(abs).filter((n) => !n.startsWith(".")).sort();
+    res.type("text/plain").send(entries.map((n) => statSync(join(abs, n)).isDirectory() ? `${n}/` : n).join("\n") + "\n"); return;
+  }
   if (st.isDirectory()) {
     const entries = readdirSync(abs).filter((n) => !n.startsWith(".")).sort((a, b) => { const da = statSync(join(abs, a)).isDirectory(), db = statSync(join(abs, b)).isDirectory(); return da === db ? a.localeCompare(b) : da ? -1 : 1; });
     const readme = entries.find((n) => /^readme\.md$/i.test(n));
@@ -93,6 +84,9 @@ docs.get("/docs{/*path}", async (req: any, res) => {
     return;
   }
   const ext = extname(abs).toLowerCase();
+  if (ext === ".md" && !browser) {
+    res.set({ "Content-Type": "text/markdown; charset=utf-8", "X-Content-Type-Options": "nosniff" }).send(readFileSync(abs, "utf8")); return;
+  }
   if (ext === ".md") {
     const r = renderMarkdown(readFileSync(abs, "utf8"), slug, rel);
     const claim = await one(`SELECT c.status, c.origin_handle FROM claims c JOIN problems p ON p.id = c.problem_id WHERE p.slug = $1 AND c.path = $2`, [slug, rel]);
