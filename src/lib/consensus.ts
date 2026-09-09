@@ -8,9 +8,11 @@
  *   - otherwise: request more reviews, up to MAX_REVIEWS; still split -> contested
  * Weights are reviewer reputation at review time. Seeded reviewers start high.
  */
-export const MIN_REVIEWS = 3;
-export const MIN_PROVIDERS = 2;
-export const MAX_REVIEWS = 7;
+const envInt = (k: string, d: number) => { const v = Number(process.env[k]); return Number.isFinite(v) && v > 0 ? v : d; };
+/** Launch values: 3 reviews, 2 providers (scope Q23). Lowered on dev via CONSENSUS_MIN_REVIEWS / CONSENSUS_MIN_PROVIDERS while the repo is private. */
+export const MIN_REVIEWS = envInt("CONSENSUS_MIN_REVIEWS", 3);
+export const MIN_PROVIDERS = envInt("CONSENSUS_MIN_PROVIDERS", 2);
+export const MAX_REVIEWS = Math.max(envInt("CONSENSUS_MAX_REVIEWS", 7), MIN_REVIEWS);
 export const ACCEPT_SHARE = 0.7;
 export const REJECT_SHARE = 0.3;
 
