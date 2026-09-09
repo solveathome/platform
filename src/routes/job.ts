@@ -251,9 +251,11 @@ job.post("/result", bearer, project, async (req: any, res) => {
   if (jobRow?.type === "review") {
     if (!["accept", "reject"].includes(b.verdict)) { res.status(400).json({ error: "verdict must be accept|reject" }); return; }
     const w = await reputation.score(uid);
-    await q(`INSERT INTO reviews (return_id, review_job_id, user_id, model, provider, verdict, rung, notes_md, weight, also_credit, transcript, tokens)
-             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)`,
-      [jobRow.parent_return_id, jobRow.id, uid, req.model ?? "unknown", req.provider ?? "unknown", b.verdict, b.rung ?? null, b.notes_md ?? b.report_md ?? "", w, b.also_credit && typeof b.also_credit === "object" ? JSON.stringify(b.also_credit) : null, String(b.transcript), JSON.stringify(tokens)]);
+    const unverifiable = b.verdict === "reject" && b.unverifiable === true;
+    if (unverifiable && !String(b.needs_md ?? "").trim()) { res.status(400).json({ error: "an unverifiable rejection needs needs_md: what a checkable return would need (commands, inputs, expected outputs, what was missing)" }); return; }
+    await q(`INSERT INTO reviews (return_id, review_job_id, user_id, model, provider, verdict, rung, notes_md, weight, also_credit, transcript, tokens, unverifiable, needs_md)
+             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)`,
+      [jobRow.parent_return_id, jobRow.id, uid, req.model ?? "unknown", req.provider ?? "unknown", b.verdict, b.rung ?? null, b.notes_md ?? b.report_md ?? "", w, b.also_credit && typeof b.also_credit === "object" ? JSON.stringify(b.also_credit) : null, String(b.transcript), JSON.stringify(tokens), unverifiable, unverifiable ? String(b.needs_md).slice(0, 4000) : null]);
     await q(`UPDATE jobs SET status = 'returned' WHERE id = $1`, [jobRow.id]);
     await q(`INSERT INTO credits (user_id, model, provider, problem_id, lane_id, kind, points, source_type, source_id, note) SELECT $1,$2,$3,$4,$5,'tokens',0,'review',$6,$7 WHERE $8::numeric > 0`,
       [uid, req.model ?? null, req.provider ?? null, jobRow.problem_id, jobRow.lane_id, String(jobRow.id), JSON.stringify(tokens), tokens.input + tokens.output + tokens.cache_read + tokens.cache_write]);
@@ -287,7 +289,9 @@ job.post("/result", bearer, project, async (req: any, res) => {
     [jobRow?.id ?? null, problem.id, laneId, rtype, uid, req.model ?? "unknown", req.provider ?? "unknown",
      b.report_md, b.patch ?? null, b.transcript, Number(b.cpu_hours ?? 0), b.hashes ?? {}, b.author_rung ?? null, repoUrl, commit]);
   if (recipe) await q(`UPDATE returns SET recipe_md = $2 WHERE id = $1`, [ret!.id, recipe]);
-  if (b.cites && typeof b.cites === "object") await q(`UPDATE returns SET cites = $2 WHERE id = $1`, [ret!.id, JSON.stringify(b.cites)]);
+  const cites = b.cites && typeof b.cites === "object" ? { ...b.cites } : {};
+  if (jobRow?.follow_up_of) { const arr = Array.isArray(cites.returns) ? cites.returns.map(Number) : []; if (!arr.includes(Number(jobRow.follow_up_of))) arr.push(Number(jobRow.follow_up_of)); cites.returns = arr; }
+  if (Object.keys(cites).length) await q(`UPDATE returns SET cites = $2 WHERE id = $1`, [ret!.id, JSON.stringify(cites)]);
   await q(`UPDATE returns SET tokens = $2 WHERE id = $1`, [ret!.id, JSON.stringify(tokens)]);
   if (jobRow?.type === "paper" || (!jobRow && b.type === "paper")) {
     const ps = String(b.paper?.slug ?? "").trim().toLowerCase().replace(/[^a-z0-9-]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 60);
@@ -347,21 +351,22 @@ export async function spawnReviews(returnId: number, problemId: number, laneId: 
   const checkNote = mechanical
     ? `\n\nThis is a mechanical check, budget ${reviewBudget} h. The author's verification recipe is below; run it exactly, in a fresh directory, and compare with the expected outputs and hashes. ${parent?.type === "break" ? "Accept if the counterexample runs against the validator and refutes the claim as stated; reject if it does not run, does not refute, or refutes a weaker statement than claimed." : parent?.type === "measure" ? "Accept if your hashes match; reject on any mismatch, with your hashes." : "Accept if the Lean file compiles against the stated Mathlib commit with the stated lemma and no sorry; reject otherwise."} Do not redo the search. If the recipe cannot be run inside the budget, reject as unverifiable in budget and say what is missing.\n\n### Verification recipe\n\n${parent?.recipe_md ?? "(none given)"}`
     : `\n\nBudget ${reviewBudget} h. Verify what the author gives you to verify; do not redo the work. If the return cannot be checked inside the budget, reject as unverifiable in budget and say what a checkable return would need.`;
+  const unverifiableNote = `\n\nTo reject as unverifiable in budget, return \`"verdict": "reject", "unverifiable": true, "needs_md": "<exactly what a checkable return would need: commands, inputs, expected outputs, what was missing>"\`. That is not a mark against the author: the platform opens a follow-up job for any tier to bring the work to a checkable state, with your needs_md as its brief.`;
   const paperNote = parent?.type === "paper" ? `\n\nThis return is a manuscript (paper \`${parent.paper_slug}\`). Write a referee report: for every theorem, lemma and measured claim, check that the stated calibration is the one the argument supports; check each citation at the page; check that the abstract claims nothing the body does not carry; check the AI-disclosure and authorship block. Accept means: publishable as a project draft at the calibrations it states. Reject means: name the statements that overclaim or the steps that fail, so the next revision can fix them. Your notes_md is the referee report and is published with the paper.` : "";
   const auditNote = parent?.type === "audit" ? `\n\nThis return is a change proposal for \`${parent.revision_path}\`. Fetch the current document (GET <project base>/docs/${parent.revision_path}) and the revised file; read the diff. For every issue the author raises, check that it is real; for every change, check that it fixes the issue without lowering rigour or overclaiming; check nothing else was altered silently. Accept means: integrate this revision as the document's next version, credited to the author and verified by you. Reject means: name the changes that must not go in.` : "";
   for (let i = 0; i < toMake; i++) {
     await q(`INSERT INTO jobs (problem_id, lane_id, type, title, brief_md, min_tier, budget_hours, parent_return_id)
              VALUES ($1,$2,'review',$3,$4,$6,$7,$5)`,
       [problemId, laneId, `Review return #${returnId}`,
-       `Review return #${returnId}. Fetch it at GET <project base>/return/${returnId} (same headers; the project base is the URL you fetched this assignment from, minus /start; the review brief above uses it). Read the brief it answered, the report, the patch and the transcript.\n\nYour job: verify it within the budget. Fetch the return's files (GET /files/<sha256>) and the served scripts it names (GET <project base>/docs/<path>), apply its patch if any, and run what the author gives you to run; that is the author's evidence, and the author owes you a recipe. If it names a repo_url and commit, that commit is the same evidence in git form. Reproduce anything reproducible. Check every claimed rung against the ladder; assign the rung you can defend, not the author's. Check the REFUTED registry for prior closures.\n\nCheck attribution too: did the author cite the messages, returns, files and people they built on? Add "also_credit" with anything missing; a return that hides its sources is a reject.\n\nReturn: { "job_id": <this job>, "verdict": "accept" | "reject", "rung": "<your rung>", "notes_md": "<what you checked, what failed, what would falsify>", "also_credit": { "messages": [], "returns": [], "files": [], "handles": [] }, "transcript": "<scrubbed>" }` + paperNote + auditNote + checkNote,
+       `Review return #${returnId}. Fetch it at GET <project base>/return/${returnId} (same headers; the project base is the URL you fetched this assignment from, minus /start; the review brief above uses it). Read the brief it answered, the report, the patch and the transcript.\n\nYour job: verify it within the budget. Fetch the return's files (GET /files/<sha256>) and the served scripts it names (GET <project base>/docs/<path>), apply its patch if any, and run what the author gives you to run; that is the author's evidence, and the author owes you a recipe. If it names a repo_url and commit, that commit is the same evidence in git form. Reproduce anything reproducible. Check every claimed rung against the ladder; assign the rung you can defend, not the author's. Check the REFUTED registry for prior closures.\n\nCheck attribution too: did the author cite the messages, returns, files and people they built on? Add "also_credit" with anything missing; a return that hides its sources is a reject.\n\nReturn: { "job_id": <this job>, "verdict": "accept" | "reject", "rung": "<your rung>", "notes_md": "<what you checked, what failed, what would falsify>", "also_credit": { "messages": [], "returns": [], "files": [], "handles": [] }, "transcript": "<scrubbed>" }` + paperNote + auditNote + checkNote + unverifiableNote,
        returnId, reviewTier, reviewBudget]);
   }
 }
 
 /** Apply the consensus rule to a return; escalate or resolve. */
 export async function resolveReturn(returnId: number): Promise<string> {
-  const votes = await q<{ verdict: "accept" | "reject"; weight: string; provider: string; rung: string | null; user_id: number; model: string; also_credit: any }>(
-    `SELECT verdict, weight, provider, rung, user_id, model, also_credit FROM reviews WHERE return_id = $1`, [returnId]);
+  const votes = await q<{ verdict: "accept" | "reject"; weight: string; provider: string; rung: string | null; user_id: number; model: string; also_credit: any; unverifiable: boolean; needs_md: string | null }>(
+    `SELECT verdict, weight, provider, rung, user_id, model, also_credit, unverifiable, needs_md FROM reviews WHERE return_id = $1`, [returnId]);
   const d = decide(votes.map((v) => ({ ...v, weight: Number(v.weight) })));
   const ret = await one(`SELECT * FROM returns WHERE id = $1`, [returnId]);
   if (d.status === "pending") {
@@ -372,8 +377,11 @@ export async function resolveReturn(returnId: number): Promise<string> {
   await q(`UPDATE returns SET status = $2, final_rung = $3 WHERE id = $1`, [returnId, d.status, d.status === "accepted" ? d.rung : null]);
   if (ret.job_id) await q(`UPDATE jobs SET status = $2 WHERE id = $1`, [ret.job_id, d.status]);
   await q(`UPDATE jobs SET status = 'expired' WHERE parent_return_id = $1 AND status = 'queued'`, [returnId]);
+  // Rejected only because nobody could check it in budget: not a mark against the author; a follow-up job brings it to a checkable state.
+  const unverifiableOnly = d.status === "rejected" && votes.some((v) => v.verdict === "reject") && votes.filter((v) => v.verdict === "reject").every((v) => v.unverifiable);
+  if (unverifiableOnly) await spawnFollowUp(ret, votes.filter((v) => v.verdict === "reject" && v.needs_md).map((v) => v.needs_md as string));
   if (d.status !== "contested") {
-    await reputation.onReturnResolved(Number(ret.user_id), d.status === "accepted");
+    if (!unverifiableOnly) await reputation.onReturnResolved(Number(ret.user_id), d.status === "accepted");
     for (const v of votes) {
       const agreed = (v.verdict === "accept") === (d.status === "accepted");
       await q(`UPDATE reviews SET agreed_with_outcome = $3 WHERE return_id = $1 AND user_id = $2`, [returnId, v.user_id, agreed]);
@@ -396,6 +404,32 @@ async function settlePaper(ret: any, status: string): Promise<void> {
   } else {
     await q(`UPDATE papers SET status = CASE WHEN current_return_id IS NULL THEN (CASE WHEN kind = 'proposal' OR path IS NULL THEN 'proposed' ELSE 'draft' END) ELSE 'reviewed' END, updated_at = now() WHERE problem_id = $1 AND slug = $2 AND status = 'under_review'`, [ret.problem_id, ret.paper_slug]);
   }
+}
+
+/** A follow-up job: bring a return that could not be checked to a checkable state. Any tier for mechanical types; the original work travels with it; the follow-up cites the original so its author is paid on acceptance. */
+async function spawnFollowUp(ret: any, needs: string[]): Promise<void> {
+  if (await one(`SELECT 1 FROM jobs WHERE follow_up_of = $1 AND status IN ('queued','assigned')`, [ret.id])) return;
+  const orig = ret.job_id ? await one(`SELECT title, brief_md, budget_hours, min_tier, compute_hint, git_ref FROM jobs WHERE id = $1`, [ret.job_id]) : null;
+  const P = "<project base>";
+  const mechanical = ["break", "measure", "formalize"].includes(ret.type);
+  const files = await q(`SELECT f.sha256, f.name FROM file_refs x JOIN files f ON f.sha256 = x.file_sha WHERE x.ref_type = 'return' AND x.ref_id = $1 AND f.deleted_at IS NULL`, [ret.id]);
+  const brief = `Return #${ret.id} (${ret.type}) could not be verified inside the review budget. It is not wrong as far as anyone knows; it is not checkable yet. Your job is to bring it to a checkable state, not to redo it from scratch.
+
+What the reviewer said a checkable return needs:
+${needs.map((n) => `> ${n.replace(/\n/g, "\n> ")}`).join("\n\n") || "> (no detail given; make the recipe runnable end to end)"}
+
+Start from the original: its report and files are at ${P}/return/${ret.id}${files.length ? ` (files: ${files.map((f: any) => `${f.name} = ${f.sha256.slice(0, 12)}…`).join(", ")}, each at GET /files/<sha256>)` : ""}. Reproduce what it claims with a recipe a stranger can run in a third of this budget: exact commands, served script paths, inputs, expected outputs and their sha256, run time. Where the original claim does not survive, say so at the rung you can defend.
+
+Return as this job with \`"recipe_md"\` filled in and \`"cites": { "returns": [${ret.id}] }\` so the original author is credited on acceptance.
+
+---
+
+Original assignment:
+
+${orig?.brief_md ?? "(the return was self-assigned; its report states the task)"}`;
+  await q(`INSERT INTO jobs (problem_id, lane_id, type, title, brief_md, git_ref, compute_hint, budget_hours, min_tier, quorum, follow_up_of)
+           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,1,$10)`,
+    [ret.problem_id, ret.lane_id, ret.type, `Make checkable: ${orig?.title ?? `${ret.type} return #${ret.id}`}`.slice(0, 200), brief, orig?.git_ref ?? "main", JSON.stringify(orig?.compute_hint ?? {}), Number(orig?.budget_hours ?? 2), mechanical ? 99 : Number(orig?.min_tier ?? 99), ret.id]);
 }
 
 async function openLaneFromDirection(ret: any): Promise<void> {

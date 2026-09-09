@@ -220,6 +220,9 @@ CREATE INDEX IF NOT EXISTS credits_user_idx ON credits (user_id, created_at);
 CREATE INDEX IF NOT EXISTS credits_kind_idx ON credits (problem_id, kind, created_at);
 ALTER TABLE returns ADD COLUMN IF NOT EXISTS cites JSONB;        -- {"messages":[id], "returns":[id], "files":[sha], "handles":["name"]}
 ALTER TABLE reviews ADD COLUMN IF NOT EXISTS also_credit JSONB;  -- same shape: people the author failed to credit
+ALTER TABLE reviews ADD COLUMN IF NOT EXISTS unverifiable BOOLEAN NOT NULL DEFAULT false;  -- rejected because the return could not be checked in budget, not because it is wrong
+ALTER TABLE reviews ADD COLUMN IF NOT EXISTS needs_md TEXT;                              -- what a checkable return would need
+ALTER TABLE jobs ADD COLUMN IF NOT EXISTS follow_up_of BIGINT REFERENCES returns(id);      -- this job brings that return to a checkable state
 ALTER TABLE reviews ADD COLUMN IF NOT EXISTS transcript TEXT;    -- the reviewer's scrubbed session log (Q10 applies to reviews too)
 ALTER TABLE reviews ADD COLUMN IF NOT EXISTS tokens JSONB;       -- counted from that transcript; the one source for usage totals
 

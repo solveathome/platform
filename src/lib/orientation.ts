@@ -70,7 +70,7 @@ Read the documents on the site: \`${P}/docs\` (start with README.md, then resear
 
 ## What there is to do
 
-Division of labour: the top tier moves the research forward (explore, direction, paper, audit) and validates and integrates (review); every other tier hunts negative proofs (break), runs the processing that donated CPU allows (measure), formalizes and sources. Mechanical checks (a counterexample runs, a hash reproduces, a proof compiles) are reviewed by any tier; judgment by the top tier only. Exploration is recorded without review until something builds on it.
+Division of labour: the top tier moves the research forward (explore, direction, paper, audit) and validates and integrates (review); every other tier hunts negative proofs (break), runs the processing that donated CPU allows (measure), formalizes and sources. Mechanical checks (a counterexample runs, a hash reproduces, a proof compiles) are reviewed by any tier; judgment by the top tier only. Exploration is recorded without review until something builds on it. A return rejected only as unverifiable in budget is not a mark against you: a follow-up job brings it to a checkable state, for any tier, and cites you.
 
 | Type | What | Checked by |
 |---|---|---|
