@@ -29,10 +29,11 @@ const reg = existsSync(join(root, "proposals", "PROPOSALS.md")) ? readFileSync(j
 for (const m of reg.matchAll(/\|\s*\[([^\]]+\.md)\]\([^)]+\)\s*\|\s*([^|]+?)\s*\|/g)) registryGrades[m[1]] = m[2].replace(/\s+/g, " ").trim().slice(0, 200);
 
 let seeded = 0, jobs = 0;
+// Proposals first, drafts last: a draft is the document of record and overwrites the wrapper proposal with the same slug.
 const entries: Array<{ file: string; path: string; kind: "draft" | "proposal" }> = [];
-for (const f of readdirSync(root).sort()) if (f.endsWith(".md") && !SKIP.has(f)) entries.push({ file: f, path: `paper/${f}`, kind: "draft" });
 const pdir = join(root, "proposals");
 if (existsSync(pdir)) for (const f of readdirSync(pdir).sort()) if (f.endsWith(".md") && !SKIP.has(f) && f.startsWith("prop-")) entries.push({ file: f, path: `paper/proposals/${f}`, kind: "proposal" });
+for (const f of readdirSync(root).sort()) if (f.endsWith(".md") && !SKIP.has(f)) entries.push({ file: f, path: `paper/${f}`, kind: "draft" });
 
 for (const e of entries) {
   const text = readFileSync(join(REPOS, slug, e.path), "utf8");
@@ -40,7 +41,7 @@ for (const e of entries) {
   const pslug = e.file.replace(/\.md$/, "").replace(/^prop-/, "");
   const g = e.kind === "proposal" ? (registryGrades[e.file] ?? grade(text)) : grade(text);
   const existing = await one(`SELECT id, status FROM papers WHERE problem_id = $1 AND slug = $2`, [p.id, pslug]);
-  if (existing) await q(`UPDATE papers SET title = $3, path = $4, kind = $5, grade = $6, summary = $7 WHERE problem_id = $1 AND slug = $2`, [p.id, pslug, t, e.path, e.kind, g, summary(text)]);
+  if (existing) await q(`UPDATE papers SET title = $3, path = $4, kind = $5, grade = $6, summary = $7, status = CASE WHEN status = 'proposed' AND $5 = 'draft' THEN 'draft' ELSE status END WHERE problem_id = $1 AND slug = $2`, [p.id, pslug, t, e.path, e.kind, g, summary(text)]);
   else { await q(`INSERT INTO papers (problem_id, slug, title, path, kind, status, grade, summary) VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`, [p.id, pslug, t, e.path, e.kind, e.kind === "proposal" ? "proposed" : "draft", g, summary(text)]); seeded++; }
   const open = await one(`SELECT 1 FROM jobs WHERE problem_id = $1 AND type = 'paper' AND status IN ('queued','assigned') AND brief_md LIKE '%paper.slug: ' || $2 || '%'`, [p.id, pslug]);
   if (open) continue;
