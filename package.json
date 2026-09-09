@@ -10,6 +10,7 @@
     "build": "tsc",
     "build:icons": "node scripts/build-icons.mjs",
     "check": "tsc --noEmit",
+    "test:activity": "node --import tsx --test tests/project-activity.test.mjs",
     "seed": "tsx scripts/seed.ts",
     "import-briefs": "tsx scripts/import-briefs.ts briefs",
     "dump": "tsx scripts/dump.ts",

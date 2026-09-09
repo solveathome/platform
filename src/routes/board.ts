@@ -5,6 +5,7 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { PUBLIC_DIR } from "../lib/paths.js";
 import { leaderboard, type Window } from "../lib/credit.js";
+import { projectActivity } from "../lib/project-activity.js";
 
 const page = (name: string) => readFileSync(join(PUBLIC_DIR, name), "utf8");
 const wantsHtml = (req: any) => (req.header("accept") ?? "").includes("text/html");
@@ -12,12 +13,15 @@ const wantsHtml = (req: any) => (req.header("accept") ?? "").includes("text/html
 export const board = Router({ mergeParams: true });
 export const root = Router();
 
-/** GET /projects/:slug : the project page for browsers (board on top, chat, contributors at the bottom). */
+/** GET /projects/:slug : project introduction, agent activity, and research workspace. */
 board.get("/", async (req: any, res) => {
-  const p = await one(`SELECT slug, name FROM problems WHERE slug = $1`, [req.params.slug]);
+  const p = await one(`SELECT slug, name, summary FROM problems WHERE slug = $1`, [req.params.slug]);
   if (!p) { res.status(404).type("text/plain").send("unknown project"); return; }
   if (!wantsHtml(req)) { res.redirect(`/projects/${p.slug}/board`); return; }
-  res.type("text/html").send(page("project.html").replaceAll("__SLUG__", p.slug).replaceAll("__NAME__", String(p.name).replace(/</g, "&lt;")));
+  const escape = (text: unknown) => String(text ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+  const intro = p.slug === "twin-primes" ? page("partials/twin-primes-intro.html")
+    : `<h2>About this project</h2><p class="lead">${escape(p.summary)}</p>`;
+  res.type("text/html").send(page("project.html").replaceAll("__SLUG__", p.slug).replaceAll("__NAME__", escape(p.name)).replace("__PROJECT_INTRO__", intro));
 });
 
 /** GET /me : who the cookie or bearer token belongs to (for the browser UI). */
@@ -28,7 +32,7 @@ root.get("/me", optionalAuth, async (req: any, res) => {
   res.json({ signed_in: true, handle: req.user.handle, owner: OWNER_SET.has(String(req.user.handle).toLowerCase()), token: viaCookie ? cookieToken(req) : undefined });
 });
 
-/** GET /projects/:slug/board : research status first, contributors last (scope Q20). */
+/** GET /projects/:slug/board : project-scoped activity and research records. */
 board.get("/board", async (req, res) => {
   const problem = await one(`SELECT id, slug, name, repo_url, status_md, researcher_role,
     (SELECT handle FROM users WHERE id = problems.researcher_user_id) AS researcher
@@ -53,8 +57,9 @@ board.get("/board", async (req, res) => {
     SELECT u.handle, count(*) FILTER (WHERE r.status = 'accepted') AS accepted, sum(r.cpu_hours) AS cpu_hours,
            count(*) FILTER (WHERE r.type = 'direction' AND r.status = 'accepted') AS directions_accepted
     FROM returns r JOIN users u ON u.id = r.user_id WHERE r.problem_id = $1 GROUP BY u.handle ORDER BY accepted DESC, cpu_hours DESC LIMIT 200`, [pid]);
+  const activity = await projectActivity(Number(pid));
   const { id: _omit, ...pub } = problem;
-  res.json({ project: pub, rungs, lanes, queue, health, recent, contributors });
+  res.json({ project: pub, activity, rungs, lanes, queue, health, recent, contributors });
 });
 
 /** POST /projects/:slug/claims (owner): upsert provenance claims. Never touches the credit ledger. */
