@@ -12,7 +12,7 @@ import { ROOT } from "../lib/paths.js";
 import { BOOK_SOURCE, readPublication, publishedDocument } from "../lib/document-publication.js";
 import { protectMath } from "../lib/math.js";
 import { linkPeople } from "../lib/people.js";
-import { linkPaths } from "../lib/paths-link.js";
+import { linkPaths, paperPages } from "../lib/paths-link.js";
 
 export const docs = Router({ mergeParams: true });
 const REPOS = process.env.DOCS_DIR ?? join(ROOT, "data", "repos");
@@ -40,7 +40,8 @@ function crumbsFor(slug: string, rel: string): string {
   return out.join(" / ");
 }
 
-function renderMarkdown(src: string, slug: string, rel: string): { html: string; ledger: Record<string, string> | null; title: string } {
+async function renderMarkdown(src: string, slug: string, rel: string): Promise<{ html: string; ledger: Record<string, string> | null; title: string }> {
+  const pages = await paperPages(slug);
   const ledger: Record<string, string> = {};
   const m = /<!--\s*ledger\n([\s\S]*?)-->\s*/.exec(src);
   if (m) { for (const line of m[1].split("\n")) { const i = line.indexOf(":"); if (i > 0) ledger[line.slice(0, i).trim()] = line.slice(i + 1).trim(); } src = src.replace(m[0], ""); }
@@ -53,7 +54,7 @@ function renderMarkdown(src: string, slug: string, rel: string): { html: string;
   const linkFn = renderer.link.bind(renderer);
   renderer.link = ({ href, title, tokens }: any) => {
     let h = String(href ?? "");
-    if (!/^(?:[a-z]+:|\/|#)/i.test(h)) h = base + posix.normalize(posix.join(dir === "." ? "" : dir, h)).replace(/^\/+/, "");
+    if (!/^(?:[a-z]+:|\/|#)/i.test(h)) { const rel = posix.normalize(posix.join(dir === "." ? "" : dir, h)).replace(/^\/+/, ""); h = pages.get(rel) ?? base + rel; }
     return linkFn({ href: h, title, tokens } as any);
   };
   const imgFn = renderer.image.bind(renderer);
@@ -62,7 +63,7 @@ function renderMarkdown(src: string, slug: string, rel: string): { html: string;
     if (!/^(?:[a-z]+:|\/)/i.test(h)) h = base + posix.normalize(posix.join(dir === "." ? "" : dir, h)).replace(/^\/+/, "");
     return imgFn({ href: h, title, text } as any);
   };
-  const html = linkPaths(math.restore(marked.parse(safe, { gfm: true, breaks: false, renderer }) as string), slug, dir === "." ? "" : dir);
+  const html = linkPaths(math.restore(marked.parse(safe, { gfm: true, breaks: false, renderer }) as string), slug, dir === "." ? "" : dir, pages);
   return { html, ledger: m ? ledger : null, title };
 }
 
@@ -97,7 +98,7 @@ docs.get("/docs{/*path}", async (req: any, res) => {
     const entries = readdirSync(abs).filter((n) => !n.startsWith(".") && visible(n)).sort((a, b) => { const da = statSync(join(abs, a)).isDirectory(), db = statSync(join(abs, b)).isDirectory(); return da === db ? a.localeCompare(b) : da ? -1 : 1; });
     const readme = entries.find((n) => /^readme\.md$/i.test(n));
     let intro = "";
-    if (readme) { const r = renderMarkdown(readFileSync(join(abs, readme), "utf8"), slug, posix.join(rel, readme)); intro = `${ledgerHtml(r.ledger)}${r.html}<hr>`; }
+    if (readme) { const r = await renderMarkdown(readFileSync(join(abs, readme), "utf8"), slug, posix.join(rel, readme)); intro = `${ledgerHtml(r.ledger)}${r.html}<hr>`; }
     const list = entries.map((n) => { const s = statSync(join(abs, n)); const href = `/projects/${esc(slug)}/docs/${esc(posix.join(rel, n))}`; return `<li><a href="${href}">${esc(n)}${s.isDirectory() ? "/" : ""}</a>${s.isDirectory() ? "" : `<small>${s.size} B</small>`}</li>`; }).join("");
     res.type("text/html").send(chrome(slug, rel || "root", crumbsFor(slug, rel), `${intro}<ul class="tree">${list}</ul>`));
     return;
@@ -107,7 +108,7 @@ docs.get("/docs{/*path}", async (req: any, res) => {
     res.set({ "Content-Type": "text/markdown; charset=utf-8", "X-Content-Type-Options": "nosniff" }).send(readFileSync(abs, "utf8")); return;
   }
   if (ext === ".md") {
-    const r = renderMarkdown(readFileSync(abs, "utf8"), slug, rel);
+    const r = await renderMarkdown(readFileSync(abs, "utf8"), slug, rel);
     const claim = await one(`SELECT c.status, c.origin_handle FROM claims c JOIN problems p ON p.id = c.problem_id WHERE p.slug = $1 AND c.path = $2`, [slug, rel]);
     const extra = claim ? `<span class="muted">claim status <span class="status">${esc(String(claim.status).toLowerCase())}</span> · origin <a href="/@${esc(claim.origin_handle)}" style="font-weight:400">@${esc(claim.origin_handle)}</a></span>` : "";
     res.type("text/html").send(chrome(slug, r.title, crumbsFor(slug, rel), `${ledgerHtml(r.ledger)}${await linkPeople(r.html)}`, extra));
