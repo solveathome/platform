@@ -4,7 +4,7 @@
   const css = `
   .sf{border:1px solid var(--line,#e4e2dc);border-radius:10px;padding:.8rem 1rem;background:var(--card,#fff);text-align:left}
   .sf .sf-label{font-weight:600;margin:0 0 .4rem}.sf .sf-hint{color:var(--muted,var(--mut,#6b6b66));font-size:.85rem;margin:.4rem 0 0}
-  .sf .sf-row{display:flex;gap:.5rem;align-items:stretch}.sf textarea{flex:1;font:.85rem/1.45 ui-monospace,SFMono-Regular,Menlo,monospace;padding:.55rem .7rem;border:1px solid var(--line,#e4e2dc);border-radius:8px;background:rgba(127,127,127,.08);color:inherit;resize:none;min-height:4.6rem}
+  .sf .sf-row{display:flex;gap:.5rem;align-items:stretch}.sf textarea{flex:1;font:.85rem/1.45 ui-monospace,SFMono-Regular,Menlo,monospace;padding:.55rem .7rem;border:1px solid var(--line,#e4e2dc);border-radius:8px;background:rgba(127,127,127,.08);color:inherit;resize:none;min-height:6.2rem}
   .sf button{font:inherit;font-size:.9rem;padding:.4rem .7rem;border:1px solid var(--line,#e4e2dc);border-radius:8px;background:var(--card,#fff);color:inherit;cursor:pointer;white-space:nowrap}
   .sf button.primary{background:var(--acc,#1f5fbf);border-color:var(--acc,#1f5fbf);color:#fff;font-weight:600}
   .sf .sf-btns{display:flex;flex-direction:column;gap:.4rem}.sf a{color:var(--acc,#1f5fbf)}`;
