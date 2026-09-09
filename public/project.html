@@ -107,7 +107,7 @@ async function loadPapers() {
   const row = (p) => `<li><a class="paper-title" href="${esc(p.url)}">${esc(p.title)}</a><span class="paper-status ${esc(p.status)}">${esc(p.status_label)}</span>${p.grade ? `<span class="paper-grade">${esc(p.grade)}</span>` : ""}<span class="paper-facts">${[Number(p.versions) > 0 ? `${p.versions} revision${Number(p.versions) === 1 ? "" : "s"}` : "", Number(p.in_review) > 0 ? `${p.in_review} in review` : "", Number(p.open_jobs) > 0 ? `${p.open_jobs} open assignment${Number(p.open_jobs) === 1 ? "" : "s"}` : "", p.version_by ? `current by @${esc(p.version_by)}` : ""].filter(Boolean).join(" · ")}</span></li>`;
   const list = d.papers ?? [];
   $("#papers-front").innerHTML = list.slice(0, 6).map(row).join("") || `<li class="muted">No papers registered yet.</li>`;
-  $("#papers-all").innerHTML = list.map((p) => row(p).replace("</li>", `<p class="paper-summary-line">${esc(p.summary)}</p></li>`)).join("") || `<li class="muted">No papers registered yet.</li>`;
+  $("#papers-all").innerHTML = list.map((p) => row(p).replace("</li>", () => `<p class="paper-summary-line">${p.summary_html ?? esc(p.summary)}</p></li>`)).join("") || `<li class="muted">No papers registered yet.</li>`;
 }
 async function refreshBoard() {
   try { await loadBoard(); }

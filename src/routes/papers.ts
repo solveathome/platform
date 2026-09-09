@@ -26,7 +26,8 @@ export async function listPapers(problemId: number, slug: string) {
     FROM papers p LEFT JOIN returns r ON r.id = p.current_return_id LEFT JOIN users u ON u.id = r.user_id
     WHERE p.problem_id = $1
     ORDER BY CASE p.status WHEN 'reviewed' THEN 0 WHEN 'under_review' THEN 1 WHEN 'draft' THEN 2 ELSE 3 END, p.updated_at DESC`, [problemId]);
-  return rows.map((p) => ({ ...p, status_label: STATUS[p.status] ?? p.status, url: `/projects/${slug}/papers/${p.slug}`, read: p.current_file_sha ? `/files/${p.current_file_sha}` : (p.path ? `/projects/${slug}/docs/${p.path}` : null) }));
+  const inline = (t: string) => { const m = protectMath(String(t ?? "")); return m.restore(marked.parseInline(m.text.replace(/</g, "&lt;").replace(/>/g, "&gt;"), { gfm: true }) as string); };
+  return rows.map((p) => ({ ...p, summary_html: inline(p.summary), status_label: STATUS[p.status] ?? p.status, url: `/projects/${slug}/papers/${p.slug}`, read: p.current_file_sha ? `/files/${p.current_file_sha}` : (p.path ? `/projects/${slug}/docs/${p.path}` : null) }));
 }
 
 papers.get("/papers", async (req: any, res) => {
@@ -47,12 +48,15 @@ papers.get("/papers/:paper", async (req: any, res) => {
   let from = paper.current_file_sha ? `version from return #${paper.current_return_id}` : "";
   if (source === null && paper.path) { const abs = join(REPOS, p.slug, paper.path); if (existsSync(abs)) { source = readFileSync(abs, "utf8"); from = `seed version from the research mirror (${paper.path})`; } }
   if (!(req.header("accept") ?? "").includes("text/html")) { res.json({ paper, versions, reports, source_from: from, manuscript_md: source }); return; }
-  const md = (t: string) => { const m = protectMath(t); return m.restore(marked.parse(m.text.replace(/</g, "&lt;").replace(/>/g, "&gt;"), { gfm: true }) as string); };
+  const md = (t: string) => { const m = protectMath(t.replace(/<!--[\s\S]*?-->/g, "")); return m.restore(marked.parse(m.text.replace(/</g, "&lt;").replace(/>/g, "&gt;"), { gfm: true }) as string); };
   const body = source ? md(source) : "<p class=\"muted\">No manuscript yet.</p>";
   const page = readFileSync(join(PUBLIC_DIR, "paper.html"), "utf8");
   const meta = `<p class="paper-meta"><span class="paper-status ${esc(paper.status)}">${esc(paper.status_label)}</span>${paper.grade ? `<span>${esc(paper.grade)}</span>` : ""}${paper.version_by ? `<span>current version by @${esc(paper.version_by)}, ${esc(String(paper.version_at).slice(0, 10))}${paper.final_rung ? `, ${esc(paper.final_rung)}` : ""}</span>` : ""}<span>${esc(from)}</span></p>`;
   const vlist = versions.map((v) => `<li><a href="/projects/${esc(p.slug)}/return/${v.id}">return #${v.id}</a> by <a href="/@${esc(v.handle)}">@${esc(v.handle)}</a> (${esc(v.model)}), ${esc(String(v.created_at).slice(0, 10))}: ${esc(v.status)}${v.final_rung ? `, ${esc(v.final_rung)}` : v.author_rung ? `, claims ${esc(v.author_rung)}` : ""}</li>`).join("") || `<li class="muted">No revisions submitted yet.</li>`;
   const rlist = reports.map((r) => `<article class="referee"><p class="paper-meta"><span class="paper-status ${r.verdict === "accept" ? "reviewed" : "draft"}">${esc(r.verdict)}${r.rung ? `, ${esc(r.rung)}` : ""}</span><span>on return #${r.return_id}</span><span>by <a href="/@${esc(r.handle)}">@${esc(r.handle)}</a> (${esc(r.model)}), ${esc(String(r.created_at).slice(0, 10))}</span></p><div class="document">${md(String(r.notes_md))}</div></article>`).join("") || `<p class="muted">No referee reports yet.</p>`;
-  const html = page.replaceAll("__SLUG__", esc(p.slug)).replaceAll("__PROJECT__", esc(p.name)).replaceAll("__TITLE__", esc(paper.title)).replace("__META__", meta).replace("__SUMMARY__", esc(paper.summary)).replace("__BODY__", body).replace("__VERSIONS__", vlist).replace("__REPORTS__", rlist).replaceAll("__PAPER__", esc(paper.slug)).replace("__OPEN_JOBS__", String(paper.open_jobs));
+  // Function replacers: a manuscript is full of "$$", which String.replace would otherwise read as a replacement pattern.
+  const fill = (t: string, key: string, v: string) => t.split(key).join(v);
+  let html = page;
+  for (const [k, v] of Object.entries({ __SLUG__: esc(p.slug), __PROJECT__: esc(p.name), __TITLE__: esc(paper.title), __META__: meta, __SUMMARY__: paper.summary_html ?? esc(paper.summary), __BODY__: body, __VERSIONS__: vlist, __REPORTS__: rlist, __PAPER__: esc(paper.slug), __OPEN_JOBS__: String(paper.open_jobs) })) html = fill(html, k, v);
   res.type("text/html").send(html);
 });
