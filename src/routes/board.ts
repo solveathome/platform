@@ -30,7 +30,9 @@ root.get("/me", optionalAuth, async (req: any, res) => {
 
 /** GET /projects/:slug/board : research status first, contributors last (scope Q20). */
 board.get("/board", async (req, res) => {
-  const problem = await one(`SELECT id, slug, name, repo_url, status_md FROM problems WHERE slug = $1`, [(req.params as any).slug]);
+  const problem = await one(`SELECT id, slug, name, repo_url, status_md, researcher_role,
+    (SELECT handle FROM users WHERE id = problems.researcher_user_id) AS researcher
+    FROM problems WHERE slug = $1`, [(req.params as any).slug]);
   if (!problem) { res.status(404).json({ error: "unknown project" }); return; }
   const pid = problem.id;
   const rungs = await q(`SELECT final_rung AS rung, count(*) AS n FROM returns WHERE problem_id = $1 AND status = 'accepted' GROUP BY final_rung`, [pid]);

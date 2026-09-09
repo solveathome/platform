@@ -10,7 +10,7 @@
   };
   const json = async (url, options = {}) => {
     const r = await fetch(url, {...options, headers: {accept: 'application/json', ...options.headers}});
-    if (!r.ok) throw new Error(`Request failed (${r.status})`);
+    if (!r.ok) { const error = new Error(`Request failed (${r.status})`); error.status = r.status; throw error; }
     return r.json();
   };
   const metric = (value, label) => `<div class="metric"><b>${number(value)}</b><span>${esc(label)}</span></div>`;
@@ -36,6 +36,7 @@
       if (link.hash === '#' + active.id) link.setAttribute('aria-current', 'page');
       else link.removeAttribute('aria-current');
     });
+    if (id === 'contribute') requestAnimationFrame(() => document.getElementById('contribute')?.scrollIntoView({block: 'start'}));
   }
   showPanel(location.hash.slice(1));
   addEventListener('hashchange', () => showPanel(location.hash.slice(1)));

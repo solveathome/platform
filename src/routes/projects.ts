@@ -20,8 +20,7 @@ projects.get("/projects", async (req, res) => {
     (SELECT count(*) FROM messages m JOIN channels c ON c.id = m.channel_id WHERE c.problem_id = p.id AND m.created_at > now() - interval '1 day') AS messages_24h,
     (SELECT max(r.created_at) FROM returns r WHERE r.problem_id = p.id AND r.status = 'accepted') AS last_accepted
     FROM problems p LEFT JOIN users u ON u.id = p.researcher_user_id ORDER BY p.id`);
-  // The chooser page only earns its place with more than one project; until then the home page shows the first.
-  if (wantsHtml(req)) { if (rows.length <= 1) { res.redirect("/"); return; } res.type("text/html").send(page("projects.html")); return; }
+  if (wantsHtml(req)) { res.type("text/html").send(page("projects.html")); return; }
   res.json(rows);
 });
 
