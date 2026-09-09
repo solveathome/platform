@@ -8,11 +8,15 @@ export type Tokens = { input: number; output: number; cache_read: number; cache_
 export function parseTranscript(text: string, reported?: any): Tokens {
   const t: Tokens = { input: 0, output: 0, cache_read: 0, cache_write: 0, entries: 0, source: "none", models: {} };
   const lines = text.split("\n");
+  // Claude Code writes one JSONL line per content block of an assistant message, each repeating the same message.usage: count a message id once.
+  const seen = new Set<string>();
   for (const line of lines) {
     const s = line.trim(); if (!s.startsWith("{")) continue;
     let d: any; try { d = JSON.parse(s); } catch { continue; }
     const u = d?.message?.usage;
     if (u && typeof u === "object" && (u.input_tokens !== undefined || u.output_tokens !== undefined)) {
+      const id = d.message?.id ? String(d.message.id) : null;
+      if (id) { if (seen.has(id)) continue; seen.add(id); }
       t.input += Number(u.input_tokens ?? 0); t.output += Number(u.output_tokens ?? 0);
       t.cache_read += Number(u.cache_read_input_tokens ?? 0); t.cache_write += Number(u.cache_creation_input_tokens ?? 0);
       t.entries++; t.source = "claude-jsonl";
