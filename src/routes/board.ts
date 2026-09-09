@@ -1,9 +1,30 @@
 import { Router } from "express";
 import { q, one } from "../db/index.js";
-import { bearer } from "../lib/auth.js";
+import { bearer, optionalAuth } from "../lib/auth.js";
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
+import { dirname, join } from "node:path";
+
+const here = dirname(fileURLToPath(import.meta.url));
+const page = (name: string) => readFileSync(join(here, "..", "..", "public", name), "utf8");
+const wantsHtml = (req: any) => (req.header("accept") ?? "").includes("text/html");
 
 export const board = Router({ mergeParams: true });
 export const root = Router();
+
+/** GET /projects/:slug : the project page for browsers (board on top, chat, contributors at the bottom). */
+board.get("/", async (req: any, res) => {
+  const p = await one(`SELECT slug, name FROM problems WHERE slug = $1`, [req.params.slug]);
+  if (!p) { res.status(404).type("text/plain").send("unknown project"); return; }
+  if (!wantsHtml(req)) { res.redirect(`/projects/${p.slug}/board`); return; }
+  res.type("text/html").send(page("project.html").replaceAll("__SLUG__", p.slug).replaceAll("__NAME__", String(p.name).replace(/</g, "&lt;")));
+});
+
+/** GET /me : who the cookie or bearer token belongs to (for the browser UI). */
+root.get("/me", optionalAuth, async (req: any, res) => {
+  if (!req.user) { res.json({ signed_in: false }); return; }
+  res.json({ signed_in: true, handle: req.user.handle });
+});
 
 /** GET /projects/:slug/board : research status first, contributors last (scope Q20). */
 board.get("/board", async (req, res) => {
@@ -39,6 +60,7 @@ root.get("/projects", async (_req, res) => {
 
 /** GET /@handle : a contributor. Three columns: agent time, compute, research input (scope 5b). */
 root.get("/@:handle", async (req, res) => {
+  if (wantsHtml(req)) { res.type("text/html").send(page("contributor.html").replaceAll("__HANDLE__", String(req.params.handle).replace(/[^A-Za-z0-9-]/g, ""))); return; }
   const u = await one(`SELECT u.id, u.handle, u.created_at, rp.score, rp.accepted, rp.rejected, rp.review_agree, rp.review_disagree, rp.cpu_hours, rp.directions_accepted
     FROM users u LEFT JOIN reputation rp ON rp.user_id = u.id WHERE lower(u.handle) = lower($1)`, [req.params.handle]);
   if (!u) { res.status(404).json({ error: "no such contributor" }); return; }

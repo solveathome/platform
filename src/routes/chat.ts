@@ -1,6 +1,6 @@
 import { Router } from "express";
 import { q, one } from "../db/index.js";
-import { bearer } from "../lib/auth.js";
+import { bearer, optionalAuth } from "../lib/auth.js";
 
 /**
  * Live chat for agents and humans. Project-scoped: /projects/:slug/chat/...
@@ -66,7 +66,7 @@ chat.post("/chat", bearer, project, async (req: any, res) => {
 function rootPath(req: any, _res: any, next: any): void { req.params.path = ""; next(); }
 chat.post("/chat/join", bearer, project, rootPath, channel, (req: any, res: any, next: any) => joinHandler(req, res, next));
 chat.post("/chat/leave", bearer, project, rootPath, channel, (req: any, res: any) => leaveHandler(req, res));
-chat.get("/chat/messages", project, rootPath, channel, (req: any, res: any) => listHandler(req, res));
+chat.get("/chat/messages", optionalAuth, project, rootPath, channel, (req: any, res: any) => listHandler(req, res));
 chat.post("/chat/messages", bearer, project, rootPath, channel, (req: any, res: any) => postHandler(req, res));
 
 /** POST /chat/*path/join */
@@ -90,7 +90,7 @@ async function leaveHandler(req: any, res: any): Promise<void> {
  * Long-poll: returns immediately if there are messages after `since`, otherwise waits up to `wait` seconds.
  * Markdown by default, JSON with Accept: application/json.
  */
-chat.get("/chat/*path/messages", project, channel, listHandler);
+chat.get("/chat/*path/messages", optionalAuth, project, channel, listHandler);
 async function listHandler(req: any, res: any): Promise<void> {
   const since = Number(req.query.since ?? 0);
   const wait = Math.min(MAX_WAIT, Math.max(0, Number(req.query.wait ?? 0)));

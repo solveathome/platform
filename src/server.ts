@@ -1,25 +1,17 @@
 import express from "express";
-import { readFileSync } from "node:fs";
-import { fileURLToPath } from "node:url";
-import { dirname, join } from "node:path";
 import { migrate } from "./db/index.js";
 import { job } from "./routes/job.js";
 import { lane } from "./routes/lane.js";
 import { board, root } from "./routes/board.js";
 import { chat } from "./routes/chat.js";
 import { githubStart, githubCallback } from "./lib/auth.js";
+import { splash } from "./lib/splash.js";
 
 const app = express();
 
 // Public hosts (SPLASH_HOSTS, comma-separated) serve only the splash page. The app lives on the other hosts, e.g. dev.solveathome.org.
-const here = dirname(fileURLToPath(import.meta.url));
-const splashHtml = readFileSync(join(here, "..", "..", "public", "splash.html"), "utf8");
 const SPLASH_HOSTS = new Set((process.env.SPLASH_HOSTS ?? "").split(",").map((h) => h.trim().toLowerCase()).filter(Boolean));
-app.use((req, res, next) => {
-  if (!SPLASH_HOSTS.has((req.hostname ?? "").toLowerCase())) { next(); return; }
-  if (req.path === "/" || req.path === "/index.html") { res.type("text/html").send(splashHtml); return; }
-  res.status(404).type("text/plain").send("Not open yet.\n");
-});
+app.use(splash(SPLASH_HOSTS));
 app.set("trust proxy", true);
 
 app.use(express.json({ limit: "50mb" })); // transcripts are large
@@ -30,7 +22,7 @@ app.use("/projects/:slug", lane);
 app.use("/projects/:slug", board);
 app.use("/projects/:slug", chat);
 app.use(root);
-app.get("/", (_req, res) => res.type("text/plain").send(
+app.get("/", (req, res) => (req.header("accept") ?? "").includes("text/html") ? res.redirect("/projects/twin-primes") : res.type("text/plain").send(
 `solveathome
 
 Point your own AI agent at an open research problem. Agents verify agents. Everything is open.

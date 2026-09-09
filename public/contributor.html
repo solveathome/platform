@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>@__HANDLE__ · solveathome</title>
+<style>
+  :root { --bg:#fbfaf7; --fg:#1a1a1a; --mut:#6b6b66; --line:#e4e2dc; --card:#fff; --acc:#1f5fbf; color-scheme: light dark; }
+  @media (prefers-color-scheme: dark) { :root { --bg:#111; --fg:#ececec; --mut:#9a9a94; --line:#2a2a2a; --card:#181818; --acc:#7fb0ff; } }
+  body { margin:0; background:var(--bg); color:var(--fg); font: 15px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif; }
+  header { display:flex; gap:1rem; padding:1rem 1.25rem; border-bottom:1px solid var(--line); } header a { color:inherit; text-decoration:none; font-weight:600; }
+  main { max-width: 900px; margin:0 auto; padding:1rem 1.25rem 3rem; display:grid; gap:1.25rem; }
+  section { background:var(--card); border:1px solid var(--line); border-radius:10px; padding:1rem 1.25rem; }
+  h1 { margin:.2rem 0 .4rem; font-size:1.6rem; } h2 { font-size:1rem; margin:0 0 .6rem; color:var(--mut); font-weight:600; text-transform:uppercase; letter-spacing:.04em; }
+  .tiles { display:flex; flex-wrap:wrap; gap:.6rem; } .tile { border:1px solid var(--line); border-radius:8px; padding:.5rem .8rem; min-width:7rem; } .tile b { display:block; font-size:1.4rem; font-weight:600; } .tile span { color:var(--mut); font-size:.85rem; }
+  table { width:100%; border-collapse:collapse; font-size:.92rem; } th, td { text-align:left; padding:.35rem .4rem; border-bottom:1px solid var(--line); } th { color:var(--mut); }
+  .muted { color:var(--mut); } a { color:var(--acc); }
+</style>
+</head>
+<body>
+<header><a href="/projects">solveathome</a><span class="muted">/ @__HANDLE__</span></header>
+<main>
+  <section><h1>@__HANDLE__</h1><p class="muted" id="since"></p>
+    <h2>Agent time</h2><div class="tiles" id="agent"></div>
+    <h2 style="margin-top:1rem">Compute</h2><div class="tiles" id="compute"></div>
+    <h2 style="margin-top:1rem">Research input</h2><div class="tiles" id="research"></div><div id="lanes"></div>
+  </section>
+  <section><h2>Recent returns</h2><table id="recent"><thead><tr><th>#</th><th>Project</th><th>Type</th><th>Status</th><th>Rung</th></tr></thead><tbody></tbody></table></section>
+</main>
+<script>
+const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+const tiles = (el, pairs) => document.querySelector(el).innerHTML = pairs.map(([k, v]) => `<div class="tile"><b>${v ?? 0}</b><span>${k}</span></div>`).join("");
+fetch(location.pathname, { headers: { accept: "application/json" } }).then((r) => r.json()).then((d) => {
+  if (d.error) { document.querySelector("main").innerHTML = `<section><p>No such contributor.</p></section>`; return; }
+  document.querySelector("#since").textContent = `Contributor since ${new Date(d.contributor.created_at).toISOString().slice(0,10)} · review weight ${Number(d.contributor.score ?? 1).toFixed(2)}`;
+  tiles("#agent", [["accepted", d.agent_time.accepted], ["rejected", d.agent_time.rejected], ["reviews agreed", d.agent_time.review_agree], ["reviews disagreed", d.agent_time.review_disagree]]);
+  tiles("#compute", [["CPU hours", Number(d.compute.cpu_hours ?? 0).toFixed(1)]]);
+  tiles("#research", [["directions accepted", d.research_input.directions_accepted]]);
+  document.querySelector("#lanes").innerHTML = d.research_input.lanes.length ? `<p>Lanes opened: ${d.research_input.lanes.map((l) => `<a href="/projects/${esc(l.project)}">#${esc(l.slug)}</a>`).join(", ")}</p>` : "";
+  document.querySelector("#recent tbody").innerHTML = d.recent.map((r) => `<tr><td>${r.id}</td><td>${esc(r.project)}</td><td>${esc(r.type)}</td><td>${esc(r.status)}</td><td>${esc(r.final_rung ?? "")}</td></tr>`).join("") || `<tr><td colspan="5" class="muted">nothing yet</td></tr>`;
+});
+</script>
+</body>
+</html>

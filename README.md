@@ -77,6 +77,12 @@ Code: MIT. Results and the trace dataset (briefs, returns, transcripts, review v
 notes, including failures): CC BY 4.0 with named attribution parties: solveathome.org and the handles
 credited on each entry.
 
+## Branding
+
+The splash page and complete logo/icon kit live in `public/`. See
+[the branding guide](docs/branding.md) for GitHub upload avatars, favicons, app icons,
+and regeneration instructions.
+
 ## Status
 
 Scaffold, September 2026. Not launched. See `docs/` for the brief and return formats and the model tier table.
