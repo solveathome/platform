@@ -32,7 +32,7 @@ a.btn{display:inline-block;background:var(--acc);color:#fff;text-decoration:none
 <script>
 const esc=(s)=>String(s??"").replace(/[&<>"]/g,(c)=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
 const ago=(t)=>{if(!t)return "never";const d=(Date.now()-new Date(t))/1000;return d<3600?`${Math.floor(d/60)} min ago`:d<86400?`${Math.floor(d/3600)} h ago`:`${Math.floor(d/86400)} d ago`};
-fetch("/me").then(r=>r.json()).then(m=>{document.querySelector("#who").innerHTML=m.signed_in?`<a href="/@${esc(m.handle)}">@${esc(m.handle)}</a>`:`<a href="/auth/github">Sign in with GitHub</a>`;}).catch(()=>{});
+fetch("/me").then(r=>r.json()).then(m=>{document.querySelector("#who").innerHTML=m.signed_in?`${m.owner&&m.pending_proposals?`<a href="/proposals" style="color:var(--acc);margin-right:.8rem">${m.pending_proposals} proposal${m.pending_proposals>1?"s":""} to decide</a>`:""}<a href="/@${esc(m.handle)}">@${esc(m.handle)}</a>`:`<a href="/auth/github">Sign in with GitHub</a>`;}).catch(()=>{});
 fetch("/projects",{headers:{accept:"application/json"}}).then(r=>r.json()).then(list=>{
   document.querySelector("#projects").innerHTML=list.map(p=>`<div class="card">
     <h2><a href="/projects/${esc(p.slug)}">${esc(p.name)}</a></h2>

@@ -30,9 +30,15 @@ async function start(req: any, res: any): Promise<void> {
   if (root) await q(`INSERT INTO channel_members (channel_id, user_id, model) VALUES ($1,$2,$3) ON CONFLICT (channel_id, user_id) DO UPDATE SET model = EXCLUDED.model`, [root.id, req.user!.id, req.model ?? null]);
   const member = await one(`SELECT * FROM pool WHERE problem_id = $1 AND user_id = $2`, [req.project.id, req.user!.id]);
   const wantsJson = (req.header("accept") ?? "").includes("application/json");
+  const isOwner = (process.env.OWNER_HANDLES ?? "").split(",").map((s) => s.trim().toLowerCase()).includes(String(req.user!.handle).toLowerCase());
+  let ownerNote = "";
+  if (isOwner) {
+    const pend = await q(`SELECT pr.id, pr.title, u.handle FROM proposals pr JOIN users u ON u.id = pr.user_id WHERE pr.status = 'proposed' ORDER BY pr.id`);
+    if (pend.length) ownerNote = `## For the site owner\n\n${pend.length} project proposal(s) await your decision. Tell your person: ${pend.map((x) => `#${x.id} "${x.title}" by @${x.handle}`).join("; ")}. Decide at ${BASE()}/proposals.\n\n`;
+  }
   if (!member) {
     // Not registered: orientation only. The agent must ask its person and POST /start.
-    const md = await orientation(req.project, BASE(), null);
+    const md = ownerNote + await orientation(req.project, BASE(), null);
     if (wantsJson) res.json({ registered: false, orientation_md: md }); else res.type("text/markdown").send(md);
     return;
   }
@@ -76,6 +82,7 @@ async function start(req: any, res: any): Promise<void> {
     row.expires_at = upd.rows[0].expires_at;
     let md = renderBrief(row, `${BASE()}/projects/${req.project.slug}`);
     if (req.justRegistered) md = (await orientation(req.project, BASE(), member)) + "\n\n---\n\n" + md;
+    md = ownerNote + md;
     if (member.input?.direction) md += `\n\n## Your person's direction\n\nThey said: "${String(member.input.direction).slice(0, 2000)}"\n\nIf this assignment does not serve that, you may set it aside: pursue their idea and submit it as type \`direction\` with their words in the report and their handle in \`cites.handles\`. Their name goes on the lane if it is accepted.\n`;
     if (wantsJson) res.json({ job_id: row.id, type: row.type, brief_md: md });
     else res.type("text/markdown").send(md);
