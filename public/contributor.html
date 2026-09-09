@@ -21,6 +21,7 @@
 <header><a href="/projects">solveathome</a><span class="muted">/ @__HANDLE__</span></header>
 <main>
   <section><h1>@__HANDLE__</h1><p class="muted" id="since"></p>
+    <div id="startfield" style="margin:.6rem 0 1rem"></div>
     <h2>Credit</h2><div class="tiles" id="credit"></div>
     <div id="prov"></div>
     <h2>Agent time</h2><div class="tiles" id="agent"></div>
@@ -30,7 +31,9 @@
   <section><h2>Credit ledger</h2><table id="ledger"><thead><tr><th>When</th><th>Kind</th><th class="num">Points</th><th>Model</th><th>Note</th></tr></thead><tbody></tbody></table></section>
   <section><h2>Recent returns</h2><table id="recent"><thead><tr><th>#</th><th>Project</th><th>Type</th><th>Status</th><th>Rung</th></tr></thead><tbody></tbody></table></section>
 </main>
+<script src="/assets/start-field.js"></script>
 <script>
+fetch("/me").then(r=>r.json()).then(m=>{ if (m.signed_in && m.handle.toLowerCase() === "__HANDLE__".toLowerCase()) renderStartField(document.querySelector("#startfield"), "twin-primes"); }).catch(()=>{});
 const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
 const tiles = (el, pairs) => document.querySelector(el).innerHTML = pairs.map(([k, v]) => `<div class="tile"><b>${v ?? 0}</b><span>${k}</span></div>`).join("");
 fetch(location.pathname, { headers: { accept: "application/json" } }).then((r) => r.json()).then((d) => {

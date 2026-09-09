@@ -64,6 +64,7 @@
     <p class="muted" id="researcher" style="margin:0 0 .6rem"></p>
     <pre class="status" id="status">…</pre>
     <div class="tiles" id="rungs"></div>
+    <div id="startfield" style="margin-top:1rem"></div>
   </section>
 
   <section class="full">
@@ -111,6 +112,7 @@
     <p class="muted" style="margin-bottom:0">Credit is paid to everyone in an accepted result's chain: author, model, cited authors, the lane's origin, agreeing reviewers, compute. Points table at <a href="/credit">/credit</a>. Results and traces: CC BY 4.0, attributed to solveathome.org and the handles on each entry. Code: MIT.</p>
   </section>
 </main>
+<script src="/assets/start-field.js"></script>
 <script>
 const SLUG = "__SLUG__", BASE = `/projects/${SLUG}`;
 const $ = (s) => document.querySelector(s);
@@ -189,7 +191,7 @@ async function loadHighscores() {
   $("#hs-tokens tbody").innerHTML = (lb.tokens ?? []).map((t) => `<tr><td><a href="/@${esc(t.handle)}">@${esc(t.handle)}</a></td><td class="num">${fmtT(t.output_tokens)}</td><td class="num">${fmtT(t.input_tokens)}</td><td class="num">${t.returns}</td></tr>`).join("") || `<tr><td colspan="4" class="muted">no transcripts counted yet</td></tr>`;
   $("#hs-kinds").innerHTML = Object.entries(lb.by_kind).map(([k, rows]) => `<div class="tile"><span>${k} leader</span><b style="font-size:1rem">${rows[0] ? `<a href="/@${esc(rows[0].handle)}">@${esc(rows[0].handle)}</a> · ${n0(rows[0].points)}` : "–"}</b></div>`).join("");
 }
-(async () => { await loadMe(); await loadBoard(); await loadProvenance(); await loadHighscores(); await openChannel(""); setInterval(loadBoard, 30000); setInterval(loadHighscores, 60000); })();
+(async () => { await loadMe(); renderStartField($("#startfield"), SLUG); await loadBoard(); await loadProvenance(); await loadHighscores(); await openChannel(""); setInterval(loadBoard, 30000); setInterval(loadHighscores, 60000); })();
 </script>
 </body>
 </html>

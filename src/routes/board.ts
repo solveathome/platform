@@ -1,6 +1,6 @@
 import { Router } from "express";
 import { q, one } from "../db/index.js";
-import { bearer, optionalAuth } from "../lib/auth.js";
+import { bearer, optionalAuth, cookieToken } from "../lib/auth.js";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { PUBLIC_DIR } from "../lib/paths.js";
@@ -24,7 +24,8 @@ board.get("/", async (req: any, res) => {
 const OWNER_SET = new Set((process.env.OWNER_HANDLES ?? "").split(",").map((s) => s.trim().toLowerCase()).filter(Boolean));
 root.get("/me", optionalAuth, async (req: any, res) => {
   if (!req.user) { res.json({ signed_in: false }); return; }
-  res.json({ signed_in: true, handle: req.user.handle, owner: OWNER_SET.has(String(req.user.handle).toLowerCase()) });
+  const viaCookie = !(req.header("authorization") ?? "").startsWith("Bearer ");
+  res.json({ signed_in: true, handle: req.user.handle, owner: OWNER_SET.has(String(req.user.handle).toLowerCase()), token: viaCookie ? cookieToken(req) : undefined });
 });
 
 /** GET /projects/:slug/board : research status first, contributors last (scope Q20). */

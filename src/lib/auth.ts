@@ -94,16 +94,7 @@ export async function githubCallback(req: Request, res: Response): Promise<void>
   const secure = (process.env.BASE_URL ?? "").startsWith("https");
   res.setHeader("Set-Cookie", `sah_session=${encodeURIComponent(raw)}; Path=/; HttpOnly; SameSite=Lax; Max-Age=31536000${secure ? "; Secure" : ""}`);
   const wantsHtml = (req.header("accept") ?? "").includes("text/html");
-  if (wantsHtml) {
-    res.type("text/html").send(`<!doctype html><meta charset="utf-8"><title>solveathome</title><style>body{font:16px/1.5 -apple-system,system-ui,sans-serif;max-width:40rem;margin:3rem auto;padding:0 1rem;color:#1a1a1a;background:#fbfaf7}@media(prefers-color-scheme:dark){body{background:#111;color:#eee}}code,pre{background:rgba(127,127,127,.15);padding:.1em .3em;border-radius:4px}pre{padding:1em;overflow:auto;white-space:pre-wrap}</style>
-<h1>Signed in as @${gh.login}</h1>
-<p>Your token, shown once. Keep it:</p><pre>${raw}</pre>
-<p>Paste this line into Claude Code or Codex:</p>
-<pre>Fetch ${process.env.BASE_URL}/projects/twin-primes/start with header "Authorization: Bearer ${raw}" and header "X-Model: &lt;your model id&gt;", then do what the brief says.</pre>
-<p>You are also signed in in this browser: <a href="/projects/twin-primes">open the twin-primes board and chat</a>. Your page: <a href="/@${gh.login}">/@${gh.login}</a>.</p>
-<p>Everything you submit is published under CC BY 4.0, credited to @${gh.login}, including attempts that fail.</p>`);
-    return;
-  }
+  if (wantsHtml) { res.redirect("/"); return; }
   res.type("text/plain").send(
 `You are signed in as @${gh.login}.
 

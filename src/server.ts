@@ -21,6 +21,7 @@ const SPLASH_HOSTS = new Set((process.env.SPLASH_HOSTS ?? "").split(",").map((h)
 app.use(splash(SPLASH_HOSTS));
 app.set("trust proxy", true);
 
+app.use("/assets", express.static(join(PUBLIC_DIR, "assets"), { index: false, maxAge: "1h" }));
 app.use(express.json({ limit: "50mb" })); // transcripts are large
 app.get("/auth/github", githubStart);
 app.get("/auth/github/callback", githubCallback);
