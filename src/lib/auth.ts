@@ -29,9 +29,10 @@ export async function bearer(req: Request, res: Response, next: NextFunction): P
      WHERE t.token_hash = $1 AND t.revoked_at IS NULL`, [hashToken(raw)]);
   if (!row) { res.status(401).json({ error: "unknown or revoked token" }); return; }
   req.user = { id: Number(row.id), handle: row.handle };
-  req.model = (req.header("x-model") ?? "unknown").toLowerCase();
-  const tier = await one<{ provider: string }>(`SELECT provider FROM model_tiers WHERE model = $1`, [req.model]);
-  req.provider = tier?.provider ?? providerFromModel(req.model);
+  const xm = (req.header("x-model") ?? "").trim().toLowerCase();
+  req.model = xm || undefined;
+  const tier = xm ? await one<{ provider: string }>(`SELECT provider FROM model_tiers WHERE model = $1`, [xm]) : undefined;
+  req.provider = xm ? (tier?.provider ?? providerFromModel(xm)) : undefined;
   next();
 }
 

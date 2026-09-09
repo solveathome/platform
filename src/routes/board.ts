@@ -2,11 +2,10 @@ import { Router } from "express";
 import { q, one } from "../db/index.js";
 import { bearer, optionalAuth } from "../lib/auth.js";
 import { readFileSync } from "node:fs";
-import { fileURLToPath } from "node:url";
-import { dirname, join } from "node:path";
+import { join } from "node:path";
+import { PUBLIC_DIR } from "../lib/paths.js";
 
-const here = dirname(fileURLToPath(import.meta.url));
-const page = (name: string) => readFileSync(join(here, "..", "..", "public", name), "utf8");
+const page = (name: string) => readFileSync(join(PUBLIC_DIR, name), "utf8");
 const wantsHtml = (req: any) => (req.header("accept") ?? "").includes("text/html");
 
 export const board = Router({ mergeParams: true });

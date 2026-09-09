@@ -56,9 +56,9 @@ chat.post("/chat", bearer, project, async (req: any, res) => {
   const c = await one<{ id: number }>(`INSERT INTO channels (problem_id, parent_id, lane_id, path, title, purpose, created_by)
       VALUES ($1,$2,$3,$4,$5,$6,$7) ON CONFLICT (problem_id, path) DO UPDATE SET status = 'open' RETURNING id`,
     [req.project.id, parent.id, parent.lane_id, path, String(b.title ?? name).slice(0, 120), String(b.purpose ?? "").slice(0, 2000), req.user!.id]);
-  await q(`INSERT INTO channel_members (channel_id, user_id, model) VALUES ($1,$2,$3) ON CONFLICT DO NOTHING`, [c!.id, req.user!.id, req.model]);
+  await q(`INSERT INTO channel_members (channel_id, user_id, model) VALUES ($1,$2,$3) ON CONFLICT DO NOTHING`, [c!.id, req.user!.id, req.model ?? null]);
   await q(`INSERT INTO messages (channel_id, user_id, model, kind, body_md) VALUES ($1,$2,$3,'spawn',$4)`,
-    [parent.id, req.user!.id, req.model, `Opened sub-channel \`${path}\`: ${String(b.title ?? name)}${b.purpose ? `\n\n${b.purpose}` : ""}\n\nJoin: POST /projects/${req.project.slug}/chat/${path}/join`]);
+    [parent.id, req.user!.id, req.model ?? null, `Opened sub-channel \`${path}\`: ${String(b.title ?? name)}${b.purpose ? `\n\n${b.purpose}` : ""}\n\nJoin: POST /projects/${req.project.slug}/chat/${path}/join`]);
   res.json({ ok: true, path, join: `/projects/${req.project.slug}/chat/${path}/join` });
 });
 
@@ -72,7 +72,7 @@ chat.post("/chat/messages", bearer, project, rootPath, channel, (req: any, res: 
 /** POST /chat/*path/join */
 chat.post("/chat/*path/join", bearer, project, channel, joinHandler);
 async function joinHandler(req: any, res: any, _next?: any): Promise<void> {
-  await q(`INSERT INTO channel_members (channel_id, user_id, model) VALUES ($1,$2,$3) ON CONFLICT (channel_id, user_id) DO UPDATE SET model = EXCLUDED.model`, [req.channel.id, req.user!.id, req.model]);
+  await q(`INSERT INTO channel_members (channel_id, user_id, model) VALUES ($1,$2,$3) ON CONFLICT (channel_id, user_id) DO UPDATE SET model = EXCLUDED.model`, [req.channel.id, req.user!.id, req.model ?? null]);
   const last = await one<{ m: string }>(`SELECT coalesce(max(id),0) AS m FROM messages WHERE channel_id = $1`, [req.channel.id]);
   const members = await q(`SELECT u.handle, m.model FROM channel_members m JOIN users u ON u.id = m.user_id WHERE m.channel_id = $1`, [req.channel.id]);
   res.json({ ok: true, path: req.channel.path, title: req.channel.title, purpose: req.channel.purpose, last_message_id: Number(last!.m), members,
@@ -119,8 +119,8 @@ async function postHandler(req: any, res: any): Promise<void> {
   const kind = KINDS.has(b.kind) ? b.kind : "say";
   const recent = await one<{ c: string }>(`SELECT count(*) AS c FROM messages WHERE user_id = $1 AND created_at > now() - interval '1 minute'`, [req.user!.id]);
   if (Number(recent!.c) >= 30) { res.status(429).json({ error: "rate limit: 30 messages per minute per token" }); return; }
-  await q(`INSERT INTO channel_members (channel_id, user_id, model) VALUES ($1,$2,$3) ON CONFLICT DO NOTHING`, [req.channel.id, req.user!.id, req.model]);
+  await q(`INSERT INTO channel_members (channel_id, user_id, model) VALUES ($1,$2,$3) ON CONFLICT DO NOTHING`, [req.channel.id, req.user!.id, req.model ?? null]);
   const m = await one<{ id: number }>(`INSERT INTO messages (channel_id, user_id, model, kind, reply_to, body_md, job_id, return_id) VALUES ($1,$2,$3,$4,$5,$6,$7,$8) RETURNING id`,
-    [req.channel.id, req.user!.id, req.model, kind, b.reply_to ?? null, body, b.job_id ?? null, b.return_id ?? null]);
+    [req.channel.id, req.user!.id, req.model ?? null, kind, b.reply_to ?? null, body, b.job_id ?? null, b.return_id ?? null]);
   res.json({ ok: true, id: m!.id, path: req.channel.path });
 }

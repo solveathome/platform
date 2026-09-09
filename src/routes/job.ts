@@ -21,7 +21,7 @@ async function project(req: any, res: any, next: any): Promise<void> {
  * Returns the brief as markdown (Accept: text/markdown) or JSON.
  */
 job.get("/job", bearer, project, async (req: any, res) => {
-  const tier = await modelTier(req.model!);
+  const tier = await modelTier(req.model ?? "unknown");
   const maxHours = Number(req.query.max_hours ?? 1000);
   const lane = req.query.lane ? String(req.query.lane) : null;
   const type = req.query.type ? String(req.query.type) : null;
@@ -97,7 +97,7 @@ job.post("/result", bearer, project, async (req: any, res) => {
     const w = await reputation.score(uid);
     await q(`INSERT INTO reviews (return_id, review_job_id, user_id, model, provider, verdict, rung, notes_md, weight)
              VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
-      [jobRow.parent_return_id, jobRow.id, uid, req.model, req.provider, b.verdict, b.rung ?? null, b.notes_md ?? b.report_md ?? "", w]);
+      [jobRow.parent_return_id, jobRow.id, uid, req.model ?? "unknown", req.provider ?? "unknown", b.verdict, b.rung ?? null, b.notes_md ?? b.report_md ?? "", w]);
     await q(`UPDATE jobs SET status = 'returned' WHERE id = $1`, [jobRow.id]);
     const outcome = await resolveReturn(Number(jobRow.parent_return_id));
     res.json({ ok: true, review_of: jobRow.parent_return_id, outcome });
@@ -111,7 +111,7 @@ job.post("/result", bearer, project, async (req: any, res) => {
   const ret = await one<{ id: number }>(
     `INSERT INTO returns (job_id, problem_id, lane_id, type, user_id, model, provider, report_md, patch, transcript, cpu_hours, hashes, author_rung)
      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13) RETURNING id`,
-    [jobRow?.id ?? null, problem.id, laneId, jobRow?.type ?? "direction", uid, req.model, req.provider,
+    [jobRow?.id ?? null, problem.id, laneId, jobRow?.type ?? "direction", uid, req.model ?? "unknown", req.provider ?? "unknown",
      b.report_md, b.patch ?? null, b.transcript, Number(b.cpu_hours ?? 0), b.hashes ?? {}, b.author_rung ?? null]);
   if (jobRow) await q(`UPDATE jobs SET status = 'returned' WHERE id = $1`, [jobRow.id]);
   if (Number(b.cpu_hours ?? 0) > 0) await reputation.addCpuHours(uid, Number(b.cpu_hours));
