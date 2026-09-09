@@ -3,7 +3,9 @@ const PH = (i: number) => `${i}`;   // private-use characters: never colli
 export function protectMath(src: string): { text: string; restore: (html: string) => string } {
   const spans: string[] = [];
   const keep = (m: string) => { spans.push(m); return PH(spans.length - 1); };
+  // A literal dollar (written \$ in the source) must never pair with a real delimiter on the client: it comes back inside a span KaTeX ignores.
   const text = src
+    .replace(/\\\$/g, () => { spans.push('<span class="no-math">$</span>'); return PH(spans.length - 1); })
     .replace(/\$\$[\s\S]+?\$\$/g, keep)
     .replace(/\\\[[\s\S]+?\\\]/g, keep)
     .replace(/\\\([\s\S]+?\\\)/g, keep)
