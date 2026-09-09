@@ -54,6 +54,11 @@ export function needsSourceReview(content: string): boolean {
   return containsSourceReproduction(content);
 }
 
+/** The first line that trips the source-reproduction check, for the error message. */
+export function sourceReviewHit(content: string): string | null {
+  for (const line of content.split("\n")) if (line.trim() && containsSourceReproduction(line)) return line.trim().slice(0, 160);
+  return /^\s*(?:%PDF-\d|data:application\/pdf;base64,)/i.test(content) ? "(PDF or base64 PDF content)" : null;
+}
 export const SOURCE_REVIEW_MESSAGE = "This public submission appears to contain a full source reproduction. Attributed quotations, citations and links are welcome. Keep complete books, papers, scans and bulk OCR in your local source repository; publish your analysis and relevant quotations with source locators. Remove full source payloads from public transcripts while retaining reasoning, usage metadata and omission notes.";
 
 export function readPublication(root: string): Publication | null {

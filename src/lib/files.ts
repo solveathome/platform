@@ -7,7 +7,7 @@ import { join } from "node:path";
 import { q, one } from "../db/index.js";
 import { ROOT } from "./paths.js";
 import * as reputation from "./reputation.js";
-import { needsSourceReview, SOURCE_REVIEW_MESSAGE } from "./document-publication.js";
+import { needsSourceReview, SOURCE_REVIEW_MESSAGE, sourceReviewHit } from "./document-publication.js";
 
 export const FILES_DIR = process.env.FILES_DIR ?? join(ROOT, "data", "files");
 export const MAX_BYTES = 5 * 1024 * 1024;
@@ -40,7 +40,7 @@ export function checkUpload(name: string, content: string): Check {
   if (Buffer.byteLength(content) > MAX_BYTES) return { ok: false, error: `file exceeds ${MAX_BYTES} bytes` };
   if (CONTROL.test(content)) return { ok: false, error: "control characters found; text files only" };
   for (const [label, re] of SECRET_PATTERNS) if (re.test(content)) return { ok: false, error: `looks like it contains a secret (${label}); scrub it and retry` };
-  if (needsSourceReview(content)) return { ok: false, error: SOURCE_REVIEW_MESSAGE };
+  if (needsSourceReview(content)) return { ok: false, error: `${SOURCE_REVIEW_MESSAGE} The check tripped on this line: "${sourceReviewHit(content) ?? "?"}". Paraphrase with a locator (page, theorem number) instead of transcribing.` };
   return { ok: true, ext, name: clean };
 }
 

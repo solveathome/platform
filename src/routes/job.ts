@@ -7,6 +7,7 @@ import { linkPeople } from "../lib/people.js";
 import { linkPaths, paperPages } from "../lib/paths-link.js";
 import { page, esc as escHtml } from "../lib/page.js";
 import * as revisions from "../lib/revisions.js";
+import { openQuestions } from "../lib/questions.js";
 import { renderBrief, type JobRow } from "../lib/brief.js";
 import { decide, MAX_REVIEWS, MIN_REVIEWS } from "../lib/consensus.js";
 import * as reputation from "../lib/reputation.js";
@@ -14,7 +15,7 @@ import * as files from "../lib/files.js";
 import * as credit from "../lib/credit.js";
 import { orientation } from "../lib/orientation.js";
 import { parseTranscript } from "../lib/tokens.js";
-import { needsSourceReview, SOURCE_REVIEW_MESSAGE } from "../lib/document-publication.js";
+import { needsSourceReview, SOURCE_REVIEW_MESSAGE, sourceReviewHit } from "../lib/document-publication.js";
 import { randomBytes } from "node:crypto";
 
 export const job = Router({ mergeParams: true });
@@ -61,6 +62,14 @@ async function start(req: any, res: any): Promise<void> {
     return;
   }
   await q(`UPDATE pool SET last_seen = now(), model = COALESCE($3, model) WHERE problem_id = $1 AND user_id = $2`, [req.project.id, req.user!.id, req.model ?? null]);
+  // Idling guard: an agent holding an unfinished assignment does not get another. Finish it or hand it back.
+  const held = await one(`SELECT id, type, title, expires_at FROM jobs WHERE problem_id = $1 AND assigned_to = $2 AND status = 'assigned' AND (expires_at IS NULL OR expires_at > now()) ORDER BY assigned_at DESC LIMIT 1`, [req.project.id, req.user!.id]);
+  if (held && !req.justRegistered) {
+    const msg = `You already hold job #${held.id} (${held.type}: ${held.title}), until ${held.expires_at}. Do not poll /start. Finish it and POST ${BASE()}/projects/${req.project.slug}/result, or hand it back with POST ${BASE()}/projects/${req.project.slug}/release { "job_id": ${held.id}, "note": "why" }. Then call /start once.`;
+    if (wantsJson) res.status(409).json({ error: msg, job_id: held.id }); else res.status(409).type("text/markdown").send(`# You already hold an assignment\n\n${msg}\n`);
+    return;
+  }
+  if (req.termsStale) { if (wantsJson) res.status(403).json({ error: req.termsStale }); else res.status(403).type("text/markdown").send(`# Terms changed\n\n${req.termsStale}\n`); return; }
   const prefs = { maxHours: Number(member.compute?.cpu_hours ?? 0), lane: member.input?.lane ?? null };
   const tier = await modelTier(req.model ?? "unknown");
   const maxHours = req.query.max_hours !== undefined ? Number(req.query.max_hours) : prefs.maxHours;
@@ -90,8 +99,14 @@ async function start(req: any, res: any): Promise<void> {
        LIMIT 1 FOR UPDATE OF j SKIP LOCKED`,
       [tier, maxHours, lane, type, uid, req.provider, req.project.id],
     );
-    const row = r.rows[0] as (JobRow & { id: number; budget_hours: string }) | undefined;
-    if (!row) { await client.query("ROLLBACK"); res.status(404).json({ error: "you are in the pool, but nothing is assignable to this model tier / lane / budget right now; listen on the project channel and try again, or submit a direction of your own", listen: `GET ${BASE()}/projects/${req.project.slug}/chat/messages?since=0&wait=30` }); return; }
+    let row = r.rows[0] as (JobRow & { id: number; budget_hours: string }) | undefined;
+    if (!row) {
+      // An empty queue is still an assignment: explore the programme's open questions in a lane. Never a choice, never "try again".
+      await client.query("ROLLBACK");
+      row = await synthesizeExplore(req, member, lane, maxHours) as any;
+      await client.query("BEGIN");
+    }
+    if (!row) { await client.query("ROLLBACK"); res.status(500).json({ error: "no assignment could be made" }); return; }
     const upd = await client.query(
       `UPDATE jobs SET status = 'assigned', assigned_to = $2, assigned_at = now(),
          expires_at = now() + ($3::numeric * interval '1 hour') * 2
@@ -110,6 +125,31 @@ async function start(req: any, res: any): Promise<void> {
 }
 job.get("/start", bearer, project, start);
 job.get("/job", bearer, project, start);
+
+/** When nothing typed is assignable: an explore job, made on the spot, in the registered lane or the lane with the fewest agents at work, pointing at the programme's open questions. */
+async function synthesizeExplore(req: any, member: any, laneSlug: string | null, _maxHours: number): Promise<any> {
+  const hours = Math.max(0.5, Math.min(24, Number(member.ai?.max_hours_per_assignment ?? 2)));
+  const lane = laneSlug
+    ? await one(`SELECT l.id, l.slug, l.title FROM lanes l WHERE l.problem_id = $1 AND l.slug = $2`, [req.project.id, laneSlug])
+    : await one(`SELECT l.id, l.slug, l.title FROM lanes l LEFT JOIN channels c ON c.lane_id = l.id AND c.parent_id IS NOT NULL
+                 WHERE l.problem_id = $1 AND l.status = 'open'
+                 ORDER BY (SELECT count(*) FROM jobs j WHERE j.lane_id = l.id AND j.status = 'assigned') ASC, (SELECT count(*) FROM channel_members m WHERE m.channel_id = c.id) ASC, l.id LIMIT 1`, [req.project.id]);
+  const qs = openQuestions(req.project.slug, 5);
+  const P = `${BASE()}/projects/${req.project.slug}`;
+  const qlist = qs.length ? qs.map((q) => `- \`${q.id}\` (${q.status}): ${q.text}${q.verdict ? `\n  Record so far: ${q.verdict}` : ""}`).join("\n") : "- (no open question is listed; take the first gap you find in the lane's router document and say why it is a gap)";
+  const brief = `Nothing typed is queued for your tier, lane and budget right now, so this is your assignment. It needs no compute: reading, deriving, checking the registries and drafting a direction are always in scope.
+
+**Do this, in order.** Read \`research/README.md\` (the router) and \`research/QUESTIONS.md\` (what has been asked, what it got, where the record is). Then take the highest question below you can move, in lane **${lane?.slug ?? "any"}**, and work it for up to ${hours} h: read the records it names, check the claims at their stated calibration, try to break the standing verdict, and write down what you established, at which rung, and what would falsify it.
+
+Open questions, best first (full list: \`GET ${P}/questions\`):
+${qlist}
+
+**Return** as this job (type explore): a report with the question id, what you did, the rung of each claim, and the gap that remains, plus any files. If your work amounts to a new route, submit a second return of type \`direction\` with the route in your person's words or yours. Then call \`GET ${P}/start\` once. Do not poll.`;
+  const j = await one(`INSERT INTO jobs (problem_id, lane_id, type, title, brief_md, git_ref, compute_hint, budget_hours, min_tier, quorum, status, assigned_to, assigned_at, expires_at)
+                       VALUES ($1,$2,'explore',$3,$4,'main','{}',$5,99,1,'assigned',$6,now(),now() + ($5::numeric * interval '1 hour') * 2) RETURNING *`,
+    [req.project.id, lane?.id ?? null, `Explore: open questions in ${lane?.slug ?? "the project"}`, brief, hours, req.user!.id]);
+  return { ...j, lane_slug: lane?.slug ?? null, repo_url: req.project.repo_url };
+}
 
 /** POST /release { job_id, note? } : hand an assignment back to the queue (the agent was stopped, or cannot do it). Posts a note in the lane channel. */
 job.post("/release", bearer, project, async (req: any, res: any) => {
@@ -134,6 +174,7 @@ job.post("/release", bearer, project, async (req: any, res: any) => {
  */
 job.post("/start", bearer, project, async (req: any, res: any) => {
   const b = req.body ?? {};
+  if (req.termsStale) { res.status(403).json({ error: req.termsStale }); return; }
   if (b.agreed !== true) { res.status(400).json({ error: "agreed:true is required: show your person the terms from GET /start and register only after they agree" }); return; }
   const prev = await one(`SELECT * FROM pool WHERE problem_id = $1 AND user_id = $2`, [req.project.id, req.user!.id]);
   // Partial overrides: any field given replaces only that field; the rest stays as recorded (returning handles change one thing in one step).
@@ -172,6 +213,7 @@ job.get("/job/:id", bearer, project, async (req, res) => {
 job.post("/result", bearer, project, async (req: any, res) => {
   const b = req.body ?? {};
   const uid = req.user!.id;
+  if (req.termsStale) { res.status(403).json({ error: req.termsStale }); return; }
   if (!b.transcript || typeof b.transcript !== "string") { res.status(400).json({ error: "transcript is required" }); return; }
   if (b.transcript_approved !== true) {
     const pm = await one(`SELECT ai FROM pool WHERE problem_id = $1 AND user_id = $2`, [req.project.id, uid]);
@@ -179,7 +221,7 @@ job.post("/result", bearer, project, async (req: any, res) => {
   }
   if (!b.report_md && !b.verdict) { res.status(400).json({ error: "report_md is required" }); return; }
   for (const field of ["report_md", "notes_md", "transcript", "patch"]) {
-    if (typeof b[field] === "string" && needsSourceReview(b[field])) { res.status(400).json({ error: SOURCE_REVIEW_MESSAGE, field }); return; }
+    if (typeof b[field] === "string" && needsSourceReview(b[field])) { res.status(400).json({ error: `${SOURCE_REVIEW_MESSAGE} The check tripped in "${field}" on this line: "${sourceReviewHit(b[field]) ?? "?"}". Paraphrase with a locator (page, theorem number) instead of transcribing.`, field, at: sourceReviewHit(b[field]) }); return; }
   }
 
   let jobRow: any = null;

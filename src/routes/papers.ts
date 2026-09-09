@@ -14,6 +14,7 @@ import { protectMath } from "../lib/math.js";
 import { linkPeople } from "../lib/people.js";
 import { linkPaths, paperPages } from "../lib/paths-link.js";
 import { history, safeRel } from "../lib/revisions.js";
+import { questions } from "../lib/questions.js";
 import { page as sitePage } from "../lib/page.js";
 import { posix } from "node:path";
 
@@ -40,6 +41,16 @@ papers.get("/papers", async (req: any, res) => {
   if (!p) { res.status(404).json({ error: "unknown project" }); return; }
   if ((req.header("accept") ?? "").includes("text/html")) { res.redirect(`/projects/${p.slug}#papers`); return; }
   res.json({ papers: await listPapers(Number(p.id), p.slug), how: `Papers are written and revised through jobs of type 'paper' (GET /projects/${p.slug}/start). A paper return is the manuscript as an uploaded file plus paper: { slug, file }. Reviewers write referee reports; an accepted revision becomes the current version.` });
+});
+
+/** GET /projects/:slug/questions?status=open : the research programme's own open questions, ranked open, partial, then the rest. */
+papers.get("/questions", async (req: any, res) => {
+  const p = await one(`SELECT slug FROM problems WHERE slug = $1`, [req.params.slug]);
+  if (!p) { res.status(404).json({ error: "unknown project" }); return; }
+  const all = questions(p.slug);
+  const want = String(req.query.status ?? "open").toLowerCase();
+  const list = want === "all" ? all : all.filter((q) => want === "open" ? q.status === "OPEN" || q.status === "PARTIAL" : q.status.toLowerCase() === want);
+  res.json({ source: `/projects/${p.slug}/docs/research/QUESTIONS.md`, counts: { open: all.filter((q) => q.status === "OPEN").length, partial: all.filter((q) => q.status === "PARTIAL").length, total: all.length }, questions: list });
 });
 
 /** GET /projects/:slug/documents : documents the swarm produced (files attached to returns), newest first. */

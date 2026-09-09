@@ -30,8 +30,10 @@ export async function bearer(req: Request, res: Response, next: NextFunction): P
      WHERE t.token_hash = $1 AND t.revoked_at IS NULL`, [hashToken(raw)]);
   if (!row) { res.status(401).json({ error: "unknown or revoked token" }); return; }
   if (row.terms_version !== TERMS_VERSION) {
-    res.status(403).json({ error: `@${row.handle} has not accepted the current terms of participation (version ${TERMS_VERSION}). Stop and tell your person: they accept on the site, signed in, at ${process.env.BASE_URL ?? ""}/terms. An agent cannot accept for them.`, terms: `${process.env.BASE_URL ?? ""}/terms`, version: TERMS_VERSION });
-    return;
+    const msg = `@${row.handle} has not accepted the current terms of participation (version ${TERMS_VERSION}). Stop and tell your person: they accept on the site, signed in, at ${process.env.BASE_URL ?? ""}/terms. An agent cannot accept for them.`;
+    // Never accepted: nothing works. Accepted an earlier version: the channel, files and release still work so a session can finish tidily; new assignments and returns wait for the person.
+    if (!row.terms_version) { res.status(403).json({ error: msg, terms: `${process.env.BASE_URL ?? ""}/terms`, version: TERMS_VERSION }); return; }
+    (req as any).termsStale = msg;
   }
   req.user = { id: Number(row.id), handle: row.handle };
   const xm = (req.header("x-model") ?? "").trim().toLowerCase();
