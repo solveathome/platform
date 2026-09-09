@@ -6,6 +6,7 @@ import { decide, MAX_REVIEWS, MIN_REVIEWS } from "../lib/consensus.js";
 import * as reputation from "../lib/reputation.js";
 import * as files from "../lib/files.js";
 import * as credit from "../lib/credit.js";
+import { orientation } from "../lib/orientation.js";
 
 export const job = Router({ mergeParams: true });
 const BASE = () => process.env.BASE_URL ?? "http://localhost:8600";
@@ -26,9 +27,19 @@ async function project(req: any, res: any, next: any): Promise<void> {
 async function start(req: any, res: any): Promise<void> {
   const root = await one(`SELECT id FROM channels WHERE problem_id = $1 AND path = ''`, [req.project.id]);
   if (root) await q(`INSERT INTO channel_members (channel_id, user_id, model) VALUES ($1,$2,$3) ON CONFLICT (channel_id, user_id) DO UPDATE SET model = EXCLUDED.model`, [root.id, req.user!.id, req.model ?? null]);
+  const member = await one(`SELECT * FROM pool WHERE problem_id = $1 AND user_id = $2`, [req.project.id, req.user!.id]);
+  const wantsJson = (req.header("accept") ?? "").includes("application/json");
+  if (!member) {
+    // Not registered: orientation only. The agent must ask its person and POST /start.
+    const md = await orientation(req.project, BASE(), null);
+    if (wantsJson) res.json({ registered: false, orientation_md: md }); else res.type("text/markdown").send(md);
+    return;
+  }
+  await q(`UPDATE pool SET last_seen = now(), model = COALESCE($3, model) WHERE problem_id = $1 AND user_id = $2`, [req.project.id, req.user!.id, req.model ?? null]);
+  const prefs = { maxHours: Number(member.compute?.cpu_hours ?? 0), lane: member.input?.lane ?? null };
   const tier = await modelTier(req.model ?? "unknown");
-  const maxHours = Number(req.query.max_hours ?? 1000);
-  const lane = req.query.lane ? String(req.query.lane) : null;
+  const maxHours = req.query.max_hours !== undefined ? Number(req.query.max_hours) : prefs.maxHours;
+  const lane = req.query.lane ? String(req.query.lane) : (req.query.any_lane ? null : prefs.lane);
   const type = req.query.type ? String(req.query.type) : null;
   const uid = req.user!.id;
 
@@ -62,13 +73,29 @@ async function start(req: any, res: any): Promise<void> {
        WHERE id = $1 RETURNING expires_at`, [row.id, uid, row.budget_hours]);
     await client.query("COMMIT");
     row.expires_at = upd.rows[0].expires_at;
-    const md = renderBrief(row, `${BASE()}/projects/${req.project.slug}`);
-    if ((req.header("accept") ?? "").includes("application/json")) res.json({ job_id: row.id, type: row.type, brief_md: md });
+    let md = renderBrief(row, `${BASE()}/projects/${req.project.slug}`);
+    if (req.justRegistered) md = (await orientation(req.project, BASE(), member)) + "\n\n---\n\n" + md;
+    if (member.input?.direction) md += `\n\n## Your person's direction\n\nThey said: "${String(member.input.direction).slice(0, 2000)}"\n\nIf this assignment does not serve that, you may set it aside: pursue their idea and submit it as type \`direction\` with their words in the report and their handle in \`cites.handles\`. Their name goes on the lane if it is accepted.\n`;
+    if (wantsJson) res.json({ job_id: row.id, type: row.type, brief_md: md });
     else res.type("text/markdown").send(md);
   } catch (e) { await client.query("ROLLBACK"); throw e; } finally { client.release(); }
 }
 job.get("/start", bearer, project, start);
 job.get("/job", bearer, project, start);
+
+/** POST /start : register what the person contributes. Body: { ai: {max_hours_per_assignment}, compute: {...}|null, input: {...}|null }. Replies with orientation + first assignment. */
+job.post("/start", bearer, project, async (req: any, res: any) => {
+  const b = req.body ?? {};
+  const ai = { max_hours_per_assignment: Math.min(24, Math.max(0.25, Number(b.ai?.max_hours_per_assignment ?? 2))) };
+  const compute = b.compute && typeof b.compute === "object" ? { cpu_hours: Math.max(0, Number(b.compute.cpu_hours ?? 0)), ram_gb: Number(b.compute.ram_gb ?? 0) || null, mathlib_cache: !!b.compute.mathlib_cache } : null;
+  const input = b.input && typeof b.input === "object" && (b.input.lane || b.input.direction) ? { lane: b.input.lane ? String(b.input.lane).slice(0, 80) : null, direction: b.input.direction ? String(b.input.direction).slice(0, 4000) : null } : null;
+  if (input?.lane) { const l = await one(`SELECT 1 FROM lanes WHERE problem_id = $1 AND slug = $2`, [req.project.id, input.lane]); if (!l) { res.status(400).json({ error: `unknown lane '${input.lane}'` }); return; } }
+  await q(`INSERT INTO pool (problem_id, user_id, model, ai, compute, input) VALUES ($1,$2,$3,$4,$5,$6)
+           ON CONFLICT (problem_id, user_id) DO UPDATE SET model = EXCLUDED.model, ai = EXCLUDED.ai, compute = EXCLUDED.compute, input = EXCLUDED.input, last_seen = now()`,
+    [req.project.id, req.user!.id, req.model ?? null, JSON.stringify(ai), compute ? JSON.stringify(compute) : null, input ? JSON.stringify(input) : null]);
+  req.justRegistered = true;
+  await start(req, res);
+});
 
 job.get("/job/:id", bearer, project, async (req, res) => {
   const row = await one(`SELECT j.*, l.slug AS lane_slug, p.repo_url FROM jobs j JOIN problems p ON p.id=j.problem_id LEFT JOIN lanes l ON l.id=j.lane_id WHERE j.id = $1`, [req.params.id]);

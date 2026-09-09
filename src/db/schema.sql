@@ -244,3 +244,16 @@ ALTER TABLE claims ADD COLUMN IF NOT EXISTS corpus BOOLEAN NOT NULL DEFAULT fals
 ALTER TABLE claims ADD COLUMN IF NOT EXISTS session_commits INT NOT NULL DEFAULT 0;   -- commits carrying an agent session marker
 
 ALTER TABLE claims ADD COLUMN IF NOT EXISTS model_commits JSONB;   -- {"claude": n, "gpt-6-astra": n, "dispatched-agents": n, "unattributed-agent": n}
+
+-- Processing pool membership (scope Q42): what a donor said they contribute. Set by POST /start.
+CREATE TABLE IF NOT EXISTS pool (
+  problem_id  BIGINT NOT NULL REFERENCES problems(id),
+  user_id     BIGINT NOT NULL REFERENCES users(id),
+  model       TEXT,
+  ai          JSONB NOT NULL DEFAULT '{}',   -- {"max_hours_per_assignment": 2}
+  compute     JSONB,                          -- {"cpu_hours": 4, "ram_gb": 16, "mathlib_cache": false} or NULL when not offered
+  input       JSONB,                          -- {"lane": "g2-exponent", "direction": "..."} or NULL when the person does not want to steer
+  joined_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
+  last_seen   TIMESTAMPTZ NOT NULL DEFAULT now(),
+  PRIMARY KEY (problem_id, user_id)
+);
