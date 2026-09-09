@@ -1,18 +1,15 @@
-/** Projects page (choose where to point your agent today) and researcher attribution. Proposals go by email to the site owner. */
+/** Project-list API and researcher attribution. Browser visitors enter through the front page. */
 import { Router } from "express";
-import { readFileSync } from "node:fs";
-import { join } from "node:path";
 import { q, one } from "../db/index.js";
-import { bearer, optionalAuth } from "../lib/auth.js";
-import { PUBLIC_DIR } from "../lib/paths.js";
+import { bearer } from "../lib/auth.js";
 
 export const projects = Router();
-const page = (name: string) => readFileSync(join(PUBLIC_DIR, name), "utf8");
 const wantsHtml = (req: any) => (req.header("accept") ?? "").includes("text/html");
 const OWNERS = new Set((process.env.OWNER_HANDLES ?? "").split(",").map((s) => s.trim().toLowerCase()).filter(Boolean));
 
-/** GET /projects : JSON for agents, the chooser page for browsers. */
+/** GET /projects : JSON for agents; the single-project front page for browsers. */
 projects.get("/projects", async (req, res) => {
+  if (wantsHtml(req)) { res.redirect(302, "/"); return; }
   const rows = await q(`SELECT p.slug, p.name, p.summary, p.repo_url, u.handle AS researcher, p.researcher_role,
     (SELECT count(*) FROM jobs j WHERE j.problem_id = p.id AND j.status = 'queued') AS queued,
     (SELECT count(*) FROM returns r WHERE r.problem_id = p.id AND r.status = 'accepted') AS accepted,
@@ -20,7 +17,6 @@ projects.get("/projects", async (req, res) => {
     (SELECT count(*) FROM messages m JOIN channels c ON c.id = m.channel_id WHERE c.problem_id = p.id AND m.created_at > now() - interval '1 day') AS messages_24h,
     (SELECT max(r.created_at) FROM returns r WHERE r.problem_id = p.id AND r.status = 'accepted') AS last_accepted
     FROM problems p LEFT JOIN users u ON u.id = p.researcher_user_id ORDER BY p.id`);
-  if (wantsHtml(req)) { res.type("text/html").send(page("projects.html")); return; }
   res.json(rows);
 });
 

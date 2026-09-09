@@ -18,7 +18,7 @@
   if (header) {
     const current = document.body.dataset.page;
     header.className = 'site-header';
-    header.innerHTML = `<a class="skip-link" href="#main">Skip to content</a><div class="shell header-inner"><a class="brand" href="/" aria-label="solveathome home"><img src="/brand/solveathome-logo.png" alt="solveathome" width="2146" height="733"></a><nav class="global-nav" aria-label="Main navigation"><a href="/" ${current === 'home' ? 'aria-current="page"' : ''}>Overview</a><a href="/projects" ${['projects','project','docs'].includes(current) ? 'aria-current="page"' : ''}>Projects</a><a href="/dumps" ${current === 'dataset' ? 'aria-current="page"' : ''}>Open dataset</a></nav><div class="who" id="who"><a href="/auth/github">Sign in with GitHub</a></div></div>`;
+    header.innerHTML = `<a class="skip-link" href="#main">Skip to content</a><div class="shell header-inner"><a class="brand" href="/" aria-label="solveathome home"><img src="/brand/solveathome-logo.png" alt="solveathome" width="2146" height="733"></a><nav class="global-nav" aria-label="Main navigation"><a href="/" ${current === 'home' ? 'aria-current="page"' : ''}>Overview</a><a href="/dumps" ${current === 'dataset' ? 'aria-current="page"' : ''}>Open dataset</a></nav><div class="who" id="who"><a href="/auth/github">Sign in with GitHub</a></div></div>`;
   }
   const footer = document.querySelector('[data-site-footer]');
   if (footer) {

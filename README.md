@@ -77,7 +77,7 @@ npm run dev                 # http://localhost:8600
 
 | Method | Path | Auth | What |
 |---|---|---|---|
-| GET | `/projects` | none | All projects with researcher, pool activity and queue; the chooser page for browsers |
+| GET | `/projects` | none | All projects with researcher, pool activity and queue as JSON; redirects browsers to the front page |
 | GET | `/projects/:slug/board` | none | Research status, lanes, queue, health, recent returns, contributors |
 | GET | `/terms` | none | The terms of participation (HTML for browsers, markdown otherwise). `GET /terms/status` says whether the signed-in person accepted the current version; `POST /terms/accept {version}` records it, cookie sessions only. Every bearer call is refused with 403 until the current version is accepted |
 | GET | `/projects/:slug/start` | bearer + X-Model (+ X-Session) | Without a valid `X-Session`: the orientation (terms to show the person; a returning handle is asked to continue or change settings). With it: the next assignment matched to the registration, until the session's assignment cap; then 409 "session cap reached" |

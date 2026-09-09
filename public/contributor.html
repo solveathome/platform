@@ -1,17 +1,17 @@
 <!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>@__HANDLE__ · solveathome</title><link rel="icon" href="/favicon.ico"><link rel="apple-touch-icon" href="/apple-touch-icon.png"><link rel="stylesheet" href="/assets/app.css?v=4"></head><body data-page="contributor"><header data-site-header></header><main class="shell" id="main">
-<nav class="breadcrumb" aria-label="Breadcrumb"><a href="/projects">Research network</a><span aria-hidden="true">/</span><span>Contributor</span></nav>
+<nav class="breadcrumb" aria-label="Breadcrumb"><a href="/">Overview</a><span aria-hidden="true">/</span><span>Contributor</span></nav>
 <div class="page-heading"><div><p class="eyebrow">A contribution, with a name behind it</p><h1>@__HANDLE__</h1><p class="muted" id="since">Loading contributor details…</p></div></div>
 <section class="panel"><div class="panel-heading"><h2>Contribution credit</h2><span class="badge neutral">All time</span></div><div class="tiles" id="credit"></div><p class="panel-note">Credit follows accepted work: insight, results, direction, reviews, and compute.</p></section>
 <div class="contributor-grid"><section class="panel"><h2>Agent time</h2><div class="tiles" id="agent"></div></section><section class="panel"><h2>Compute</h2><div class="tiles" id="compute"></div></section><section class="panel"><h2>Research direction</h2><div class="tiles" id="research"></div><div id="lanes"></div></section></div>
 <section class="panel"><h2>Prior work &amp; research roles</h2><div class="origin" id="prov"></div><p class="panel-note">Prior research is attributed by name. It does not earn platform points.</p></section>
 <section class="panel"><h2>Credit ledger</h2><div class="wrap"><table id="ledger"><thead><tr><th>Date</th><th>Contribution</th><th class="num">Points</th><th>Model</th><th>Note</th></tr></thead><tbody></tbody></table></div></section>
 <section class="panel"><h2>Recent results</h2><div class="wrap"><table id="recent"><thead><tr><th>Result</th><th>Project</th><th>Type</th><th>Status</th><th>Evidence</th></tr></thead><tbody></tbody></table></div></section>
-</main><footer data-site-footer></footer><script src="/assets/ui.js?v=4"></script><script src="/assets/who.js?v=3"></script><script>
+</main><footer data-site-footer></footer><script src="/assets/ui.js?v=5"></script><script src="/assets/who.js?v=3"></script><script>
 loadWho(document.querySelector("#who"));
 const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
 const tiles = (el, pairs) => document.querySelector(el).innerHTML = pairs.map(([k, v]) => `<div class="tile"><b>${v ?? 0}</b><span>${k}</span></div>`).join("");
 SA.json(location.pathname).then((d) => {
-  if (d.error) { document.querySelector("main").innerHTML = `<section class="empty-state"><h1>Contributor not found.</h1><p><a href="/projects">Explore the projects →</a></p></section>`; return; }
+  if (d.error) { document.querySelector("main").innerHTML = `<section class="empty-state"><h1>Contributor not found.</h1><p><a href="/">Back to overview →</a></p></section>`; return; }
   document.querySelector("#since").textContent = `Contributor since ${new Date(d.contributor.created_at).toISOString().slice(0,10)} · review weight ${Number(d.contributor.score ?? 1).toFixed(2)}`;
   document.querySelector("#prov").innerHTML = (d.researcher_of ?? []).map((p) => `<p><b>Researcher of <a href="/projects/${esc(p.slug)}">${esc(p.name)}</a></b>: ${esc(p.researcher_role)}.</p>`).join("") + (d.provenance ?? []).map((p) => `<p class="muted">Prior work in <a href="/projects/${esc(p.project)}">${esc(p.project)}</a>: ${p.claims} claims (${p.notes} notes, ${p.scripts} scripts; ${p.corpus_claims} rest on the pre-repo corpus), ${p.commits} commits, ${p.first ? String(p.first).slice(0,10) : ""} to ${p.last ? String(p.last).slice(0,10) : ""}.<br>@${esc(d.contributor.handle)}: ${esc(p.role)}. ${esc(p.model ?? "")}: ${esc(p.model_role)}. Credited, not scored.</p>`).join("");
   const bk = d.credit?.by_kind ?? {};
@@ -22,5 +22,5 @@ SA.json(location.pathname).then((d) => {
   tiles("#research", [["directions accepted", d.research_input.directions_accepted]]);
   document.querySelector("#lanes").innerHTML = d.research_input.lanes.length ? `<p>Lanes opened: ${d.research_input.lanes.map((l) => `<a href="/projects/${esc(l.project)}">#${esc(l.slug)}</a>`).join(", ")}</p>` : "";
   document.querySelector("#recent tbody").innerHTML = d.recent.map((r) => `<tr><td>${r.id}</td><td>${esc(r.project)}</td><td>${esc(r.type)}</td><td>${esc(r.status)}</td><td>${esc(r.final_rung ?? "")}</td></tr>`).join("") || `<tr><td colspan="5" class="muted">nothing yet</td></tr>`;
-}).catch(error => { if (error.status === 404) { document.querySelector('main').innerHTML = '<section class="empty-state"><h1>Contributor not found.</h1><p><a href="/projects">Explore the projects →</a></p></section>'; } else { document.querySelector('#since').textContent = 'Contributor data is temporarily unavailable. Refresh to try again.'; } });
+}).catch(error => { if (error.status === 404) { document.querySelector('main').innerHTML = '<section class="empty-state"><h1>Contributor not found.</h1><p><a href="/">Back to overview →</a></p></section>'; } else { document.querySelector('#since').textContent = 'Contributor data is temporarily unavailable. Refresh to try again.'; } });
 </script></body></html>
