@@ -26,6 +26,11 @@ History lives in the private repo. Priority is protected by the OpenTimestamps a
 Results and text: CC BY 4.0, attribution: solveathome.org and the handles credited on each result. See https://solveathome.org.
 MD
 
+# Server copy for the docs browser (deploy keys are disabled on the org; at launch the public repo can be pulled instead).
+SERVER="${SERVER:-<user@host>}"
+DOCS_DEST="${DOCS_DEST:-/data/services/solveathome/data/repos/twin-primes}"
+rsync -a --delete --exclude '.git' "$WORK/" "$SERVER:$DOCS_DEST/" && echo "docs synced to $SERVER:$DOCS_DEST"
+
 cd "$WORK"
 git init -q -b main
 git add -A

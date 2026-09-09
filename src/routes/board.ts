@@ -81,7 +81,7 @@ board.get("/claims", async (req: any, res) => {
   const rows = await q(`SELECT ledger_id, path, kind, status, question, verdict, origin_handle, origin_role, origin_model, origin_model_role, first_commit, last_commit, commits, corpus, session_commits, model_commits, scored FROM claims WHERE problem_id = $1 ORDER BY kind, path`, [p.id]);
   const by_status = await q(`SELECT status, count(*) AS n FROM claims WHERE problem_id = $1 GROUP BY status ORDER BY n DESC`, [p.id]);
   const by_origin = await q(`SELECT origin_handle, origin_role, origin_model, origin_model_role, max(origin_note) AS origin_note, count(*) AS n, count(*) FILTER (WHERE corpus) AS corpus_claims, min(first_commit) AS first, max(last_commit) AS last, sum(commits) AS commits, sum(session_commits) AS session_commits,
-      sum((model_commits->>'claude')::int) AS claude_commits, sum((model_commits->>'gpt-6-astra')::int) AS astra_commits, sum((model_commits->>'dispatched-agents')::int) AS dispatched_commits, sum((model_commits->>'unattributed-agent')::int) AS unattributed_commits
+      sum((model_commits->>'claude')::int) AS claude_commits, sum((model_commits->>'claude-marked')::int) AS claude_marked_commits, sum((model_commits->>'gpt-6-astra')::int) AS astra_commits, sum((model_commits->>'claude-dispatched')::int) AS dispatched_commits
     FROM claims WHERE problem_id = $1 GROUP BY origin_handle, origin_role, origin_model, origin_model_role ORDER BY n DESC`, [p.id]);
   res.json({ by_status, by_origin, claims: rows });
 });

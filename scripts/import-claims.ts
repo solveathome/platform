@@ -27,13 +27,13 @@ const history = (p: string) => {
   const lines = git(["log", "--follow", "--format=%H|%ad|%(trailers:key=Claude-Session,valueonly)|%B%x00", "--date=short", "--", p]).split("\0").map((l) => l.trim()).filter(Boolean);
   const dates = lines.map((l) => l.split("|")[1]).filter(Boolean);
   const hashes = lines.map((l) => l.split("|")[0]);
-  const model_commits: Record<string, number> = { "claude": 0, "gpt-6-astra": 0, "dispatched-agents": 0, "unattributed-agent": 0 };
+  // claude = marker or Chris's statement; claude-marked = the subset with a session marker (evidence in the log itself)
+  const model_commits: Record<string, number> = { "claude": 0, "claude-marked": 0, "gpt-6-astra": 0, "claude-dispatched": 0 };
   for (const l of lines) {
-    const h = l.split("|")[0]; const short = h.slice(0, 7);
+    const h = l.split("|")[0];
     if ([...astraHashes].some((a) => h.startsWith(a))) model_commits["gpt-6-astra"]++;
-    else if ([...submissionHashes].some((a) => h.startsWith(a))) model_commits["dispatched-agents"]++;
-    else if (/claude-session|generated with claude|co-authored-by: claude/i.test(l)) model_commits["claude"]++;
-    else model_commits["unattributed-agent"]++;
+    else if ([...submissionHashes].some((a) => h.startsWith(a))) { model_commits["claude-dispatched"]++; model_commits["claude"]++; }
+    else { model_commits["claude"]++; if (/claude-session|generated with claude|co-authored-by: claude/i.test(l)) model_commits["claude-marked"]++; }
   }
   return { first: dates.at(-1) ?? null, last: dates[0] ?? null, commits: lines.length, corpus: hashes.includes(rootCommit), session_commits: model_commits["claude"], model_commits };
 };
@@ -61,8 +61,8 @@ const r = await fetch(`${base}/projects/${slug}/claims`, { method: "POST", heade
   body: JSON.stringify({
     origin_handle: origin,
     origin_role: "direction, review, prior corpus (2020-2026 independent experiments)",
-    origin_model: "claude and gpt-6-astra (Claude Code and Codex sessions; attributed per commit where evidence exists, see provenance/twin-primes.json)",
+    origin_model: "claude (Fable or Opus) and gpt-6-astra; per commit, see provenance/twin-primes.json",
     origin_model_role: "writing, computation, validators, dispatch rounds",
-    origin_note: `All ${git(["rev-list", "--count", "HEAD"])} commits were made through agent sessions (Claude Code and Codex) directed by @${origin}; ${git(["log", "--format=%B"]).split("\n").filter((l) => /claude-session/i.test(l)).length} carry a Claude session marker; none carry a co-author trailer and no commit names a model. ${astraHashes.size} commits are attributed to GPT-6 Astra from a Codex transcript, ${submissionHashes.size} recorded dispatched-agent submissions of unrecorded model; the rest are agent sessions of unrecorded model. The per-file human/agent split is by role, not by line. Credited, not scored.`,
+    origin_note: `All ${git(["rev-list", "--count", "HEAD"])} commits were made through agent sessions (Claude Code and Codex) directed by @${origin}; ${git(["log", "--format=%B"]).split("\n").filter((l) => /claude-session/i.test(l)).length} carry a Claude session marker; none carry a co-author trailer and no commit names a model. ${astraHashes.size} commits are GPT-6 Astra's, from a Codex transcript. Everything else is Claude (Fable or Opus): 38 commits by their session marker, the rest by @${origin}'s statement of 2026-09-09. The human/agent split is by role, not by line. Credited, not scored.`,
     claims }) });
 console.log(r.status, (await r.text()).slice(0, 300));

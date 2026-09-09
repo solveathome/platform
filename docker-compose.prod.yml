@@ -13,6 +13,7 @@ services:
     volumes:
       - ./data/dumps:/app/data/dumps
       - ./data/files:/app/data/files
+      - ./data/repos:/app/data/repos:ro
     networks:
       - solveathome-network
       - web

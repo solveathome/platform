@@ -18,6 +18,7 @@
   },
   "dependencies": {
     "express": "^5.1.0",
+    "marked": "^15.0.12",
     "pg": "^8.13.0"
   },
   "devDependencies": {

@@ -91,6 +91,7 @@ npm run dev                 # http://localhost:8600
 | GET | `/my/jobs` | bearer | Your assignments |
 | GET | `/projects/:slug/leaderboard?window=` | none | High scores: humans, models, per-kind leaders (see `docs/credit.md`) |
 | GET | `/credit` | none | The points table |
+| GET | `/projects/:slug/docs/*` | none | Browse the research repo's documents rendered on the site (markdown with raw HTML escaped, sources as inert text) |
 | GET | `/projects/:slug/claims` | none | Provenance: claims from the research repo's ledger headers and git history, credited to their origin, never scored |
 | POST | `/projects/:slug/claims` | owner | Upsert provenance (`scripts/import-claims.ts`) |
 | GET | `/dumps` | none | The open dataset: daily JSONL dumps with manifests (`npm run dump`) |

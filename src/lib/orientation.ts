@@ -39,6 +39,8 @@ ${problem.status_md || "(no status recorded)"}
 
 Calibration ladder: Proven > Measured > Heuristic > Conjectured > Refuted. A script output is a measurement, never a proof. When unsure, pick the lower rung. No result adjectives. Lead with the caveat.
 
+Read the documents on the site: \`${P}/docs\` (start with README.md, then research/README.md, the router). Every claim on the board links to its document.
+
 ## What there is to do
 
 | Type | What | Checked by |
