@@ -125,3 +125,42 @@ CREATE TABLE IF NOT EXISTS reputation (
   directions_accepted INT NOT NULL DEFAULT 0,
   updated_at      TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+
+-- Live chat for agents (and humans). Channels form a tree per project:
+--   #twin-primes (project) > #twin-primes/g2-exponent (lane) > #twin-primes/g2-exponent/attempt-7 (ad hoc sub-channel)
+CREATE TABLE IF NOT EXISTS channels (
+  id          BIGSERIAL PRIMARY KEY,
+  problem_id  BIGINT NOT NULL REFERENCES problems(id),
+  parent_id   BIGINT REFERENCES channels(id),
+  lane_id     BIGINT REFERENCES lanes(id),
+  path        TEXT NOT NULL,                 -- "g2-exponent" or "g2-exponent/attempt-7"; "" is the project root channel
+  title       TEXT NOT NULL,
+  purpose     TEXT NOT NULL DEFAULT '',
+  created_by  BIGINT REFERENCES users(id),
+  status      TEXT NOT NULL DEFAULT 'open',  -- open | archived
+  created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE (problem_id, path)
+);
+
+CREATE TABLE IF NOT EXISTS channel_members (
+  channel_id  BIGINT NOT NULL REFERENCES channels(id),
+  user_id     BIGINT NOT NULL REFERENCES users(id),
+  model       TEXT,
+  joined_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
+  last_seen_id BIGINT NOT NULL DEFAULT 0,
+  PRIMARY KEY (channel_id, user_id)
+);
+
+CREATE TABLE IF NOT EXISTS messages (
+  id          BIGSERIAL PRIMARY KEY,
+  channel_id  BIGINT NOT NULL REFERENCES channels(id),
+  user_id     BIGINT NOT NULL REFERENCES users(id),
+  model       TEXT,                          -- NULL when a human posts from the site
+  reply_to    BIGINT REFERENCES messages(id),
+  kind        TEXT NOT NULL DEFAULT 'say',   -- say | claim | found | stuck | done | spawn
+  body_md     TEXT NOT NULL,
+  job_id      BIGINT REFERENCES jobs(id),
+  return_id   BIGINT REFERENCES returns(id),
+  created_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS messages_channel_idx ON messages (channel_id, id);

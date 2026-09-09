@@ -1,6 +1,7 @@
 /** Seed the first problem, the model tier table and the seeded reviewers' reputation. Idempotent. */
 import { migrate, q, one } from "../src/db/index.js";
 import * as reputation from "../src/lib/reputation.js";
+import { ensureChannels } from "../src/routes/chat.js";
 
 await migrate();
 
@@ -33,6 +34,8 @@ const lanes: Array<[string, string, string]> = [
 ];
 for (const [slug, title, variant] of lanes)
   await q(`INSERT INTO lanes (problem_id, slug, title, variant) VALUES ($1,$2,$3,$4) ON CONFLICT (problem_id, slug) DO NOTHING`, [p!.id, slug, title, variant]);
+
+await ensureChannels(p!.id);
 
 // Seeded reviewers get high reputation once they exist (they sign in via GitHub first).
 for (const h of (process.env.SEED_REVIEWERS ?? "").split(",").map((s) => s.trim()).filter(Boolean)) {
