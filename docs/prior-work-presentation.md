@@ -10,7 +10,7 @@ The first Git snapshot is not the date of each underlying insight.
 The Twin Prime Conjecture editorial copy is based on these mirrored sources,
 read on 2026-09-09:
 
-- `README.md`: Chris Moltke-Benjaminsen's independent 2020–2026 experiments;
+- `README.md`: Chris Benjaminsen's independent 2020–2026 experiments;
   AI-assisted development; the conjecture remains open.
 - `paper/moire-primes.md`, “Authorship and AI disclosure”: the framework,
   vocabulary, and driving questions belong to Chris; derivations, computation,
