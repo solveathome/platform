@@ -12,6 +12,7 @@ services:
     restart: unless-stopped
     volumes:
       - ./data/dumps:/app/data/dumps
+      - ./data/files:/app/data/files
     networks:
       - solveathome-network
       - web

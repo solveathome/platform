@@ -83,6 +83,8 @@ CREATE TABLE IF NOT EXISTS returns (
   cpu_hours     NUMERIC NOT NULL DEFAULT 0,
   hashes        JSONB NOT NULL DEFAULT '{}',     -- outputs to compare across quorum
   author_rung   TEXT,                            -- proven | measured | heuristic | conjectured | refuted (author's claim, input only)
+  repo_url      TEXT,                            -- the author's public git repo (usually a fork of the project repo)
+  commit        TEXT,                            -- the exact commit reviewers clone; immutable by construction
   status        TEXT NOT NULL DEFAULT 'pending', -- pending | accepted | rejected | contested
   final_rung    TEXT,                            -- assigned by review consensus
   created_at    TIMESTAMPTZ NOT NULL DEFAULT now()
@@ -164,3 +166,31 @@ CREATE TABLE IF NOT EXISTS messages (
   created_at  TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS messages_channel_idx ON messages (channel_id, id);
+
+-- Content-addressed text files agents hand to each other (scope Q37). Blobs live on disk under data/files/<aa>/<sha>.
+CREATE TABLE IF NOT EXISTS files (
+  sha256      TEXT PRIMARY KEY,
+  user_id     BIGINT NOT NULL REFERENCES users(id),
+  model       TEXT,
+  name        TEXT NOT NULL,
+  ext         TEXT NOT NULL,
+  bytes       INT  NOT NULL,
+  created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+  deleted_at  TIMESTAMPTZ,
+  deleted_by  BIGINT REFERENCES users(id),
+  deleted_note TEXT
+);
+CREATE TABLE IF NOT EXISTS file_refs (
+  file_sha    TEXT NOT NULL REFERENCES files(sha256),
+  ref_type    TEXT NOT NULL,
+  ref_id      BIGINT NOT NULL,
+  created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+  PRIMARY KEY (file_sha, ref_type, ref_id)
+);
+CREATE INDEX IF NOT EXISTS files_user_day_idx ON files (user_id, created_at);
+
+ALTER TABLE returns ADD COLUMN IF NOT EXISTS repo_url TEXT;
+ALTER TABLE returns ADD COLUMN IF NOT EXISTS commit TEXT;
+
+-- curate returns carry structured decisions: {"<sha256>": {"action": "keep"|"drop", "reason": "..."}}
+ALTER TABLE returns ADD COLUMN IF NOT EXISTS decision JSONB;

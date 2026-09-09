@@ -1,6 +1,7 @@
 import { Router } from "express";
 import { q, one } from "../db/index.js";
 import { bearer, optionalAuth } from "../lib/auth.js";
+import * as files from "../lib/files.js";
 
 /**
  * Live chat for agents and humans. Project-scoped: /projects/:slug/chat/...
@@ -98,14 +99,16 @@ async function listHandler(req: any, res: any): Promise<void> {
   const deadline = Date.now() + wait * 1000;
   let rows: any[] = [];
   for (;;) {
-    rows = await q(`SELECT m.id, u.handle, m.model, m.kind, m.reply_to, m.body_md, m.job_id, m.return_id, m.created_at
+    rows = await q(`SELECT m.id, u.handle, m.model, m.kind, m.reply_to, m.body_md, m.job_id, m.return_id, m.created_at,
+                      coalesce((SELECT json_agg(json_build_object('sha256', f.sha256, 'name', f.name, 'bytes', f.bytes) ORDER BY r.created_at)
+                                FROM file_refs r JOIN files f ON f.sha256 = r.file_sha WHERE r.ref_type = 'message' AND r.ref_id = m.id AND f.deleted_at IS NULL), '[]'::json) AS files
                     FROM messages m JOIN users u ON u.id = m.user_id WHERE m.channel_id = $1 AND m.id > $2 ORDER BY m.id LIMIT $3`, [req.channel.id, since, limit]);
     if (rows.length || Date.now() >= deadline) break;
     await new Promise((r) => setTimeout(r, 1000));
   }
   if (req.user) await q(`UPDATE channel_members SET last_seen_id = GREATEST(last_seen_id, $3) WHERE channel_id = $1 AND user_id = $2`, [req.channel.id, req.user.id, rows.at(-1)?.id ?? since]);
   if ((req.header("accept") ?? "").includes("application/json")) { res.json({ path: req.channel.path, since, last_id: rows.at(-1)?.id ?? since, messages: rows }); return; }
-  const md = rows.map((m) => `#### [${m.id}] @${m.handle}${m.model ? ` (${m.model})` : ""} · ${m.kind}${m.reply_to ? ` · re ${m.reply_to}` : ""} · ${new Date(m.created_at).toISOString()}\n\n${m.body_md}\n`).join("\n");
+  const md = rows.map((m) => `#### [${m.id}] @${m.handle}${m.model ? ` (${m.model})` : ""} · ${m.kind}${m.reply_to ? ` · re ${m.reply_to}` : ""} · ${new Date(m.created_at).toISOString()}\n\n${m.body_md}\n${(m.files ?? []).length ? "\nFiles: " + m.files.map((f: any) => `${f.name} -> GET /files/${f.sha256}`).join(", ") + "\n" : ""}`).join("\n");
   res.type("text/markdown").send(md || `(no new messages in \`${req.channel.path || "project"}\` since ${since}; poll again with since=${since}&wait=30)\n`);
 }
 
@@ -122,5 +125,7 @@ async function postHandler(req: any, res: any): Promise<void> {
   await q(`INSERT INTO channel_members (channel_id, user_id, model) VALUES ($1,$2,$3) ON CONFLICT DO NOTHING`, [req.channel.id, req.user!.id, req.model ?? null]);
   const m = await one<{ id: number }>(`INSERT INTO messages (channel_id, user_id, model, kind, reply_to, body_md, job_id, return_id) VALUES ($1,$2,$3,$4,$5,$6,$7,$8) RETURNING id`,
     [req.channel.id, req.user!.id, req.model ?? null, kind, b.reply_to ?? null, body, b.job_id ?? null, b.return_id ?? null]);
-  res.json({ ok: true, id: m!.id, path: req.channel.path });
+  let attached: string[] = [];
+  try { attached = await files.attach(b.files, "message", Number(m!.id)); } catch (e: any) { res.status(e.status ?? 400).json({ error: e.message, message_id: m!.id }); return; }
+  res.json({ ok: true, id: m!.id, path: req.channel.path, files: attached });
 }

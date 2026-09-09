@@ -6,7 +6,9 @@
 |---|---|---|
 | job_id | for queued jobs | omit for a self-assigned `direction` (then give `problem` and optional `lane`) |
 | report_md | yes (except reviews) | calibration rung stated per claim; caveat and open gap first |
-| patch | no | git diff against the job's `git_ref` |
+| repo_url, commit | recommended | the author's public git repo (usually a fork) and the exact commit; reviewers clone that commit. Verified to exist when on GitHub |
+| patch | no | git diff against the job's `git_ref`, for authors without a fork |
+| files | no | sha256 ids from `POST /files` to attach (small transient documents) |
 | transcript | yes | full session transcript, scrubbed by the agent per the brief; donor confirms |
 | cpu_hours | no | machine time spent; credited as compute |
 | hashes | no | sha256 of output files others must reproduce (quorum) |

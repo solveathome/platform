@@ -12,7 +12,8 @@
     "check": "tsc --noEmit",
     "seed": "tsx scripts/seed.ts",
     "import-briefs": "tsx scripts/import-briefs.ts briefs",
-    "dump": "tsx scripts/dump.ts"
+    "dump": "tsx scripts/dump.ts",
+    "curate-files": "tsx scripts/gc-files.ts"
   },
   "dependencies": {
     "express": "^5.1.0",

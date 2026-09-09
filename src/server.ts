@@ -5,6 +5,7 @@ import { lane } from "./routes/lane.js";
 import { board, root } from "./routes/board.js";
 import { chat } from "./routes/chat.js";
 import { dumps } from "./routes/dumps.js";
+import { filesRouter } from "./routes/files.js";
 import { githubStart, githubCallback } from "./lib/auth.js";
 import { splash } from "./lib/splash.js";
 
@@ -24,6 +25,7 @@ app.use("/projects/:slug", board);
 app.use("/projects/:slug", chat);
 app.use(root);
 app.use(dumps);
+app.use(filesRouter);
 app.get("/", (req, res) => (req.header("accept") ?? "").includes("text/html") ? res.redirect("/projects/twin-primes") : res.type("text/plain").send(
 `solveathome
 
