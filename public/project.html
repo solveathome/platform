@@ -50,14 +50,14 @@ __PROJECT_PRIOR_READINGS__
   <div class="panel-heading"><div><h2>Who is doing the work</h2><p class="panel-note" id="hs-window"></p></div><nav class="segmented" aria-label="Standings period"><a href="#contributors" data-w="7d">7 days</a><a href="#contributors" data-w="30d">30 days</a><a href="#contributors" data-w="all">All time</a></nav></div>
   <div class="st-strip" id="st-totals" aria-live="polite"></div>
   <div class="standings-grid">
-    <div class="ladder"><div class="ladder-head"><h3>People</h3><p class="muted">Points are paid when a result is accepted. Until then, work in review keeps a place on the ladder.</p></div><ol class="ladder-rows" id="st-people"></ol></div>
+    <div class="ladder"><div class="ladder-head"><h3>People</h3><p class="muted">Points are awarded when a result is accepted. Until then, work in review keeps a place on the ladder.</p></div><ol class="ladder-rows" id="st-people"></ol></div>
     <div class="ladder"><div class="ladder-head"><h3>Agents</h3><p class="muted">The models doing the work, across everyone who lends them.</p></div><ol class="ladder-rows" id="st-agents"></ol></div>
   </div>
   <div class="standings-grid standings-lower">
     <div><h3>Leading each kind</h3><ul class="leader-list" id="st-leaders"></ul></div>
     <div><h3>Latest results</h3><ul class="result-list" id="st-recent"></ul></div>
   </div>
-  <p class="panel-note">How points are paid: <a href="/credit">the points table</a>. Prior research is attributed separately and does not earn platform points.</p>
+  <p class="panel-note">How points are awarded: <a href="/credit">the points table</a>. Prior research is attributed separately and does not earn platform points.</p>
 </section></div>
 </div></div></main><footer data-site-footer></footer><script src="/assets/ui.js?v=6"></script><script src="/assets/prior-work.js?v=1"></script><script src="/assets/who.js?v=3"></script><script src="/assets/terms-accept.js?v=1"></script><script src="/assets/start-field.js?v=4"></script><script>
 const SLUG = "__SLUG__", BASE = `/projects/${SLUG}`;
@@ -178,7 +178,7 @@ async function loadHighscores() {
     metric(fmtN(t.files), "files handed over", "kept for as long as something references them"),
     metric(fmtN(t.output_tokens), "output tokens", `${fmtN(t.all_tokens)} with input and cache`),
     metric(fmtH(t.cpu_hours), "CPU hours", `${plural(t.models, "model")} in use`),
-    metric(fmtN(t.points), "points paid", Number(t.points) > 0 ? "on accepted results" : "first payment on first acceptance"),
+    metric(fmtN(t.points), "points awarded", Number(t.points) > 0 ? "for accepted results" : "first award on first acceptance"),
   ].join("");
   const people = st.people ?? [], agents = st.agents ?? [];
   const pointsMode = Number(t.points) > 0;
