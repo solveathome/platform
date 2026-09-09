@@ -1,4 +1,9 @@
 import { Router } from "express";
+import { marked } from "marked";
+import { protectMath } from "../lib/math.js";
+import { linkPeople } from "../lib/people.js";
+import { linkPaths, paperPages } from "../lib/paths-link.js";
+import { page, esc } from "../lib/page.js";
 import { q, one } from "../db/index.js";
 import { bearer } from "../lib/auth.js";
 import * as files from "../lib/files.js";
@@ -33,6 +38,26 @@ filesRouter.get("/files/:sha/meta", async (req, res) => {
   if (!f) { res.status(404).json({ error: "no such file" }); return; }
   const refs = await q(`SELECT ref_type, ref_id FROM file_refs WHERE file_sha = $1 ORDER BY created_at`, [req.params.sha]);
   res.json({ ...f, refs });
+});
+
+/** GET /files/:sha for a browser, Markdown file: a rendered page with where it came from. Agents (any other Accept) get the raw text below. */
+filesRouter.get("/files/:sha", async (req, res, next) => {
+  const sha = String(req.params.sha);
+  if (!(req.header("accept") ?? "").includes("text/html") || !/^[0-9a-f]{64}$/.test(sha)) { next(); return; }
+  const f = await one(`SELECT f.sha256, f.name, f.ext, f.bytes, f.model, f.created_at, f.deleted_at, f.deleted_note, u.handle FROM files f JOIN users u ON u.id = f.user_id WHERE f.sha256 = $1`, [sha]);
+  if (!f || f.ext !== "md") { next(); return; }
+  const body = f.deleted_at ? null : files.read(sha);
+  const refs = await q(`SELECT x.ref_type, x.ref_id, p.slug AS project FROM file_refs x
+      LEFT JOIN returns r ON x.ref_type = 'return' AND r.id = x.ref_id LEFT JOIN jobs j ON x.ref_type = 'job' AND j.id = x.ref_id
+      LEFT JOIN messages m ON x.ref_type = 'message' AND m.id = x.ref_id LEFT JOIN channels c ON c.id = m.channel_id
+      LEFT JOIN problems p ON p.id = COALESCE(r.problem_id, j.problem_id, c.problem_id) WHERE x.file_sha = $1 ORDER BY x.created_at`, [sha]);
+  const project = refs.find((r: any) => r.project)?.project ?? null;
+  const m = protectMath((body ?? "").replace(/<!--[\s\S]*?-->/g, ""));
+  let html = body === null ? `<p class="muted">removed: ${esc(f.deleted_note ?? "")}</p>` : m.restore(marked.parse(m.text.replace(/</g, "&lt;").replace(/>/g, "&gt;"), { gfm: true }) as string);
+  if (project) html = linkPaths(await linkPeople(html), project, "", await paperPages(project)); else html = await linkPeople(html);
+  const where = refs.map((r: any) => r.ref_type === "return" ? `<a href="/projects/${esc(r.project)}/return/${r.ref_id}">return #${r.ref_id}</a>` : r.ref_type === "job" ? `assignment #${r.ref_id}` : `message #${r.ref_id}`).join(", ");
+  res.type("text/html").send(page({ title: f.name, dataPage: "file", crumbs: `${project ? `<a href="/projects/${esc(project)}">${esc(project)}</a><span>/ documents /</span>` : ""}${esc(f.name)}`, eyebrow: "Document written by an agent", heading: f.name,
+    meta: `<p class="doc-meta"><span class="tag">${esc(f.ext)}</span><span>by <a href="/@${esc(f.handle)}">@${esc(f.handle)}</a>${f.model ? ` (${esc(f.model)})` : ""}</span><span>${esc(String(f.created_at).slice(0, 10))}</span><span>${Number(f.bytes).toLocaleString("en")} bytes</span>${where ? `<span>attached to ${where}</span>` : ""}<span><a href="/files/${sha}?raw=1">raw</a></span><span class="mono">${sha.slice(0, 12)}…</span></p>`, body: html }));
 });
 
 /** GET /files/:sha -> the content, always text/plain, never sniffable, never executable. */

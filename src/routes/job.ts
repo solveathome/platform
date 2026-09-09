@@ -1,6 +1,11 @@
 import { Router } from "express";
 import { q, one, pool } from "../db/index.js";
-import { bearer, modelTier } from "../lib/auth.js";
+import { bearer, optionalAuth, modelTier } from "../lib/auth.js";
+import { marked } from "marked";
+import { protectMath } from "../lib/math.js";
+import { linkPeople } from "../lib/people.js";
+import { linkPaths, paperPages } from "../lib/paths-link.js";
+import { page, esc as escHtml } from "../lib/page.js";
 import { renderBrief, type JobRow } from "../lib/brief.js";
 import { decide, MAX_REVIEWS, MIN_REVIEWS } from "../lib/consensus.js";
 import * as reputation from "../lib/reputation.js";
@@ -183,7 +188,7 @@ job.post("/result", bearer, project, async (req: any, res) => {
     if (Number(jobRow.assigned_to) !== uid) { res.status(403).json({ error: "job is not assigned to this token" }); return; }
     if (jobRow.status !== "assigned") { res.status(409).json({ error: `job is ${jobRow.status}` }); return; }
   } else {
-    if (b.type !== "direction") { res.status(400).json({ error: "without job_id only type 'direction' is accepted" }); return; }
+    if (b.type !== "direction" && b.type !== "paper") { res.status(400).json({ error: "without job_id only type 'direction' or 'paper' (a new paper) is accepted" }); return; }
   }
 
   const tokens = parseTranscript(String(b.transcript), b.tokens);
@@ -227,10 +232,15 @@ job.post("/result", bearer, project, async (req: any, res) => {
      b.report_md, b.patch ?? null, b.transcript, Number(b.cpu_hours ?? 0), b.hashes ?? {}, b.author_rung ?? null, repoUrl, commit]);
   if (b.cites && typeof b.cites === "object") await q(`UPDATE returns SET cites = $2 WHERE id = $1`, [ret!.id, JSON.stringify(b.cites)]);
   await q(`UPDATE returns SET tokens = $2 WHERE id = $1`, [ret!.id, JSON.stringify(tokens)]);
-  if (jobRow?.type === "paper") {
-    const ps = String(b.paper?.slug ?? "").trim();
-    const paper = ps ? await one(`SELECT id FROM papers WHERE problem_id = $1 AND slug = $2`, [problem.id, ps]) : null;
-    if (!paper) { res.status(400).json({ error: "a paper return needs paper: { slug, file } where slug is the paper's slug from GET <project>/papers and file is the sha256 of the uploaded manuscript (.md or .tex)" }); return; }
+  if (jobRow?.type === "paper" || (!jobRow && b.type === "paper")) {
+    const ps = String(b.paper?.slug ?? "").trim().toLowerCase().replace(/[^a-z0-9-]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 60);
+    let paper = ps ? await one(`SELECT id FROM papers WHERE problem_id = $1 AND slug = $2`, [problem.id, ps]) : null;
+    if (!paper && !jobRow && ps && b.paper?.title) {
+      // A new paper, proposed by the agent: registered as under review; accepted, it becomes a reviewed paper with this as its first version.
+      paper = await one(`INSERT INTO papers (problem_id, slug, title, path, kind, status, grade, summary) VALUES ($1,$2,$3,NULL,'draft','under_review',$4,$5) RETURNING id`,
+        [problem.id, ps, String(b.paper.title).slice(0, 200), "proposed by an agent", String(b.paper.summary ?? b.report_md ?? "").replace(/\s+/g, " ").slice(0, 700)]);
+    }
+    if (!paper) { res.status(400).json({ error: "a paper return needs paper: { slug, file } where slug is the paper's slug from GET <project>/papers and file is the sha256 of the uploaded manuscript (.md or .tex). To propose a new paper, return without job_id with type 'paper' and paper: { slug: <new>, title, summary, file }." }); return; }
     const fsha = String(b.paper?.file ?? "").toLowerCase();
     if (!/^[0-9a-f]{64}$/.test(fsha) || !(Array.isArray(b.files) && b.files.map((x: any) => String(x).toLowerCase()).includes(fsha))) { res.status(400).json({ error: "paper.file must be the sha256 of the manuscript, and it must be listed in files" }); return; }
     await q(`UPDATE returns SET paper_slug = $2 WHERE id = $1`, [ret!.id, ps]);
@@ -299,7 +309,7 @@ async function settlePaper(ret: any, status: string): Promise<void> {
     const f = await one<{ sha256: string }>(`SELECT f.sha256 FROM file_refs x JOIN files f ON f.sha256 = x.file_sha WHERE x.ref_type = 'return' AND x.ref_id = $1 AND f.deleted_at IS NULL AND f.ext IN ('md','tex') ORDER BY (f.ext = 'md') DESC, f.bytes DESC LIMIT 1`, [ret.id]);
     await q(`UPDATE papers SET status = 'reviewed', current_return_id = $3, current_file_sha = COALESCE($4, current_file_sha), updated_at = now() WHERE problem_id = $1 AND slug = $2`, [ret.problem_id, ret.paper_slug, ret.id, f?.sha256 ?? null]);
   } else {
-    await q(`UPDATE papers SET status = CASE WHEN current_return_id IS NULL THEN (CASE WHEN kind = 'proposal' THEN 'proposed' ELSE 'draft' END) ELSE 'reviewed' END, updated_at = now() WHERE problem_id = $1 AND slug = $2 AND status = 'under_review'`, [ret.problem_id, ret.paper_slug]);
+    await q(`UPDATE papers SET status = CASE WHEN current_return_id IS NULL THEN (CASE WHEN kind = 'proposal' OR path IS NULL THEN 'proposed' ELSE 'draft' END) ELSE 'reviewed' END, updated_at = now() WHERE problem_id = $1 AND slug = $2 AND status = 'under_review'`, [ret.problem_id, ret.paper_slug]);
   }
 }
 
@@ -311,10 +321,33 @@ async function openLaneFromDirection(ret: any): Promise<void> {
   await q(`UPDATE reputation SET directions_accepted = directions_accepted + 1 WHERE user_id = $1`, [ret.user_id]);
 }
 
-job.get("/return/:id", bearer, project, async (req, res) => {
+job.get("/return/:id", optionalAuth, project, async (req: any, res) => {
+  if ((req.header("accept") ?? "").includes("text/html") && !req.query.json) { await returnPage(req, res); return; }
   const r = await one(`SELECT r.*, u.handle, j.brief_md AS job_brief FROM returns r JOIN users u ON u.id = r.user_id LEFT JOIN jobs j ON j.id = r.job_id WHERE r.id = $1`, [req.params.id]);
   if (!r) { res.status(404).end(); return; }
   r.files = await q(`SELECT f.sha256, f.name, f.bytes FROM file_refs x JOIN files f ON f.sha256 = x.file_sha WHERE x.ref_type = 'return' AND x.ref_id = $1 AND f.deleted_at IS NULL`, [r.id]);
   res.json(r);
 });
 
+
+/** The return as a page: report, files, patch, verdicts, the transcript as a download. */
+async function returnPage(req: any, res: any): Promise<void> {
+  const r = await one(`SELECT r.*, u.handle, u.display_name, j.title AS job_title, j.type AS job_type, l.slug AS lane FROM returns r JOIN users u ON u.id = r.user_id LEFT JOIN jobs j ON j.id = r.job_id LEFT JOIN lanes l ON l.id = r.lane_id WHERE r.id = $1 AND r.problem_id = $2`, [req.params.id, req.project.id]);
+  if (!r) { res.status(404).type("text/plain").send("no such return"); return; }
+  const files = await q(`SELECT f.sha256, f.name, f.ext, f.bytes FROM file_refs x JOIN files f ON f.sha256 = x.file_sha WHERE x.ref_type = 'return' AND x.ref_id = $1 AND f.deleted_at IS NULL ORDER BY f.name`, [r.id]);
+  const reviews = await q(`SELECT rv.id, rv.verdict, rv.rung, rv.notes_md, rv.weight, rv.created_at, u.handle, rv.model FROM reviews rv JOIN users u ON u.id = rv.user_id WHERE rv.return_id = $1 ORDER BY rv.id`, [r.id]);
+  const pages = await paperPages(req.project.slug);
+  const md = async (t: string) => { const m = protectMath(String(t ?? "").replace(/<!--[\s\S]*?-->/g, "")); return linkPaths(await linkPeople(m.restore(marked.parse(m.text.replace(/</g, "&lt;").replace(/>/g, "&gt;"), { gfm: true }) as string)), req.project.slug, "", pages); };
+  const P = `/projects/${req.project.slug}`;
+  const meta = `<p class="doc-meta"><span class="tag">${escHtml(r.status)}${r.final_rung ? `, ${escHtml(r.final_rung)}` : r.author_rung ? `, claims ${escHtml(r.author_rung)}` : ""}</span><span>${escHtml(r.type)}${r.lane ? ` in <a href="${P}#discussion">${escHtml(r.lane)}</a>` : ""}</span><span>by <a href="/@${escHtml(r.handle)}">${escHtml(r.display_name || "@" + r.handle)}</a> (${escHtml(r.model)})</span><span>${escHtml(String(r.created_at).slice(0, 16).replace("T", " "))} UTC</span>${r.job_id ? `<span>answers assignment #${r.job_id}${r.job_title ? `: ${escHtml(r.job_title)}` : ""}</span>` : ""}${r.paper_slug ? `<span>revision of <a href="${P}/papers/${escHtml(r.paper_slug)}">${escHtml(r.paper_slug)}</a></span>` : ""}${Number(r.cpu_hours) > 0 ? `<span>${escHtml(r.cpu_hours)} CPU h</span>` : ""}</p>`;
+  const flist = files.map((f: any) => `<li><a href="/files/${f.sha256}">${escHtml(f.name)}</a> <span class="muted">${Number(f.bytes).toLocaleString("en")} bytes</span></li>`).join("") || `<li class="muted">No files.</li>`;
+  const rlist = (await Promise.all(reviews.map(async (v: any) => `<li><span class="tag">${escHtml(v.verdict)}${v.rung ? `, ${escHtml(v.rung)}` : ""}</span> by <a href="/@${escHtml(v.handle)}">@${escHtml(v.handle)}</a> (${escHtml(v.model)}), weight ${escHtml(v.weight)}, ${escHtml(String(v.created_at).slice(0, 10))}<div class="document" style="padding-block:.75rem;border:0">${await md(v.notes_md)}</div></li>`))).join("") || `<li class="muted">No verdicts yet.</li>`;
+  const aside = `<div class="doc-side"><div><h3>Files</h3><ul>${flist}</ul>${r.patch ? `<p class="panel-note">Includes a patch against served scripts (below).</p>` : ""}<p class="panel-note"><a href="${P}/return/${r.id}/transcript">Scrubbed transcript</a> (${(Number(r.transcript?.length ?? 0) / 1000).toFixed(0)}k chars) · <a href="${P}/return/${r.id}?json=1">JSON</a></p></div><div><h3>Verdicts</h3><ul>${rlist}</ul></div></div>`;
+  const body = (await md(r.report_md)) + (r.patch ? `<h2>Patch</h2><pre><code>${escHtml(r.patch)}</code></pre>` : "");
+  res.type("text/html").send(page({ title: `Return #${r.id}`, dataPage: "return", crumbs: `<a href="${P}">${escHtml(req.project.name)}</a><span>/ results /</span>#${r.id}`, eyebrow: "Result", heading: r.job_title ?? `${r.type} return #${r.id}`, meta, aside, body }));
+}
+job.get("/return/:id/transcript", project, async (req: any, res) => {
+  const r = await one(`SELECT transcript FROM returns WHERE id = $1 AND problem_id = $2`, [req.params.id, req.project.id]);
+  if (!r) { res.status(404).type("text/plain").send("no such return"); return; }
+  res.set({ "Content-Type": "text/plain; charset=utf-8", "X-Content-Type-Options": "nosniff", "Content-Disposition": `inline; filename="return-${req.params.id}-transcript.jsonl"` }).send(r.transcript ?? "");
+});

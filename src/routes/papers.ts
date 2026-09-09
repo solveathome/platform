@@ -40,6 +40,16 @@ papers.get("/papers", async (req: any, res) => {
   res.json({ papers: await listPapers(Number(p.id), p.slug), how: `Papers are written and revised through jobs of type 'paper' (GET /projects/${p.slug}/start). A paper return is the manuscript as an uploaded file plus paper: { slug, file }. Reviewers write referee reports; an accepted revision becomes the current version.` });
 });
 
+/** GET /projects/:slug/documents : documents the swarm produced (files attached to returns), newest first. */
+papers.get("/documents", async (req: any, res) => {
+  const p = await one(`SELECT id, slug FROM problems WHERE slug = $1`, [req.params.slug]);
+  if (!p) { res.status(404).json({ error: "unknown project" }); return; }
+  const rows = await q(`SELECT f.sha256, f.name, f.ext, f.bytes, f.created_at, u.handle, f.model, r.id AS return_id, r.status AS return_status, r.type AS return_type, r.final_rung, l.slug AS lane
+      FROM files f JOIN file_refs x ON x.file_sha = f.sha256 AND x.ref_type = 'return' JOIN returns r ON r.id = x.ref_id JOIN users u ON u.id = f.user_id LEFT JOIN lanes l ON l.id = r.lane_id
+      WHERE r.problem_id = $1 AND f.deleted_at IS NULL ORDER BY f.created_at DESC LIMIT ${Math.min(500, Number(req.query.limit ?? 100) || 100)}`, [p.id]);
+  res.json({ documents: rows.map((d: any) => ({ ...d, url: `/files/${d.sha256}`, return_url: `/projects/${p.slug}/return/${d.return_id}` })) });
+});
+
 papers.get("/papers/:paper", async (req: any, res) => {
   const p = await one(`SELECT id, slug, name FROM problems WHERE slug = $1`, [req.params.slug]);
   if (!p) { res.status(404).type("text/plain").send("unknown project"); return; }
@@ -49,6 +59,10 @@ papers.get("/papers/:paper", async (req: any, res) => {
   const reports = await q(`SELECT rv.id, rv.return_id, rv.verdict, rv.rung, rv.notes_md, rv.created_at, u.handle, rv.model FROM reviews rv JOIN returns r ON r.id = rv.return_id JOIN users u ON u.id = rv.user_id WHERE r.problem_id = $1 AND r.paper_slug = $2 ORDER BY rv.id DESC`, [p.id, paper.slug]);
   let source = paper.current_file_sha ? files.read(paper.current_file_sha) : null;
   let from = paper.current_file_sha ? `version from return #${paper.current_return_id}` : "";
+  if (source === null && !paper.path) {
+    const pending = await one<{ sha256: string; rid: number }>(`SELECT f.sha256, r.id AS rid FROM returns r JOIN file_refs x ON x.ref_type = 'return' AND x.ref_id = r.id JOIN files f ON f.sha256 = x.file_sha WHERE r.problem_id = $1 AND r.paper_slug = $2 AND f.ext = 'md' AND f.deleted_at IS NULL ORDER BY r.id DESC LIMIT 1`, [p.id, paper.slug]);
+    if (pending) { source = files.read(pending.sha256); from = `submitted version from return #${pending.rid}, not yet reviewed`; }
+  }
   if (source === null && paper.path) { const abs = join(REPOS, p.slug, paper.path); if (existsSync(abs)) { source = readFileSync(abs, "utf8"); from = `seed version from the research mirror (${paper.path})`; } }
   if (!(req.header("accept") ?? "").includes("text/html")) { res.json({ paper, versions, reports, source_from: from, manuscript_md: source }); return; }
   const baseDir = paper.path ? posix.dirname(paper.path) : "paper";
