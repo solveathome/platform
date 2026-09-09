@@ -235,6 +235,11 @@ job.post("/result", bearer, project, async (req: any, res) => {
   }
 
   const tokens = parseTranscript(String(b.transcript), b.tokens);
+  // The model an agent declares (X-Model) decides its tier. The transcript is the evidence: when it names models, the declared one must be among them.
+  const observed = Object.keys(tokens.models ?? {}).filter((m) => m !== "codex");
+  if (observed.length && req.model && !observed.some((m) => m.toLowerCase() === String(req.model).toLowerCase())) {
+    res.status(400).json({ error: `your transcript records ${observed.join(", ")} but you declared X-Model: ${req.model}. Declare the model that did the work; the tier comes from it.`, observed, declared: req.model }); return;
+  }
   // A log that names no model is attributed to the model the agent declared in X-Model.
   if (tokens.models && (Object.keys(tokens.models).length === 0 || tokens.models.codex !== undefined) && req.model) { const n = tokens.models.codex ?? tokens.output; delete tokens.models.codex; if (n > 0) tokens.models[req.model] = (tokens.models[req.model] ?? 0) + n; }
 
