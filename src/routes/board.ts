@@ -63,12 +63,12 @@ board.post("/claims", bearer, async (req: any, res) => {
   let n = 0;
   for (const c of list) {
     if (!c?.path || !c?.ledger_id) continue;
-    await q(`INSERT INTO claims (problem_id, ledger_id, path, kind, status, question, verdict, origin_handle, origin_role, origin_model, origin_model_role, origin_note, first_commit, last_commit, commits, corpus, session_commits)
-             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17)
+    await q(`INSERT INTO claims (problem_id, ledger_id, path, kind, status, question, verdict, origin_handle, origin_role, origin_model, origin_model_role, origin_note, first_commit, last_commit, commits, corpus, session_commits, model_commits)
+             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18)
              ON CONFLICT (problem_id, path) DO UPDATE SET ledger_id = EXCLUDED.ledger_id, kind = EXCLUDED.kind, status = EXCLUDED.status, question = EXCLUDED.question, verdict = EXCLUDED.verdict,
                origin_handle = EXCLUDED.origin_handle, origin_role = EXCLUDED.origin_role, origin_model = EXCLUDED.origin_model, origin_model_role = EXCLUDED.origin_model_role, origin_note = EXCLUDED.origin_note,
-               first_commit = EXCLUDED.first_commit, last_commit = EXCLUDED.last_commit, commits = EXCLUDED.commits, corpus = EXCLUDED.corpus, session_commits = EXCLUDED.session_commits, updated_at = now()`,
-      [p.id, String(c.ledger_id), String(c.path), String(c.kind ?? "note"), String(c.status ?? "UNKNOWN"), String(c.question ?? ""), String(c.verdict ?? ""), String(b.origin_handle ?? "unknown"), String(b.origin_role ?? ""), b.origin_model ?? null, String(b.origin_model_role ?? ""), String(b.origin_note ?? ""), c.first ?? null, c.last ?? null, Number(c.commits ?? 0), !!c.corpus, Number(c.session_commits ?? 0)]);
+               first_commit = EXCLUDED.first_commit, last_commit = EXCLUDED.last_commit, commits = EXCLUDED.commits, corpus = EXCLUDED.corpus, session_commits = EXCLUDED.session_commits, model_commits = EXCLUDED.model_commits, updated_at = now()`,
+      [p.id, String(c.ledger_id), String(c.path), String(c.kind ?? "note"), String(c.status ?? "UNKNOWN"), String(c.question ?? ""), String(c.verdict ?? ""), String(b.origin_handle ?? "unknown"), String(b.origin_role ?? ""), b.origin_model ?? null, String(b.origin_model_role ?? ""), String(b.origin_note ?? ""), c.first ?? null, c.last ?? null, Number(c.commits ?? 0), !!c.corpus, Number(c.session_commits ?? 0), c.model_commits ? JSON.stringify(c.model_commits) : null]);
     n++;
   }
   res.json({ ok: true, upserted: n });
@@ -78,9 +78,10 @@ board.post("/claims", bearer, async (req: any, res) => {
 board.get("/claims", async (req: any, res) => {
   const p = await one(`SELECT id FROM problems WHERE slug = $1`, [req.params.slug]);
   if (!p) { res.status(404).json({ error: "unknown project" }); return; }
-  const rows = await q(`SELECT ledger_id, path, kind, status, question, verdict, origin_handle, origin_role, origin_model, origin_model_role, first_commit, last_commit, commits, corpus, session_commits, scored FROM claims WHERE problem_id = $1 ORDER BY kind, path`, [p.id]);
+  const rows = await q(`SELECT ledger_id, path, kind, status, question, verdict, origin_handle, origin_role, origin_model, origin_model_role, first_commit, last_commit, commits, corpus, session_commits, model_commits, scored FROM claims WHERE problem_id = $1 ORDER BY kind, path`, [p.id]);
   const by_status = await q(`SELECT status, count(*) AS n FROM claims WHERE problem_id = $1 GROUP BY status ORDER BY n DESC`, [p.id]);
-  const by_origin = await q(`SELECT origin_handle, origin_role, origin_model, origin_model_role, max(origin_note) AS origin_note, count(*) AS n, count(*) FILTER (WHERE corpus) AS corpus_claims, min(first_commit) AS first, max(last_commit) AS last, sum(commits) AS commits, sum(session_commits) AS session_commits
+  const by_origin = await q(`SELECT origin_handle, origin_role, origin_model, origin_model_role, max(origin_note) AS origin_note, count(*) AS n, count(*) FILTER (WHERE corpus) AS corpus_claims, min(first_commit) AS first, max(last_commit) AS last, sum(commits) AS commits, sum(session_commits) AS session_commits,
+      sum((model_commits->>'claude')::int) AS claude_commits, sum((model_commits->>'gpt-6-astra')::int) AS astra_commits, sum((model_commits->>'dispatched-agents')::int) AS dispatched_commits, sum((model_commits->>'unattributed-agent')::int) AS unattributed_commits
     FROM claims WHERE problem_id = $1 GROUP BY origin_handle, origin_role, origin_model, origin_model_role ORDER BY n DESC`, [p.id]);
   res.json({ by_status, by_origin, claims: rows });
 });

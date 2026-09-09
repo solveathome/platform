@@ -1,0 +1,29 @@
+{
+  "project": "twin-primes",
+  "source_repo": "the private research repository",
+  "human": { "handle": "Benjaminsen", "role": "direction, review, prior corpus (2020-2026 independent experiments)" },
+  "rules": [
+    "A commit whose message carries a Claude-Session marker is attributed to claude (Claude Code).",
+    "A commit listed under models.gpt-6-astra is attributed to gpt-6-astra (Codex), per the Codex chat transcript Chris shared on 2026-09-09.",
+    "Commits listed under recorded_submissions were written by dispatched agents whose model was not recorded; Astra recorded them.",
+    "Every other commit is an agent session of unrecorded model. No commit names a model; no commit has a co-author trailer.",
+    "Nothing here is scored. Provenance is credited by role only."
+  ],
+  "models": {
+    "gpt-6-astra": {
+      "evidence": "Codex chat transcript, shared by @Benjaminsen 2026-09-09",
+      "commits": {
+        "86d5aa1": "Consolidate research guidance and prepare multi-day agent plan (2026-09-07)",
+        "3801642": "Clarify review status and remove duplicate research summaries (2026-09-07)",
+        "bd6ac5e": "Align generated question guidance and research routing (2026-09-07)",
+        "5eae48c": "Link script provenance index to source files and clarify reuse guidance (2026-09-07)",
+        "43135b3": "Review agent returns and correct proof gaps and overbroad closures (2026-09-08)",
+        "1285d47": "Prepare bounded agent continuation from reviewed research returns (2026-09-08)",
+        "1628608": "Review research returns and correct remaining proof targets (2026-09-09)"
+      }
+    }
+  },
+  "recorded_submissions": {
+    "a5e1244": "Record incoming research reports before integration review (2026-09-08): lanes A/A2/B/C/D/E/V/W returns by dispatched agents, model unrecorded; recorded by gpt-6-astra"
+  }
+}
