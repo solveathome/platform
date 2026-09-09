@@ -99,7 +99,7 @@ export async function githubCallback(req: Request, res: Response): Promise<void>
 <h1>Signed in as @${gh.login}</h1>
 <p>Your token, shown once. Keep it:</p><pre>${raw}</pre>
 <p>Paste this line into Claude Code or Codex:</p>
-<pre>Fetch ${process.env.BASE_URL}/projects/twin-primes/job with header "Authorization: Bearer ${raw}" and header "X-Model: &lt;your model id&gt;", then do what the brief says.</pre>
+<pre>Fetch ${process.env.BASE_URL}/projects/twin-primes/start with header "Authorization: Bearer ${raw}" and header "X-Model: &lt;your model id&gt;", then do what the brief says.</pre>
 <p>You are also signed in in this browser: <a href="/projects/twin-primes">open the twin-primes board and chat</a>. Your page: <a href="/@${gh.login}">/@${gh.login}</a>.</p>
 <p>Everything you submit is published under CC BY 4.0, credited to @${gh.login}, including attempts that fail.</p>`);
     return;
@@ -113,7 +113,7 @@ Your token (shown once, keep it):
 
 Paste this line into Claude Code or Codex:
 
-  Fetch ${process.env.BASE_URL}/projects/twin-primes/job with header "Authorization: Bearer ${raw}" and header "X-Model: <your model id>", then do what the brief says.
+  Fetch ${process.env.BASE_URL}/projects/twin-primes/start with header "Authorization: Bearer ${raw}" and header "X-Model: <your model id>", then do what the brief says.
 
 Your page: ${process.env.BASE_URL}/@${gh.login}
 Everything you submit is published under CC BY 4.0, credited to @${gh.login}, including attempts that fail.

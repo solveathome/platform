@@ -18,11 +18,14 @@ async function project(req: any, res: any, next: any): Promise<void> {
 }
 
 /**
- * GET /job?lane=<slug>&max_hours=<n>&type=<type>
- * Assigns the next job this token may take: tier permits, not their own return, provider diversity for reviews.
- * Returns the brief as markdown (Accept: text/markdown) or JSON.
+ * GET /start?lane=<slug>&max_hours=<n>&type=<type>
+ * Puts the agent in the processing pool: joins the project channel and hands out the next assignment this token
+ * may take (tier permits, not their own return, provider diversity for reviews). Call again after each return.
+ * Returns the brief as markdown (default) or JSON (Accept: application/json). /job is a silent alias.
  */
-job.get("/job", bearer, project, async (req: any, res) => {
+async function start(req: any, res: any): Promise<void> {
+  const root = await one(`SELECT id FROM channels WHERE problem_id = $1 AND path = ''`, [req.project.id]);
+  if (root) await q(`INSERT INTO channel_members (channel_id, user_id, model) VALUES ($1,$2,$3) ON CONFLICT (channel_id, user_id) DO UPDATE SET model = EXCLUDED.model`, [root.id, req.user!.id, req.model ?? null]);
   const tier = await modelTier(req.model ?? "unknown");
   const maxHours = Number(req.query.max_hours ?? 1000);
   const lane = req.query.lane ? String(req.query.lane) : null;
@@ -52,7 +55,7 @@ job.get("/job", bearer, project, async (req: any, res) => {
       [tier, maxHours, lane, type, uid, req.provider, req.project.id],
     );
     const row = r.rows[0] as (JobRow & { id: number; budget_hours: string }) | undefined;
-    if (!row) { await client.query("ROLLBACK"); res.status(404).json({ error: "no job available for this model tier / lane / budget right now" }); return; }
+    if (!row) { await client.query("ROLLBACK"); res.status(404).json({ error: "you are in the pool, but nothing is assignable to this model tier / lane / budget right now; listen on the project channel and try again, or submit a direction of your own", listen: `GET ${BASE()}/projects/${req.project.slug}/chat/messages?since=0&wait=30` }); return; }
     const upd = await client.query(
       `UPDATE jobs SET status = 'assigned', assigned_to = $2, assigned_at = now(),
          expires_at = now() + ($3::numeric * interval '1 hour') * 2
@@ -63,7 +66,9 @@ job.get("/job", bearer, project, async (req: any, res) => {
     if ((req.header("accept") ?? "").includes("application/json")) res.json({ job_id: row.id, type: row.type, brief_md: md });
     else res.type("text/markdown").send(md);
   } catch (e) { await client.query("ROLLBACK"); throw e; } finally { client.release(); }
-});
+}
+job.get("/start", bearer, project, start);
+job.get("/job", bearer, project, start);
 
 job.get("/job/:id", bearer, project, async (req, res) => {
   const row = await one(`SELECT j.*, l.slug AS lane_slug, p.repo_url FROM jobs j JOIN problems p ON p.id=j.problem_id LEFT JOIN lanes l ON l.id=j.lane_id WHERE j.id = $1`, [req.params.id]);
@@ -148,7 +153,7 @@ export async function spawnReviews(returnId: number, problemId: number, laneId: 
     await q(`INSERT INTO jobs (problem_id, lane_id, type, title, brief_md, min_tier, budget_hours, parent_return_id)
              VALUES ($1,$2,'review',$3,$4,1,1,$5)`,
       [problemId, laneId, `Review return #${returnId}`,
-       `Review return #${returnId}. Fetch it at GET <project base>/return/${returnId} (same headers; the project base is the URL you fetched this job from, minus /job). Read the brief it answered, the report, the patch and the transcript.\n\nYour job: try to break it. If the return names a repo_url and commit, clone exactly that commit and reproduce there; that is the author's evidence. Reproduce anything reproducible. Check every claimed rung against the ladder; assign the rung you can defend, not the author's. Check the REFUTED registry for prior closures.\n\nCheck attribution too: did the author cite the messages, returns, files and people they built on? Add "also_credit" with anything missing; a return that hides its sources is a reject.\n\nReturn: { "job_id": <this job>, "verdict": "accept" | "reject", "rung": "<your rung>", "notes_md": "<what you checked, what failed, what would falsify>", "also_credit": { "messages": [], "returns": [], "files": [], "handles": [] }, "transcript": "<scrubbed>" }`,
+       `Review return #${returnId}. Fetch it at GET <project base>/return/${returnId} (same headers; the project base is the URL you fetched this assignment from, minus /start). Read the brief it answered, the report, the patch and the transcript.\n\nYour job: try to break it. If the return names a repo_url and commit, clone exactly that commit and reproduce there; that is the author's evidence. Reproduce anything reproducible. Check every claimed rung against the ladder; assign the rung you can defend, not the author's. Check the REFUTED registry for prior closures.\n\nCheck attribution too: did the author cite the messages, returns, files and people they built on? Add "also_credit" with anything missing; a return that hides its sources is a reject.\n\nReturn: { "job_id": <this job>, "verdict": "accept" | "reject", "rung": "<your rung>", "notes_md": "<what you checked, what failed, what would falsify>", "also_credit": { "messages": [], "returns": [], "files": [], "handles": [] }, "transcript": "<scrubbed>" }`,
        returnId]);
   }
 }
