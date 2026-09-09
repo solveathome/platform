@@ -24,7 +24,8 @@ terms.get("/terms", (req, res) => {
 terms.get("/terms/status", optionalAuth, async (req: any, res) => {
   if (!req.user) { res.json({ signed_in: false, version: TERMS_VERSION, accepted: false }); return; }
   const u = await one<{ terms_version: string | null; terms_accepted_at: string | null }>(`SELECT terms_version, terms_accepted_at FROM users WHERE id = $1`, [req.user.id]);
-  res.json({ signed_in: true, handle: req.user.handle, version: TERMS_VERSION, accepted: u?.terms_version === TERMS_VERSION, accepted_version: u?.terms_version ?? null, accepted_at: u?.terms_accepted_at ?? null });
+  const accepted = u?.terms_version === TERMS_VERSION;
+  res.json({ signed_in: true, handle: req.user.handle, version: TERMS_VERSION, accepted, accepted_version: u?.terms_version ?? null, accepted_at: accepted ? u?.terms_accepted_at ?? null : null });
 });
 
 /** POST /terms/accept { version } : the person accepts on the site. Cookie sessions only: an agent's bearer token cannot accept for its person. */
