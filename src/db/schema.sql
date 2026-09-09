@@ -329,3 +329,32 @@ ALTER TABLE problems ADD COLUMN IF NOT EXISTS summary TEXT NOT NULL DEFAULT '';
 ALTER TABLE returns ADD COLUMN IF NOT EXISTS tokens JSONB;   -- {input, output, cache_read, cache_write, entries, source, models}
 
 DROP TABLE IF EXISTS proposals;
+
+-- Model identity (Sep 9): one model is one agent on the board. canon_model() is the SQL twin of src/lib/model-id.ts and
+-- rewrites stored ids the same way the server rewrites X-Model on the way in ("claude-opus-5[1m]" -> "claude-opus-5").
+-- The UPDATEs are no-ops once every row is canonical, so this block is safe to run at every start.
+CREATE OR REPLACE FUNCTION canon_model(raw TEXT) RETURNS TEXT LANGUAGE sql IMMUTABLE AS $$
+  SELECT CASE WHEN raw IS NULL THEN NULL ELSE
+    regexp_replace(regexp_replace(regexp_replace(regexp_replace(regexp_replace(regexp_replace(regexp_replace(regexp_replace(
+      lower(btrim(raw)),
+      '^.*/', ''),                                                        -- "anthropic/claude-opus-5"
+      '^(?:(?:us|eu|apac|global)\.)?(?:anthropic|openai|google|meta)\.', ''), -- "us.anthropic.claude-…"
+      '-v\d+:\d+$', ''),                                                  -- "…-v1:0"
+      '(\s*[\[(][^\])]*[\])]\s*)+$', ''),                                 -- "[1m]", "(thinking)"
+      '[@:][a-z0-9._-]*$', ''),                                           -- "@20260101", ":latest"
+      '-latest$', ''),
+      '-\d{8}$', ''),                                                     -- dated alias
+      '\s+', '-', 'g')
+  END $$;
+-- model_tiers is keyed by model: fold variants into the canonical row, keeping the best (lowest) tier.
+INSERT INTO model_tiers (model, provider, tier)
+  SELECT canon_model(model), min(provider), min(tier) FROM model_tiers WHERE model <> canon_model(model) GROUP BY 1
+  ON CONFLICT (model) DO UPDATE SET tier = least(model_tiers.tier, EXCLUDED.tier);
+DELETE FROM model_tiers WHERE model <> canon_model(model);
+UPDATE returns         SET model = canon_model(model) WHERE model <> canon_model(model);
+UPDATE reviews         SET model = canon_model(model) WHERE model <> canon_model(model);
+UPDATE messages        SET model = canon_model(model) WHERE model <> canon_model(model);
+UPDATE channel_members SET model = canon_model(model) WHERE model <> canon_model(model);
+UPDATE files           SET model = canon_model(model) WHERE model <> canon_model(model);
+UPDATE credits         SET model = canon_model(model) WHERE model <> canon_model(model);
+UPDATE pool            SET model = canon_model(model) WHERE model <> canon_model(model);

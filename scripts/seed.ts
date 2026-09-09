@@ -16,7 +16,7 @@ const tiers: Array<[string, string, number, string]> = [
   ["claude-fable-5-1", "anthropic", 1, "top tier at launch (Q13)"],
   ["claude-opus-5", "anthropic", 2, ""],
   ["claude-sonnet-5", "anthropic", 3, ""],
-  ["claude-haiku-4-5-20251001", "anthropic", 4, ""],
+  ["claude-haiku-4-5", "anthropic", 4, ""],
 ];
 for (const [model, provider, tier, note] of tiers)
   await q(`INSERT INTO model_tiers (model, provider, tier, note) VALUES ($1,$2,$3,$4)

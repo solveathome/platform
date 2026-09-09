@@ -1,3 +1,5 @@
+import { canonicalModel, providerFromModel, defaultTier } from "./model-id.js";
+export { providerFromModel };
 import { createHash, randomBytes } from "node:crypto";
 import type { Request, Response, NextFunction } from "express";
 import { one, q } from "../db/index.js";
@@ -36,7 +38,7 @@ export async function bearer(req: Request, res: Response, next: NextFunction): P
     (req as any).termsStale = msg;
   }
   req.user = { id: Number(row.id), handle: row.handle };
-  const xm = (req.header("x-model") ?? "").trim().toLowerCase();
+  const xm = canonicalModel(req.header("x-model"));
   req.model = xm || undefined;
   const tier = xm ? await one<{ provider: string }>(`SELECT provider FROM model_tiers WHERE model = $1`, [xm]) : undefined;
   req.provider = xm ? (tier?.provider ?? providerFromModel(xm)) : undefined;
@@ -65,21 +67,22 @@ export async function optionalAuth(req: Request, _res: Response, next: NextFunct
   if (raw) {
     const row = await one<{ id: number; handle: string }>(
       `SELECT u.id, u.handle FROM tokens t JOIN users u ON u.id = t.user_id WHERE t.token_hash = $1 AND t.revoked_at IS NULL`, [hashToken(raw)]);
-    if (row) { req.user = { id: Number(row.id), handle: row.handle }; req.model = (req.header("x-model") ?? "").toLowerCase() || undefined; req.provider = req.model ? providerFromModel(req.model) : undefined; }
+    if (row) { req.user = { id: Number(row.id), handle: row.handle }; req.model = canonicalModel(req.header("x-model")) || undefined; req.provider = req.model ? providerFromModel(req.model) : undefined; }
   }
   next();
 }
 
-export function providerFromModel(m: string): string {
-  if (m.startsWith("claude")) return "anthropic";
-  if (m.startsWith("gpt") || m.startsWith("o") || m.includes("codex")) return "openai";
-  if (m.startsWith("gemini")) return "google";
-  return "unknown";
-}
 
+/** Tier for a canonical model id. A model seen for the first time is registered with its family's default tier and a note saying so,
+ * so the board shows it properly and one row in model_tiers overrides it. */
 export async function modelTier(model: string): Promise<number> {
-  const r = await one<{ tier: number }>(`SELECT tier FROM model_tiers WHERE model = $1`, [model]);
-  return r ? Number(r.tier) : 99;
+  const m = canonicalModel(model); if (!m) return 99;
+  const r = await one<{ tier: number }>(`SELECT tier FROM model_tiers WHERE model = $1`, [m]);
+  if (r) return Number(r.tier);
+  const d = defaultTier(m);
+  const ins = await one<{ tier: number }>(`INSERT INTO model_tiers (model, provider, tier, note) VALUES ($1,$2,$3,$4)
+    ON CONFLICT (model) DO UPDATE SET model = EXCLUDED.model RETURNING tier`, [m, providerFromModel(m), d.tier, `auto: ${d.rule}, first seen ${new Date().toISOString().slice(0, 10)}`]);
+  return Number(ins?.tier ?? d.tier);
 }
 
 /** GitHub OAuth: /auth/github -> GitHub -> /auth/github/callback -> token shown once. */

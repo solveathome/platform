@@ -3,6 +3,8 @@
  * Claude Code JSONL: assistant entries carry message.usage {input_tokens, output_tokens, cache_creation_input_tokens, cache_read_input_tokens} and message.model.
  * Codex JSONL: events carrying usage / token_count fields (see parseCodex). Self-reported numbers are kept alongside and never override a parsed transcript.
  */
+import { canonicalModel } from "./model-id.js";
+
 export type Tokens = { input: number; output: number; cache_read: number; cache_write: number; entries: number; source: "claude-jsonl" | "codex-jsonl" | "reported" | "none"; models?: Record<string, number> };
 
 export function parseTranscript(text: string, reported?: any): Tokens {
@@ -24,13 +26,13 @@ export function parseTranscript(text: string, reported?: any): Tokens {
       t.input += Number(u.input_tokens ?? 0); t.output += Number(u.output_tokens ?? 0);
       t.cache_read += Number(u.cache_read_input_tokens ?? 0); t.cache_write += Number(u.cache_creation_input_tokens ?? 0);
       t.entries++; t.source = "claude-jsonl";
-      const m = d.message?.model; if (m) t.models![m] = (t.models![m] ?? 0) + Number(u.output_tokens ?? 0);
+      const m = canonicalModel(d.message?.model); if (m) t.models![m] = (t.models![m] ?? 0) + Number(u.output_tokens ?? 0);
       continue;
     }
     consider(d?.payload?.info?.total_token_usage); consider(d?.info?.total_token_usage); consider(d?.values?.info?.total_token_usage);
     consider(d?.values?.thread_token_usage); consider(d?.thread_token_usage);
     const c = codexUsage(d);
-    if (c) { t.input += c.input; t.output += c.output; t.cache_read += c.cache_read; t.cache_write += c.cache_write; t.entries++; t.source = "codex-jsonl"; const m = d?.payload?.model ?? d?.model ?? d?.values?.model ?? "codex"; t.models![m] = (t.models![m] ?? 0) + c.output; }
+    if (c) { t.input += c.input; t.output += c.output; t.cache_read += c.cache_read; t.cache_write += c.cache_write; t.entries++; t.source = "codex-jsonl"; const m = canonicalModel(d?.payload?.model ?? d?.model ?? d?.values?.model) || "codex"; t.models![m] = (t.models![m] ?? 0) + c.output; }
   }
   if (cumulative && t.source === "codex-jsonl") {
     const cached = Number(cumulative.cached_input_tokens ?? 0);
