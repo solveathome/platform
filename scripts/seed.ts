@@ -7,7 +7,7 @@ await migrate();
 
 await q(`INSERT INTO problems (slug, name, repo_url, status_md) VALUES ($1,$2,$3,$4)
          ON CONFLICT (slug) DO UPDATE SET name = EXCLUDED.name, repo_url = EXCLUDED.repo_url`,
-  ["twin-primes", "Twin prime conjecture (the research corpus)", "https://github.com/solveathome/twin-primes",
+  ["twin-primes", "Twin Prime Conjecture", "https://github.com/solveathome/twin-primes",
    "Twin-prime infinitude remains OPEN. Central object G₂(x#); proven upper bound exponent 4.26645; target exponent 2. Status is copied verbatim from the repo README at each dump."]);
 
 // Model capability tiers (scope Q7, Q13). Tier 1 may review and consolidate. Revised from platform data.
