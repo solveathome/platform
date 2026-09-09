@@ -16,7 +16,8 @@ async function project(req: any, res: any, next: any): Promise<void> {
   req.project = p; next();
 }
 async function channel(req: any, res: any, next: any): Promise<void> {
-  const path = String(req.params.path ?? "").replace(/^\/+|\/+$/g, "");
+  const raw = req.params.path;
+  const path = (Array.isArray(raw) ? raw.join("/") : String(raw ?? "")).replace(/^\/+|\/+$/g, "");
   const c = await one(`SELECT * FROM channels WHERE problem_id = $1 AND path = $2`, [req.project.id, path]);
   if (!c) { res.status(404).json({ error: `no channel '${path}'` }); return; }
   req.channel = c; next();
