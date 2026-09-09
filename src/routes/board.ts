@@ -31,7 +31,10 @@ board.get("/board", async (req, res) => {
   if (!problem) { res.status(404).json({ error: "unknown project" }); return; }
   const pid = problem.id;
   const rungs = await q(`SELECT final_rung AS rung, count(*) AS n FROM returns WHERE problem_id = $1 AND status = 'accepted' GROUP BY final_rung`, [pid]);
-  const lanes = await q(`SELECT slug, title, variant, status FROM lanes WHERE problem_id = $1 ORDER BY id`, [pid]);
+  const lanes = await q(`SELECT l.slug, l.title, l.variant, l.status,
+    (SELECT count(*) FROM jobs j WHERE j.lane_id = l.id AND j.status = 'queued') AS queued,
+    (SELECT count(*) FROM returns r WHERE r.lane_id = l.id AND r.status = 'accepted') AS accepted
+    FROM lanes l WHERE l.problem_id = $1 ORDER BY l.id`, [pid]);
   const queue = await q(`SELECT type, status, count(*) AS n FROM jobs WHERE problem_id = $1 GROUP BY type, status ORDER BY type, status`, [pid]);
   const recent = await q(`SELECT r.id, r.type, r.status, r.final_rung, u.handle, r.created_at FROM returns r JOIN users u ON u.id = r.user_id WHERE r.problem_id = $1 ORDER BY r.id DESC LIMIT 50`, [pid]);
   const health = await one(`
