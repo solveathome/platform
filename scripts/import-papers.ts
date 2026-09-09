@@ -23,7 +23,7 @@ const summary = (t: string) => {
   const para = (abs ?? t.replace(/^#\s+.+$/m, "").replace(/^\*[^\n]*\*\s*$/m, "")).split(/\n\s*\n/).map((x) => x.replace(/\s+/g, " ").trim()).find((x) => x.length > 80 && !/^status:/i.test(x) && !/^\*\*status/i.test(x)) ?? "";
   return para.slice(0, 700);
 };
-const grade = (t: string) => { const m = /^\*\*Status:\s*([^*]+)\*\*/im.exec(t) ?? /^status:\s*(.+)$/im.exec(t); return m ? m[1].replace(/\s+/g, " ").trim().slice(0, 200) : null; };
+const grade = (t: string) => { const m = /^\*\*Status:\s*([^*]+)\*\*/im.exec(t) ?? /^status:\s*(.+)$/im.exec(t); if (!m) return null; const g = m[1].replace(/\s+/g, " ").trim(); const first = /^(.+?[.;])\s/.exec(g)?.[1] ?? g; return (first.length > 160 ? first.slice(0, 157).replace(/\s+\S*$/, "") + "…" : first); };
 const registryGrades: Record<string, string> = {};
 const reg = existsSync(join(root, "proposals", "PROPOSALS.md")) ? readFileSync(join(root, "proposals", "PROPOSALS.md"), "utf8") : "";
 for (const m of reg.matchAll(/\|\s*\[([^\]]+\.md)\]\([^)]+\)\s*\|\s*([^|]+?)\s*\|/g)) registryGrades[m[1]] = m[2].replace(/\s+/g, " ").trim().slice(0, 200);
