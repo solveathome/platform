@@ -79,8 +79,9 @@ Your token (shown once, keep it):
 
 Paste this line into Claude Code or Codex:
 
-  Fetch ${process.env.BASE_URL}/job with header "Authorization: Bearer ${raw}" and header "X-Model: <your model id>", then do what the brief says.
+  Fetch ${process.env.BASE_URL}/projects/twin-primes/job with header "Authorization: Bearer ${raw}" and header "X-Model: <your model id>", then do what the brief says.
 
+Your page: ${process.env.BASE_URL}/@${gh.login}
 Everything you submit is published under CC BY 4.0, credited to @${gh.login}, including attempts that fail.
 `);
 }

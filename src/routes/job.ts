@@ -5,15 +5,22 @@ import { renderBrief, type JobRow } from "../lib/brief.js";
 import { decide, MAX_REVIEWS, MIN_REVIEWS } from "../lib/consensus.js";
 import * as reputation from "../lib/reputation.js";
 
-export const job = Router();
+export const job = Router({ mergeParams: true });
 const BASE = () => process.env.BASE_URL ?? "http://localhost:8600";
+
+/** Resolve /projects/:slug to a problem row; 404 otherwise. */
+async function project(req: any, res: any, next: any): Promise<void> {
+  const p = await one(`SELECT * FROM problems WHERE slug = $1`, [req.params.slug]);
+  if (!p) { res.status(404).json({ error: "unknown project" }); return; }
+  req.project = p; next();
+}
 
 /**
  * GET /job?lane=<slug>&max_hours=<n>&type=<type>
  * Assigns the next job this token may take: tier permits, not their own return, provider diversity for reviews.
  * Returns the brief as markdown (Accept: text/markdown) or JSON.
  */
-job.get("/job", bearer, async (req, res) => {
+job.get("/job", bearer, project, async (req: any, res) => {
   const tier = await modelTier(req.model!);
   const maxHours = Number(req.query.max_hours ?? 1000);
   const lane = req.query.lane ? String(req.query.lane) : null;
@@ -28,6 +35,7 @@ job.get("/job", bearer, async (req, res) => {
        FROM jobs j JOIN problems p ON p.id = j.problem_id LEFT JOIN lanes l ON l.id = j.lane_id
        LEFT JOIN returns pr ON pr.id = j.parent_return_id
        WHERE j.status = 'queued'
+         AND j.problem_id = $7
          AND j.min_tier >= $1
          AND COALESCE((j.compute_hint->>'cpu_hours')::numeric, 0) <= $2
          AND ($3::text IS NULL OR l.slug = $3)
@@ -39,7 +47,7 @@ job.get("/job", bearer, async (req, res) => {
          CASE WHEN pr.id IS NOT NULL AND pr.provider <> $6 THEN 0 ELSE 1 END,
          j.created_at
        LIMIT 1 FOR UPDATE OF j SKIP LOCKED`,
-      [tier, maxHours, lane, type, uid, req.provider],
+      [tier, maxHours, lane, type, uid, req.provider, req.project.id],
     );
     const row = r.rows[0] as (JobRow & { id: number; budget_hours: string }) | undefined;
     if (!row) { await client.query("ROLLBACK"); res.status(404).json({ error: "no job available for this model tier / lane / budget right now" }); return; }
@@ -49,13 +57,13 @@ job.get("/job", bearer, async (req, res) => {
        WHERE id = $1 RETURNING expires_at`, [row.id, uid, row.budget_hours]);
     await client.query("COMMIT");
     row.expires_at = upd.rows[0].expires_at;
-    const md = renderBrief(row, BASE());
+    const md = renderBrief(row, `${BASE()}/projects/${req.project.slug}`);
     if ((req.header("accept") ?? "").includes("application/json")) res.json({ job_id: row.id, type: row.type, brief_md: md });
     else res.type("text/markdown").send(md);
   } catch (e) { await client.query("ROLLBACK"); throw e; } finally { client.release(); }
 });
 
-job.get("/job/:id", bearer, async (req, res) => {
+job.get("/job/:id", bearer, project, async (req, res) => {
   const row = await one(`SELECT j.*, l.slug AS lane_slug, p.repo_url FROM jobs j JOIN problems p ON p.id=j.problem_id LEFT JOIN lanes l ON l.id=j.lane_id WHERE j.id = $1`, [req.params.id]);
   if (!row) { res.status(404).end(); return; }
   res.json(row);
@@ -67,7 +75,7 @@ job.get("/job/:id", bearer, async (req, res) => {
  *         verdict?, rung?, notes_md? }   (verdict/rung/notes for review jobs)
  * job_id may be omitted for a self-assigned Direction (type must then be "direction" and problem given).
  */
-job.post("/result", bearer, async (req, res) => {
+job.post("/result", bearer, project, async (req: any, res) => {
   const b = req.body ?? {};
   const uid = req.user!.id;
   if (!b.transcript || typeof b.transcript !== "string") { res.status(400).json({ error: "transcript is required" }); return; }
@@ -76,7 +84,7 @@ job.post("/result", bearer, async (req, res) => {
   let jobRow: any = null;
   if (b.job_id) {
     jobRow = await one(`SELECT * FROM jobs WHERE id = $1`, [b.job_id]);
-    if (!jobRow) { res.status(404).json({ error: "job not found" }); return; }
+      if (!jobRow) { res.status(404).json({ error: "job not found" }); return; }
     if (Number(jobRow.assigned_to) !== uid) { res.status(403).json({ error: "job is not assigned to this token" }); return; }
     if (jobRow.status !== "assigned") { res.status(409).json({ error: `job is ${jobRow.status}` }); return; }
   } else {
@@ -96,10 +104,8 @@ job.post("/result", bearer, async (req, res) => {
     return;
   }
 
-  const problem = jobRow
-    ? await one(`SELECT id FROM problems WHERE id = $1`, [jobRow.problem_id])
-    : await one(`SELECT id FROM problems WHERE slug = $1`, [b.problem]);
-  if (!problem) { res.status(400).json({ error: "unknown problem" }); return; }
+  const problem = req.project;
+  if (jobRow && Number(jobRow.problem_id) !== Number(problem.id)) { res.status(400).json({ error: "job belongs to another project" }); return; }
   const laneId = jobRow?.lane_id ?? (b.lane ? (await one(`SELECT id FROM lanes WHERE slug = $1 AND problem_id = $2`, [b.lane, problem.id]))?.id : null) ?? null;
 
   const ret = await one<{ id: number }>(
@@ -122,7 +128,7 @@ export async function spawnReviews(returnId: number, problemId: number, laneId: 
     await q(`INSERT INTO jobs (problem_id, lane_id, type, title, brief_md, min_tier, budget_hours, parent_return_id)
              VALUES ($1,$2,'review',$3,$4,1,1,$5)`,
       [problemId, laneId, `Review return #${returnId}`,
-       `Review return #${returnId}. Fetch it at GET /return/${returnId} (same headers). Read the brief it answered, the report, the patch and the transcript.\n\nYour job: try to break it. Reproduce anything reproducible. Check every claimed rung against the ladder; assign the rung you can defend, not the author's. Check the REFUTED registry for prior closures.\n\nReturn: { "job_id": <this job>, "verdict": "accept" | "reject", "rung": "<your rung>", "notes_md": "<what you checked, what failed, what would falsify>", "transcript": "<scrubbed>" }`,
+       `Review return #${returnId}. Fetch it at GET <project base>/return/${returnId} (same headers; the project base is the URL you fetched this job from, minus /job). Read the brief it answered, the report, the patch and the transcript.\n\nYour job: try to break it. Reproduce anything reproducible. Check every claimed rung against the ladder; assign the rung you can defend, not the author's. Check the REFUTED registry for prior closures.\n\nReturn: { "job_id": <this job>, "verdict": "accept" | "reject", "rung": "<your rung>", "notes_md": "<what you checked, what failed, what would falsify>", "transcript": "<scrubbed>" }`,
        returnId]);
   }
 }
@@ -161,12 +167,10 @@ async function openLaneFromDirection(ret: any): Promise<void> {
   await q(`UPDATE reputation SET directions_accepted = directions_accepted + 1 WHERE user_id = $1`, [ret.user_id]);
 }
 
-job.get("/return/:id", bearer, async (req, res) => {
+job.get("/return/:id", bearer, project, async (req, res) => {
   const r = await one(`SELECT r.*, u.handle, j.brief_md AS job_brief FROM returns r JOIN users u ON u.id = r.user_id LEFT JOIN jobs j ON j.id = r.job_id WHERE r.id = $1`, [req.params.id]);
   if (!r) { res.status(404).end(); return; }
   res.json(r);
 });
 
-job.get("/my/jobs", bearer, async (req, res) => {
-  res.json(await q(`SELECT id, type, title, status, assigned_at, expires_at FROM jobs WHERE assigned_to = $1 ORDER BY assigned_at DESC LIMIT 50`, [req.user!.id]));
-});
+
