@@ -6,7 +6,7 @@
 import { q, one } from "../db/index.js";
 
 export const POINTS = {
-  result: { formalize: 100, break: 60, measure: 20, source: 15, explore: 40, direction: 60, curate: 10, consolidate: 50, review: 0 } as Record<string, number>,
+  result: { formalize: 100, break: 60, measure: 20, source: 15, explore: 40, direction: 60, curate: 10, consolidate: 50, paper: 100, review: 0 } as Record<string, number>,
   breakthrough: { refuted: 150, proven: 300 } as Record<string, number>,   // a break that refutes; a formalization that proves
   insight_cited_message: 10,        // your chat message was cited by an accepted return
   cited_return: 15,                 // your earlier return was built on

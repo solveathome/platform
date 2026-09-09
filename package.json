@@ -15,7 +15,8 @@
     "import-briefs": "tsx scripts/import-briefs.ts briefs",
     "dump": "tsx scripts/dump.ts",
     "curate-files": "tsx scripts/gc-files.ts",
-    "import-claims": "tsx scripts/import-claims.ts"
+    "import-claims": "tsx scripts/import-claims.ts",
+    "import-papers": "tsx scripts/import-papers.ts"
   },
   "dependencies": {
     "express": "^5.1.0",

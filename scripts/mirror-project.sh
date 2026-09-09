@@ -40,6 +40,7 @@ JS
 SERVER="${SERVER:-<user@host>}"
 DOCS_DEST="${DOCS_DEST:-/data/services/solveathome/data/repos/twin-primes}"
 rsync -a --delete --exclude '.git' "$PORTFOLIO/" "$SERVER:$DOCS_DEST/" && echo "docs synced to $SERVER:$DOCS_DEST"
+ssh "$SERVER" "cd /data/services/solveathome && docker compose -f docker-compose.prod.yml exec -T backend node dist/scripts/import-papers.js" || echo "paper registry refresh failed (run import-papers on the server)"
 
 cd "$PORTFOLIO"
 git init -q -b main

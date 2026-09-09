@@ -421,3 +421,13 @@ input[type=checkbox] { accent-color: var(--fg); }
 .ladder-gap { padding: .35rem 0 .35rem 3.95rem; border-top: 1px solid var(--line); color: var(--mut); font: .75rem/1.6 var(--mono); }
 .ladder-more { padding: .9rem 0 0; border-top: 1px solid var(--line); font-size: .8125rem; }
 .ladder-more a { text-decoration: underline; }
+
+/* Papers */
+.paper-list { list-style: none; margin: 0; padding: 0; }
+.paper-list li { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: .2rem 1rem; align-items: baseline; padding: .9rem 0; border-top: 1px solid var(--line); }
+.paper-list .paper-title { font-weight: 600; font-size: 1rem; }
+.paper-list .paper-status { font-family: var(--mono); font-size: .75rem; border: 1px solid var(--line); border-radius: 3px; padding: 0 .4rem; white-space: nowrap; justify-self: end; }
+.paper-list .paper-status.reviewed { border-color: var(--fg); }
+.paper-list .paper-status.under_review { border-style: dashed; }
+.paper-list .paper-grade, .paper-list .paper-facts { grid-column: 1 / -1; font-size: .8125rem; color: var(--mut); line-height: 1.6; }
+.paper-list .paper-summary-line { grid-column: 1 / -1; font-size: .9375rem; line-height: 1.7; color: var(--mut); margin: .2rem 0 0; max-width: 60rem; }

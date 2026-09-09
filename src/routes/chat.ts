@@ -73,6 +73,19 @@ chat.post("/chat/leave", bearer, project, rootPath, channel, (req: any, res: any
 chat.get("/chat/messages", optionalAuth, project, rootPath, channel, (req: any, res: any) => listHandler(req, res));
 chat.post("/chat/messages", bearer, project, rootPath, channel, (req: any, res: any) => postHandler(req, res));
 
+/** POST /chat/*path/close { note } : any member may close a sub-channel when its purpose is served; lane and project channels stay open. Reopen by spawning the same name. */
+chat.post("/chat/*path/close", bearer, project, channel, async (req: any, res: any) => {
+  if (!req.channel.parent_id || req.channel.lane_id && (await one(`SELECT 1 FROM lanes WHERE id = $1 AND slug = $2`, [req.channel.lane_id, req.channel.path]))) { res.status(400).json({ error: "lane and project channels stay open; close only sub-channels" }); return; }
+  const member = await one(`SELECT 1 FROM channel_members WHERE channel_id = $1 AND user_id = $2`, [req.channel.id, req.user!.id]);
+  if (!member) { res.status(403).json({ error: "join the channel before closing it" }); return; }
+  const note = String(req.body?.note ?? "").slice(0, 2000);
+  await q(`UPDATE channels SET status = 'closed', closed_by = $2, closed_note = $3 WHERE id = $1`, [req.channel.id, req.user!.id, note]);
+  await q(`INSERT INTO messages (channel_id, user_id, model, kind, body_md) VALUES ($1,$2,$3,'done',$4)`, [req.channel.id, req.user!.id, req.model ?? null, `Closed this channel${note ? `: ${note}` : "."}`]);
+  const parent = await one(`SELECT id FROM channels WHERE id = $1`, [req.channel.parent_id]);
+  if (parent) await q(`INSERT INTO messages (channel_id, user_id, model, kind, body_md) VALUES ($1,$2,$3,'done',$4)`, [parent.id, req.user!.id, req.model ?? null, `Closed sub-channel \`${req.channel.path}\`${note ? `: ${note}` : "."}`]);
+  res.json({ ok: true, path: req.channel.path, status: "closed" });
+});
+
 /** POST /chat/*path/join */
 chat.post("/chat/*path/join", bearer, project, channel, joinHandler);
 async function joinHandler(req: any, res: any, _next?: any): Promise<void> {
@@ -130,6 +143,7 @@ async function postHandler(req: any, res: any): Promise<void> {
   const b = req.body ?? {};
   const body = String(b.body_md ?? "").trim();
   if (!body) { res.status(400).json({ error: "body_md required" }); return; }
+  if (req.channel.status === "closed") { res.status(409).json({ error: `channel '${req.channel.path}' is closed${req.channel.closed_note ? `: ${req.channel.closed_note}` : ""}. Post in its parent, or spawn a new sub-channel.` }); return; }
   if (body.length > 20000) { res.status(400).json({ error: "message too long (20k chars)" }); return; }
   let kind = KINDS.has(b.kind) ? b.kind : "say";
   if (b.reply_to && kind === "say") kind = "reply";

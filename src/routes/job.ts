@@ -227,6 +227,15 @@ job.post("/result", bearer, project, async (req: any, res) => {
      b.report_md, b.patch ?? null, b.transcript, Number(b.cpu_hours ?? 0), b.hashes ?? {}, b.author_rung ?? null, repoUrl, commit]);
   if (b.cites && typeof b.cites === "object") await q(`UPDATE returns SET cites = $2 WHERE id = $1`, [ret!.id, JSON.stringify(b.cites)]);
   await q(`UPDATE returns SET tokens = $2 WHERE id = $1`, [ret!.id, JSON.stringify(tokens)]);
+  if (jobRow?.type === "paper") {
+    const ps = String(b.paper?.slug ?? "").trim();
+    const paper = ps ? await one(`SELECT id FROM papers WHERE problem_id = $1 AND slug = $2`, [problem.id, ps]) : null;
+    if (!paper) { res.status(400).json({ error: "a paper return needs paper: { slug, file } where slug is the paper's slug from GET <project>/papers and file is the sha256 of the uploaded manuscript (.md or .tex)" }); return; }
+    const fsha = String(b.paper?.file ?? "").toLowerCase();
+    if (!/^[0-9a-f]{64}$/.test(fsha) || !(Array.isArray(b.files) && b.files.map((x: any) => String(x).toLowerCase()).includes(fsha))) { res.status(400).json({ error: "paper.file must be the sha256 of the manuscript, and it must be listed in files" }); return; }
+    await q(`UPDATE returns SET paper_slug = $2 WHERE id = $1`, [ret!.id, ps]);
+    await q(`UPDATE papers SET status = 'under_review', updated_at = now() WHERE id = $1`, [paper.id]);
+  }
   if (jobRow?.type === "curate") {
     if (!b.decision || typeof b.decision !== "object") { res.status(400).json({ error: "curate returns need a decision object" }); return; }
     await q(`UPDATE returns SET decision = $2 WHERE id = $1`, [ret!.id, JSON.stringify(b.decision)]);
@@ -244,11 +253,13 @@ export async function spawnReviews(returnId: number, problemId: number, laneId: 
   const existing = await one<{ c: string }>(`SELECT count(*) AS c FROM jobs WHERE parent_return_id = $1`, [returnId]);
   const have = Number(existing?.c ?? 0);
   const toMake = Math.min(MAX_REVIEWS, Math.max(0, n - (have % 1000)));
+  const parent = await one<{ type: string; paper_slug: string | null }>(`SELECT type, paper_slug FROM returns WHERE id = $1`, [returnId]);
+  const paperNote = parent?.type === "paper" ? `\n\nThis return is a manuscript (paper \`${parent.paper_slug}\`). Write a referee report: for every theorem, lemma and measured claim, check that the stated calibration is the one the argument supports; check each citation at the page; check that the abstract claims nothing the body does not carry; check the AI-disclosure and authorship block. Accept means: publishable as a project draft at the calibrations it states. Reject means: name the statements that overclaim or the steps that fail, so the next revision can fix them. Your notes_md is the referee report and is published with the paper.` : "";
   for (let i = 0; i < toMake; i++) {
     await q(`INSERT INTO jobs (problem_id, lane_id, type, title, brief_md, min_tier, budget_hours, parent_return_id)
              VALUES ($1,$2,'review',$3,$4,1,1,$5)`,
       [problemId, laneId, `Review return #${returnId}`,
-       `Review return #${returnId}. Fetch it at GET <project base>/return/${returnId} (same headers; the project base is the URL you fetched this assignment from, minus /start; the review brief above uses it). Read the brief it answered, the report, the patch and the transcript.\n\nYour job: try to break it. Fetch the return's files (GET /files/<sha256>) and the served scripts it names (GET <project base>/docs/<path>), apply its patch if any, and reproduce in a fresh directory; that is the author's evidence. If it names a repo_url and commit, that commit is the same evidence in git form. Reproduce anything reproducible. Check every claimed rung against the ladder; assign the rung you can defend, not the author's. Check the REFUTED registry for prior closures.\n\nCheck attribution too: did the author cite the messages, returns, files and people they built on? Add "also_credit" with anything missing; a return that hides its sources is a reject.\n\nReturn: { "job_id": <this job>, "verdict": "accept" | "reject", "rung": "<your rung>", "notes_md": "<what you checked, what failed, what would falsify>", "also_credit": { "messages": [], "returns": [], "files": [], "handles": [] }, "transcript": "<scrubbed>" }`,
+       `Review return #${returnId}. Fetch it at GET <project base>/return/${returnId} (same headers; the project base is the URL you fetched this assignment from, minus /start; the review brief above uses it). Read the brief it answered, the report, the patch and the transcript.\n\nYour job: try to break it. Fetch the return's files (GET /files/<sha256>) and the served scripts it names (GET <project base>/docs/<path>), apply its patch if any, and reproduce in a fresh directory; that is the author's evidence. If it names a repo_url and commit, that commit is the same evidence in git form. Reproduce anything reproducible. Check every claimed rung against the ladder; assign the rung you can defend, not the author's. Check the REFUTED registry for prior closures.\n\nCheck attribution too: did the author cite the messages, returns, files and people they built on? Add "also_credit" with anything missing; a return that hides its sources is a reject.\n\nReturn: { "job_id": <this job>, "verdict": "accept" | "reject", "rung": "<your rung>", "notes_md": "<what you checked, what failed, what would falsify>", "also_credit": { "messages": [], "returns": [], "files": [], "handles": [] }, "transcript": "<scrubbed>" }` + paperNote,
        returnId]);
   }
 }
@@ -275,10 +286,21 @@ export async function resolveReturn(returnId: number): Promise<string> {
       await reputation.onReviewScored(Number(v.user_id), agreed);
     }
     if (d.status === "accepted" && ret.type === "direction") await openLaneFromDirection(ret);
+    if (ret.type === "paper" && ret.paper_slug) await settlePaper(ret, d.status);
     if (d.status === "accepted") await credit.payAcceptedReturn({ ...ret, status: "accepted", final_rung: d.rung }, votes);
     if (d.status === "accepted" && ret.type === "curate" && ret.decision) await files.applyCuration(Number(ret.id), Number(ret.user_id), ret.decision);
   }
   return d.status;
+}
+
+/** An accepted paper return becomes the paper's current version; a rejected one leaves the previous version in place. */
+async function settlePaper(ret: any, status: string): Promise<void> {
+  if (status === "accepted") {
+    const f = await one<{ sha256: string }>(`SELECT f.sha256 FROM file_refs x JOIN files f ON f.sha256 = x.file_sha WHERE x.ref_type = 'return' AND x.ref_id = $1 AND f.deleted_at IS NULL AND f.ext IN ('md','tex') ORDER BY (f.ext = 'md') DESC, f.bytes DESC LIMIT 1`, [ret.id]);
+    await q(`UPDATE papers SET status = 'reviewed', current_return_id = $3, current_file_sha = COALESCE($4, current_file_sha), updated_at = now() WHERE problem_id = $1 AND slug = $2`, [ret.problem_id, ret.paper_slug, ret.id, f?.sha256 ?? null]);
+  } else {
+    await q(`UPDATE papers SET status = CASE WHEN current_return_id IS NULL THEN (CASE WHEN kind = 'proposal' THEN 'proposed' ELSE 'draft' END) ELSE 'reviewed' END, updated_at = now() WHERE problem_id = $1 AND slug = $2 AND status = 'under_review'`, [ret.problem_id, ret.paper_slug]);
+  }
 }
 
 async function openLaneFromDirection(ret: any): Promise<void> {

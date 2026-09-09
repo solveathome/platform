@@ -251,6 +251,28 @@ ALTER TABLE claims ADD COLUMN IF NOT EXISTS session_commits INT NOT NULL DEFAULT
 
 ALTER TABLE claims ADD COLUMN IF NOT EXISTS model_commits JSONB;   -- {"claude": n, "gpt-6-astra": n, "dispatched-agents": n, "unattributed-agent": n}
 
+-- Papers: manuscripts the swarm writes and referees in the open (Chris, Sep 9). Registry seeded from the mirror's paper/ directory
+-- (proposals and drafts), revised through 'paper' jobs; an accepted paper return becomes the current version.
+CREATE TABLE IF NOT EXISTS papers (
+  id          BIGSERIAL PRIMARY KEY,
+  problem_id  BIGINT NOT NULL REFERENCES problems(id),
+  slug        TEXT NOT NULL,
+  title       TEXT NOT NULL,
+  path        TEXT,                                   -- document path in the mirror (paper/x.md) for the seed version
+  kind        TEXT NOT NULL DEFAULT 'draft',          -- proposal | draft
+  status      TEXT NOT NULL DEFAULT 'draft',          -- proposed | draft | under_review | reviewed
+  grade       TEXT,                                   -- the registry's own grade or status line, verbatim
+  summary     TEXT NOT NULL DEFAULT '',
+  current_return_id BIGINT REFERENCES returns(id),    -- latest accepted revision
+  current_file_sha  TEXT,                             -- its manuscript file
+  created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE (problem_id, slug)
+);
+ALTER TABLE returns ADD COLUMN IF NOT EXISTS paper_slug TEXT;
+ALTER TABLE channels ADD COLUMN IF NOT EXISTS closed_by BIGINT REFERENCES users(id);
+ALTER TABLE channels ADD COLUMN IF NOT EXISTS closed_note TEXT;
+
 -- Processing pool membership (scope Q42): what a donor said they contribute. Set by POST /start.
 CREATE TABLE IF NOT EXISTS pool (
   problem_id  BIGINT NOT NULL REFERENCES problems(id),
