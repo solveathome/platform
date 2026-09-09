@@ -61,6 +61,7 @@
 <main>
   <section class="full">
     <h1>__NAME__</h1>
+    <p class="muted" id="researcher" style="margin:0 0 .6rem"></p>
     <pre class="status" id="status">…</pre>
     <div class="tiles" id="rungs"></div>
   </section>
@@ -103,7 +104,8 @@
     <h2>High scores <span class="muted" id="hs-window"></span> <span style="float:right;font-weight:400;text-transform:none;letter-spacing:0"><a href="#" data-w="7d">7 days</a> · <a href="#" data-w="30d">30 days</a> · <a href="#" data-w="all">all time</a></span></h2>
     <div class="chat" style="grid-template-columns: minmax(0,3fr) minmax(0,2fr); min-height:0">
       <div class="wrap"><table id="hs-humans"><thead><tr><th>#</th><th>Contributor</th><th class="num">Points</th><th class="num">Insight</th><th class="num">Breakthrough</th><th class="num">Results</th><th class="num">Direction</th><th class="num">Review</th><th class="num">Compute</th></tr></thead><tbody></tbody></table></div>
-      <div class="wrap"><table id="hs-models"><thead><tr><th>#</th><th>Model</th><th class="num">Points</th><th class="num">Donors</th><th class="num">Breakthrough</th></tr></thead><tbody></tbody></table></div>
+      <div class="wrap"><table id="hs-models"><thead><tr><th>#</th><th>Model</th><th class="num">Points</th><th class="num">Donors</th><th class="num">Breakthrough</th></tr></thead><tbody></tbody></table>
+      <h2 style="margin-top:1rem">Tokens contributed</h2><table id="hs-tokens"><thead><tr><th>Contributor</th><th class="num">Output</th><th class="num">Input + cache</th><th class="num">Returns</th></tr></thead><tbody></tbody></table></div>
     </div>
     <div class="tiles" id="hs-kinds" style="margin-top:1rem"></div>
     <p class="muted" style="margin-bottom:0">Credit is paid to everyone in an accepted result's chain: author, model, cited authors, the lane's origin, agreeing reviewers, compute. Points table at <a href="/credit">/credit</a>. Results and traces: CC BY 4.0, attributed to solveathome.org and the handles on each entry. Code: MIT.</p>
@@ -123,6 +125,7 @@ async function loadMe() {
 async function loadBoard() {
   const b = await fetch(`${BASE}/board`).then((r) => r.json());
   $("#status").textContent = b.project.status_md || "(no status yet)";
+  $("#researcher").innerHTML = b.project.researcher ? `Researcher: <a href="/@${esc(b.project.researcher)}">@${esc(b.project.researcher)}</a> · ${esc(b.project.researcher_role)}` : "";
   const rungs = Object.fromEntries(b.rungs.map((r) => [r.rung ?? "unranked", Number(r.n)]));
   $("#rungs").innerHTML = ["proven","measured","heuristic","conjectured","refuted"].map((r) => `<div class="tile"><b class="rung-${r}">${rungs[r] ?? 0}</b><span>${r}</span></div>`).join("");
   $("#lanes tbody").innerHTML = b.lanes.map((l) => `<tr><td><a href="#" data-ch="${esc(l.slug)}">${esc(l.title)}</a></td><td class="muted">${esc(l.variant)}</td><td class="num">${l.queued ?? ""}</td><td class="num">${l.accepted ?? ""}</td></tr>`).join("") || `<tr><td colspan="4" class="muted">no lanes</td></tr>`;
@@ -182,6 +185,8 @@ async function loadHighscores() {
   document.querySelectorAll("#highscores [data-w]").forEach((a) => { a.style.fontWeight = a.dataset.w === hsWindow ? "600" : "400"; a.onclick = (e) => { e.preventDefault(); hsWindow = a.dataset.w; loadHighscores(); }; });
   $("#hs-humans tbody").innerHTML = lb.humans.map((h, i) => `<tr><td class="num">${i + 1}</td><td><a href="/@${esc(h.handle)}">@${esc(h.handle)}</a></td><td class="num"><b>${n0(h.points)}</b></td><td class="num">${n0(h.insight)}</td><td class="num">${n0(h.breakthrough)}</td><td class="num">${n0(h.result)}</td><td class="num">${n0(h.direction)}</td><td class="num">${n0(h.review)}</td><td class="num">${n0(h.compute)}</td></tr>`).join("") || `<tr><td colspan="9" class="muted">no credit paid yet; the first accepted result starts the board</td></tr>`;
   $("#hs-models tbody").innerHTML = lb.models.map((m, i) => `<tr><td class="num">${i + 1}</td><td>${esc(m.model)} <span class="muted">${esc(m.provider ?? "")}</span></td><td class="num"><b>${n0(m.points)}</b></td><td class="num">${m.donors}</td><td class="num">${n0(m.breakthrough)}</td></tr>`).join("") || `<tr><td colspan="5" class="muted">no model credited yet</td></tr>`;
+  const fmtT = (v) => { const n = Number(v ?? 0); return n >= 1e9 ? (n/1e9).toFixed(2) + "B" : n >= 1e6 ? (n/1e6).toFixed(1) + "M" : n >= 1e3 ? (n/1e3).toFixed(0) + "k" : String(n); };
+  $("#hs-tokens tbody").innerHTML = (lb.tokens ?? []).map((t) => `<tr><td><a href="/@${esc(t.handle)}">@${esc(t.handle)}</a></td><td class="num">${fmtT(t.output_tokens)}</td><td class="num">${fmtT(t.input_tokens)}</td><td class="num">${t.returns}</td></tr>`).join("") || `<tr><td colspan="4" class="muted">no transcripts counted yet</td></tr>`;
   $("#hs-kinds").innerHTML = Object.entries(lb.by_kind).map(([k, rows]) => `<div class="tile"><span>${k} leader</span><b style="font-size:1rem">${rows[0] ? `<a href="/@${esc(rows[0].handle)}">@${esc(rows[0].handle)}</a> · ${n0(rows[0].points)}` : "–"}</b></div>`).join("");
 }
 (async () => { await loadMe(); await loadBoard(); await loadProvenance(); await loadHighscores(); await openChannel(""); setInterval(loadBoard, 30000); setInterval(loadHighscores, 60000); })();

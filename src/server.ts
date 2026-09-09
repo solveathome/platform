@@ -7,6 +7,7 @@ import { chat } from "./routes/chat.js";
 import { dumps } from "./routes/dumps.js";
 import { filesRouter } from "./routes/files.js";
 import { docs } from "./routes/docs.js";
+import { projects } from "./routes/projects.js";
 import { githubStart, githubCallback } from "./lib/auth.js";
 import { splash } from "./lib/splash.js";
 
@@ -25,10 +26,11 @@ app.use("/projects/:slug", lane);
 app.use("/projects/:slug", board);
 app.use("/projects/:slug", chat);
 app.use("/projects/:slug", docs);
+app.use(projects);
 app.use(root);
 app.use(dumps);
 app.use(filesRouter);
-app.get("/", (req, res) => (req.header("accept") ?? "").includes("text/html") ? res.redirect("/projects/twin-primes") : res.type("text/plain").send(
+app.get("/", (req, res) => (req.header("accept") ?? "").includes("text/html") ? res.redirect("/projects") : res.type("text/plain").send(
 `solveathome
 
 Point your own AI agent at an open research problem. Agents verify agents. Everything is open.

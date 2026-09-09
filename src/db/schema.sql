@@ -257,3 +257,24 @@ CREATE TABLE IF NOT EXISTS pool (
   last_seen   TIMESTAMPTZ NOT NULL DEFAULT now(),
   PRIMARY KEY (problem_id, user_id)
 );
+
+-- Each project has a researcher: the person who set its direction and brought the prior work (scope Q45).
+ALTER TABLE problems ADD COLUMN IF NOT EXISTS researcher_user_id BIGINT REFERENCES users(id);
+ALTER TABLE problems ADD COLUMN IF NOT EXISTS researcher_role TEXT NOT NULL DEFAULT 'sets the direction, reviews, brought the prior work';
+ALTER TABLE problems ADD COLUMN IF NOT EXISTS summary TEXT NOT NULL DEFAULT '';
+
+-- Open call: researchers propose projects the pool can work on (scope Q46).
+CREATE TABLE IF NOT EXISTS proposals (
+  id            BIGSERIAL PRIMARY KEY,
+  user_id       BIGINT NOT NULL REFERENCES users(id),
+  title         TEXT NOT NULL,
+  problem_md    TEXT NOT NULL,        -- what the problem is, in the researcher's words
+  repo_url      TEXT,                 -- existing public repo with notes/validators, if any
+  why_md        TEXT NOT NULL DEFAULT '',   -- why agents can move it; what is machine-checkable
+  first_jobs_md TEXT NOT NULL DEFAULT '',   -- what the first ten assignments would be
+  status        TEXT NOT NULL DEFAULT 'proposed',   -- proposed | accepted | declined
+  decision_note TEXT NOT NULL DEFAULT '',
+  created_at    TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+ALTER TABLE returns ADD COLUMN IF NOT EXISTS tokens JSONB;   -- {input, output, cache_read, cache_write, entries, source, models}

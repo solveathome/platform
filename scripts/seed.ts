@@ -36,6 +36,9 @@ for (const [slug, title, variant] of lanes)
   await q(`INSERT INTO lanes (problem_id, slug, title, variant) VALUES ($1,$2,$3,$4) ON CONFLICT (problem_id, slug) DO NOTHING`, [p!.id, slug, title, variant]);
 
 await ensureChannels(p!.id);
+const researcher = await one<{ id: number }>(`SELECT id FROM users WHERE lower(handle) = lower($1)`, [process.env.SEED_RESEARCHER ?? "Benjaminsen"]);
+if (researcher) await q(`UPDATE problems SET researcher_user_id = $2, summary = COALESCE(NULLIF(summary, ''), $3) WHERE id = $1`,
+  [p!.id, researcher.id, "Are there infinitely many twin primes? A moiré/tile framework over classical sieve objects, with a proven upper bound on the two-class twin-slot gap exponent and a long registry of refuted routes."]);
 
 // Seeded reviewers get high reputation once they exist (they sign in via GitHub first).
 for (const h of (process.env.SEED_REVIEWERS ?? "").split(",").map((s) => s.trim()).filter(Boolean)) {

@@ -16,6 +16,7 @@ export const POINTS = {
   review_agreed: 5,
   review_also_credit_bonus: 3,      // a reviewer who restored missing attribution
   compute_per_cpu_hour: 1,
+  tokens_per_million: 1,            // 1 point per million tokens (input + output + cache), on acceptance; the count itself is the stat that matters
   max_cites_paid_per_return: 10,
 };
 
@@ -38,6 +39,8 @@ export async function payAcceptedReturn(ret: any, reviews: Array<{ user_id: numb
   if (ret.type === "formalize" && ret.final_rung === "proven") await pay(ret.user_id, ret.model, ret.provider, pid, lid, "breakthrough", POINTS.breakthrough.proven, "return", rid, "lemma formalized and proven");
   if (ret.type === "formalize") await pay(ret.user_id, ret.model, ret.provider, pid, lid, "formalize", 0, "return", rid, "");
   if (Number(ret.cpu_hours) > 0) await pay(ret.user_id, null, null, pid, lid, "compute", Number(ret.cpu_hours) * POINTS.compute_per_cpu_hour, "return", rid, `${Number(ret.cpu_hours).toFixed(2)} CPU hours`);
+  const tk = ret.tokens; const ttot = tk ? Number(tk.input ?? 0) + Number(tk.output ?? 0) + Number(tk.cache_read ?? 0) + Number(tk.cache_write ?? 0) : 0;
+  if (ttot > 0) await pay(ret.user_id, ret.model, ret.provider, pid, lid, "tokens", ttot / 1e6 * POINTS.tokens_per_million, "return", rid, `${ttot.toLocaleString("en-US")} tokens (${Number(tk.output ?? 0).toLocaleString("en-US")} output), ${tk.source}`);
   if (ret.type === "direction") await pay(ret.user_id, ret.model, ret.provider, pid, lid, "direction", 0, "return", rid, "");
   // lane origin share
   if (lid) {
@@ -96,9 +99,14 @@ export async function leaderboard(problemId: number | null, w: Window, limit = 5
   const models = await q(`SELECT c.model, c.provider, sum(c.points) AS points, count(DISTINCT c.user_id) AS donors,
       sum(c.points) FILTER (WHERE c.kind = 'breakthrough') AS breakthrough, sum(c.points) FILTER (WHERE c.kind = 'insight') AS insight, sum(c.points) FILTER (WHERE c.kind = 'review') AS review
     FROM credits c WHERE c.model IS NOT NULL AND ${where} GROUP BY c.model, c.provider ORDER BY points DESC LIMIT ${limit}`, params);
+  const tokenWhere = `${problemId ? "r.problem_id = $1 AND" : ""} r.created_at >= ${since(w)}`;
+  const tokens = await q(`SELECT u.handle, sum((r.tokens->>'input')::numeric + (r.tokens->>'cache_read')::numeric + (r.tokens->>'cache_write')::numeric) AS input_tokens, sum((r.tokens->>'output')::numeric) AS output_tokens, count(*) AS returns
+    FROM returns r JOIN users u ON u.id = r.user_id WHERE r.tokens IS NOT NULL AND ${tokenWhere} GROUP BY u.handle ORDER BY output_tokens DESC NULLS LAST LIMIT ${limit}`, params);
+  const tokensByModel = await q(`SELECT r.model, sum((r.tokens->>'output')::numeric) AS output_tokens, sum((r.tokens->>'input')::numeric + (r.tokens->>'cache_read')::numeric + (r.tokens->>'cache_write')::numeric) AS input_tokens
+    FROM returns r WHERE r.tokens IS NOT NULL AND ${tokenWhere} GROUP BY r.model ORDER BY output_tokens DESC NULLS LAST LIMIT ${limit}`, params);
   const byKind: Record<string, any[]> = {};
-  for (const kind of ["insight", "breakthrough", "result", "direction", "review", "compute"]) {
+  for (const kind of ["insight", "breakthrough", "result", "direction", "review", "compute", "tokens"]) {
     byKind[kind] = await q(`SELECT u.handle, sum(c.points) AS points, count(*) AS events FROM credits c JOIN users u ON u.id = c.user_id WHERE c.kind = '${kind}' AND ${where} GROUP BY u.handle ORDER BY points DESC LIMIT 10`, params);
   }
-  return { window: w, humans, models, by_kind: byKind, points: POINTS };
+  return { window: w, humans, models, tokens, tokens_by_model: tokensByModel, by_kind: byKind, points: POINTS };
 }

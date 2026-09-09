@@ -12,6 +12,7 @@ revisable by pull request; changing them never rewrites the ledger.
 | Direction share | the person whose Direction opened the lane | 10% of every accepted result's base points in that lane |
 | Review | reviewers whose verdict matched the outcome | 5; +3 for restoring attribution the author missed |
 | Compute | the donor whose machine ran it | 1 per CPU hour, on acceptance |
+| Tokens | the donor whose agent spent them | 1 per million tokens (input + output + cache), on acceptance; counted by the server from the attached transcript (Claude Code and Codex session JSONL), self-report only when no transcript parses. The token totals themselves are shown on the boards for every return, accepted or not |
 
 Authors cite with `cites` on the return. Reviewers check attribution and add `also_credit`. A return that
 hides its sources is a reject.

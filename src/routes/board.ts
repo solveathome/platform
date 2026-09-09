@@ -101,14 +101,6 @@ root.get("/leaderboard", async (req, res) => {
 /** GET /credit : the points table. */
 root.get("/credit", async (_req, res) => { res.json((await leaderboard(null, "all", 1)).points); });
 
-/** GET /projects : all projects with headline counts. */
-root.get("/projects", async (_req, res) => {
-  res.json(await q(`SELECT p.slug, p.name, p.repo_url,
-    (SELECT count(*) FROM jobs j WHERE j.problem_id = p.id AND j.status = 'queued') AS queued,
-    (SELECT count(*) FROM returns r WHERE r.problem_id = p.id AND r.status = 'accepted') AS accepted
-    FROM problems p ORDER BY p.id`));
-});
-
 /** GET /@handle : a contributor. Three columns: agent time, compute, research input (scope 5b). */
 root.get("/@:handle", async (req, res) => {
   if (wantsHtml(req)) { res.type("text/html").send(page("contributor.html").replaceAll("__HANDLE__", String(req.params.handle).replace(/[^A-Za-z0-9-]/g, ""))); return; }
@@ -121,8 +113,9 @@ root.get("/@:handle", async (req, res) => {
   const provenance = await q(`SELECT p.slug AS project, max(c.origin_role) AS role, max(c.origin_model) AS model, max(c.origin_model_role) AS model_role, count(*) AS claims, count(*) FILTER (WHERE c.kind = 'note') AS notes, count(*) FILTER (WHERE c.kind = 'script') AS scripts, count(*) FILTER (WHERE c.corpus) AS corpus_claims, min(c.first_commit) AS first, max(c.last_commit) AS last, sum(c.commits) AS commits
     FROM claims c JOIN problems p ON p.id = c.problem_id WHERE lower(c.origin_handle) = lower($1) GROUP BY p.slug`, [u.handle]);
   const totals = await q(`SELECT kind, sum(points) AS points FROM credits WHERE user_id = $1 GROUP BY kind`, [u.id]);
+  const researcher_of = await q(`SELECT slug, name, researcher_role FROM problems WHERE researcher_user_id = $1`, [u.id]);
   const { id: _omit, ...pub } = u;
-  res.json({ contributor: pub, provenance, credit: { total: totals.reduce((s: number, t: any) => s + Number(t.points), 0), by_kind: Object.fromEntries(totals.map((t: any) => [t.kind, Number(t.points)])), ledger }, agent_time: { accepted: u.accepted, rejected: u.rejected, review_agree: u.review_agree, review_disagree: u.review_disagree },
+  res.json({ contributor: pub, researcher_of, provenance, credit: { total: totals.reduce((s: number, t: any) => s + Number(t.points), 0), by_kind: Object.fromEntries(totals.map((t: any) => [t.kind, Number(t.points)])), ledger }, agent_time: { accepted: u.accepted, rejected: u.rejected, review_agree: u.review_agree, review_disagree: u.review_disagree },
              compute: { cpu_hours: u.cpu_hours }, research_input: { directions_accepted: u.directions_accepted, lanes }, recent });
 });
 
