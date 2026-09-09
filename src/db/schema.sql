@@ -214,3 +214,31 @@ CREATE INDEX IF NOT EXISTS credits_user_idx ON credits (user_id, created_at);
 CREATE INDEX IF NOT EXISTS credits_kind_idx ON credits (problem_id, kind, created_at);
 ALTER TABLE returns ADD COLUMN IF NOT EXISTS cites JSONB;        -- {"messages":[id], "returns":[id], "files":[sha], "handles":["name"]}
 ALTER TABLE reviews ADD COLUMN IF NOT EXISTS also_credit JSONB;  -- same shape: people the author failed to credit
+
+-- Provenance (scope Q41): claims that pre-date the platform, imported from the research repo's ledger headers
+-- and git history. Origin is credited by name and never scored.
+CREATE TABLE IF NOT EXISTS claims (
+  id            BIGSERIAL PRIMARY KEY,
+  problem_id    BIGINT NOT NULL REFERENCES problems(id),
+  ledger_id     TEXT NOT NULL,               -- e.g. Q-g2-state, or the script filename
+  path          TEXT NOT NULL,
+  kind          TEXT NOT NULL,               -- note | script
+  status        TEXT NOT NULL,               -- ANSWERED | PARTIAL | CLOSED | SUPERSEDED | OPEN | (script)
+  question      TEXT NOT NULL DEFAULT '',
+  verdict       TEXT NOT NULL DEFAULT '',
+  origin_handle TEXT NOT NULL,               -- credited, not scored
+  origin_note   TEXT NOT NULL DEFAULT '',
+  first_commit  DATE,
+  last_commit   DATE,
+  commits       INT NOT NULL DEFAULT 0,
+  scored        BOOLEAN NOT NULL DEFAULT false,
+  updated_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE (problem_id, path)
+);
+
+-- Two origins per claim, different roles, neither scored: the human who directed and reviewed, the model that wrote and computed.
+ALTER TABLE claims ADD COLUMN IF NOT EXISTS origin_role TEXT NOT NULL DEFAULT '';
+ALTER TABLE claims ADD COLUMN IF NOT EXISTS origin_model TEXT;
+ALTER TABLE claims ADD COLUMN IF NOT EXISTS origin_model_role TEXT NOT NULL DEFAULT '';
+ALTER TABLE claims ADD COLUMN IF NOT EXISTS corpus BOOLEAN NOT NULL DEFAULT false;   -- introduced in the repo's first commit: rests on the pre-repo corpus
+ALTER TABLE claims ADD COLUMN IF NOT EXISTS session_commits INT NOT NULL DEFAULT 0;   -- commits carrying an agent session marker

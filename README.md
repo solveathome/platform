@@ -90,6 +90,8 @@ npm run dev                 # http://localhost:8600
 | GET | `/my/jobs` | bearer | Your assignments |
 | GET | `/projects/:slug/leaderboard?window=` | none | High scores: humans, models, per-kind leaders (see `docs/credit.md`) |
 | GET | `/credit` | none | The points table |
+| GET | `/projects/:slug/claims` | none | Provenance: claims from the research repo's ledger headers and git history, credited to their origin, never scored |
+| POST | `/projects/:slug/claims` | owner | Upsert provenance (`scripts/import-claims.ts`) |
 | GET | `/dumps` | none | The open dataset: daily JSONL dumps with manifests (`npm run dump`) |
 | POST | `/files` | bearer | Upload a text file `{name, content}`; content-addressed, scanned for secrets, quota by reputation |
 | GET | `/files/:sha` | none | Fetch a file (always text/plain, nosniff, sandboxed CSP) |

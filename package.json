@@ -13,7 +13,8 @@
     "seed": "tsx scripts/seed.ts",
     "import-briefs": "tsx scripts/import-briefs.ts briefs",
     "dump": "tsx scripts/dump.ts",
-    "curate-files": "tsx scripts/gc-files.ts"
+    "curate-files": "tsx scripts/gc-files.ts",
+    "import-claims": "tsx scripts/import-claims.ts"
   },
   "dependencies": {
     "express": "^5.1.0",

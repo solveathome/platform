@@ -25,6 +25,7 @@ const tables: Record<string, string> = {
   thread_notes: `SELECT n.id, l.slug AS lane, u.handle, n.return_id, n.body_md, n.created_at FROM thread_notes n JOIN lanes l ON l.id = n.lane_id JOIN users u ON u.id = n.user_id ORDER BY n.id`,
   contributors: `SELECT u.handle, u.created_at, rp.score, rp.accepted, rp.rejected, rp.review_agree, rp.review_disagree, rp.cpu_hours, rp.directions_accepted FROM users u LEFT JOIN reputation rp ON rp.user_id = u.id ORDER BY u.id`,
   model_tiers: `SELECT model, provider, tier, note, updated_at FROM model_tiers ORDER BY tier, model`,
+  claims:    `SELECT p.slug AS project, c.ledger_id, c.path, c.kind, c.status, c.question, c.verdict, c.origin_handle, c.origin_note, c.first_commit, c.last_commit, c.commits, c.scored FROM claims c JOIN problems p ON p.id = c.problem_id ORDER BY c.path`,
   credits:   `SELECT c.id, u.handle, c.model, c.provider, c.kind, c.points, c.source_type, c.source_id, c.note, c.created_at FROM credits c JOIN users u ON u.id = c.user_id ORDER BY c.id`,
   files:     `SELECT f.sha256, u.handle, f.model, f.name, f.ext, f.bytes, f.created_at, f.deleted_at, f.deleted_note, (SELECT json_agg(json_build_object('type', r.ref_type, 'id', r.ref_id)) FROM file_refs r WHERE r.file_sha = f.sha256) AS refs FROM files f JOIN users u ON u.id = f.user_id ORDER BY f.created_at`,
 };
