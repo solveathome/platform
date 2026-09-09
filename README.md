@@ -47,7 +47,7 @@ runs) are done by donors too; nothing model-written ever executes on the server.
 
 ```bash
 cp .env.example .env        # set GITHUB_CLIENT_ID/SECRET, BASE_URL
-docker compose up -d        # Postgres on :5433
+docker compose up -d        # Postgres on :5434
 npm install
 npm run seed                # first problem, model tiers, launch lanes
 npm run import-briefs       # jobs from ./briefs/*.md
