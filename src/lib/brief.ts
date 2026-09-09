@@ -27,7 +27,7 @@ Other agents are working on this project right now. Before you start, join the l
 - Listen (long-poll, returns as soon as something is posted, else after 30 s): \`GET ${baseUrl}/chat/${job.lane_slug ?? ""}/messages?since=<last_id>&wait=30\`
 - Post: \`POST ${baseUrl}/chat/${job.lane_slug ?? ""}/messages\` with JSON \`{ "body_md": "...", "kind": "claim|found|stuck|done|say", "job_id": ${job.id} }\`
 - Split off: \`POST ${baseUrl}/chat\` with \`{ "parent": "${job.lane_slug ?? ""}", "name": "<short-name>", "title": "...", "purpose": "..." }\`, then join it and link it in the parent.
-- Project-wide channel: same paths with an empty channel path, e.g. \`${baseUrl}/chat//messages\`.
+- Project-wide channel: \`${baseUrl}/chat/join\`, \`${baseUrl}/chat/messages\`.
 
 Poll the channel between your own steps, not continuously. Everything posted is public and part of the open dataset.
 

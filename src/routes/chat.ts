@@ -62,26 +62,36 @@ chat.post("/chat", bearer, project, async (req: any, res) => {
   res.json({ ok: true, path, join: `/projects/${req.project.slug}/chat/${path}/join` });
 });
 
+/** Root (project-wide) channel: /chat/join, /chat/messages, /chat/leave map to path "". */
+function rootPath(req: any, _res: any, next: any): void { req.params.path = ""; next(); }
+chat.post("/chat/join", bearer, project, rootPath, channel, (req: any, res: any, next: any) => joinHandler(req, res, next));
+chat.post("/chat/leave", bearer, project, rootPath, channel, (req: any, res: any) => leaveHandler(req, res));
+chat.get("/chat/messages", project, rootPath, channel, (req: any, res: any) => listHandler(req, res));
+chat.post("/chat/messages", bearer, project, rootPath, channel, (req: any, res: any) => postHandler(req, res));
+
 /** POST /chat/*path/join */
-chat.post("/chat/*path/join", bearer, project, channel, async (req: any, res) => {
+chat.post("/chat/*path/join", bearer, project, channel, joinHandler);
+async function joinHandler(req: any, res: any, _next?: any): Promise<void> {
   await q(`INSERT INTO channel_members (channel_id, user_id, model) VALUES ($1,$2,$3) ON CONFLICT (channel_id, user_id) DO UPDATE SET model = EXCLUDED.model`, [req.channel.id, req.user!.id, req.model]);
   const last = await one<{ m: string }>(`SELECT coalesce(max(id),0) AS m FROM messages WHERE channel_id = $1`, [req.channel.id]);
   const members = await q(`SELECT u.handle, m.model FROM channel_members m JOIN users u ON u.id = m.user_id WHERE m.channel_id = $1`, [req.channel.id]);
   res.json({ ok: true, path: req.channel.path, title: req.channel.title, purpose: req.channel.purpose, last_message_id: Number(last!.m), members,
-             listen: `GET /projects/${req.project.slug}/chat/${req.channel.path}/messages?since=${last!.m}&wait=30` });
-});
+             listen: `GET /projects/${req.project.slug}/chat/${req.channel.path ? req.channel.path + "/" : ""}messages?since=${last!.m}&wait=30` });
+}
 
-chat.post("/chat/*path/leave", bearer, project, channel, async (req: any, res) => {
+chat.post("/chat/*path/leave", bearer, project, channel, leaveHandler);
+async function leaveHandler(req: any, res: any): Promise<void> {
   await q(`DELETE FROM channel_members WHERE channel_id = $1 AND user_id = $2`, [req.channel.id, req.user!.id]);
   res.json({ ok: true });
-});
+}
 
 /**
  * GET /chat/*path/messages?since=<id>&wait=<seconds>&limit=<n>
  * Long-poll: returns immediately if there are messages after `since`, otherwise waits up to `wait` seconds.
  * Markdown by default, JSON with Accept: application/json.
  */
-chat.get("/chat/*path/messages", project, channel, async (req: any, res) => {
+chat.get("/chat/*path/messages", project, channel, listHandler);
+async function listHandler(req: any, res: any): Promise<void> {
   const since = Number(req.query.since ?? 0);
   const wait = Math.min(MAX_WAIT, Math.max(0, Number(req.query.wait ?? 0)));
   const limit = Math.min(200, Math.max(1, Number(req.query.limit ?? 100)));
@@ -97,10 +107,11 @@ chat.get("/chat/*path/messages", project, channel, async (req: any, res) => {
   if ((req.header("accept") ?? "").includes("application/json")) { res.json({ path: req.channel.path, since, last_id: rows.at(-1)?.id ?? since, messages: rows }); return; }
   const md = rows.map((m) => `#### [${m.id}] @${m.handle}${m.model ? ` (${m.model})` : ""} · ${m.kind}${m.reply_to ? ` · re ${m.reply_to}` : ""} · ${new Date(m.created_at).toISOString()}\n\n${m.body_md}\n`).join("\n");
   res.type("text/markdown").send(md || `(no new messages in \`${req.channel.path || "project"}\` since ${since}; poll again with since=${since}&wait=30)\n`);
-});
+}
 
 /** POST /chat/*path/messages  Body: { body_md, kind?, reply_to?, job_id?, return_id? } */
-chat.post("/chat/*path/messages", bearer, project, channel, async (req: any, res) => {
+chat.post("/chat/*path/messages", bearer, project, channel, postHandler);
+async function postHandler(req: any, res: any): Promise<void> {
   const b = req.body ?? {};
   const body = String(b.body_md ?? "").trim();
   if (!body) { res.status(400).json({ error: "body_md required" }); return; }
@@ -112,4 +123,4 @@ chat.post("/chat/*path/messages", bearer, project, channel, async (req: any, res
   const m = await one<{ id: number }>(`INSERT INTO messages (channel_id, user_id, model, kind, reply_to, body_md, job_id, return_id) VALUES ($1,$2,$3,$4,$5,$6,$7,$8) RETURNING id`,
     [req.channel.id, req.user!.id, req.model, kind, b.reply_to ?? null, body, b.job_id ?? null, b.return_id ?? null]);
   res.json({ ok: true, id: m!.id, path: req.channel.path });
-});
+}
