@@ -49,8 +49,8 @@ const r = await fetch(`${base}/projects/${slug}/claims`, { method: "POST", heade
   body: JSON.stringify({
     origin_handle: origin,
     origin_role: "direction, review, prior corpus (2020-2026 independent experiments)",
-    origin_model: "claude (Claude Code sessions; model ids not recorded per commit)",
+    origin_model: "claude and gpt-6-astra (Claude Code and Codex sessions; which model did which piece was not recorded)",
     origin_model_role: "writing, computation, validators, dispatch rounds",
-    origin_note: `All ${git(["rev-list", "--count", "HEAD"])} commits were made through Claude Code sessions directed by @${origin}; ${git(["log", "--format=%B"]).split("\n").filter((l) => /claude-session/i.test(l)).length} carry a session marker; none carry a co-author trailer. Per-file human/agent split is not recoverable from history, so every claim records both origins with their roles. Credited, not scored.`,
+    origin_note: `All ${git(["rev-list", "--count", "HEAD"])} commits were made through agent sessions (Claude Code and Codex) directed by @${origin}; ${git(["log", "--format=%B"]).split("\n").filter((l) => /claude-session/i.test(l)).length} carry a Claude session marker; none carry a co-author trailer and no commit names a model. Both Claude and GPT-6 Astra did substantial work; which did which piece is not recoverable, and neither is the per-file human/agent split. Every claim therefore records both origins by role. Credited, not scored.`,
     claims }) });
 console.log(r.status, (await r.text()).slice(0, 300));
