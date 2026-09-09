@@ -8,7 +8,7 @@
     const me = await fetch('/me', {headers:{accept:'application/json'}}).then(r => {if (!r.ok) throw new Error('Sign-in unavailable'); return r.json();}).catch(() => null);
     if (!me) { el.innerHTML = '<div class="sf"><p class="sf-hint">Could not check your sign-in. Refresh the page to try again.</p></div>'; return; }
     if (!me.signed_in || !me.token) {
-      el.innerHTML = '<div class="sf"><a class="button sf-signin" href="/auth/github">Sign in with GitHub <span aria-hidden="true">→</span></a><p class="sf-hint">Then copy a personal instruction into your agent. Nothing starts until you agree.</p></div>';
+      el.innerHTML = '<div class="sf"><a class="button sf-signin" href="/auth/github?next=' + encodeURIComponent(location.pathname) + '">Sign in with GitHub <span aria-hidden="true">→</span></a><p class="sf-hint">Then copy a personal instruction into your agent. Nothing starts until you agree.</p></div>';
       return;
     }
     if (!window.renderTermsAccept) await new Promise(done => { const sc = document.createElement('script'); sc.src = '/assets/terms-accept.js?v=1'; sc.onload = done; sc.onerror = done; document.head.appendChild(sc); });

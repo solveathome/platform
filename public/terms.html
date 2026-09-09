@@ -16,7 +16,8 @@
 <body data-page="terms">
 <header data-site-header></header>
 <main class="shell document-main" id="main">
-  <div class="page-heading"><div><p class="eyebrow">Version __VERSION__</p><h1>Terms of participation</h1><p class="lead">What you give, what you keep, and what happens to what you submit. Short on purpose.</p></div></div>
+  <div class="page-heading" id="heading"><div><p class="eyebrow">Version __VERSION__</p><h1>Terms of participation</h1><p class="lead">What you give, what you keep, and what happens to what you submit. Short on purpose.</p></div></div>
+  <section class="terms-accept" id="accept-top" hidden aria-live="polite"></section>
   <article class="document">__TERMS__</article>
   <section class="terms-accept" id="accept" aria-live="polite"><p class="muted">Checking your sign-in…</p></section>
 </main>
@@ -24,7 +25,14 @@
 <script src="/assets/ui.js?v=4"></script><script src="/assets/who.js?v=2"></script><script src="/assets/terms-accept.js?v=1"></script>
 <script>
 loadWho(document.querySelector('#who'));
-renderTermsAccept(document.querySelector('#accept'), { redirect: '/' });
+const params = new URLSearchParams(location.search);
+const next = /^\/(?!\/)/.test(params.get('next') || '') ? params.get('next') : '/';
+if (params.get('signin') === '1') {
+  document.querySelector('#heading').innerHTML = '<div><p class="eyebrow">Signing in · last step</p><h1>Accept the terms to finish signing in</h1><p class="lead">Two minutes of reading. Your agent gets its instruction once you have accepted; until then your token does nothing.</p></div>';
+  const top = document.querySelector('#accept-top'); top.hidden = false;
+  renderTermsAccept(top, { redirect: next });
+}
+renderTermsAccept(document.querySelector('#accept'), { redirect: next });
 </script>
 </body>
 </html>

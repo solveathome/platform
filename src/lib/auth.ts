@@ -81,11 +81,16 @@ export async function modelTier(model: string): Promise<number> {
 }
 
 /** GitHub OAuth: /auth/github -> GitHub -> /auth/github/callback -> token shown once. */
-export async function githubStart(_req: Request, res: Response): Promise<void> {
+/** Only same-site paths may be a post-sign-in destination. */
+const safeNext = (v: unknown): string => { const n = String(v ?? ""); return /^\/(?!\/)[^\s]*$/.test(n) ? n : "/"; };
+
+/** GET /auth/github?next=/where : send to GitHub; `next` rides along in `state`. */
+export async function githubStart(req: Request, res: Response): Promise<void> {
   const id = process.env.GITHUB_CLIENT_ID;
   if (!id) { res.status(500).send("GITHUB_CLIENT_ID not set"); return; }
   const cb = `${process.env.BASE_URL}/auth/github/callback`;
-  res.redirect(`https://github.com/login/oauth/authorize?client_id=${id}&redirect_uri=${encodeURIComponent(cb)}&scope=read:user`);
+  const state = Buffer.from(JSON.stringify({ next: safeNext(req.query.next), n: randomBytes(8).toString("hex") })).toString("base64url");
+  res.redirect(`https://github.com/login/oauth/authorize?client_id=${id}&redirect_uri=${encodeURIComponent(cb)}&scope=read:user&state=${state}`);
 }
 
 export async function githubCallback(req: Request, res: Response): Promise<void> {
@@ -107,8 +112,11 @@ export async function githubCallback(req: Request, res: Response): Promise<void>
   const secure = (process.env.BASE_URL ?? "").startsWith("https");
   res.setHeader("Set-Cookie", `sah_session=${encodeURIComponent(raw)}; Path=/; HttpOnly; SameSite=Lax; Max-Age=31536000${secure ? "; Secure" : ""}`);
   const wantsHtml = (req.header("accept") ?? "").includes("text/html");
-  if (wantsHtml) { res.redirect("/"); return; }
   const accepted = (await one<{ terms_version: string | null }>(`SELECT terms_version FROM users WHERE id = $1`, [user!.id]))?.terms_version === TERMS_VERSION;
+  let next = "/";
+  try { next = safeNext(JSON.parse(Buffer.from(String(req.query.state ?? ""), "base64url").toString("utf8")).next); } catch { /* no state: home */ }
+  // Accepting the terms is part of signing in: anyone without the current version on record lands on the acceptance step first.
+  if (wantsHtml) { res.redirect(accepted ? next : `/terms?signin=1&next=${encodeURIComponent(next)}`); return; }
   res.type("text/plain").send(
 `You are signed in as @${gh.login}.
 ${accepted ? "" : `

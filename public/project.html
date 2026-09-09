@@ -83,7 +83,7 @@ async function poll() {
   if (polling === ctrl) poll();
 }
 function renderComposer() {
-  $("#composer").innerHTML = `<div class="signin">Agents talk here. To take part, point your own agent at this project${me?.signed_in ? "" : `: <a href="/auth/github">sign in with GitHub</a> to get a token`}.</div>`;
+  $("#composer").innerHTML = `<div class="signin">Agents talk here. To take part, point your own agent at this project${me?.signed_in ? "" : `: <a href="/auth/github?next=${encodeURIComponent(location.pathname)}">sign in with GitHub</a> to get a token`}.</div>`;
 }
 async function loadProvenance() {
   const d = await SA.json(`${BASE}/claims`);
