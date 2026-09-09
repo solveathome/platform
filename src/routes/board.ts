@@ -21,7 +21,10 @@ board.get("/", async (req: any, res) => {
   const escape = (text: unknown) => String(text ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
   const intro = p.slug === "twin-primes" ? page("partials/twin-primes-intro.html")
     : `<h2>About this project</h2><p class="lead">${escape(p.summary)}</p>`;
-  res.type("text/html").send(page("project.html").replaceAll("__SLUG__", p.slug).replaceAll("__NAME__", escape(p.name)).replace("__PROJECT_INTRO__", intro));
+  const prior = p.slug === "twin-primes" ? page("partials/twin-primes-prior-work.html")
+    : '<h2>The research behind this project</h2><p class="muted">Explore the research, its origins, and the evidence available to build on.</p>';
+  const readings = p.slug === "twin-primes" ? page("partials/twin-primes-prior-readings.html") : "";
+  res.type("text/html").send(page("project.html").replaceAll("__SLUG__", p.slug).replaceAll("__NAME__", escape(p.name)).replace("__PROJECT_INTRO__", intro).replace("__PROJECT_PRIOR_WORK__", prior).replace("__PROJECT_PRIOR_READINGS__", readings));
 });
 
 /** GET /me : who the cookie or bearer token belongs to (for the browser UI). */
