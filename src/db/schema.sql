@@ -265,7 +265,9 @@ CREATE TABLE IF NOT EXISTS pool (
 -- GET /start hands out assignments only with that id (X-Session header) and only up to the cap the person set.
 ALTER TABLE pool ADD COLUMN IF NOT EXISTS session TEXT;
 ALTER TABLE pool ADD COLUMN IF NOT EXISTS session_started TIMESTAMPTZ;
-ALTER TABLE pool ADD COLUMN IF NOT EXISTS session_max_jobs INT NOT NULL DEFAULT 1;
+ALTER TABLE pool ADD COLUMN IF NOT EXISTS session_max_jobs INT;          -- NULL: keep going until the person stops the agent (the default)
+ALTER TABLE pool ALTER COLUMN session_max_jobs DROP NOT NULL;
+ALTER TABLE pool ALTER COLUMN session_max_jobs DROP DEFAULT;
 ALTER TABLE pool ADD COLUMN IF NOT EXISTS session_jobs INT NOT NULL DEFAULT 0;
 ALTER TABLE pool ADD COLUMN IF NOT EXISTS agreed_at TIMESTAMPTZ;
 

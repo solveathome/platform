@@ -47,7 +47,7 @@ async function start(req: any, res: any): Promise<void> {
     if (wantsJson) res.json({ registered: !!member, session: null, orientation_md: md }); else res.type("text/markdown").send(md);
     return;
   }
-  if (Number(member.session_jobs) >= Number(member.session_max_jobs)) {
+  if (member.session_max_jobs !== null && Number(member.session_jobs) >= Number(member.session_max_jobs)) {
     const md = `# solveathome / ${req.project.name}: session cap reached\n\nYour person allowed ${member.session_max_jobs} assignment(s) this session and you have taken ${member.session_jobs}. Stop here. Tell them what you did and where it stands (\`${BASE()}/@${req.user!.handle}\`). Continue only if they say so: \`POST ${BASE()}/projects/${req.project.slug}/start\` with \`{ "agreed": true, "ai": { "max_assignments": <n> } }\` starts a new session with their new cap. Nothing continues by default.\n`;
     if (wantsJson) res.status(409).json({ error: "session cap reached", session_jobs: member.session_jobs, session_max_jobs: member.session_max_jobs, orientation_md: md });
     else res.status(409).type("text/markdown").send(md);
@@ -92,7 +92,7 @@ async function start(req: any, res: any): Promise<void> {
     await client.query(`UPDATE pool SET session_jobs = session_jobs + 1 WHERE problem_id = $1 AND user_id = $2`, [req.project.id, uid]);
     await client.query("COMMIT");
     row.expires_at = upd.rows[0].expires_at;
-    const sess = { id: String(member.session), jobs: Number(member.session_jobs) + 1, max: Number(member.session_max_jobs), maxHours: Number(member.ai?.max_hours_per_assignment ?? 2), compute: member.compute ? `${member.compute.cpu_hours ?? 0} CPU h / ${member.compute.ram_gb ?? "?"} GB` : "not offered", transcriptPreapproved: member.ai?.transcript_preapproved === true };
+    const sess = { id: String(member.session), jobs: Number(member.session_jobs) + 1, max: member.session_max_jobs === null ? null : Number(member.session_max_jobs), maxHours: Number(member.ai?.max_hours_per_assignment ?? 2), compute: member.compute ? `${member.compute.cpu_hours ?? 0} CPU h / ${member.compute.ram_gb ?? "?"} GB` : "not offered", transcriptPreapproved: member.ai?.transcript_preapproved === true };
     let md = renderBrief(row, `${BASE()}/projects/${req.project.slug}`, sess);
     if (req.justRegistered) md = (await orientation(req.project, BASE(), member, true)) + "\n\n---\n\n" + md;
     md = ownerNote + md;
@@ -121,6 +121,7 @@ job.post("/release", bearer, project, async (req: any, res: any) => {
 /**
  * POST /start : the person agreed to the terms; register what they contribute and open a session.
  * Body: { agreed: true, ai: {max_hours_per_assignment, max_assignments}, transcript_preapproved?, compute: {...}|null, input: {...}|null }.
+ * ai.max_assignments: omitted/null/"until_stopped" keeps going until the person stops the agent (default); a number caps the session.
  * A returning handle sends only what changes; omitted fields keep their recorded values.
  * Replies with orientation + session id + first assignment.
  */
@@ -133,7 +134,9 @@ job.post("/start", bearer, project, async (req: any, res: any) => {
   if (b.ai?.max_hours_per_assignment !== undefined || !prev) ai.max_hours_per_assignment = Math.min(24, Math.max(0.25, Number(b.ai?.max_hours_per_assignment ?? ai.max_hours_per_assignment ?? 2)));
   const pre = b.transcript_preapproved ?? b.ai?.transcript_preapproved;
   if (pre !== undefined || !prev) ai.transcript_preapproved = pre === true;
-  const maxJobs = Math.min(50, Math.max(1, Math.floor(Number(b.ai?.max_assignments ?? 1)) || 1));
+  // Assignment count: the default is to keep going until the person stops the agent (NULL). A number caps the session.
+  const rawMax = b.ai?.max_assignments;
+  const maxJobs: number | null = rawMax === undefined || rawMax === null || rawMax === 0 || rawMax === "until_stopped" || rawMax === "unlimited" ? null : Math.min(50, Math.max(1, Math.floor(Number(rawMax)) || 1));
   const compute = b.compute === undefined && prev ? prev.compute : (b.compute && typeof b.compute === "object" ? { cpu_hours: Math.max(0, Number(b.compute.cpu_hours ?? 0)), ram_gb: Number(b.compute.ram_gb ?? 0) || null, mathlib_cache: !!b.compute.mathlib_cache } : null);
   const input = b.input === undefined && prev ? prev.input : (b.input && typeof b.input === "object" && (b.input.lane || b.input.direction) ? { lane: b.input.lane ? String(b.input.lane).slice(0, 80) : null, direction: b.input.direction ? String(b.input.direction).slice(0, 4000) : null } : null);
   if (b.input !== undefined && input?.lane) { const l = await one(`SELECT 1 FROM lanes WHERE problem_id = $1 AND slug = $2`, [req.project.id, input.lane]); if (!l) { res.status(400).json({ error: `unknown lane '${input.lane}'` }); return; } }
