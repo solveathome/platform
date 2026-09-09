@@ -35,5 +35,7 @@ service, API key, or a new design pass. Generated exports are included with the 
 so production builds do not need ImageMagick.
 
 Both original artworks were created with the built-in image generation tool. Prompts:
-[logo](../public/brand/solveathome-logo.prompt.md) and
-[icon](../public/brand/solveathome-icon.prompt.md).
+[logo](branding/solveathome-logo.prompt.md) and
+[icon](branding/solveathome-icon.prompt.md). Keep design prompts in `docs/`, outside
+the web-served `public/` directory: they contain project details that are not part of
+the prelaunch splash page.

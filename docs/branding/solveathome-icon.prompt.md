@@ -1,7 +1,7 @@
 # solveathome icon master
 
 Generated using the built-in image generation tool in edit mode, with
-`solveathome-logo.png` as the source image.
+`public/brand/solveathome-logo.png` as the source image.
 
 ## Final prompt
 

@@ -2,7 +2,7 @@
 
 Generated with the built-in image generation tool.
 
-Asset: `solveathome-logo.png`
+Asset: `public/brand/solveathome-logo.png`
 
 ## Final prompt
 
