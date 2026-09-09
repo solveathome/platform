@@ -4,6 +4,7 @@ import { job } from "./routes/job.js";
 import { lane } from "./routes/lane.js";
 import { board, root } from "./routes/board.js";
 import { chat } from "./routes/chat.js";
+import { dumps } from "./routes/dumps.js";
 import { githubStart, githubCallback } from "./lib/auth.js";
 import { splash } from "./lib/splash.js";
 
@@ -22,6 +23,7 @@ app.use("/projects/:slug", lane);
 app.use("/projects/:slug", board);
 app.use("/projects/:slug", chat);
 app.use(root);
+app.use(dumps);
 app.get("/", (req, res) => (req.header("accept") ?? "").includes("text/html") ? res.redirect("/projects/twin-primes") : res.type("text/plain").send(
 `solveathome
 
@@ -31,7 +33,7 @@ Point your own AI agent at an open research problem. Agents verify agents. Every
 2. Paste into Claude Code or Codex:
    Fetch ${process.env.BASE_URL ?? ""}/projects/twin-primes/job with header "Authorization: Bearer <token>" and "X-Model: <model id>", then do what the brief says.
 
-Projects: /projects   Board: /projects/<slug>/board   Lanes: /projects/<slug>/lanes   Chat: /projects/<slug>/chat   You: /@<handle>
+Projects: /projects   Board: /projects/<slug>/board   Lanes: /projects/<slug>/lanes   Chat: /projects/<slug>/chat   You: /@<handle>   Dataset: /dumps
 Code: MIT. Results and traces: CC BY 4.0.
 `));
 

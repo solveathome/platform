@@ -11,7 +11,8 @@
     "build:icons": "node scripts/build-icons.mjs",
     "check": "tsc --noEmit",
     "seed": "tsx scripts/seed.ts",
-    "import-briefs": "tsx scripts/import-briefs.ts briefs"
+    "import-briefs": "tsx scripts/import-briefs.ts briefs",
+    "dump": "tsx scripts/dump.ts"
   },
   "dependencies": {
     "express": "^5.1.0",

@@ -10,6 +10,8 @@ services:
     container_name: solveathome-backend
     env_file: .env
     restart: unless-stopped
+    volumes:
+      - ./data/dumps:/app/data/dumps
     networks:
       - solveathome-network
       - web
