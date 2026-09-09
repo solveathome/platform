@@ -53,7 +53,7 @@ const visit = (dir: string, prefix = "") => {
     const text = bytes.toString("utf8");
     if (path.endsWith(".md") && needsSourceReview(text)) { write(path, linkEdition(path, text), "source-links"); linked++; }
     else if (!path.endsWith(".ots") && needsSourceReview(text)) { excluded++; }
-    else if (prefix === "" && /^(CLAUDE|AGENTS|README)\.md$/.test(name)) write(path, publicEdition(text), "project");
+    else if (prefix === "" && /^(CLAUDE|AGENTS|README|TODO)\.md$/.test(name)) write(path, publicEdition(text), "project");
     else write(path, bytes, "project");
   }
 };

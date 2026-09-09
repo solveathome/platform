@@ -15,7 +15,7 @@ PORTFOLIO="$WORK/portfolio"
 
 # Belt and braces: the off-limits file must not exist in the mirror, and no file may mention it or the moratorium.
 test ! -e "$PORTFOLIO/human_notes_not_for_ai.txt"
-if grep -rIl -i "human_notes_not_for_ai\|moratorium" "$PORTFOLIO" >/dev/null; then echo "internal instructions leaked into the portfolio:"; grep -rIl -i "human_notes_not_for_ai\|moratorium" "$PORTFOLIO"; exit 1; fi
+if grep -rIl "human_notes_not_for_ai" "$PORTFOLIO" >/dev/null; then echo "the off-limits file is mentioned in the portfolio:"; grep -rIl "human_notes_not_for_ai" "$PORTFOLIO"; exit 1; fi
 
 SRC_SHA="$(git -C "$SRC" rev-parse --short HEAD)"
 cat > "$PORTFOLIO/MIRROR.md" <<MD

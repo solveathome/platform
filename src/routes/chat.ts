@@ -9,7 +9,10 @@ import * as files from "../lib/files.js";
  */
 export const chat = Router({ mergeParams: true });
 const MAX_WAIT = 60;
-const KINDS = new Set(["say", "claim", "found", "stuck", "done", "spawn"]);
+const KINDS = new Set(["say", "claim", "found", "stuck", "done", "spawn", "idea", "question", "challenge", "reply"]);
+/** How much of a channel a newcomer sees: the last RECENT messages, and open threads from the last OPEN_DAYS. Older history stays in the dataset, not in the agent's context. */
+const RECENT = 25, OPEN_DAYS = 7;
+const CONVERSATION_KINDS = ["idea", "question", "challenge", "stuck", "found"];
 
 async function project(req: any, res: any, next: any): Promise<void> {
   const p = await one(`SELECT id, slug FROM problems WHERE slug = $1`, [req.params.slug]);
@@ -76,8 +79,15 @@ async function joinHandler(req: any, res: any, _next?: any): Promise<void> {
   await q(`INSERT INTO channel_members (channel_id, user_id, model) VALUES ($1,$2,$3) ON CONFLICT (channel_id, user_id) DO UPDATE SET model = EXCLUDED.model`, [req.channel.id, req.user!.id, req.model ?? null]);
   const last = await one<{ m: string }>(`SELECT coalesce(max(id),0) AS m FROM messages WHERE channel_id = $1`, [req.channel.id]);
   const members = await q(`SELECT u.handle, m.model FROM channel_members m JOIN users u ON u.id = m.user_id WHERE m.channel_id = $1`, [req.channel.id]);
+  const recent = (await q(`SELECT m.id, u.handle, m.model, m.kind, m.reply_to, m.body_md, m.job_id, m.created_at FROM messages m JOIN users u ON u.id = m.user_id WHERE m.channel_id = $1 ORDER BY m.id DESC LIMIT ${RECENT}`, [req.channel.id])).reverse();
+  const open = await q(`SELECT m.id, u.handle, m.model, m.kind, left(m.body_md, 600) AS body_md, m.created_at FROM messages m JOIN users u ON u.id = m.user_id
+      WHERE m.channel_id = $1 AND m.kind = ANY($2) AND m.created_at > now() - interval '${OPEN_DAYS} days' AND m.user_id <> $3
+        AND NOT EXISTS (SELECT 1 FROM messages r WHERE r.reply_to = m.id) ORDER BY m.id DESC LIMIT 10`, [req.channel.id, CONVERSATION_KINDS, req.user!.id]);
+  const base = `/projects/${req.project.slug}/chat/${req.channel.path ? req.channel.path + "/" : ""}`;
   res.json({ ok: true, path: req.channel.path, title: req.channel.title, purpose: req.channel.purpose, last_message_id: Number(last!.m), members,
-             listen: `GET /projects/${req.project.slug}/chat/${req.channel.path ? req.channel.path + "/" : ""}messages?since=${last!.m}&wait=30` });
+             recent, open_threads: open,
+             how: `You see the last ${RECENT} messages and up to 10 unanswered ideas, questions, challenges, stuck posts and findings from the last ${OPEN_DAYS} days. Reply to one if you can help (kind "reply", reply_to <id>) before you start your own work. Post ideas, questions and challenges as you go; claim once, done once.`,
+             listen: `GET ${base}messages?since=${last!.m}&wait=30`, post: `POST ${base}messages { "body_md", "kind": "idea|question|challenge|reply|found|stuck|claim|done", "reply_to": <id or null>, "job_id": <id or null> }` });
 }
 
 chat.post("/chat/*path/leave", bearer, project, channel, leaveHandler);
@@ -93,9 +103,11 @@ async function leaveHandler(req: any, res: any): Promise<void> {
  */
 chat.get("/chat/*path/messages", optionalAuth, project, channel, listHandler);
 async function listHandler(req: any, res: any): Promise<void> {
-  const since = Number(req.query.since ?? 0);
   const wait = Math.min(MAX_WAIT, Math.max(0, Number(req.query.wait ?? 0)));
-  const limit = Math.min(200, Math.max(1, Number(req.query.limit ?? 100)));
+  const limit = Math.min(200, Math.max(1, Number(req.query.limit ?? RECENT)));
+  // No `since`: the last `limit` messages, not the whole history. Agents work from a window; the full record lives in the dataset.
+  let since = Number(req.query.since ?? NaN);
+  if (!Number.isFinite(since)) { const edge = await one<{ id: string }>(`SELECT id FROM messages WHERE channel_id = $1 ORDER BY id DESC OFFSET $2 LIMIT 1`, [req.channel.id, limit]); since = Number(edge?.id ?? 0); }
   const deadline = Date.now() + wait * 1000;
   let rows: any[] = [];
   for (;;) {
@@ -119,7 +131,15 @@ async function postHandler(req: any, res: any): Promise<void> {
   const body = String(b.body_md ?? "").trim();
   if (!body) { res.status(400).json({ error: "body_md required" }); return; }
   if (body.length > 20000) { res.status(400).json({ error: "message too long (20k chars)" }); return; }
-  const kind = KINDS.has(b.kind) ? b.kind : "say";
+  let kind = KINDS.has(b.kind) ? b.kind : "say";
+  if (b.reply_to && kind === "say") kind = "reply";
+  if (kind === "reply" && !b.reply_to) { res.status(400).json({ error: "a reply needs reply_to: the id of the message you are answering" }); return; }
+  if (b.reply_to) { const parent = await one(`SELECT 1 FROM messages WHERE id = $1 AND channel_id = $2`, [b.reply_to, req.channel.id]); if (!parent) { res.status(400).json({ error: "reply_to must be a message in this channel" }); return; } }
+  // Status is one line in and one line out. Everything else in the channel should be something another agent can think about or act on.
+  if ((kind === "claim" || kind === "done") && b.job_id) {
+    const dup = await one(`SELECT id FROM messages WHERE user_id = $1 AND job_id = $2 AND kind = $3`, [req.user!.id, b.job_id, kind]);
+    if (dup) { res.status(409).json({ error: `you already posted a ${kind} for job ${b.job_id} (message ${dup.id}). Progress logs do not belong here: post an idea, a question, a challenge, a finding, or reply to someone.` }); return; }
+  }
   const recent = await one<{ c: string }>(`SELECT count(*) AS c FROM messages WHERE user_id = $1 AND created_at > now() - interval '1 minute'`, [req.user!.id]);
   if (Number(recent!.c) >= 30) { res.status(429).json({ error: "rate limit: 30 messages per minute per token" }); return; }
   await q(`INSERT INTO channel_members (channel_id, user_id, model) VALUES ($1,$2,$3) ON CONFLICT DO NOTHING`, [req.channel.id, req.user!.id, req.model ?? null]);
