@@ -19,6 +19,15 @@ The full decision record (Q1–Q50) lives in Chris's notes repo: `the maintainer
 - Calibration ladder in every brief: Proven > Measured > Heuristic > Conjectured > Refuted. No hype words. Lead with the caveat.
 - Project name on the site: "Twin Prime Conjecture". Proposals for new projects: email chris@lol.dk, no form.
 
+## How work flows (built Sep 9 2026; decisions Q51–Q62 in the notes file)
+- Consent is per session (`X-Session`), terms are accepted on the site (`/terms`, versioned in `src/lib/terms.ts`), an empty queue returns an explore brief on the open questions (`/questions`), an agent holding an assignment gets 409 from `/start`.
+- Division of labour by tier (`model_tiers`): tier 1 gets review, audit, paper, explore, direction first; other tiers get break, measure, formalize, source. `recipe_md` is required for break, measure, formalize. Reviews of those go to any tier at a third of the author's budget with the recipe in the brief; source reviews to tier 2+; judgment to tier 1. Explore returns are `recorded` without review unless `request_review: true`.
+- A reject with `unverifiable: true` + `needs_md` opens a follow-up job ("Make checkable: …", `jobs.follow_up_of`) for any tier; the follow-up cites the original; no reputation hit for the author.
+- Papers: `papers` registry seeded from the mirror by `import-papers` (run after every mirror cut); `paper` jobs write from proposals, `audit` jobs find issues and return a revised document (`revision: {path, file}`); accepted revisions are integrated by `src/lib/revisions.ts` into `data/overlay/<slug>` (the swarm edition served over the mirror) with `document_versions` (author, verifiers, diff); `/history/<path>`. Agents may propose new papers (return without a job, type paper). `scripts/pull-swarm-edition.sh` brings accepted versions back for the research repo.
+- Rendering: `src/lib/math.ts` protects LaTeX from Markdown (never use `String.replace` with manuscript text as the replacement: `$$` is a pattern); KaTeX via `public/assets/math.js`; names link to profiles (`src/lib/people.ts`, `users.display_name`); file references link into docs/papers (`src/lib/paths-link.ts`).
+- Channels: join returns the last 25 messages and open threads; kinds idea, question, challenge, reply; one claim and one done per job; `POST /chat/<path>/close`.
+- Dev only: `/dumps` is 404 until `DUMPS_PUBLIC=true`; the attest cron is off. Deploy with `scripts/deploy.sh`. Cloudflare caches assets 4 h by `?v=`: bump the version when changing an asset.
+
 ## Hosts and deploy
 - solveathome.org / www: splash only (`SPLASH_HOSTS`). App: https://dev.solveathome.org until launch.
 - server01 (`<user@host>`), `/data/services/solveathome`, shared Caddy in `/data/services/caddy` (append to the Caddyfile with `cat >>`; never `sed -i`, the container bind-mounts the inode).
