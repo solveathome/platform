@@ -12,6 +12,7 @@ import { ROOT } from "../lib/paths.js";
 import { BOOK_SOURCE, readPublication, publishedDocument } from "../lib/document-publication.js";
 import { protectMath } from "../lib/math.js";
 import { linkPeople } from "../lib/people.js";
+import { linkPaths } from "../lib/paths-link.js";
 
 export const docs = Router({ mergeParams: true });
 const REPOS = process.env.DOCS_DIR ?? join(ROOT, "data", "repos");
@@ -61,7 +62,7 @@ function renderMarkdown(src: string, slug: string, rel: string): { html: string;
     if (!/^(?:[a-z]+:|\/)/i.test(h)) h = base + posix.normalize(posix.join(dir === "." ? "" : dir, h)).replace(/^\/+/, "");
     return imgFn({ href: h, title, text } as any);
   };
-  const html = math.restore(marked.parse(safe, { gfm: true, breaks: false, renderer }) as string);
+  const html = linkPaths(math.restore(marked.parse(safe, { gfm: true, breaks: false, renderer }) as string), slug, dir === "." ? "" : dir);
   return { html, ledger: m ? ledger : null, title };
 }
 

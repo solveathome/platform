@@ -12,6 +12,8 @@ import { ROOT, PUBLIC_DIR } from "../lib/paths.js";
 import * as files from "../lib/files.js";
 import { protectMath } from "../lib/math.js";
 import { linkPeople } from "../lib/people.js";
+import { linkPaths } from "../lib/paths-link.js";
+import { posix } from "node:path";
 
 export const papers = Router({ mergeParams: true });
 const REPOS = process.env.DOCS_DIR ?? join(ROOT, "data", "repos");
@@ -49,7 +51,12 @@ papers.get("/papers/:paper", async (req: any, res) => {
   let from = paper.current_file_sha ? `version from return #${paper.current_return_id}` : "";
   if (source === null && paper.path) { const abs = join(REPOS, p.slug, paper.path); if (existsSync(abs)) { source = readFileSync(abs, "utf8"); from = `seed version from the research mirror (${paper.path})`; } }
   if (!(req.header("accept") ?? "").includes("text/html")) { res.json({ paper, versions, reports, source_from: from, manuscript_md: source }); return; }
-  const md = (t: string) => { const m = protectMath(t.replace(/<!--[\s\S]*?-->/g, "")); return m.restore(marked.parse(m.text.replace(/</g, "&lt;").replace(/>/g, "&gt;"), { gfm: true }) as string); };
+  const baseDir = paper.path ? posix.dirname(paper.path) : "paper";
+  const docsBase = `/projects/${p.slug}/docs/`;
+  const renderer = new marked.Renderer();
+  const linkFn = renderer.link.bind(renderer);
+  renderer.link = ({ href, title, tokens }: any) => { let h = String(href ?? ""); if (!/^(?:[a-z]+:|\/|#)/i.test(h)) h = docsBase + posix.normalize(posix.join(baseDir, h)).replace(/^\/+/, ""); return linkFn({ href: h, title, tokens } as any); };
+  const md = (t: string) => { const m = protectMath(t.replace(/<!--[\s\S]*?-->/g, "")); return linkPaths(m.restore(marked.parse(m.text.replace(/</g, "&lt;").replace(/>/g, "&gt;"), { gfm: true, renderer }) as string), p.slug, baseDir); };
   const body = source ? await linkPeople(md(source)) : "<p class=\"muted\">No manuscript yet.</p>";
   const page = readFileSync(join(PUBLIC_DIR, "paper.html"), "utf8");
   const meta = `<p class="paper-meta"><span class="paper-status ${esc(paper.status)}">${esc(paper.status_label)}</span>${paper.grade ? `<span>${esc(paper.grade)}</span>` : ""}${paper.version_by ? `<span>current version by @${esc(paper.version_by)}, ${esc(String(paper.version_at).slice(0, 10))}${paper.final_rung ? `, ${esc(paper.final_rung)}` : ""}</span>` : ""}<span>${esc(from)}</span></p>`;
