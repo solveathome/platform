@@ -9,6 +9,13 @@ export const dumps = Router();
 const DIR = process.env.DUMP_DIR ?? join(ROOT, "data", "dumps");
 const esc = (value: unknown) => String(value ?? "").replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]!));
 
+/** Until launch the dataset stays on the server: DUMPS_PUBLIC=true publishes the listing and the files (Chris, Sep 9: no datasets out while in dev). */
+const PUBLIC = /^(1|true|yes)$/i.test(process.env.DUMPS_PUBLIC ?? "");
+dumps.use("/dumps", (req, res, next) => {
+  if (PUBLIC) { next(); return; }
+  if ((req.header("accept") ?? "").includes("text/html")) { res.status(404).type("text/html").send(`<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Open dataset · solveathome</title><link rel="stylesheet" href="/assets/app.css?v=12"></head><body data-page="dumps"><header data-site-header></header><main class="shell" id="main"><div class="page-heading"><div><p class="eyebrow">Open dataset</p><h1>Not published yet.</h1><p class="lead">Daily exports of briefs, results with scrubbed transcripts, review verdicts and channel messages will appear here at launch, under CC BY 4.0.</p></div></div></main><footer data-site-footer></footer><script src="/assets/ui.js?v=6"></script><script src="/assets/who.js?v=3"></script><script>loadWho(document.querySelector("#who"));</script></body></html>`); return; }
+  res.status(404).json({ error: "the dataset is not published yet", license: "CC BY 4.0", dumps: [] });
+});
 dumps.get("/dumps", (req, res) => {
   const days = existsSync(DIR) ? readdirSync(DIR).filter((d) => /^\d{4}-\d{2}-\d{2}$/.test(d)).sort().reverse() : [];
   const entries = days.map((d) => {

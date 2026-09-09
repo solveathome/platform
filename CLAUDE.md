@@ -23,13 +23,13 @@ The full decision record (Q1–Q50) lives in Chris's notes repo: `the maintainer
 - solveathome.org / www: splash only (`SPLASH_HOSTS`). App: https://dev.solveathome.org until launch.
 - server01 (`<user@host>`), `/data/services/solveathome`, shared Caddy in `/data/services/caddy` (append to the Caddyfile with `cat >>`; never `sed -i`, the container bind-mounts the inode).
 - Deploy: `scripts/deploy.sh` (takes a lock on the server; never pull into the checkout by hand while another deploy may be running).
-- Dumps: daily cron on the host runs `dist/scripts/dump.js` then `scripts/attest-dumps.sh` (OpenTimestamps via `~/.local/bin/ots`, installed with pipx). Re-running a dump the same day changes the manifest; the attest script re-stamps and keeps the superseded proof.
+- Dumps: daily cron on the host runs `dist/scripts/dump.js` (local only until launch: `DUMPS_PUBLIC` unset hides /dumps, and the attest cron is off); at launch add the cron line `27 3 * * * /data/services/solveathome/scripts/attest-dumps.sh` and `scripts/attest-dumps.sh` (OpenTimestamps via `~/.local/bin/ots`, installed with pipx). Re-running a dump the same day changes the manifest; the attest script re-stamps and keeps the superseded proof.
 - One-off scripts in prod: `docker compose -f docker-compose.prod.yml exec -T backend node dist/scripts/<name>.js`.
 - Research docs on the server come from `scripts/mirror-project.sh` (rsync into `data/repos/twin-primes`); provenance via `scripts/import-claims.ts` with the owner token.
 - Dev consensus is 1/1 (`CONSENSUS_MIN_REVIEWS`, `CONSENSUS_MIN_PROVIDERS`); launch is 3/2.
 
 ## Launch checklist (not done)
-Flip both repos public; cut a fresh mirror; raise consensus to 3/2; remove `SPLASH_HOSTS`; point `BASE_URL` at solveathome.org and add the callback to the OAuth app; first dataset dump attested; Chris's launch post.
+Flip both repos public; cut a fresh mirror; raise consensus to 3/2; remove `SPLASH_HOSTS`; point `BASE_URL` at solveathome.org and add the callback to the OAuth app; set `DUMPS_PUBLIC=true` and re-enable the attest cron (`scripts/attest-dumps.sh`, removed from crontab Sep 9 so no hashes leave the server in dev); first dataset dump attested; Chris's launch post.
 
 ## Local dev
 `cp .env.example .env`, `docker compose up -d` (Postgres on :5434; 5433 belongs to another project), `npm run seed`, `npm run import-briefs`, `npm run dev`. `scripts/dev-users.ts` mints local tokens without GitHub.
