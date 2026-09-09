@@ -13,8 +13,9 @@ npm run build
 node dist/scripts/prepare-document-portfolio.js "$SRC" "$WORK/portfolio"
 PORTFOLIO="$WORK/portfolio"
 
-# Belt and braces: the off-limits file must not exist in the mirror.
+# Belt and braces: the off-limits file must not exist in the mirror, and no file may mention it or the moratorium.
 test ! -e "$PORTFOLIO/human_notes_not_for_ai.txt"
+if grep -rIl -i "human_notes_not_for_ai\|moratorium" "$PORTFOLIO" >/dev/null; then echo "internal instructions leaked into the portfolio:"; grep -rIl -i "human_notes_not_for_ai\|moratorium" "$PORTFOLIO"; exit 1; fi
 
 SRC_SHA="$(git -C "$SRC" rev-parse --short HEAD)"
 cat > "$PORTFOLIO/MIRROR.md" <<MD

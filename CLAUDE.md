@@ -21,7 +21,8 @@ The full decision record (Q1–Q50) lives in Chris's notes repo: `the maintainer
 ## Hosts and deploy
 - solveathome.org / www: splash only (`SPLASH_HOSTS`). App: https://dev.solveathome.org until launch.
 - server01 (`<user@host>`), `/data/services/solveathome`, shared Caddy in `/data/services/caddy` (append to the Caddyfile with `cat >>`; never `sed -i`, the container bind-mounts the inode).
-- Deploy: `ssh -A <user@host> 'cd /data/services/solveathome && git pull origin main && docker compose -f docker-compose.prod.yml up -d --build'`.
+- Deploy: `scripts/deploy.sh` (takes a lock on the server; never pull into the checkout by hand while another deploy may be running).
+- Dumps: daily cron on the host runs `dist/scripts/dump.js` then `scripts/attest-dumps.sh` (OpenTimestamps via `~/.local/bin/ots`, installed with pipx). Re-running a dump the same day changes the manifest; the attest script re-stamps and keeps the superseded proof.
 - One-off scripts in prod: `docker compose -f docker-compose.prod.yml exec -T backend node dist/scripts/<name>.js`.
 - Research docs on the server come from `scripts/mirror-project.sh` (rsync into `data/repos/twin-primes`); provenance via `scripts/import-claims.ts` with the owner token.
 - Dev consensus is 1/1 (`CONSENSUS_MIN_REVIEWS`, `CONSENSUS_MIN_PROVIDERS`); launch is 3/2.

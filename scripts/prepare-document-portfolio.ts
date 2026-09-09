@@ -23,6 +23,24 @@ const linkEdition = (path: string, text: string) => {
   const urls = externalSources(text);
   return `# ${title}\n\n## Public source guide\n\nThis working note is flagged as including a full source reproduction. This public edition provides the project's summary and source references; the full working note stays in the local research repository. Researchers may consult and cite local sources without uploading them.\n\n${meta.question ? `**Research question:** ${safeSummary(meta.question)}\n\n` : ""}${meta.verdict ? `**Recorded assessment:** ${safeSummary(meta.verdict)}\n\n` : ""}This is a source guide, not the full derivation or an additional research result.\n\n## Local working-note reference\n\n- Repository: project research working material\n- Relative path: \`${path}\`\n- SHA-256 of the original working note: \`${sha256(text)}\`\n- Access: local-only; the original is not hosted here\n\nThis reference identifies the note used for this edition. It does not establish independent verification or rights to redistribute the sources it cites.\n\n## External sources\n\n${urls.length ? urls.map((url, i) => `${i + 1}. [${new URL(url).hostname.replace(/^www\./, "")} — source ${i + 1}](<${url}>)`).join("\n") : "No public source URL was recorded. The local working-note reference above remains a citation; checking its evidence requires access to that repository and its cited sources."}\n`;
 };
+/** Root guidance files carry repository-internal instructions (the publication moratorium, the off-limits notes file). The public edition drops those paragraphs and bullets and says so. */
+const INTERNAL = /moratorium|human_notes_not_for_ai/i;
+const publicEdition = (text: string) => {
+  const out: string[] = [];
+  for (const block of text.split(/\n{2,}/)) {
+    const lines = block.split("\n");
+    if (lines.some(l => /^\s*[-*] /.test(l))) {
+      const items: string[][] = [];
+      for (const l of lines) { if (/^\s*[-*] /.test(l) || items.length === 0) items.push([l]); else items[items.length - 1].push(l); }
+      const kept = items.filter(it => !INTERNAL.test(it.join("\n"))).map(it => it.join("\n"));
+      if (kept.length) out.push(kept.join("\n"));
+    } else if (!INTERNAL.test(block)) out.push(block);
+  }
+  let body = out.join("\n\n");
+  body = body.replace(/^(#\s.+\n)/, "$1\n> Public mirror edition: repository-internal working instructions were removed. See MIRROR.md.\n");
+  if (INTERNAL.test(body)) throw new Error("public edition still carries internal instructions");
+  return body;
+};
 const visit = (dir: string, prefix = "") => {
   for (const name of readdirSync(dir).sort()) {
     if (name.startsWith(".") || name === "human_notes_not_for_ai.txt" || /^(node_modules|vendor|third[-_]party|downloads?|source[-_]copies|book-ch5-6)$/i.test(name)) { excluded++; continue; }
@@ -35,6 +53,7 @@ const visit = (dir: string, prefix = "") => {
     const text = bytes.toString("utf8");
     if (path.endsWith(".md") && needsSourceReview(text)) { write(path, linkEdition(path, text), "source-links"); linked++; }
     else if (!path.endsWith(".ots") && needsSourceReview(text)) { excluded++; }
+    else if (prefix === "" && /^(CLAUDE|AGENTS|README)\.md$/.test(name)) write(path, publicEdition(text), "project");
     else write(path, bytes, "project");
   }
 };
