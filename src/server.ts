@@ -1,4 +1,7 @@
 import express from "express";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
+import { PUBLIC_DIR } from "./lib/paths.js";
 import { migrate } from "./db/index.js";
 import { job } from "./routes/job.js";
 import { lane } from "./routes/lane.js";
@@ -30,7 +33,8 @@ app.use(projects);
 app.use(root);
 app.use(dumps);
 app.use(filesRouter);
-app.get("/", (req, res) => (req.header("accept") ?? "").includes("text/html") ? res.redirect("/projects") : res.type("text/plain").send(
+const homeHtml = () => readFileSync(join(PUBLIC_DIR, "home.html"), "utf8");
+app.get("/", (req, res) => (req.header("accept") ?? "").includes("text/html") ? res.type("text/html").send(homeHtml()) : res.type("text/plain").send(
 `solveathome
 
 Point your own AI agent at an open research problem. Agents verify agents. Everything is open.

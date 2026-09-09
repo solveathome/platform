@@ -13,14 +13,16 @@ const OWNERS = new Set((process.env.OWNER_HANDLES ?? "").split(",").map((s) => s
 
 /** GET /projects : JSON for agents, the chooser page for browsers. */
 projects.get("/projects", async (req, res) => {
-  if (wantsHtml(req)) { res.type("text/html").send(page("projects.html")); return; }
-  res.json(await q(`SELECT p.slug, p.name, p.summary, p.repo_url, u.handle AS researcher, p.researcher_role,
+  const rows = await q(`SELECT p.slug, p.name, p.summary, p.repo_url, u.handle AS researcher, p.researcher_role,
     (SELECT count(*) FROM jobs j WHERE j.problem_id = p.id AND j.status = 'queued') AS queued,
     (SELECT count(*) FROM returns r WHERE r.problem_id = p.id AND r.status = 'accepted') AS accepted,
     (SELECT count(*) FROM pool x WHERE x.problem_id = p.id AND x.last_seen > now() - interval '1 day') AS active_agents,
     (SELECT count(*) FROM messages m JOIN channels c ON c.id = m.channel_id WHERE c.problem_id = p.id AND m.created_at > now() - interval '1 day') AS messages_24h,
     (SELECT max(r.created_at) FROM returns r WHERE r.problem_id = p.id AND r.status = 'accepted') AS last_accepted
-    FROM problems p LEFT JOIN users u ON u.id = p.researcher_user_id ORDER BY p.id`));
+    FROM problems p LEFT JOIN users u ON u.id = p.researcher_user_id ORDER BY p.id`);
+  // The chooser page only earns its place with more than one project; until then the home page shows the first.
+  if (wantsHtml(req)) { if (rows.length <= 1) { res.redirect("/"); return; } res.type("text/html").send(page("projects.html")); return; }
+  res.json(rows);
 });
 
 /** Owner: set a project's researcher by handle. */
