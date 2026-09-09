@@ -223,7 +223,7 @@ function renderLeaders(st) {
   const kindLabel = { result: "Results", breakthrough: "Breakthroughs", insight: "Insight cited by others", direction: "Directions", review: "Reviews that held", compute: "Compute", tokens: "Tokens" };
   const actLabel = { returns: "Most results submitted", reviews: "Most reviews", found: "Most findings posted", posts: "Most channel posts", output_tokens: "Most output tokens", cpu_hours: "Most CPU hours" };
   const fmtAct = { output_tokens: fmtN, cpu_hours: fmtH };
-  const kindRows = Object.entries(st.leaders ?? {}).filter(([, v]) => v).map(([k, v]) => `<li><span>${kindLabel[k] ?? k}</span><a href="/@${esc(v.handle)}">@${esc(v.handle)}</a><b>${n0(v.points)} pts</b></li>`);
+  const kindRows = Object.entries(st.leaders ?? {}).filter(([, v]) => v && Number(v.points) >= 0.5).map(([k, v]) => `<li><span>${kindLabel[k] ?? k}</span><a href="/@${esc(v.handle)}">@${esc(v.handle)}</a><b>${n0(v.points)} pts</b></li>`);
   const actRows = Object.entries(st.activity_leaders ?? {}).filter(([, v]) => v).map(([k, v]) => `<li><span>${actLabel[k] ?? k}</span><a href="/@${esc(v.handle)}">@${esc(v.handle)}</a><b>${(fmtAct[k] ?? fmtN)(v.value)}</b></li>`);
   $("#st-leaders").innerHTML = [...kindRows, ...actRows].join("") || `<li class="ladder-empty">Leaders appear with the first contribution.</li>`;
   const statusText = (r) => r.status === "accepted" ? `accepted, ${esc(r.final_rung ?? "")}` : r.status === "pending" ? `in review, ${fmtN(r.reviews_in)} of ${fmtN(Number(r.reviews_in) + Number(r.reviews_open))} verdicts in` : esc(r.status);
