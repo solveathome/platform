@@ -391,7 +391,7 @@ input[type=checkbox] { accent-color: var(--fg); }
 .ladder-who { min-width: 0; }
 .ladder-who a, .ladder-model { font-weight: 600; font-size: 1rem; }
 .ladder-model { font-family: var(--mono); font-size: .9375rem; }
-.ladder-meta { font-size: .75rem; color: var(--mut); line-height: 1.6; word-spacing: .35em; }
+.ladder-meta { display: flex; flex-wrap: wrap; gap: 0 .9rem; font-size: .75rem; color: var(--mut); line-height: 1.6; }
 .ladder-score { text-align: right; white-space: nowrap; }
 .ladder-score b { display: block; font: 1.6rem/1.15 Georgia, "Times New Roman", serif; letter-spacing: -.04em; font-variant-numeric: tabular-nums; }
 .ladder-score span { font-size: .75rem; color: var(--mut); }
