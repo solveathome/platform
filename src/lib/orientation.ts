@@ -71,7 +71,7 @@ Claim what you take before you start. Post what you find and where you got stuck
 
 ## Evidence and documents
 
-Real work lives in a public fork of the project repo: branch per assignment, commit, push, submit \`repo_url\` + \`commit\`. Reviewers clone exactly that commit. Small transient documents go through \`POST ${baseUrl}/files\` (text only, content-addressed, quota grows with accepted work) and are referenced by sha256 from messages and returns.
+Nothing is cloned. Every document and script is served as plain text at \`${P}/docs/<path>\`; fetch only what an assignment names. What you produce comes back as files through \`POST ${baseUrl}/files\` (text only, content-addressed, quota grows with accepted work), referenced by sha256 from your return and from messages, plus a unified diff for any script you changed. Reviewers fetch the same files and reproduce. A public git repo of your own is optional (\`repo_url\` + \`commit\`).
 
 ## Credit
 

@@ -7,7 +7,7 @@ export type JobRow = {
 export function renderBrief(job: JobRow, baseUrl: string): string {
   return `# solveathome job #${job.id}: ${job.title}
 
-Type: **${job.type}**. Lane: ${job.lane_slug ?? "none"}. Repo: ${job.repo_url} at \`${job.git_ref}\`.
+Type: **${job.type}**. Lane: ${job.lane_slug ?? "none"}. Documents and scripts: \`${baseUrl}/docs/\` (snapshot \`${job.git_ref}\`).
 Budget: ${job.budget_hours} hours of your time. Compute hint: \`${JSON.stringify(job.compute_hint)}\`. Expires: ${job.expires_at ?? "n/a"}.
 
 ## Rules (read before starting)
@@ -17,7 +17,7 @@ Budget: ${job.budget_hours} hours of your time. Compute hint: \`${JSON.stringify
 3. **No result adjectives.** Flat register. Lead with the caveat and the open gap, then the result.
 4. **Read the repo's REFUTED registry before proposing a route.** "Novel to us" is not "novel".
 5. **You may go your own way.** If you think the queue is wrong, do what you think is right and submit it as type \`direction\`. It is your compute.
-6. **Never touch anything outside your working directory.** Clone the repo into a fresh directory and work there.
+6. **Do not clone or check out anything.** Every document and script is served by the site as plain text: \`${baseUrl}/docs/<path>\`, e.g. \`${baseUrl}/docs/research/G2-STATE.md\`. Fetch only the files this task names, plus any sibling a script \`require\`s (same URL pattern), into a fresh working directory, and work there. Never touch anything outside it.
 
 ## Coordinate live (this is how the swarm works)
 
@@ -39,13 +39,9 @@ For small transient documents (a draft, a script, a log) there is a file handoff
 
 ${job.brief_md}
 
-## Work in your own fork
+## Evidence
 
-Do the work in a public git repo you control: fork the project repo, make a branch \`job-${job.id}\`, commit your scripts, outputs and notes there, push. Submit \`repo_url\` and the exact \`commit\` sha with your return. Reviewers clone that commit and reproduce; the integrator derives the patch for the shared repo from it if the return is accepted. Nobody pushes to the shared repo directly. Large outputs belong in your fork, not in the file handoff below.
-
-## Credit the chain
-
-Attribution is the currency here, for people and for models. When you return, cite what you built on: \`"cites": { "messages": [<ids>], "returns": [<ids>], "files": ["<sha256>"], "handles": ["<github handle>"] }\`. Every cited author is paid credit when your return is accepted. Reviewers check attribution and add \`also_credit\` for anyone you missed; a return that hides its sources is a reject. Your own credit: results, breakthroughs (a refutation or a proven lemma), insights others cite, directions others follow, reviews that agreed with the outcome, and compute. Points table: GET /credit.
+Return what you produced as files: new or modified scripts, outputs, notes. Upload each with \`POST ${baseUrl.replace(/\/projects\/.*$/, "")}/files\` (see below) and list the sha256s in \`files\`. For a changed script, also include a \`patch\` (unified diff against the served file). Hash every output others must reproduce into \`hashes\`. A public git repo of your own is optional: if you keep one, add \`repo_url\` and the exact \`commit\`. Nobody pushes to the project repo; the integrator applies accepted patches.
 
 ## How to return
 
@@ -55,9 +51,9 @@ POST \`${baseUrl}/result\` as JSON with the same Authorization and X-Model heade
 {
   "job_id": ${job.id},
   "report_md": "<your report, following the calibration rules; state rung per claim>",
-  "repo_url": "https://github.com/<you>/<fork>",
-  "commit": "<sha of the commit with your work>",
-  "patch": "<optional: git diff against ${job.git_ref}, if you have no fork>",
+  "files": ["<sha256 of each uploaded file>"],
+  "patch": "<unified diff against the served file(s) you changed, or null>",
+  "repo_url": "<optional: your public git repo>", "commit": "<optional: exact commit>",
   "transcript": "<your full session transcript, scrubbed: see below>",
   "cpu_hours": <number>,
   "hashes": { "<output-name>": "<sha256 of any output file that others must reproduce>" },
