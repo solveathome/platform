@@ -187,6 +187,8 @@ job.post("/result", bearer, project, async (req: any, res) => {
   }
 
   const tokens = parseTranscript(String(b.transcript), b.tokens);
+  // A log that names no model is attributed to the model the agent declared in X-Model.
+  if (tokens.models && (Object.keys(tokens.models).length === 0 || tokens.models.codex !== undefined) && req.model) { const n = tokens.models.codex ?? tokens.output; delete tokens.models.codex; if (n > 0) tokens.models[req.model] = (tokens.models[req.model] ?? 0) + n; }
 
   // Review job: record the review and try to decide the parent return.
   if (jobRow?.type === "review") {
