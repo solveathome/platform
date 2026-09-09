@@ -13,7 +13,7 @@
   section { background:var(--card); border:1px solid var(--line); border-radius:10px; padding:1rem 1.25rem; }
   h1 { margin:.2rem 0 .4rem; font-size:1.6rem; } h2 { font-size:1rem; margin:0 0 .6rem; color:var(--mut); font-weight:600; text-transform:uppercase; letter-spacing:.04em; }
   .tiles { display:flex; flex-wrap:wrap; gap:.6rem; } .tile { border:1px solid var(--line); border-radius:8px; padding:.5rem .8rem; min-width:7rem; } .tile b { display:block; font-size:1.4rem; font-weight:600; } .tile span { color:var(--mut); font-size:.85rem; }
-  table { width:100%; border-collapse:collapse; font-size:.92rem; } th, td { text-align:left; padding:.35rem .4rem; border-bottom:1px solid var(--line); } th { color:var(--mut); }
+  table { width:100%; border-collapse:collapse; font-size:.92rem; } th, td { text-align:left; padding:.35rem .4rem; border-bottom:1px solid var(--line); } th { color:var(--mut); } td.num, th.num { text-align:right; }
   .muted { color:var(--mut); } a { color:var(--acc); }
 </style>
 </head>
@@ -21,10 +21,12 @@
 <header><a href="/projects">solveathome</a><span class="muted">/ @__HANDLE__</span></header>
 <main>
   <section><h1>@__HANDLE__</h1><p class="muted" id="since"></p>
+    <h2>Credit</h2><div class="tiles" id="credit"></div>
     <h2>Agent time</h2><div class="tiles" id="agent"></div>
     <h2 style="margin-top:1rem">Compute</h2><div class="tiles" id="compute"></div>
     <h2 style="margin-top:1rem">Research input</h2><div class="tiles" id="research"></div><div id="lanes"></div>
   </section>
+  <section><h2>Credit ledger</h2><table id="ledger"><thead><tr><th>When</th><th>Kind</th><th class="num">Points</th><th>Model</th><th>Note</th></tr></thead><tbody></tbody></table></section>
   <section><h2>Recent returns</h2><table id="recent"><thead><tr><th>#</th><th>Project</th><th>Type</th><th>Status</th><th>Rung</th></tr></thead><tbody></tbody></table></section>
 </main>
 <script>
@@ -33,6 +35,9 @@ const tiles = (el, pairs) => document.querySelector(el).innerHTML = pairs.map(([
 fetch(location.pathname, { headers: { accept: "application/json" } }).then((r) => r.json()).then((d) => {
   if (d.error) { document.querySelector("main").innerHTML = `<section><p>No such contributor.</p></section>`; return; }
   document.querySelector("#since").textContent = `Contributor since ${new Date(d.contributor.created_at).toISOString().slice(0,10)} · review weight ${Number(d.contributor.score ?? 1).toFixed(2)}`;
+  const bk = d.credit?.by_kind ?? {};
+  tiles("#credit", [["total", Number(d.credit?.total ?? 0).toFixed(0)], ["insight", Number(bk.insight ?? 0).toFixed(0)], ["breakthrough", Number(bk.breakthrough ?? 0).toFixed(0)], ["results", Number(bk.result ?? 0).toFixed(0)], ["direction", Number(bk.direction ?? 0).toFixed(0)], ["review", Number(bk.review ?? 0).toFixed(0)], ["compute", Number(bk.compute ?? 0).toFixed(0)]]);
+  document.querySelector("#ledger tbody").innerHTML = (d.credit?.ledger ?? []).map((c) => `<tr><td class="muted">${new Date(c.created_at).toISOString().slice(0,10)}</td><td>${esc(c.kind)}</td><td class="num">${Number(c.points).toFixed(0)}</td><td class="muted">${esc(c.model ?? "")}</td><td>${esc(c.note)}</td></tr>`).join("") || `<tr><td colspan="5" class="muted">no credit yet</td></tr>`;
   tiles("#agent", [["accepted", d.agent_time.accepted], ["rejected", d.agent_time.rejected], ["reviews agreed", d.agent_time.review_agree], ["reviews disagreed", d.agent_time.review_disagree]]);
   tiles("#compute", [["CPU hours", Number(d.compute.cpu_hours ?? 0).toFixed(1)]]);
   tiles("#research", [["directions accepted", d.research_input.directions_accepted]]);

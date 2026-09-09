@@ -4,6 +4,7 @@ import { bearer, optionalAuth } from "../lib/auth.js";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { PUBLIC_DIR } from "../lib/paths.js";
+import { leaderboard, type Window } from "../lib/credit.js";
 
 const page = (name: string) => readFileSync(join(PUBLIC_DIR, name), "utf8");
 const wantsHtml = (req: any) => (req.header("accept") ?? "").includes("text/html");
@@ -52,6 +53,21 @@ board.get("/board", async (req, res) => {
   res.json({ project: pub, rungs, lanes, queue, health, recent, contributors });
 });
 
+/** GET /projects/:slug/leaderboard?window=all|30d|7d */
+board.get("/leaderboard", async (req: any, res) => {
+  const p = await one(`SELECT id FROM problems WHERE slug = $1`, [req.params.slug]);
+  if (!p) { res.status(404).json({ error: "unknown project" }); return; }
+  const w = (["all", "30d", "7d"].includes(String(req.query.window)) ? String(req.query.window) : "all") as Window;
+  res.json(await leaderboard(Number(p.id), w));
+});
+/** GET /leaderboard?window= : across all projects. */
+root.get("/leaderboard", async (req, res) => {
+  const w = (["all", "30d", "7d"].includes(String(req.query.window)) ? String(req.query.window) : "all") as Window;
+  res.json(await leaderboard(null, w));
+});
+/** GET /credit : the points table. */
+root.get("/credit", async (_req, res) => { res.json((await leaderboard(null, "all", 1)).points); });
+
 /** GET /projects : all projects with headline counts. */
 root.get("/projects", async (_req, res) => {
   res.json(await q(`SELECT p.slug, p.name, p.repo_url,
@@ -68,8 +84,10 @@ root.get("/@:handle", async (req, res) => {
   if (!u) { res.status(404).json({ error: "no such contributor" }); return; }
   const recent = await q(`SELECT r.id, p.slug AS project, r.type, r.status, r.final_rung, r.created_at FROM returns r JOIN problems p ON p.id = r.problem_id WHERE r.user_id = $1 ORDER BY r.id DESC LIMIT 50`, [u.id]);
   const lanes = await q(`SELECT p.slug AS project, l.slug, l.title FROM lanes l JOIN problems p ON p.id = l.problem_id WHERE l.origin_user_id = $1 ORDER BY l.id`, [u.id]);
+  const ledger = await q(`SELECT c.kind, c.points, c.model, c.source_type, c.source_id, c.note, c.created_at FROM credits c WHERE c.user_id = $1 ORDER BY c.id DESC LIMIT 100`, [u.id]);
+  const totals = await q(`SELECT kind, sum(points) AS points FROM credits WHERE user_id = $1 GROUP BY kind`, [u.id]);
   const { id: _omit, ...pub } = u;
-  res.json({ contributor: pub, agent_time: { accepted: u.accepted, rejected: u.rejected, review_agree: u.review_agree, review_disagree: u.review_disagree },
+  res.json({ contributor: pub, credit: { total: totals.reduce((s: number, t: any) => s + Number(t.points), 0), by_kind: Object.fromEntries(totals.map((t: any) => [t.kind, Number(t.points)])), ledger }, agent_time: { accepted: u.accepted, rejected: u.rejected, review_agree: u.review_agree, review_disagree: u.review_disagree },
              compute: { cpu_hours: u.cpu_hours }, research_input: { directions_accepted: u.directions_accepted, lanes }, recent });
 });
 

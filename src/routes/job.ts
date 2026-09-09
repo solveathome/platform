@@ -5,6 +5,7 @@ import { renderBrief, type JobRow } from "../lib/brief.js";
 import { decide, MAX_REVIEWS, MIN_REVIEWS } from "../lib/consensus.js";
 import * as reputation from "../lib/reputation.js";
 import * as files from "../lib/files.js";
+import * as credit from "../lib/credit.js";
 
 export const job = Router({ mergeParams: true });
 const BASE = () => process.env.BASE_URL ?? "http://localhost:8600";
@@ -96,9 +97,9 @@ job.post("/result", bearer, project, async (req: any, res) => {
   if (jobRow?.type === "review") {
     if (!["accept", "reject"].includes(b.verdict)) { res.status(400).json({ error: "verdict must be accept|reject" }); return; }
     const w = await reputation.score(uid);
-    await q(`INSERT INTO reviews (return_id, review_job_id, user_id, model, provider, verdict, rung, notes_md, weight)
-             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
-      [jobRow.parent_return_id, jobRow.id, uid, req.model ?? "unknown", req.provider ?? "unknown", b.verdict, b.rung ?? null, b.notes_md ?? b.report_md ?? "", w]);
+    await q(`INSERT INTO reviews (return_id, review_job_id, user_id, model, provider, verdict, rung, notes_md, weight, also_credit)
+             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`,
+      [jobRow.parent_return_id, jobRow.id, uid, req.model ?? "unknown", req.provider ?? "unknown", b.verdict, b.rung ?? null, b.notes_md ?? b.report_md ?? "", w, b.also_credit && typeof b.also_credit === "object" ? JSON.stringify(b.also_credit) : null]);
     await q(`UPDATE jobs SET status = 'returned' WHERE id = $1`, [jobRow.id]);
     const outcome = await resolveReturn(Number(jobRow.parent_return_id));
     res.json({ ok: true, review_of: jobRow.parent_return_id, outcome });
@@ -125,6 +126,7 @@ job.post("/result", bearer, project, async (req: any, res) => {
      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15) RETURNING id`,
     [jobRow?.id ?? null, problem.id, laneId, jobRow?.type ?? "direction", uid, req.model ?? "unknown", req.provider ?? "unknown",
      b.report_md, b.patch ?? null, b.transcript, Number(b.cpu_hours ?? 0), b.hashes ?? {}, b.author_rung ?? null, repoUrl, commit]);
+  if (b.cites && typeof b.cites === "object") await q(`UPDATE returns SET cites = $2 WHERE id = $1`, [ret!.id, JSON.stringify(b.cites)]);
   if (jobRow?.type === "curate") {
     if (!b.decision || typeof b.decision !== "object") { res.status(400).json({ error: "curate returns need a decision object" }); return; }
     await q(`UPDATE returns SET decision = $2 WHERE id = $1`, [ret!.id, JSON.stringify(b.decision)]);
@@ -146,15 +148,15 @@ export async function spawnReviews(returnId: number, problemId: number, laneId: 
     await q(`INSERT INTO jobs (problem_id, lane_id, type, title, brief_md, min_tier, budget_hours, parent_return_id)
              VALUES ($1,$2,'review',$3,$4,1,1,$5)`,
       [problemId, laneId, `Review return #${returnId}`,
-       `Review return #${returnId}. Fetch it at GET <project base>/return/${returnId} (same headers; the project base is the URL you fetched this job from, minus /job). Read the brief it answered, the report, the patch and the transcript.\n\nYour job: try to break it. If the return names a repo_url and commit, clone exactly that commit and reproduce there; that is the author's evidence. Reproduce anything reproducible. Check every claimed rung against the ladder; assign the rung you can defend, not the author's. Check the REFUTED registry for prior closures.\n\nReturn: { "job_id": <this job>, "verdict": "accept" | "reject", "rung": "<your rung>", "notes_md": "<what you checked, what failed, what would falsify>", "transcript": "<scrubbed>" }`,
+       `Review return #${returnId}. Fetch it at GET <project base>/return/${returnId} (same headers; the project base is the URL you fetched this job from, minus /job). Read the brief it answered, the report, the patch and the transcript.\n\nYour job: try to break it. If the return names a repo_url and commit, clone exactly that commit and reproduce there; that is the author's evidence. Reproduce anything reproducible. Check every claimed rung against the ladder; assign the rung you can defend, not the author's. Check the REFUTED registry for prior closures.\n\nCheck attribution too: did the author cite the messages, returns, files and people they built on? Add "also_credit" with anything missing; a return that hides its sources is a reject.\n\nReturn: { "job_id": <this job>, "verdict": "accept" | "reject", "rung": "<your rung>", "notes_md": "<what you checked, what failed, what would falsify>", "also_credit": { "messages": [], "returns": [], "files": [], "handles": [] }, "transcript": "<scrubbed>" }`,
        returnId]);
   }
 }
 
 /** Apply the consensus rule to a return; escalate or resolve. */
 export async function resolveReturn(returnId: number): Promise<string> {
-  const votes = await q<{ verdict: "accept" | "reject"; weight: string; provider: string; rung: string | null; user_id: number }>(
-    `SELECT verdict, weight, provider, rung, user_id FROM reviews WHERE return_id = $1`, [returnId]);
+  const votes = await q<{ verdict: "accept" | "reject"; weight: string; provider: string; rung: string | null; user_id: number; model: string; also_credit: any }>(
+    `SELECT verdict, weight, provider, rung, user_id, model, also_credit FROM reviews WHERE return_id = $1`, [returnId]);
   const d = decide(votes.map((v) => ({ ...v, weight: Number(v.weight) })));
   const ret = await one(`SELECT * FROM returns WHERE id = $1`, [returnId]);
   if (d.status === "pending") {
@@ -173,6 +175,7 @@ export async function resolveReturn(returnId: number): Promise<string> {
       await reputation.onReviewScored(Number(v.user_id), agreed);
     }
     if (d.status === "accepted" && ret.type === "direction") await openLaneFromDirection(ret);
+    if (d.status === "accepted") await credit.payAcceptedReturn({ ...ret, status: "accepted", final_rung: d.rung }, votes);
     if (d.status === "accepted" && ret.type === "curate" && ret.decision) await files.applyCuration(Number(ret.id), Number(ret.user_id), ret.decision);
   }
   return d.status;

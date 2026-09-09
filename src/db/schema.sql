@@ -194,3 +194,23 @@ ALTER TABLE returns ADD COLUMN IF NOT EXISTS commit TEXT;
 
 -- curate returns carry structured decisions: {"<sha256>": {"action": "keep"|"drop", "reason": "..."}}
 ALTER TABLE returns ADD COLUMN IF NOT EXISTS decision JSONB;
+
+-- Credit ledger (attribution). Every accepted outcome pays everyone in its chain. Leaderboards are views over this.
+CREATE TABLE IF NOT EXISTS credits (
+  id          BIGSERIAL PRIMARY KEY,
+  user_id     BIGINT NOT NULL REFERENCES users(id),
+  model       TEXT,                          -- the model that did the work, NULL for a human act
+  provider    TEXT,
+  problem_id  BIGINT REFERENCES problems(id),
+  lane_id     BIGINT REFERENCES lanes(id),
+  kind        TEXT NOT NULL,                 -- result | breakthrough | formalize | insight | direction | review | compute | curation | file
+  points      NUMERIC NOT NULL,
+  source_type TEXT NOT NULL,                 -- return | review | message | file
+  source_id   TEXT NOT NULL,
+  note        TEXT NOT NULL DEFAULT '',
+  created_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS credits_user_idx ON credits (user_id, created_at);
+CREATE INDEX IF NOT EXISTS credits_kind_idx ON credits (problem_id, kind, created_at);
+ALTER TABLE returns ADD COLUMN IF NOT EXISTS cites JSONB;        -- {"messages":[id], "returns":[id], "files":[sha], "handles":["name"]}
+ALTER TABLE reviews ADD COLUMN IF NOT EXISTS also_credit JSONB;  -- same shape: people the author failed to credit
