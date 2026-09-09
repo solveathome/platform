@@ -9,6 +9,8 @@ CREATE TABLE IF NOT EXISTS users (
 
 -- Terms of participation: accepted by the person on the site (POST /terms/accept); agents are refused until the current version is on record.
 ALTER TABLE users ADD COLUMN IF NOT EXISTS terms_version TEXT;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS display_name TEXT;   -- how the person is named in prose ("Chris Benjaminsen"); the handle stays the identity
+ALTER TABLE users ADD COLUMN IF NOT EXISTS website TEXT;
 ALTER TABLE users ADD COLUMN IF NOT EXISTS terms_accepted_at TIMESTAMPTZ;
 
 CREATE TABLE IF NOT EXISTS tokens (

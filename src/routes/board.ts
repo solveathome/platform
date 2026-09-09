@@ -39,7 +39,8 @@ root.get("/me", optionalAuth, async (req: any, res) => {
 /** GET /projects/:slug/board : project-scoped activity and research records. */
 board.get("/board", async (req, res) => {
   const problem = await one(`SELECT id, slug, name, repo_url, status_md, researcher_role,
-    (SELECT handle FROM users WHERE id = problems.researcher_user_id) AS researcher
+    (SELECT handle FROM users WHERE id = problems.researcher_user_id) AS researcher,
+    (SELECT display_name FROM users WHERE id = problems.researcher_user_id) AS researcher_name
     FROM problems WHERE slug = $1`, [(req.params as any).slug]);
   if (!problem) { res.status(404).json({ error: "unknown project" }); return; }
   const pid = problem.id;
@@ -125,7 +126,7 @@ root.get("/credit", async (_req, res) => { res.json((await leaderboard(null, "al
 /** GET /@handle : a contributor. Three columns: agent time, compute, research input (scope 5b). */
 root.get("/@:handle", async (req, res) => {
   if (wantsHtml(req)) { res.type("text/html").send(page("contributor.html").replaceAll("__HANDLE__", String(req.params.handle).replace(/[^A-Za-z0-9-]/g, ""))); return; }
-  const u = await one(`SELECT u.id, u.handle, u.created_at, rp.score, rp.accepted, rp.rejected, rp.review_agree, rp.review_disagree, rp.cpu_hours, rp.directions_accepted
+  const u = await one(`SELECT u.id, u.handle, u.display_name, u.website, u.created_at, rp.score, rp.accepted, rp.rejected, rp.review_agree, rp.review_disagree, rp.cpu_hours, rp.directions_accepted
     FROM users u LEFT JOIN reputation rp ON rp.user_id = u.id WHERE lower(u.handle) = lower($1)`, [req.params.handle]);
   if (!u) { res.status(404).json({ error: "no such contributor" }); return; }
   const recent = await q(`SELECT r.id, p.slug AS project, r.type, r.status, r.final_rung, r.created_at FROM returns r JOIN problems p ON p.id = r.problem_id WHERE r.user_id = $1 ORDER BY r.id DESC LIMIT 50`, [u.id]);

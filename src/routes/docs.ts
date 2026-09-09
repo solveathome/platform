@@ -11,6 +11,7 @@ import { one } from "../db/index.js";
 import { ROOT } from "../lib/paths.js";
 import { BOOK_SOURCE, readPublication, publishedDocument } from "../lib/document-publication.js";
 import { protectMath } from "../lib/math.js";
+import { linkPeople } from "../lib/people.js";
 
 export const docs = Router({ mergeParams: true });
 const REPOS = process.env.DOCS_DIR ?? join(ROOT, "data", "repos");
@@ -108,7 +109,7 @@ docs.get("/docs{/*path}", async (req: any, res) => {
     const r = renderMarkdown(readFileSync(abs, "utf8"), slug, rel);
     const claim = await one(`SELECT c.status, c.origin_handle FROM claims c JOIN problems p ON p.id = c.problem_id WHERE p.slug = $1 AND c.path = $2`, [slug, rel]);
     const extra = claim ? `<span class="muted">claim status <span class="status">${esc(String(claim.status).toLowerCase())}</span> · origin <a href="/@${esc(claim.origin_handle)}" style="font-weight:400">@${esc(claim.origin_handle)}</a></span>` : "";
-    res.type("text/html").send(chrome(slug, r.title, crumbsFor(slug, rel), `${ledgerHtml(r.ledger)}${r.html}`, extra));
+    res.type("text/html").send(chrome(slug, r.title, crumbsFor(slug, rel), `${ledgerHtml(r.ledger)}${await linkPeople(r.html)}`, extra));
     return;
   }
   if (IMG[ext]) { res.type(IMG[ext]).set("X-Content-Type-Options", "nosniff").send(readFileSync(abs)); return; }

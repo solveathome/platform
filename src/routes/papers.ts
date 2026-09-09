@@ -11,6 +11,7 @@ import { q, one } from "../db/index.js";
 import { ROOT, PUBLIC_DIR } from "../lib/paths.js";
 import * as files from "../lib/files.js";
 import { protectMath } from "../lib/math.js";
+import { linkPeople } from "../lib/people.js";
 
 export const papers = Router({ mergeParams: true });
 const REPOS = process.env.DOCS_DIR ?? join(ROOT, "data", "repos");
@@ -49,14 +50,14 @@ papers.get("/papers/:paper", async (req: any, res) => {
   if (source === null && paper.path) { const abs = join(REPOS, p.slug, paper.path); if (existsSync(abs)) { source = readFileSync(abs, "utf8"); from = `seed version from the research mirror (${paper.path})`; } }
   if (!(req.header("accept") ?? "").includes("text/html")) { res.json({ paper, versions, reports, source_from: from, manuscript_md: source }); return; }
   const md = (t: string) => { const m = protectMath(t.replace(/<!--[\s\S]*?-->/g, "")); return m.restore(marked.parse(m.text.replace(/</g, "&lt;").replace(/>/g, "&gt;"), { gfm: true }) as string); };
-  const body = source ? md(source) : "<p class=\"muted\">No manuscript yet.</p>";
+  const body = source ? await linkPeople(md(source)) : "<p class=\"muted\">No manuscript yet.</p>";
   const page = readFileSync(join(PUBLIC_DIR, "paper.html"), "utf8");
   const meta = `<p class="paper-meta"><span class="paper-status ${esc(paper.status)}">${esc(paper.status_label)}</span>${paper.grade ? `<span>${esc(paper.grade)}</span>` : ""}${paper.version_by ? `<span>current version by @${esc(paper.version_by)}, ${esc(String(paper.version_at).slice(0, 10))}${paper.final_rung ? `, ${esc(paper.final_rung)}` : ""}</span>` : ""}<span>${esc(from)}</span></p>`;
   const vlist = versions.map((v) => `<li><a href="/projects/${esc(p.slug)}/return/${v.id}">return #${v.id}</a> by <a href="/@${esc(v.handle)}">@${esc(v.handle)}</a> (${esc(v.model)}), ${esc(String(v.created_at).slice(0, 10))}: ${esc(v.status)}${v.final_rung ? `, ${esc(v.final_rung)}` : v.author_rung ? `, claims ${esc(v.author_rung)}` : ""}</li>`).join("") || `<li class="muted">No revisions submitted yet.</li>`;
-  const rlist = reports.map((r) => `<article class="referee"><p class="paper-meta"><span class="paper-status ${r.verdict === "accept" ? "reviewed" : "draft"}">${esc(r.verdict)}${r.rung ? `, ${esc(r.rung)}` : ""}</span><span>on return #${r.return_id}</span><span>by <a href="/@${esc(r.handle)}">@${esc(r.handle)}</a> (${esc(r.model)}), ${esc(String(r.created_at).slice(0, 10))}</span></p><div class="document">${md(String(r.notes_md))}</div></article>`).join("") || `<p class="muted">No referee reports yet.</p>`;
+  const rlist = (await Promise.all(reports.map(async (r) => `<article class="referee"><p class="paper-meta"><span class="paper-status ${r.verdict === "accept" ? "reviewed" : "draft"}">${esc(r.verdict)}${r.rung ? `, ${esc(r.rung)}` : ""}</span><span>on return #${r.return_id}</span><span>by <a href="/@${esc(r.handle)}">@${esc(r.handle)}</a> (${esc(r.model)}), ${esc(String(r.created_at).slice(0, 10))}</span></p><div class="document">${await linkPeople(md(String(r.notes_md)))}</div></article>`))).join("") || `<p class="muted">No referee reports yet.</p>`;
   // Function replacers: a manuscript is full of "$$", which String.replace would otherwise read as a replacement pattern.
   const fill = (t: string, key: string, v: string) => t.split(key).join(v);
   let html = page;
-  for (const [k, v] of Object.entries({ __SLUG__: esc(p.slug), __PROJECT__: esc(p.name), __TITLE__: esc(paper.title), __META__: meta, __SUMMARY__: paper.summary_html ?? esc(paper.summary), __BODY__: body, __VERSIONS__: vlist, __REPORTS__: rlist, __PAPER__: esc(paper.slug), __OPEN_JOBS__: String(paper.open_jobs) })) html = fill(html, k, v);
+  for (const [k, v] of Object.entries({ __SLUG__: esc(p.slug), __PROJECT__: esc(p.name), __TITLE__: esc(paper.title), __META__: meta, __SUMMARY__: await linkPeople(paper.summary_html ?? esc(paper.summary)), __BODY__: body, __VERSIONS__: vlist, __REPORTS__: rlist, __PAPER__: esc(paper.slug), __OPEN_JOBS__: String(paper.open_jobs) })) html = fill(html, k, v);
   res.type("text/html").send(html);
 });

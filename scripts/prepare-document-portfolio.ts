@@ -51,12 +51,12 @@ const visit = (dir: string, prefix = "") => {
     if (!permittedDocumentPath(path)) { excluded++; continue; }
     const bytes = readFileSync(full);
     if (/^%PDF-|^PK\x03\x04/.test(bytes.subarray(0, 8).toString("latin1")) || bytes.subarray(0, 8).equals(Buffer.from([137,80,78,71,13,10,26,10]))) { excluded++; continue; }
-    const text = bytes.toString("utf8");
+    const text = bytes.toString("utf8").replace(/Chris Moltke-Benjaminsen/g, "Chris Benjaminsen").replace(/Moltke-Benjaminsen/g, "Benjaminsen");
     if (path.endsWith(".md") && needsSourceReview(text)) { write(path, linkEdition(path, text), "source-links"); linked++; }
     else if (!path.endsWith(".ots") && needsSourceReview(text)) { excluded++; }
     else if (prefix === "" && /^(CLAUDE|AGENTS|README|TODO)\.md$/.test(name)) write(path, publicEdition(text), "project");
     else if (path.endsWith(".md") && OFF_LIMITS.test(text)) write(path, publicEdition(text, OFF_LIMITS), "project");
-    else write(path, bytes, "project");
+    else write(path, path.endsWith(".md") ? text : bytes, "project");
   }
 };
 visit(source);
