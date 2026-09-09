@@ -416,3 +416,8 @@ input[type=checkbox] { accent-color: var(--fg); }
   .result-list .result-state, .result-list .result-when { grid-column: 2; }
 }
 @media (prefers-reduced-motion: no-preference) { .ladder-bar i { transition: width .5s ease-out; } }
+.ladder-me { background: var(--soft); margin: 0 -.75rem; padding-left: .75rem; padding-right: .75rem; border-top-color: transparent; }
+.ladder-you { display: inline-block; margin-left: .6rem; font: .6875rem/1.4 var(--mono); color: var(--mut); border: 1px solid var(--line); border-radius: 3px; padding: 0 .35rem; vertical-align: middle; }
+.ladder-gap { padding: .35rem 0 .35rem 2.95rem; border-top: 1px solid var(--line); color: var(--mut); font: .75rem/1.6 var(--mono); }
+.ladder-more { padding: .9rem 0 0; border-top: 1px solid var(--line); font-size: .8125rem; }
+.ladder-more a { text-decoration: underline; }

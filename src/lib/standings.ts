@@ -9,7 +9,7 @@ import { POINTS, type Window } from "./credit.js";
 
 const since = (w: Window) => w === "7d" ? "now() - interval '7 days'" : w === "30d" ? "now() - interval '30 days'" : "'epoch'::timestamptz";
 
-export async function standings(problemId: number, w: Window, limit = 100) {
+export async function standings(problemId: number, w: Window, limit = 100, meHandle: string | null = null) {
   const S = since(w);
   const P = [problemId];
   const totals = await one(`
@@ -34,7 +34,7 @@ export async function standings(problemId: number, w: Window, limit = 100) {
       (SELECT count(*) FROM jobs WHERE problem_id = $1 AND status = 'queued') AS queued,
       (SELECT count(*) FROM jobs WHERE problem_id = $1 AND status = 'assigned') AS underway`, P);
 
-  const people = await q(`
+  const peopleAll = await q(`
     WITH ret AS (
       SELECT user_id, count(*) AS submitted, count(*) FILTER (WHERE status = 'accepted') AS accepted, count(*) FILTER (WHERE status = 'pending') AS pending,
              count(*) FILTER (WHERE status = 'rejected') AS rejected, count(*) FILTER (WHERE status = 'contested') AS contested,
@@ -71,8 +71,10 @@ export async function standings(problemId: number, w: Window, limit = 100) {
     FROM ids JOIN users u ON u.id = ids.user_id
     LEFT JOIN ret ON ret.user_id = u.id LEFT JOIN rev ON rev.user_id = u.id LEFT JOIN msg ON msg.user_id = u.id LEFT JOIN cr ON cr.user_id = u.id
     LEFT JOIN reputation rp ON rp.user_id = u.id
-    ORDER BY points DESC, accepted DESC, submitted DESC, reviews DESC, output_tokens DESC, messages DESC, u.handle
-    LIMIT ${limit}`, P);
+    ORDER BY points DESC, accepted DESC, submitted DESC, reviews DESC, output_tokens DESC, messages DESC, u.handle`, P);
+  peopleAll.forEach((r, i) => { r.rank = i + 1; });
+  const people = peopleAll.slice(0, limit);
+  const me = meHandle ? peopleAll.find((r) => String(r.handle).toLowerCase() === meHandle.toLowerCase()) ?? null : null;
 
   const agents = await q(`
     WITH ret AS (
@@ -97,8 +99,8 @@ export async function standings(problemId: number, w: Window, limit = 100) {
       ret.last_return AS last_active
     FROM ids LEFT JOIN model_tiers mt ON mt.model = ids.model
     LEFT JOIN ret ON ret.model = ids.model LEFT JOIN rev ON rev.model = ids.model LEFT JOIN msg ON msg.model = ids.model LEFT JOIN cr ON cr.model = ids.model
-    ORDER BY points DESC, accepted DESC, returns DESC, output_tokens DESC, ids.model
-    LIMIT ${limit}`, P);
+    ORDER BY points DESC, accepted DESC, returns DESC, output_tokens DESC, ids.model`, P);
+  agents.forEach((r, i) => { r.rank = i + 1; });
 
   const kinds = ["result", "breakthrough", "insight", "direction", "review", "compute", "tokens"];
   const leaders: Record<string, any> = {};
@@ -106,7 +108,7 @@ export async function standings(problemId: number, w: Window, limit = 100) {
     leaders[kind] = await one(`SELECT u.handle, sum(c.points) AS points, count(*) AS events FROM credits c JOIN users u ON u.id = c.user_id
       WHERE c.problem_id = $1 AND c.kind = '${kind}' AND c.created_at >= ${S} GROUP BY u.handle ORDER BY points DESC LIMIT 1`, P) ?? null;
   }
-  const most = (key: string) => { const best = [...people].sort((a, b) => Number(b[key]) - Number(a[key]))[0]; return best && Number(best[key]) > 0 ? { handle: best.handle, value: Number(best[key]) } : null; };
+  const most = (key: string) => { const best = [...peopleAll].sort((a, b) => Number(b[key]) - Number(a[key]))[0]; return best && Number(best[key]) > 0 ? { handle: best.handle, value: Number(best[key]) } : null; };
   const activity_leaders = { returns: most("submitted"), reviews: most("reviews"), posts: most("messages"), found: most("found"), output_tokens: most("output_tokens"), cpu_hours: most("cpu_hours") };
 
   const recent = await q(`
@@ -116,5 +118,5 @@ export async function standings(problemId: number, w: Window, limit = 100) {
     FROM returns r JOIN users u ON u.id = r.user_id LEFT JOIN lanes l ON l.id = r.lane_id
     WHERE r.problem_id = $1 AND r.created_at >= ${S} ORDER BY r.id DESC LIMIT 12`, P);
 
-  return { window: w, as_of: new Date().toISOString(), totals, people, agents, leaders, activity_leaders, recent, points: POINTS };
+  return { window: w, as_of: new Date().toISOString(), totals, people, people_total: peopleAll.length, me, agents: agents.slice(0, limit), agents_total: agents.length, leaders, activity_leaders, recent, points: POINTS };
 }

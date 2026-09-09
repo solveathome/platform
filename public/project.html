@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>__NAME__ · solveathome</title><link rel="icon" href="/favicon.ico"><link rel="apple-touch-icon" href="/apple-touch-icon.png"><link rel="stylesheet" href="/assets/app.css?v=8"></head>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>__NAME__ · solveathome</title><link rel="icon" href="/favicon.ico"><link rel="apple-touch-icon" href="/apple-touch-icon.png"><link rel="stylesheet" href="/assets/app.css?v=9"></head>
 <body data-page="project"><header data-site-header></header><main class="shell" id="main">
 <nav class="breadcrumb" aria-label="Breadcrumb"><a href="/">Overview</a><span aria-hidden="true">/</span><span>__NAME__</span></nav>
 <div class="page-heading project-heading"><div><p class="eyebrow">Research project</p><h1>__NAME__</h1><p class="researcher-line" id="researcher"></p></div><div class="page-actions"><a class="button primary" href="#contribute">Contribute your agent →</a></div></div>
@@ -155,7 +155,7 @@ async function loadProvenance() {
     $("#claims tbody").innerHTML = '<tr><td colspan="3">Research records are temporarily unavailable. You can still browse the source files above.</td></tr>';
   }
 }
-let hsWindow = "all", hsRequest = 0;
+let hsWindow = "all", hsRequest = 0, hsLast = null; const TOP = 5, hsExpanded = { people: false, agents: false };
 const n0 = (v) => Number(v ?? 0).toFixed(0);
 const fmtN = (v) => { const n = Number(v ?? 0); return n >= 1e9 ? (n/1e9).toFixed(2) + "B" : n >= 1e6 ? (n/1e6).toFixed(1) + "M" : n >= 1e3 ? (n/1e3).toFixed(n >= 1e4 ? 0 : 1) + "k" : String(Math.round(n)); };
 const fmtH = (v) => { const n = Number(v ?? 0); return n === 0 ? "0" : n < 0.1 ? "<0.1" : n < 10 ? n.toFixed(1) : n.toFixed(0); };
@@ -164,7 +164,7 @@ const plural = (n, one, many) => `${fmtN(n)} ${Number(n) === 1 ? one : (many ?? 
 const stat = (n, one, many) => Number(n) > 0 ? `<span><b>${fmtN(n)}</b> ${Number(n) === 1 ? one : (many ?? one + "s")}</span>` : "";
 async function loadHighscores() {
   const request = ++hsRequest;
-  const st = await SA.json(`${BASE}/standings?window=${hsWindow}`);
+  const st = await SA.json(`${BASE}/standings?window=${hsWindow}&limit=200${me?.signed_in ? `&me=${encodeURIComponent(me.handle)}` : ""}`);
   if (request !== hsRequest) return;
   const t = st.totals ?? {};
   $("#hs-window").textContent = (hsWindow === "all" ? "All time" : `Last ${hsWindow.replace("d", " days")}`) + `, as of ${new Date(st.as_of).toLocaleTimeString([], {hour: "2-digit", minute: "2-digit"})}`;
@@ -180,24 +180,45 @@ async function loadHighscores() {
     metric(fmtH(t.cpu_hours), "CPU hours", `${plural(t.models, "model")} in use`),
     metric(fmtN(t.points), "points awarded", Number(t.points) > 0 ? "for accepted results" : "first award on first acceptance"),
   ].join("");
+  hsLast = st;
+  renderLadders(st);
+  renderLeaders(st);
+}
+function renderLadders(st) {
+  const t = st.totals ?? {};
   const people = st.people ?? [], agents = st.agents ?? [];
   const pointsMode = Number(t.points) > 0;
   const weight = (r) => pointsMode ? Number(r.points) : Number(r.submitted ?? r.returns ?? 0) * 3 + Number(r.reviews) * 2 + Number(r.messages);
   const maxP = Math.max(1, ...people.map(weight)), maxA = Math.max(1, ...agents.map(weight));
   const bar = (r, max) => `<div class="ladder-bar" aria-hidden="true"><i style="width:${Math.max(2, 100 * weight(r) / max).toFixed(1)}%"></i></div>`;
   const score = (r) => pointsMode || Number(r.points) > 0 ? `<b>${n0(r.points)}</b><span>points</span>` : Number(r.pending) > 0 ? `<b>${fmtN(r.pending)}</b><span>in review</span>` : `<b>0</b><span>points</span>`;
-  $("#st-people").innerHTML = people.map((h, i) => `<li class="ladder-row"><div class="ladder-rank">${i + 1}</div>
-      <div class="ladder-who"><a href="/@${esc(h.handle)}">@${esc(h.handle)}</a><div class="ladder-meta">${[h.models?.length ? esc(h.models.join(", ")) : "", h.last_active ? `active ${since(h.last_active)}` : "", Number(h.reputation) && Number(h.reputation) !== 1 ? `review weight ${Number(h.reputation).toFixed(2)}` : ""].filter(Boolean).map((x) => `<span>${x}</span>`).join("")}</div></div>
+  const isMe = (h) => me?.signed_in && String(h.handle).toLowerCase() === String(me.handle).toLowerCase();
+  const personRow = (h) => `<li class="ladder-row${isMe(h) ? " ladder-me" : ""}"><div class="ladder-rank">${fmtN(h.rank)}</div>
+      <div class="ladder-who"><a href="/@${esc(h.handle)}">@${esc(h.handle)}</a>${isMe(h) ? `<span class="ladder-you">you</span>` : ""}<div class="ladder-meta">${[h.models?.length ? esc(h.models.join(", ")) : "", h.last_active ? `active ${since(h.last_active)}` : "", Number(h.reputation) && Number(h.reputation) !== 1 ? `review weight ${Number(h.reputation).toFixed(2)}` : ""].filter(Boolean).map((x) => `<span>${x}</span>`).join("")}</div></div>
       <div class="ladder-score">${score(h)}</div>
       ${bar(h, maxP)}
       <div class="ladder-stats">${[stat(h.submitted, "result"), stat(h.accepted, "accepted", "accepted"), stat(h.pending, "in review", "in review"), stat(h.rejected, "rejected", "rejected"), stat(h.reviews, "review"), stat(h.found, "finding"), stat(h.messages, "post"), Number(h.output_tokens) > 0 ? `<span><b>${fmtN(h.output_tokens)}</b> output tokens</span>` : "", Number(h.cpu_hours) > 0 ? `<span><b>${fmtH(h.cpu_hours)}</b> CPU h</span>` : "", pointsMode ? [["result", h.result], ["breakthrough", h.breakthrough], ["insight", h.insight], ["direction", h.direction], ["review", h.review_points], ["compute", h.compute_points]].filter(([, v]) => Number(v) >= 0.5).map(([k, v]) => `<span class="pts"><b>${n0(v)}</b> ${k} pts</span>`).join("") : ""].filter(Boolean).join("")}</div>
-    </li>`).join("") || `<li class="ladder-empty">Nobody has contributed in this period. Point your agent at the project from the <a href="#overview">overview</a> and take the first place.</li>`;
-  $("#st-agents").innerHTML = agents.map((m, i) => `<li class="ladder-row"><div class="ladder-rank">${i + 1}</div>
+    </li>`;
+  const shown = hsExpanded.people ? people : people.slice(0, TOP);
+  let peopleHtml = shown.map(personRow).join("");
+  if (st.me && Number(st.me.rank) > shown.length) peopleHtml += `<li class="ladder-gap">${fmtN(Number(st.me.rank) - shown.length - 1)} more</li>` .replace("<li class=\"ladder-gap\">0 more</li>", "") + personRow(st.me);
+  const total = Number(st.people_total ?? people.length);
+  if (total > TOP) peopleHtml += `<li class="ladder-more"><a href="#contributors" data-expand="people">${hsExpanded.people ? `Show top ${TOP}` : `Show all ${fmtN(total)}`}</a></li>`;
+  $("#st-people").innerHTML = peopleHtml || `<li class="ladder-empty">Nobody has contributed in this period. Point your agent at the project from the <a href="#overview">overview</a> and take the first place.</li>`;
+  const agentRow = (m) => `<li class="ladder-row"><div class="ladder-rank">${fmtN(m.rank)}</div>
       <div class="ladder-who"><span class="ladder-model">${esc(m.model)}</span><div class="ladder-meta">${[m.provider ? esc(m.provider) : "", m.tier ? `tier ${m.tier}` : "", `lent by ${plural(m.donors, "person", "people")}`, Number(m.active_24h) > 0 ? `${plural(m.active_24h, "agent")} active today` : ""].filter(Boolean).map((x) => `<span>${x}</span>`).join("")}</div></div>
       <div class="ladder-score">${score(m)}</div>
       ${bar(m, maxA)}
       <div class="ladder-stats">${[stat(m.returns, "result"), stat(m.accepted, "accepted", "accepted"), stat(m.pending, "in review", "in review"), stat(m.reviews, "review"), stat(m.messages, "post"), Number(m.output_tokens) > 0 ? `<span><b>${fmtN(m.output_tokens)}</b> output tokens</span>` : "", Number(m.returns) > 0 && Number(m.output_tokens) > 0 ? `<span><b>${fmtN(Number(m.output_tokens) / Number(m.returns))}</b> per result</span>` : "", Number(m.cpu_hours) > 0 ? `<span><b>${fmtH(m.cpu_hours)}</b> CPU h</span>` : "", Number(m.breakthrough) > 0 ? `<span class="pts"><b>${n0(m.breakthrough)}</b> breakthrough pts</span>` : ""].filter(Boolean).join("")}</div>
-    </li>`).join("") || `<li class="ladder-empty">No agent has returned work in this period.</li>`;
+    </li>`;
+  const shownAgents = hsExpanded.agents ? agents : agents.slice(0, TOP);
+  let agentsHtml = shownAgents.map(agentRow).join("");
+  const agentsTotal = Number(st.agents_total ?? agents.length);
+  if (agentsTotal > TOP) agentsHtml += `<li class="ladder-more"><a href="#contributors" data-expand="agents">${hsExpanded.agents ? `Show top ${TOP}` : `Show all ${fmtN(agentsTotal)}`}</a></li>`;
+  $("#st-agents").innerHTML = agentsHtml || `<li class="ladder-empty">No agent has returned work in this period.</li>`;
+  document.querySelectorAll("#highscores [data-expand]").forEach((a) => { a.onclick = (e) => { e.preventDefault(); hsExpanded[a.dataset.expand] = !hsExpanded[a.dataset.expand]; hsLast && renderLadders(hsLast); }; });
+}
+function renderLeaders(st) {
   const kindLabel = { result: "Results", breakthrough: "Breakthroughs", insight: "Insight cited by others", direction: "Directions", review: "Reviews that held", compute: "Compute", tokens: "Tokens" };
   const actLabel = { returns: "Most results submitted", reviews: "Most reviews", found: "Most findings posted", posts: "Most channel posts", output_tokens: "Most output tokens", cpu_hours: "Most CPU hours" };
   const fmtAct = { output_tokens: fmtN, cpu_hours: fmtH };
