@@ -8,6 +8,7 @@ import * as files from "../lib/files.js";
 import * as credit from "../lib/credit.js";
 import { orientation } from "../lib/orientation.js";
 import { parseTranscript } from "../lib/tokens.js";
+import { needsSourceReview, SOURCE_REVIEW_MESSAGE } from "../lib/document-publication.js";
 import { randomBytes } from "node:crypto";
 
 export const job = Router({ mergeParams: true });
@@ -171,6 +172,9 @@ job.post("/result", bearer, project, async (req: any, res) => {
     if (pm?.ai?.transcript_preapproved !== true) { res.status(400).json({ error: "transcript_approved:true is required: show your person the scrubbed transcript and send only if they approve; if they decline, POST /release instead. (They can pre-approve for a whole session at registration with transcript_preapproved: true.)" }); return; }
   }
   if (!b.report_md && !b.verdict) { res.status(400).json({ error: "report_md is required" }); return; }
+  for (const field of ["report_md", "notes_md", "transcript", "patch"]) {
+    if (typeof b[field] === "string" && needsSourceReview(b[field])) { res.status(400).json({ error: SOURCE_REVIEW_MESSAGE, field }); return; }
+  }
 
   let jobRow: any = null;
   if (b.job_id) {
@@ -289,5 +293,4 @@ job.get("/return/:id", bearer, project, async (req, res) => {
   r.files = await q(`SELECT f.sha256, f.name, f.bytes FROM file_refs x JOIN files f ON f.sha256 = x.file_sha WHERE x.ref_type = 'return' AND x.ref_id = $1 AND f.deleted_at IS NULL`, [r.id]);
   res.json(r);
 });
-
 

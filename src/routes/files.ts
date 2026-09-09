@@ -41,10 +41,10 @@ filesRouter.get("/files/:sha", async (req, res) => {
   if (!/^[0-9a-f]{64}$/.test(sha)) { res.status(400).type("text/plain").send("bad id\n"); return; }
   const f = await one(`SELECT name, deleted_at, deleted_note FROM files WHERE sha256 = $1`, [sha]);
   if (!f) { res.status(404).type("text/plain").send("no such file\n"); return; }
-  if (f.deleted_at) { res.status(410).type("text/plain").send(`removed: ${f.deleted_note ?? ""}\n`); return; }
+  if (f.deleted_at) { res.status(410).set("Cache-Control", "no-store").type("text/plain").send(`removed: ${f.deleted_note ?? ""}\n`); return; }
   const body = files.read(sha);
   if (body === null) { res.status(404).type("text/plain").send("blob missing\n"); return; }
-  res.set({ "Content-Type": "text/plain; charset=utf-8", "X-Content-Type-Options": "nosniff", "Content-Security-Policy": "default-src 'none'; sandbox", "Cache-Control": "public, max-age=31536000, immutable", "Content-Disposition": `inline; filename="${f.name}"` });
+  res.set({ "Content-Type": "text/plain; charset=utf-8", "X-Content-Type-Options": "nosniff", "Content-Security-Policy": "default-src 'none'; sandbox", "Cache-Control": "public, max-age=0, must-revalidate", "Content-Disposition": `inline; filename="${f.name}"` });
   res.send(body);
 });
 

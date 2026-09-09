@@ -9,6 +9,7 @@ import { join, normalize, extname, dirname, posix } from "node:path";
 import { marked } from "marked";
 import { one } from "../db/index.js";
 import { ROOT } from "../lib/paths.js";
+import { BOOK_SOURCE, readPublication, publishedDocument } from "../lib/document-publication.js";
 
 export const docs = Router({ mergeParams: true });
 const REPOS = process.env.DOCS_DIR ?? join(ROOT, "data", "repos");
@@ -66,16 +67,30 @@ docs.get("/docs{/*path}", async (req: any, res) => {
   const rel = Array.isArray(req.params.path) ? req.params.path.join("/") : String(req.params.path ?? "");
   const root = join(REPOS, slug);
   if (!existsSync(root)) { res.status(404).type("text/plain").send("no documents for this project yet\n"); return; }
+  // The former book scans now resolve to the publisher, never to local bytes.
+  if (slug === "twin-primes" && /^attestation\/(?:book-ch5-6(?:\/|$)|Screenshot[\s%])/i.test(rel)) {
+    res.set("Cache-Control", "no-store").redirect(303, BOOK_SOURCE); return;
+  }
+  const publication = readPublication(root);
+  if (!publication) { res.status(503).type("text/plain").send("The document portfolio is awaiting publication review.\n"); return; }
   const abs = safePath(root, rel);
   if (!abs || !existsSync(abs)) { res.status(404).type("text/plain").send("not found\n"); return; }
   const st = statSync(abs);
+  if (!st.isDirectory() && !publishedDocument(root, rel, publication)) {
+    res.status(404).set("Cache-Control", "no-store").type("text/plain").send("This file is not part of the published document portfolio.\n"); return;
+  }
+  const visible = (name: string) => {
+    const path = posix.join(rel, name);
+    if (statSync(join(abs, name)).isDirectory()) return Object.keys(publication.files).some(file => file.startsWith(path + "/") && publishedDocument(root, file, publication));
+    return publishedDocument(root, path, publication);
+  };
   const browser = (req.header("accept") ?? "").includes("text/html");
   if (st.isDirectory() && !browser) {
-    const entries = readdirSync(abs).filter((n) => !n.startsWith(".")).sort();
+    const entries = readdirSync(abs).filter((n) => !n.startsWith(".") && visible(n)).sort();
     res.type("text/plain").send(entries.map((n) => statSync(join(abs, n)).isDirectory() ? `${n}/` : n).join("\n") + "\n"); return;
   }
   if (st.isDirectory()) {
-    const entries = readdirSync(abs).filter((n) => !n.startsWith(".")).sort((a, b) => { const da = statSync(join(abs, a)).isDirectory(), db = statSync(join(abs, b)).isDirectory(); return da === db ? a.localeCompare(b) : da ? -1 : 1; });
+    const entries = readdirSync(abs).filter((n) => !n.startsWith(".") && visible(n)).sort((a, b) => { const da = statSync(join(abs, a)).isDirectory(), db = statSync(join(abs, b)).isDirectory(); return da === db ? a.localeCompare(b) : da ? -1 : 1; });
     const readme = entries.find((n) => /^readme\.md$/i.test(n));
     let intro = "";
     if (readme) { const r = renderMarkdown(readFileSync(join(abs, readme), "utf8"), slug, posix.join(rel, readme)); intro = `${ledgerHtml(r.ledger)}${r.html}<hr>`; }

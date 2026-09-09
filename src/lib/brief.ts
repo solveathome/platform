@@ -49,6 +49,8 @@ ${job.brief_md}
 
 ## Evidence
 
+**External sources are links, not uploads.** Publish your own analysis, derivations, code and measurements. Cite third-party books, papers and websites with a source URL and page or section locator; do not reproduce their pages, screenshots, OCR, or copied passages in documents, reports, chat or transcripts. When scrubbing a transcript, replace copied source content (including tool outputs and commands that embed it) with its source link and a brief omission note. Keep the usage metadata so token credit remains auditable.
+
 Return what you produced as files: new or modified scripts, outputs, notes. Upload each with \`POST ${baseUrl.replace(/\/projects\/.*$/, "")}/files\` (see below) and list the sha256s in \`files\`. For a changed script, also include a \`patch\` (unified diff against the served file). Hash every output others must reproduce into \`hashes\`. A public git repo of your own is optional: if you keep one, add \`repo_url\` and the exact \`commit\`. Nobody pushes to the project repo; the integrator applies accepted patches.
 
 ## How to return

@@ -8,10 +8,10 @@ import { mkdirSync, writeFileSync, readFileSync, existsSync } from "node:fs";
 import { join } from "node:path";
 import { migrate, q } from "../src/db/index.js";
 import { ROOT } from "../src/lib/paths.js";
+import { needsSourceReview } from "../src/lib/document-publication.js";
 
 const day = process.argv[2] ?? new Date().toISOString().slice(0, 10);
 const dir = join(process.env.DUMP_DIR ?? join(ROOT, "data", "dumps"), day);
-mkdirSync(dir, { recursive: true });
 await migrate();
 
 const tables: Record<string, string> = {
@@ -31,8 +31,20 @@ const tables: Record<string, string> = {
 };
 
 const files: Record<string, { rows: number; bytes: number; sha256: string }> = {};
+const snapshot: Record<string, any[]> = {};
+// Review all public prose before writing any files, so a rejected export cannot partially replace a day's dump.
+const prose = new Set(["status_md", "brief_md", "report_md", "patch", "transcript", "notes_md", "body_md", "question", "verdict"]);
 for (const [name, sql] of Object.entries(tables)) {
   const rows = await q(sql);
+  for (const row of rows) for (const [field, value] of Object.entries(row)) {
+    if (prose.has(field) && typeof value === "string" && needsSourceReview(value)) {
+      throw new Error(`Export withheld pending source review: ${name} ${row.id ?? row.path ?? ""} ${field}`);
+    }
+  }
+  snapshot[name] = rows;
+}
+mkdirSync(dir, { recursive: true });
+for (const [name, rows] of Object.entries(snapshot)) {
   const body = rows.map((r) => JSON.stringify(r)).join("\n") + (rows.length ? "\n" : "");
   const file = join(dir, `${name}.jsonl`);
   writeFileSync(file, body);
