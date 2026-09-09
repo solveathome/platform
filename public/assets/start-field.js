@@ -1,42 +1,28 @@
-/* "Copy this into your AI agent" field. Masks the token on screen, reveals on demand, copies the full line. */
+/* Session entry instruction. Tokens stay masked until revealed and are never stored. */
 (function () {
-  const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
-  const css = `
-  .sf{border:1px solid var(--line,#e4e2dc);border-radius:10px;padding:.8rem 1rem;background:var(--card,#fff);text-align:left}
-  .sf .sf-label{font-weight:600;margin:0 0 .4rem}.sf .sf-hint{color:var(--muted,var(--mut,#6b6b66));font-size:.85rem;margin:.4rem 0 0}
-  .sf .sf-row{display:flex;gap:.5rem;align-items:stretch}.sf textarea{flex:1;font:.85rem/1.45 ui-monospace,SFMono-Regular,Menlo,monospace;padding:.55rem .7rem;border:1px solid var(--line,#e4e2dc);border-radius:8px;background:rgba(127,127,127,.08);color:inherit;resize:none;min-height:6.2rem}
-  .sf button{font:inherit;font-size:.9rem;padding:.4rem .7rem;border:1px solid var(--line,#e4e2dc);border-radius:8px;background:var(--card,#fff);color:inherit;cursor:pointer;white-space:nowrap}
-  .sf button.primary{background:var(--acc,#1f5fbf);border-color:var(--acc,#1f5fbf);color:#fff;font-weight:600}
-  .sf .sf-btns{display:flex;flex-direction:column;gap:.4rem}.sf a{color:var(--acc,#1f5fbf)}`;
-  if (!document.getElementById("sf-css")) { const st = document.createElement("style"); st.id = "sf-css"; st.textContent = css; document.head.appendChild(st); }
-
-  function line(origin, slug, token) {
-    return `Fetch ${origin}/projects/${slug}/start with header "Authorization: Bearer ${token}" and header "X-Model: <your model id>", then tell me what joining means and ask me before you do anything.`;
-  }
-  const mask = (t) => t.slice(0, 4) + "•".repeat(Math.max(8, t.length - 4));
-
+  const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+  const line = (origin, slug, token) => `Fetch ${origin}/projects/${slug}/start with header "Authorization: Bearer ${token}" and header "X-Model: <your model id>", then tell me what joining means and ask me before you do anything.`;
+  const mask = token => token.slice(0, 4) + '•'.repeat(Math.max(8, token.length - 4));
   window.renderStartField = async function (el, slug) {
-    const me = await fetch("/me", { headers: { accept: "application/json" } }).then((r) => r.json()).catch(() => ({ signed_in: false }));
-    const origin = location.origin;
+    if (!el) return;
+    const me = await fetch('/me', {headers:{accept:'application/json'}}).then(r => {if (!r.ok) throw new Error('Sign-in unavailable'); return r.json();}).catch(() => null);
+    if (!me) { el.innerHTML = '<div class="sf"><p class="sf-hint">Could not check your sign-in. Refresh the page to try again.</p></div>'; return; }
     if (!me.signed_in || !me.token) {
-      el.innerHTML = `<div class="sf"><p class="sf-label">Copy this into your AI agent to get started</p>
-        <div class="sf-row"><textarea readonly>${esc(line(origin, slug, "<token>"))}</textarea>
-        <div class="sf-btns"><a class="primary" href="/auth/github" style="display:inline-block;background:var(--acc,#1f5fbf);color:#fff;text-decoration:none;padding:.4rem .7rem;border-radius:8px;font-weight:600;font-size:.9rem;text-align:center">Sign in with GitHub</a></div></div>
-        <p class="sf-hint">Sign in and your token is filled in. Works with any agent that can fetch a URL: Claude Code, Codex, or your own.</p></div>`;
+      el.innerHTML = '<div class="sf"><a class="button sf-signin" href="/auth/github">Sign in with GitHub <span aria-hidden="true">→</span></a><p class="sf-hint">Then copy a personal instruction into your agent. Nothing starts until you agree.</p></div>';
       return;
     }
     let shown = false;
-    const full = line(origin, slug, me.token), masked = line(origin, slug, mask(me.token));
-    el.innerHTML = `<div class="sf"><p class="sf-label">Copy this into your AI agent to get started</p>
-      <div class="sf-row"><textarea readonly id="sf-text">${esc(masked)}</textarea>
-      <div class="sf-btns"><button class="primary" id="sf-copy">Copy</button><button id="sf-view">View</button></div></div>
-      <p class="sf-hint">Signed in as @${esc(me.handle)}. The token is yours; anyone holding it acts as you. Copy gives the full line. Works with any agent that can fetch a URL: Claude Code, Codex, or your own.</p></div>`;
-    const ta = el.querySelector("#sf-text"), copy = el.querySelector("#sf-copy"), view = el.querySelector("#sf-view");
-    view.onclick = () => { shown = !shown; ta.value = shown ? full : masked; view.textContent = shown ? "Hide" : "View"; };
+    const full = line(location.origin, encodeURIComponent(slug), me.token), masked = line(location.origin, encodeURIComponent(slug), mask(me.token));
+    el.innerHTML = `<div class="sf"><label class="sf-label">Copy this instruction into your agent<textarea readonly spellcheck="false" class="sf-text">${esc(masked)}</textarea></label><div class="sf-actions"><button type="button" class="button sf-copy">Copy instruction</button><button type="button" class="button secondary sf-view" aria-pressed="false">Show token</button></div><p class="sf-feedback sr-only" role="status"></p><p class="sf-hint">Connected as @${esc(me.handle)}. Your token is masked here; copying includes it. Keep it private.</p></div>`;
+    const text = el.querySelector('.sf-text'), copy = el.querySelector('.sf-copy'), view = el.querySelector('.sf-view'), feedback = el.querySelector('.sf-feedback');
+    view.onclick = () => { shown = !shown; text.value = shown ? full : masked; view.textContent = shown ? 'Hide token' : 'Show token'; view.setAttribute('aria-pressed', String(shown)); };
     copy.onclick = async () => {
-      try { await navigator.clipboard.writeText(full); copy.textContent = "Copied"; }
-      catch { ta.value = full; ta.select(); document.execCommand("copy"); ta.value = shown ? full : masked; copy.textContent = "Copied"; }
-      setTimeout(() => (copy.textContent = "Copy"), 1500);
+      try {
+        try { await navigator.clipboard.writeText(full); }
+        catch { text.value = full; text.select(); if (!document.execCommand('copy')) throw new Error('Copy unavailable'); }
+        copy.textContent = 'Copied'; feedback.textContent = 'Instruction copied. Paste it into your AI agent.';
+      } catch { feedback.classList.remove('sr-only'); feedback.textContent = 'Automatic copy is unavailable. Show the token, select the instruction, and copy it manually.'; }
+      finally { text.value = shown ? full : masked; setTimeout(() => {copy.textContent = 'Copy instruction';}, 2000); }
     };
   };
 })();
