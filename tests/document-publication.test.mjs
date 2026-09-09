@@ -9,11 +9,19 @@ import {needsSourceReview, externalSources, readPublication, publishedDocument, 
 import {checkUpload} from '../src/lib/files.ts';
 
 // Synthetic text only; these fixtures reproduce no external publication.
-const extract = '# Literature note\n\nSource: https://example.org/paper\n\n> ' + Array.from({length: 32}, (_, i) => `fixture${i}`).join(' ');
+const quotation = '# Literature note\n\nSource: https://example.org/paper\n\n> ' + Array.from({length: 32}, (_, i) => `fixture${i}`).join(' ');
 
-test('source screening handles quoted prose and JSONL without treating JSON syntax as a quote', () => {
+const extract = 'BEGIN THIRD-PARTY SOURCE\n\n' + quotation;
+
+test('source screening permits quotations and local citations while withholding explicit full copies', () => {
+  assert.equal(needsSourceReview(quotation), false);
+  assert.equal(checkUpload('quoted-research.md', quotation).ok, true);
+  assert.equal(needsSourceReview('Local data — experiment-notes, commit abc1234, data/run-17.csv, rows 20–35; access: local-only.'), false);
+  assert.equal(needsSourceReview('The source says “All rights reserved”; see https://example.org/paper.'), false);
+  assert.equal(needsSourceReview('# Full transcription of a published paper\n' + quotation), true);
+  assert.equal(needsSourceReview('%PDF-1.7'), true);
   assert.equal(needsSourceReview(extract), true);
-  assert.equal(needsSourceReview('Section 4, p. 278, verbatim:\n> fixture text'), true);
+  assert.equal(needsSourceReview('Section 4, p. 278, verbatim:\n> fixture text'), false);
   assert.equal(needsSourceReview(JSON.stringify({tool: {content: extract}})), true);
   assert.equal(needsSourceReview([JSON.stringify({usage: {input_tokens: 10}}), JSON.stringify({content: extract})].join('\n')), true);
   assert.equal(needsSourceReview('Report the script output verbatim: the measured values and hashes.'), false);
@@ -32,6 +40,7 @@ test('prepared portfolio serves exact admitted bytes and redirects former book s
   mkdirSync(source); mkdirSync(repos);
   writeFileSync(join(source, 'README.md'), '# Original research\n\nA finite measurement, with no claim of a proof.\n');
   writeFileSync(join(source, 'literature.md'), extract);
+  writeFileSync(join(source, 'quoted-research.md'), quotation);
   writeFileSync(join(source, 'source.jsonl'), JSON.stringify({content: extract}));
   writeFileSync(join(source, 'book.png'), Buffer.from([137,80,78,71,13,10,26,10]));
   writeFileSync(join(source, 'disguised.txt'), '%PDF-1.7 fixture');
@@ -41,6 +50,9 @@ test('prepared portfolio serves exact admitted bytes and redirects former book s
     execFileSync(process.execPath, ['--import', 'tsx', 'scripts/prepare-document-portfolio.ts', source, out]);
     const manifest = readPublication(out);
     assert.equal(manifest.files['literature.md'].mode, 'source-links');
+    assert.equal(manifest.files['quoted-research.md'].mode, 'project');
+    assert.equal(readFileSync(join(out, 'quoted-research.md'), 'utf8'), quotation);
+    assert.match(readFileSync(join(out, 'literature.md'), 'utf8'), /SHA-256 of the original working note/);
     assert.match(readFileSync(join(out, 'literature.md'), 'utf8'), /https:\/\/example.org\/paper/);
     assert.doesNotMatch(readFileSync(join(out, 'literature.md'), 'utf8'), /fixture0/);
     for (const path of ['source.jsonl', 'book.png', 'disguised.txt', 'escape.md']) assert.equal(existsSync(join(out, path)), false, path);

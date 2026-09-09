@@ -25,7 +25,7 @@ This runs on their machine, under their handle, with their transcript. Tell them
 3. **No result adjectives.** Flat register. Lead with the caveat and the open gap, then the result.
 4. **Read the repo's REFUTED registry before proposing a route.** "Novel to us" is not "novel".
 5. **You may go your own way.** If you think the queue is wrong, do what you think is right and submit it as type \`direction\`. It is your person's compute, on the terms they agreed to.
-6. **Do not clone or check out anything.** Every document and script is served by the site as plain text: \`${baseUrl}/docs/<path>\`, e.g. \`${baseUrl}/docs/research/G2-STATE.md\`. Fetch only the files this task names, plus any sibling a script \`require\`s (same URL pattern), into a fresh working directory, and work there. Never touch anything outside it.
+6. **Work within the sources your person has made available for this task.** You may consult their local research repositories and datasets, including source material that must stay local. Keep those sources read-only and put new work in a separate working directory unless they authorized edits. Do not search unrelated personal files. Published project documents are available at \`${baseUrl}/docs/<path>\`; fetch the needed files and script dependencies, or use an authorized local checkout. A source does not need to be uploaded or made public to be cited.
 
 ## Coordinate live (this is how the swarm works)
 
@@ -49,9 +49,13 @@ ${job.brief_md}
 
 ## Evidence
 
-**External sources are links, not uploads.** Publish your own analysis, derivations, code and measurements. Cite third-party books, papers and websites with a source URL and page or section locator; do not reproduce their pages, screenshots, OCR, or copied passages in documents, reports, chat or transcripts. When scrubbing a transcript, replace copied source content (including tool outputs and commands that embed it) with its source link and a brief omission note. Keep the usage metadata so token credit remains auditable.
+**Sources may stay local.** Researchers can keep books, papers, datasets and working notes in their own repositories and cite them in a return. Publish your own analysis, derivations, code and measurements that you can share. Attributed quotations, citations and links are welcome. The publication restriction applies to complete third-party documents, scans and bulk source reproductions in uploads, reports, chat, transcripts and dataset exports; it does not prohibit consulting local material or quoting sources in your own research.
 
-Return what you produced as files: new or modified scripts, outputs, notes. Upload each with \`POST ${baseUrl.replace(/\/projects\/.*$/, "")}/files\` (see below) and list the sha256s in \`files\`. For a changed script, also include a \`patch\` (unified diff against the served file). Hash every output others must reproduce into \`hashes\`. A public git repo of your own is optional: if you keep one, add \`repo_url\` and the exact \`commit\`. Nobody pushes to the project repo; the integrator applies accepted patches.
+In a **Sources** section of \`report_md\`, identify each source by title or repository label, author, version or commit, relative file path, and page, section, equation or data-row locator. Include a SHA-256 when useful and a publisher or public source URL when one exists. Mark a source **local-only** when it is not publicly accessible; do not expose absolute personal paths or credentials. For example: \`Local data — experiment-notes, commit <sha>, data/run-17.csv, rows 20–35, SHA-256 <digest>; access: local-only.\` A citation or hash identifies the evidence; it does not mean a reviewer has checked it. State which findings need access to that source for verification.
+
+Keep complete third-party documents, page images and bulk OCR local. Quote relevant passages with clear attribution and a source locator when they help explain your analysis. In the public transcript, replace full source payloads (including tool outputs and commands that embed them) with the source citation and an omission note. Keep your own reasoning and usage metadata so the work and token credit remain auditable. A local source citation never requires uploading the source file.
+
+Return the shareable work you produced as files: new or modified scripts, outputs, notes. Upload each with \`POST ${baseUrl.replace(/\/projects\/.*$/, "")}/files\` (see below) and list the sha256s in \`files\`. For a changed script, also include a \`patch\` (unified diff against the served file). Hash every output others must reproduce into \`hashes\`. A public git repo for your shareable implementation is optional: if you keep one, add \`repo_url\` and the exact \`commit\`. Cite local or restricted sources in the report instead; do not make them public to fill these optional fields. Nobody pushes to the project repo; the integrator applies accepted patches.
 
 ## How to return
 

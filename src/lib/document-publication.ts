@@ -35,22 +35,15 @@ export function externalSources(text: string): string[] {
   return [...urls];
 }
 
-/** Conservative review triggers, not a legal test or a word-count permission. */
-export function containsSourceExcerpts(text: string): boolean {
-  if (/all rights reserved|(?:copyright|©)\s*(?:19|20)\d\d/i.test(text)) return true;
-  if (/full (?:transcription|reproduction)|OCR (?:extract|transcript)/i.test(text)) return true;
-  if (/verbatim\s*:/i.test(text) && /^\s*>/m.test(text)) return true;
-  if (!externalSources(text).length) return false;
-  for (const m of text.matchAll(/“([^”]*)”|"([^"]*)"/g)) {
-    if ((m[1] ?? m[2]).trim().split(/\s+/).length >= 20) return true;
-  }
-  const blocks = text.match(/(?:^\s*>[^\n]*(?:\n|$))+/gm) ?? [];
-  return blocks.some(block => block.replace(/^\s*>/gm, "").trim().split(/\s+/).length >= 25);
+/** Explicit source-copy markers only. Quotations, citations and copyright notices are not publication bans. */
+export function containsSourceReproduction(text: string): boolean {
+  if (/^\s*(?:%PDF-\d|data:application\/pdf;base64,)/i.test(text)) return true;
+  return /^\s*(?:#{1,6}\s*)?(?:BEGIN\s+(?:THIRD[- ]PARTY\s+SOURCE|FULL\s+(?:BOOK|PAPER|ARTICLE|PUBLICATION))|(?:FULL|COMPLETE)\s+(?:TEXT|TRANSCRIPTION|OCR)\s+(?:OF|FROM)\b)/im.test(text);
 }
 
 /** Inspect actual string values in JSON/JSONL, not JSON's structural quotation marks. */
 export function needsSourceReview(content: string): boolean {
-  const inspect = (value: unknown): boolean => typeof value === "string" ? containsSourceExcerpts(value)
+  const inspect = (value: unknown): boolean => typeof value === "string" ? containsSourceReproduction(value)
     : Array.isArray(value) ? value.some(inspect)
     : value !== null && typeof value === "object" ? Object.values(value).some(inspect) : false;
   try { return inspect(JSON.parse(content)); } catch { /* Plain text or JSONL. */ }
@@ -58,10 +51,10 @@ export function needsSourceReview(content: string): boolean {
   if (lines.length && lines.every(line => /^\s*[{[]/.test(line))) {
     try { return lines.map(line => JSON.parse(line)).some(inspect); } catch { /* Plain text. */ }
   }
-  return containsSourceExcerpts(content);
+  return containsSourceReproduction(content);
 }
 
-export const SOURCE_REVIEW_MESSAGE = "Possible third-party source reproduction: replace copied pages, OCR and source extracts with external links and your own analysis. Scrub source content from transcripts while retaining usage metadata and noting omissions.";
+export const SOURCE_REVIEW_MESSAGE = "This public submission appears to contain a full source reproduction. Attributed quotations, citations and links are welcome. Keep complete books, papers, scans and bulk OCR in your local source repository; publish your analysis and relevant quotations with source locators. Remove full source payloads from public transcripts while retaining reasoning, usage metadata and omission notes.";
 
 export function readPublication(root: string): Publication | null {
   try {

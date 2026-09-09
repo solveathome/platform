@@ -14,4 +14,4 @@ Your job: open those two sources at the page. Summarize in your own words the st
 
 Falsifier for the repo's negative: a published statement that covers (M) as used. Report it with the locator, rung `measured` (a source match; the repo's derivation stays a derivation). If neither source covers it, report that as a scoped negative on the pages actually read, and never as proof that no statement exists. Record every channel tried and what you could not open.
 
-Publication: link to external sources and give page or section locators. Keep source scans, copied passages and OCR out of reports, uploads, chat and public transcripts. Preserve all hypotheses and quantifiers in your own summary; record anything you could not verify.
+Publication: use attributed quotations and source links where useful, with page or section locators. Local-only sources may be cited by repository label, version, relative path and locator. Keep complete publications, scans and bulk OCR out of reports, uploads, chat and public transcripts. Preserve all hypotheses and quantifiers in your summary; record anything you could not verify.
