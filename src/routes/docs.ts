@@ -10,6 +10,7 @@ import { marked } from "marked";
 import { one } from "../db/index.js";
 import { ROOT } from "../lib/paths.js";
 import { BOOK_SOURCE, readPublication, publishedDocument } from "../lib/document-publication.js";
+import { protectMath } from "../lib/math.js";
 
 export const docs = Router({ mergeParams: true });
 const REPOS = process.env.DOCS_DIR ?? join(ROOT, "data", "repos");
@@ -27,7 +28,7 @@ function safePath(root: string, rel: string): string | null {
 }
 
 function chrome(slug: string, title: string, crumbs: string, body: string, extra = ""): string {
-  return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>${esc(title)} · ${esc(slug)} · solveathome</title><link rel="icon" href="/favicon.ico"><link rel="stylesheet" href="/assets/app.css?v=4"></head><body data-page="docs"><header data-site-header></header><main class="shell document-main" id="main"><nav class="breadcrumb" aria-label="Breadcrumb"><a href="/projects/${esc(slug)}">${esc(slug)}</a><span>/ documents /</span>${crumbs}</nav>${extra ? `<p class="panel-note">${extra}</p>` : ""}<article class="document">${body}</article></main><footer data-site-footer></footer><script src="/assets/ui.js?v=5"></script><script src="/assets/who.js?v=3"></script><script>loadWho(document.querySelector("#who"));</script></body></html>`;
+  return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>${esc(title)} · ${esc(slug)} · solveathome</title><link rel="icon" href="/favicon.ico"><link rel="stylesheet" href="/assets/app.css?v=4"></head><body data-page="docs"><header data-site-header></header><main class="shell document-main" id="main"><nav class="breadcrumb" aria-label="Breadcrumb"><a href="/projects/${esc(slug)}">${esc(slug)}</a><span>/ documents /</span>${crumbs}</nav>${extra ? `<p class="panel-note">${extra}</p>` : ""}<article class="document">${body}</article></main><footer data-site-footer></footer><script src="/assets/ui.js?v=5"></script><script src="/assets/who.js?v=3"></script><script src="/assets/math.js?v=1"></script><script>loadWho(document.querySelector("#who"));</script></body></html>`;
 }
 
 function crumbsFor(slug: string, rel: string): string {
@@ -42,7 +43,8 @@ function renderMarkdown(src: string, slug: string, rel: string): { html: string;
   const m = /<!--\s*ledger\n([\s\S]*?)-->\s*/.exec(src);
   if (m) { for (const line of m[1].split("\n")) { const i = line.indexOf(":"); if (i > 0) ledger[line.slice(0, i).trim()] = line.slice(i + 1).trim(); } src = src.replace(m[0], ""); }
   const title = (/^#\s+(.+)$/m.exec(src)?.[1] ?? rel.split("/").pop() ?? rel).trim();
-  const safe = src.replace(/</g, "&lt;").replace(/>/g, "&gt;");
+  const math = protectMath(src);
+  const safe = math.text.replace(/</g, "&lt;").replace(/>/g, "&gt;");
   const base = `/projects/${slug}/docs/`;
   const dir = posix.dirname(rel);
   const renderer = new marked.Renderer();
@@ -58,7 +60,7 @@ function renderMarkdown(src: string, slug: string, rel: string): { html: string;
     if (!/^(?:[a-z]+:|\/)/i.test(h)) h = base + posix.normalize(posix.join(dir === "." ? "" : dir, h)).replace(/^\/+/, "");
     return imgFn({ href: h, title, text } as any);
   };
-  const html = marked.parse(safe, { gfm: true, breaks: false, renderer }) as string;
+  const html = math.restore(marked.parse(safe, { gfm: true, breaks: false, renderer }) as string);
   return { html, ledger: m ? ledger : null, title };
 }
 

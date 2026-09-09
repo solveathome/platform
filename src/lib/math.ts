@@ -1,0 +1,13 @@
+/** Keep LaTeX math out of the Markdown parser (underscores and asterisks inside formulas are not emphasis), then put it back for KaTeX on the client. */
+const PH = (i: number) => `M${i}`;
+export function protectMath(src: string): { text: string; restore: (html: string) => string } {
+  const spans: string[] = [];
+  const keep = (m: string) => { spans.push(m); return PH(spans.length - 1); };
+  const text = src
+    .replace(/\$\$[\s\S]+?\$\$/g, keep)
+    .replace(/\\\[[\s\S]+?\\\]/g, keep)
+    .replace(/\\\([\s\S]+?\\\)/g, keep)
+    .replace(/(?<![\\$\w])\$(?![\s$])((?:\\.|[^$\n\\])+?)(?<!\s)\$(?![\w$])/g, keep);
+  const restore = (html: string) => html.replace(/M(\d+)/g, (_, i) => spans[Number(i)].replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;"));
+  return { text, restore };
+}

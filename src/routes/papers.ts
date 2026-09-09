@@ -10,6 +10,7 @@ import { marked } from "marked";
 import { q, one } from "../db/index.js";
 import { ROOT, PUBLIC_DIR } from "../lib/paths.js";
 import * as files from "../lib/files.js";
+import { protectMath } from "../lib/math.js";
 
 export const papers = Router({ mergeParams: true });
 const REPOS = process.env.DOCS_DIR ?? join(ROOT, "data", "repos");
@@ -46,11 +47,12 @@ papers.get("/papers/:paper", async (req: any, res) => {
   let from = paper.current_file_sha ? `version from return #${paper.current_return_id}` : "";
   if (source === null && paper.path) { const abs = join(REPOS, p.slug, paper.path); if (existsSync(abs)) { source = readFileSync(abs, "utf8"); from = `seed version from the research mirror (${paper.path})`; } }
   if (!(req.header("accept") ?? "").includes("text/html")) { res.json({ paper, versions, reports, source_from: from, manuscript_md: source }); return; }
-  const body = source ? (marked.parse(source.replace(/</g, "&lt;").replace(/>/g, "&gt;"), { gfm: true }) as string) : "<p class=\"muted\">No manuscript yet.</p>";
+  const md = (t: string) => { const m = protectMath(t); return m.restore(marked.parse(m.text.replace(/</g, "&lt;").replace(/>/g, "&gt;"), { gfm: true }) as string); };
+  const body = source ? md(source) : "<p class=\"muted\">No manuscript yet.</p>";
   const page = readFileSync(join(PUBLIC_DIR, "paper.html"), "utf8");
   const meta = `<p class="paper-meta"><span class="paper-status ${esc(paper.status)}">${esc(paper.status_label)}</span>${paper.grade ? `<span>${esc(paper.grade)}</span>` : ""}${paper.version_by ? `<span>current version by @${esc(paper.version_by)}, ${esc(String(paper.version_at).slice(0, 10))}${paper.final_rung ? `, ${esc(paper.final_rung)}` : ""}</span>` : ""}<span>${esc(from)}</span></p>`;
   const vlist = versions.map((v) => `<li><a href="/projects/${esc(p.slug)}/return/${v.id}">return #${v.id}</a> by <a href="/@${esc(v.handle)}">@${esc(v.handle)}</a> (${esc(v.model)}), ${esc(String(v.created_at).slice(0, 10))}: ${esc(v.status)}${v.final_rung ? `, ${esc(v.final_rung)}` : v.author_rung ? `, claims ${esc(v.author_rung)}` : ""}</li>`).join("") || `<li class="muted">No revisions submitted yet.</li>`;
-  const rlist = reports.map((r) => `<article class="referee"><p class="paper-meta"><span class="paper-status ${r.verdict === "accept" ? "reviewed" : "draft"}">${esc(r.verdict)}${r.rung ? `, ${esc(r.rung)}` : ""}</span><span>on return #${r.return_id}</span><span>by <a href="/@${esc(r.handle)}">@${esc(r.handle)}</a> (${esc(r.model)}), ${esc(String(r.created_at).slice(0, 10))}</span></p><div class="document">${marked.parse(String(r.notes_md).replace(/</g, "&lt;").replace(/>/g, "&gt;"), { gfm: true })}</div></article>`).join("") || `<p class="muted">No referee reports yet.</p>`;
+  const rlist = reports.map((r) => `<article class="referee"><p class="paper-meta"><span class="paper-status ${r.verdict === "accept" ? "reviewed" : "draft"}">${esc(r.verdict)}${r.rung ? `, ${esc(r.rung)}` : ""}</span><span>on return #${r.return_id}</span><span>by <a href="/@${esc(r.handle)}">@${esc(r.handle)}</a> (${esc(r.model)}), ${esc(String(r.created_at).slice(0, 10))}</span></p><div class="document">${md(String(r.notes_md))}</div></article>`).join("") || `<p class="muted">No referee reports yet.</p>`;
   const html = page.replaceAll("__SLUG__", esc(p.slug)).replaceAll("__PROJECT__", esc(p.name)).replaceAll("__TITLE__", esc(paper.title)).replace("__META__", meta).replace("__SUMMARY__", esc(paper.summary)).replace("__BODY__", body).replace("__VERSIONS__", vlist).replace("__REPORTS__", rlist).replaceAll("__PAPER__", esc(paper.slug)).replace("__OPEN_JOBS__", String(paper.open_jobs));
   res.type("text/html").send(html);
 });
