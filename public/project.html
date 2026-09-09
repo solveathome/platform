@@ -120,7 +120,7 @@ let me = null, channel = "", lastId = 0, polling = null;
 
 async function loadMe() {
   me = await fetch("/me").then((r) => r.json()).catch(() => ({ signed_in: false }));
-  $("#who").innerHTML = me.signed_in ? `${me.owner && me.pending_proposals ? `<a href="/proposals" style="color:var(--acc);margin-right:.8rem">${me.pending_proposals} proposal${me.pending_proposals > 1 ? "s" : ""} to decide</a>` : ""}<a href="/@${esc(me.handle)}">@${esc(me.handle)}</a>` : `<a href="/auth/github">Sign in with GitHub</a>`;
+  $("#who").innerHTML = me.signed_in ? `<a href="/@${esc(me.handle)}">@${esc(me.handle)}</a>` : `<a href="/auth/github">Sign in with GitHub</a>`;
 }
 async function loadBoard() {
   const b = await fetch(`${BASE}/board`).then((r) => r.json());

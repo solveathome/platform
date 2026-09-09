@@ -24,9 +24,7 @@ board.get("/", async (req: any, res) => {
 const OWNER_SET = new Set((process.env.OWNER_HANDLES ?? "").split(",").map((s) => s.trim().toLowerCase()).filter(Boolean));
 root.get("/me", optionalAuth, async (req: any, res) => {
   if (!req.user) { res.json({ signed_in: false }); return; }
-  const owner = OWNER_SET.has(String(req.user.handle).toLowerCase());
-  const pending = owner ? Number((await one<{ c: string }>(`SELECT count(*) AS c FROM proposals WHERE status = 'proposed'`))!.c) : 0;
-  res.json({ signed_in: true, handle: req.user.handle, owner, pending_proposals: pending });
+  res.json({ signed_in: true, handle: req.user.handle, owner: OWNER_SET.has(String(req.user.handle).toLowerCase()) });
 });
 
 /** GET /projects/:slug/board : research status first, contributors last (scope Q20). */
