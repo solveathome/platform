@@ -21,7 +21,9 @@ const title = (t: string) => (/^#\s+(.+)$/m.exec(t)?.[1] ?? "").replace(/\s*\(dr
 const summary = (t: string) => {
   const abs = /##\s*Abstract\s*\n+([\s\S]*?)(?:\n##|\n\*\*|$)/i.exec(t)?.[1];
   const para = (abs ?? t.replace(/^#\s+.+$/m, "").replace(/^\*[^\n]*\*\s*$/m, "")).split(/\n\s*\n/).map((x) => x.replace(/\s+/g, " ").trim()).find((x) => x.length > 80 && !/^status:/i.test(x) && !/^\*\*status/i.test(x)) ?? "";
-  return para.slice(0, 700);
+  if (para.length <= 700) return para;
+  const cut = para.slice(0, 700); const end = Math.max(cut.lastIndexOf(". "), cut.lastIndexOf("; "));
+  return end > 300 ? cut.slice(0, end + 1) : cut.replace(/\s+\S*$/, "") + "…";
 };
 const grade = (t: string) => { const m = /^\*\*Status:\s*([^*]+)\*\*/im.exec(t) ?? /^status:\s*(.+)$/im.exec(t); if (!m) return null; const g = m[1].replace(/\s+/g, " ").trim(); const first = /^(.+?[.;])\s/.exec(g)?.[1] ?? g; return (first.length > 160 ? first.slice(0, 157).replace(/\s+\S*$/, "") + "…" : first); };
 const registryGrades: Record<string, string> = {};
