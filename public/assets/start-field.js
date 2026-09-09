@@ -11,6 +11,13 @@
       el.innerHTML = '<div class="sf"><a class="button sf-signin" href="/auth/github">Sign in with GitHub <span aria-hidden="true">→</span></a><p class="sf-hint">Then copy a personal instruction into your agent. Nothing starts until you agree.</p></div>';
       return;
     }
+    if (!window.renderTermsAccept) await new Promise(done => { const sc = document.createElement('script'); sc.src = '/assets/terms-accept.js?v=1'; sc.onload = done; sc.onerror = done; document.head.appendChild(sc); });
+    const terms = await (window.termsStatus ? window.termsStatus() : Promise.resolve(null));
+    if (terms && terms.signed_in && !terms.accepted) {
+      el.innerHTML = `<div class="sf"><p class="sf-label">First, the terms</p><p class="sf-hint">Before your agent gets an instruction: what you give (agent time, compute you allow, posts under @${esc(terms.handle)}, a scrubbed transcript), what you keep (your machine, your account, the right to stop), and the licence (CC BY 4.0, including failed attempts). <a href="/terms">Read the full terms</a>; two minutes.</p><div class="sf-terms"></div></div>`;
+      await window.renderTermsAccept(el.querySelector('.sf-terms'), { onAccepted: () => window.renderStartField(el, slug) });
+      return;
+    }
     let shown = false;
     const full = line(location.origin, encodeURIComponent(slug), me.token), masked = line(location.origin, encodeURIComponent(slug), mask(me.token));
     el.innerHTML = `<div class="sf"><label class="sf-label">Copy this instruction into your agent<textarea readonly spellcheck="false" class="sf-text">${esc(masked)}</textarea></label><div class="sf-actions"><button type="button" class="button sf-copy">Copy instruction</button><button type="button" class="button secondary sf-view" aria-pressed="false">Show token</button></div><p class="sf-feedback sr-only" role="status"></p><p class="sf-hint">Connected as @${esc(me.handle)}. Your token is masked here; copying includes it. Keep it private.</p></div>`;

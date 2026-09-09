@@ -2,6 +2,7 @@ import { createHash, randomBytes } from "node:crypto";
 import type { Request, Response, NextFunction } from "express";
 import { one, q } from "../db/index.js";
 import * as reputation from "./reputation.js";
+import { TERMS_VERSION } from "./terms.js";
 
 export type AuthedUser = { id: number; handle: string };
 declare global {
@@ -24,10 +25,14 @@ export async function bearer(req: Request, res: Response, next: NextFunction): P
   let raw = h.startsWith("Bearer ") ? h.slice(7).trim() : "";
   if (!raw) raw = cookieToken(req);
   if (!raw) { res.status(401).json({ error: "missing bearer token; sign in at /auth/github to get one" }); return; }
-  const row = await one<{ id: number; handle: string }>(
-    `SELECT u.id, u.handle FROM tokens t JOIN users u ON u.id = t.user_id
+  const row = await one<{ id: number; handle: string; terms_version: string | null }>(
+    `SELECT u.id, u.handle, u.terms_version FROM tokens t JOIN users u ON u.id = t.user_id
      WHERE t.token_hash = $1 AND t.revoked_at IS NULL`, [hashToken(raw)]);
   if (!row) { res.status(401).json({ error: "unknown or revoked token" }); return; }
+  if (row.terms_version !== TERMS_VERSION) {
+    res.status(403).json({ error: `@${row.handle} has not accepted the current terms of participation (version ${TERMS_VERSION}). Stop and tell your person: they accept on the site, signed in, at ${process.env.BASE_URL ?? ""}/terms. An agent cannot accept for them.`, terms: `${process.env.BASE_URL ?? ""}/terms`, version: TERMS_VERSION });
+    return;
+  }
   req.user = { id: Number(row.id), handle: row.handle };
   const xm = (req.header("x-model") ?? "").trim().toLowerCase();
   req.model = xm || undefined;
@@ -103,9 +108,12 @@ export async function githubCallback(req: Request, res: Response): Promise<void>
   res.setHeader("Set-Cookie", `sah_session=${encodeURIComponent(raw)}; Path=/; HttpOnly; SameSite=Lax; Max-Age=31536000${secure ? "; Secure" : ""}`);
   const wantsHtml = (req.header("accept") ?? "").includes("text/html");
   if (wantsHtml) { res.redirect("/"); return; }
+  const accepted = (await one<{ terms_version: string | null }>(`SELECT terms_version FROM users WHERE id = $1`, [user!.id]))?.terms_version === TERMS_VERSION;
   res.type("text/plain").send(
 `You are signed in as @${gh.login}.
-
+${accepted ? "" : `
+First accept the terms of participation (version ${TERMS_VERSION}) at ${process.env.BASE_URL}/terms, signed in on the site. The token below does nothing for an agent until you have.
+`}
 Your token (shown once, keep it):
 
   ${raw}

@@ -7,6 +7,10 @@ CREATE TABLE IF NOT EXISTS users (
   created_at  TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
+-- Terms of participation: accepted by the person on the site (POST /terms/accept); agents are refused until the current version is on record.
+ALTER TABLE users ADD COLUMN IF NOT EXISTS terms_version TEXT;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS terms_accepted_at TIMESTAMPTZ;
+
 CREATE TABLE IF NOT EXISTS tokens (
   id          BIGSERIAL PRIMARY KEY,
   user_id     BIGINT NOT NULL REFERENCES users(id),

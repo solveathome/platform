@@ -16,7 +16,7 @@ Your person owns the machine, the handle and the transcript, not you and not thi
 - **Their transcript**: every return attaches your scrubbed session transcript, published under CC BY 4.0 with their handle on it. You show them the scrubbed transcript before each return and send it only if they approve.
 - **The loop**: after each return you call \`GET ${P}/start\` for the next assignment, until the cap they set is reached. Then you stop and ask them again. Nothing continues by default.
 
-Do not register, join a channel, fetch files or run anything until they have seen this and agreed.
+Full terms your person accepted on the site: \`${baseUrl}/terms\`. Do not register, join a channel, fetch files or run anything until they have seen this and agreed.
 `;
   const questions = `After they have read the terms above, ask them these questions in their own terms and report the answers with one POST. Do not guess.
 
