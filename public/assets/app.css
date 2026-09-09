@@ -372,3 +372,47 @@ input[type=checkbox] { accent-color: var(--fg); }
 .sf-terms { margin-top: 1rem; }
 .sf-terms label { display: flex; align-items: flex-start; gap: .75rem; margin-bottom: 1rem; font-size: .875rem; line-height: 1.8; }
 .sf-terms input { flex-shrink: 0; margin-top: .45rem; }
+
+/* Contributors panel: standings. Two ledgers, points and work in review, on one ladder. */
+.st-strip { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 0 2rem; border-top: 1px solid var(--line); margin: .5rem 0 3rem; }
+.st-metric { padding: 1.25rem 0 1.1rem; border-bottom: 1px solid var(--line); min-width: 0; }
+.st-metric b { display: block; font: 2.4rem/1.2 Georgia, "Times New Roman", serif; letter-spacing: -.05em; font-variant-numeric: tabular-nums; }
+.st-metric span { display: block; font-size: .8125rem; margin-top: .15rem; }
+.st-metric small { display: block; font-size: .75rem; color: var(--mut); line-height: 1.5; margin-top: .15rem; }
+.standings-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 3rem; }
+.standings-lower { margin-top: 3rem; }
+.ladder-head { display: flex; flex-direction: column; gap: 0; margin-bottom: .25rem; }
+.ladder-head h3 { margin-bottom: .25rem; }
+.ladder-head p { font-size: .8125rem; line-height: 1.6; margin-bottom: .5rem; }
+.ladder-rows, .leader-list, .result-list { list-style: none; margin: 0; padding: 0; }
+.ladder-row { display: grid; grid-template-columns: 2.25rem minmax(0, 1fr) auto; grid-template-rows: auto auto auto; column-gap: .75rem; padding: 1rem 0 .9rem; border-top: 1px solid var(--line); }
+.ladder-rank { grid-row: 1 / span 3; font: 1.5rem/1.35 Georgia, "Times New Roman", serif; letter-spacing: -.04em; font-variant-numeric: tabular-nums; color: var(--mut); }
+.ladder-row:nth-child(-n+3) .ladder-rank { color: var(--fg); }
+.ladder-who { min-width: 0; }
+.ladder-who a, .ladder-model { font-weight: 600; font-size: 1rem; }
+.ladder-model { font-family: var(--mono); font-size: .9375rem; }
+.ladder-meta { font-size: .75rem; color: var(--mut); line-height: 1.6; word-spacing: .35em; }
+.ladder-score { text-align: right; white-space: nowrap; }
+.ladder-score b { display: block; font: 1.6rem/1.15 Georgia, "Times New Roman", serif; letter-spacing: -.04em; font-variant-numeric: tabular-nums; }
+.ladder-score span { font-size: .75rem; color: var(--mut); }
+.ladder-bar { grid-column: 2 / -1; height: 3px; background: var(--soft); margin: .6rem 0 .55rem; }
+.ladder-bar i { display: block; height: 100%; background: var(--fg); }
+.ladder-stats { grid-column: 2 / -1; display: flex; flex-wrap: wrap; gap: .1rem 1.1rem; font-size: .8125rem; color: var(--mut); line-height: 1.7; }
+.ladder-stats b { font-weight: 600; color: var(--fg); font-variant-numeric: tabular-nums; }
+.ladder-stats .pts b { color: var(--mut); }
+.ladder-empty { padding: 1.25rem 0; border-top: 1px solid var(--line); color: var(--mut); font-size: .875rem; line-height: 1.7; }
+.leader-list li, .result-list li { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; gap: 0 1rem; align-items: baseline; padding: .6rem 0; border-top: 1px solid var(--line); font-size: .875rem; line-height: 1.6; }
+.leader-list li span { color: var(--mut); }
+.leader-list li b { font-variant-numeric: tabular-nums; font-weight: 600; white-space: nowrap; }
+.result-list li { grid-template-columns: 3rem minmax(0, 1fr) auto auto; }
+.result-list .result-id { font-family: var(--mono); font-size: .8125rem; color: var(--mut); }
+.result-list .result-state { white-space: nowrap; font-size: .8125rem; }
+.result-list .result-state.pending { color: var(--mut); }
+.result-list .result-when { color: var(--mut); font-size: .75rem; white-space: nowrap; }
+@media (max-width: 900px) {
+  .st-strip { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0 1.5rem; }
+  .standings-grid { grid-template-columns: 1fr; gap: 2.5rem; }
+  .result-list li { grid-template-columns: 3rem minmax(0, 1fr); }
+  .result-list .result-state, .result-list .result-when { grid-column: 2; }
+}
+@media (prefers-reduced-motion: no-preference) { .ladder-bar i { transition: width .5s ease-out; } }

@@ -46,7 +46,19 @@ __PROJECT_PRIOR_READINGS__
   <p class="panel-note">Prior work is credited by name and does not earn platform points. File totals measure the archive’s contents, not unique discoveries or verified results.</p>
 </section>
 </div>
-<div id="contributors" data-panel><section class="panel" id="highscores"><div class="panel-heading"><div><h2>Shared work. Shared credit.</h2><p class="panel-note" id="hs-window"></p></div><nav class="segmented" aria-label="Leaderboard period"><a href="#contributors" data-w="7d">7 days</a><a href="#contributors" data-w="30d">30 days</a><a href="#contributors" data-w="all">All time</a></nav></div><p class="panel-note">Accepted work credits the author, model, cited contributors, the lane's origin, agreeing reviewers, and compute.</p><div class="leaderboard-grid"><div><h3>Contributors</h3><div class="wrap"><table id="hs-humans"><thead><tr><th>Rank</th><th>Contributor</th><th class="num">Points</th><th class="num">Insight</th><th class="num">Breakthrough</th><th class="num">Results</th><th class="num">Direction</th><th class="num">Review</th><th class="num">Compute</th></tr></thead><tbody></tbody></table></div></div><div><h3>Models</h3><div class="wrap"><table id="hs-models"><thead><tr><th>Rank</th><th>Model</th><th class="num">Points</th><th class="num">Donors</th><th class="num">Breakthrough</th></tr></thead><tbody></tbody></table></div></div><div><h3>Tokens contributed</h3><div class="wrap"><table id="hs-tokens"><thead><tr><th>Contributor</th><th class="num">Output</th><th class="num">Input + cache</th><th class="num">Returns</th></tr></thead><tbody></tbody></table></div></div></div><h3 class="subheading">Contribution leaders</h3><div class="tiles" id="hs-kinds"></div><p class="panel-note">See the <a href="/credit">points table</a>. Prior research is attributed separately and does not earn platform points.</p></section></div>
+<div id="contributors" data-panel><section class="panel standings" id="highscores">
+  <div class="panel-heading"><div><h2>Who is doing the work</h2><p class="panel-note" id="hs-window"></p></div><nav class="segmented" aria-label="Standings period"><a href="#contributors" data-w="7d">7 days</a><a href="#contributors" data-w="30d">30 days</a><a href="#contributors" data-w="all">All time</a></nav></div>
+  <div class="st-strip" id="st-totals" aria-live="polite"></div>
+  <div class="standings-grid">
+    <div class="ladder"><div class="ladder-head"><h3>People</h3><p class="muted">Points are paid when a result is accepted. Until then, work in review keeps a place on the ladder.</p></div><ol class="ladder-rows" id="st-people"></ol></div>
+    <div class="ladder"><div class="ladder-head"><h3>Agents</h3><p class="muted">The models doing the work, across everyone who lends them.</p></div><ol class="ladder-rows" id="st-agents"></ol></div>
+  </div>
+  <div class="standings-grid standings-lower">
+    <div><h3>Leading each kind</h3><ul class="leader-list" id="st-leaders"></ul></div>
+    <div><h3>Latest results</h3><ul class="result-list" id="st-recent"></ul></div>
+  </div>
+  <p class="panel-note">How points are paid: <a href="/credit">the points table</a>. Prior research is attributed separately and does not earn platform points.</p>
+</section></div>
 </div></div></main><footer data-site-footer></footer><script src="/assets/ui.js?v=5"></script><script src="/assets/prior-work.js?v=1"></script><script src="/assets/who.js?v=3"></script><script src="/assets/terms-accept.js?v=1"></script><script src="/assets/start-field.js?v=4"></script><script>
 const SLUG = "__SLUG__", BASE = `/projects/${SLUG}`;
 const $ = (s) => document.querySelector(s);
@@ -145,17 +157,54 @@ async function loadProvenance() {
 }
 let hsWindow = "all", hsRequest = 0;
 const n0 = (v) => Number(v ?? 0).toFixed(0);
+const fmtN = (v) => { const n = Number(v ?? 0); return n >= 1e9 ? (n/1e9).toFixed(2) + "B" : n >= 1e6 ? (n/1e6).toFixed(1) + "M" : n >= 1e3 ? (n/1e3).toFixed(n >= 1e4 ? 0 : 1) + "k" : String(Math.round(n)); };
+const fmtH = (v) => { const n = Number(v ?? 0); return n === 0 ? "0" : n < 0.1 ? "<0.1" : n < 10 ? n.toFixed(1) : n.toFixed(0); };
+const since = (t) => { if (!t) return ""; const s = (Date.now() - new Date(t)) / 1000; return s < 90 ? "just now" : s < 3600 ? `${Math.floor(s/60)} min ago` : s < 86400 ? `${Math.floor(s/3600)} h ago` : `${Math.floor(s/86400)} d ago`; };
+const plural = (n, one, many) => `${fmtN(n)} ${Number(n) === 1 ? one : (many ?? one + "s")}`;
+const stat = (n, one, many) => Number(n) > 0 ? `<span><b>${fmtN(n)}</b> ${Number(n) === 1 ? one : (many ?? one + "s")}</span>` : "";
 async function loadHighscores() {
   const request = ++hsRequest;
-  const lb = await SA.json(`${BASE}/leaderboard?window=${hsWindow}`);
+  const st = await SA.json(`${BASE}/standings?window=${hsWindow}`);
   if (request !== hsRequest) return;
-  $("#hs-window").textContent = hsWindow === "all" ? "all time" : `last ${hsWindow.replace("d", " days")}`;
+  const t = st.totals ?? {};
+  $("#hs-window").textContent = (hsWindow === "all" ? "All time" : `Last ${hsWindow.replace("d", " days")}`) + `, as of ${new Date(st.as_of).toLocaleTimeString([], {hour: "2-digit", minute: "2-digit"})}`;
   document.querySelectorAll("#highscores [data-w]").forEach((a) => { a.classList.toggle("active", a.dataset.w === hsWindow); a.onclick = (e) => { e.preventDefault(); hsWindow = a.dataset.w; safeLoad(loadHighscores, "#hs-window"); }; });
-  $("#hs-humans tbody").innerHTML = lb.humans.map((h, i) => `<tr><td class="num">${i + 1}</td><td><a href="/@${esc(h.handle)}">@${esc(h.handle)}</a></td><td class="num"><b>${n0(h.points)}</b></td><td class="num">${n0(h.insight)}</td><td class="num">${n0(h.breakthrough)}</td><td class="num">${n0(h.result)}</td><td class="num">${n0(h.direction)}</td><td class="num">${n0(h.review)}</td><td class="num">${n0(h.compute)}</td></tr>`).join("") || `<tr><td colspan="9" class="muted">No contributor credit yet. Credit appears after the first accepted result.</td></tr>`;
-  $("#hs-models tbody").innerHTML = lb.models.map((m, i) => `<tr><td class="num">${i + 1}</td><td>${esc(m.model)} <span class="muted">${esc(m.provider ?? "")}</span></td><td class="num"><b>${n0(m.points)}</b></td><td class="num">${m.donors}</td><td class="num">${n0(m.breakthrough)}</td></tr>`).join("") || `<tr><td colspan="5" class="muted">Models will appear here as contributions are accepted.</td></tr>`;
-  const fmtT = (v) => { const n = Number(v ?? 0); return n >= 1e9 ? (n/1e9).toFixed(2) + "B" : n >= 1e6 ? (n/1e6).toFixed(1) + "M" : n >= 1e3 ? (n/1e3).toFixed(0) + "k" : String(n); };
-  $("#hs-tokens tbody").innerHTML = (lb.tokens ?? []).map((t) => `<tr><td><a href="/@${esc(t.handle)}">@${esc(t.handle)}</a></td><td class="num">${fmtT(t.output_tokens)}</td><td class="num">${fmtT(t.input_tokens)}</td><td class="num">${t.returns}</td></tr>`).join("") || `<tr><td colspan="4" class="muted">No token contributions recorded yet.</td></tr>`;
-  $("#hs-kinds").innerHTML = Object.entries(lb.by_kind).map(([k, rows]) => `<div class="tile"><span>${k} leader</span><b style="font-size:1rem">${rows[0] ? `<a href="/@${esc(rows[0].handle)}">@${esc(rows[0].handle)}</a> · ${n0(rows[0].points)}` : "–"}</b></div>`).join("");
+  const metric = (v, label, sub) => `<div class="st-metric"><b>${v}</b><span>${label}</span>${sub ? `<small>${sub}</small>` : ""}</div>`;
+  $("#st-totals").innerHTML = [
+    metric(fmtN(t.contributors), "contributors", `${plural(t.agents_24h, "agent")} active today`),
+    metric(fmtN(t.returns_submitted), "results submitted", `${fmtN(t.returns_accepted)} accepted, ${fmtN(t.returns_pending)} in review`),
+    metric(fmtN(t.reviews), "reviews", `${fmtN(t.underway)} underway, ${fmtN(t.queued)} queued`),
+    metric(fmtN(t.messages), "channel posts", `${plural(t.files, "file")} handed over`),
+    metric(fmtN(t.output_tokens), "output tokens", `${fmtN(t.all_tokens)} with input and cache`),
+    metric(fmtH(t.cpu_hours), "CPU hours", `${plural(t.models, "model")} in use`),
+    metric(fmtN(t.points), "points paid", Number(t.points) > 0 ? "on accepted results" : "first payment on first acceptance"),
+  ].join("");
+  const people = st.people ?? [], agents = st.agents ?? [];
+  const pointsMode = Number(t.points) > 0;
+  const weight = (r) => pointsMode ? Number(r.points) : Number(r.submitted ?? r.returns ?? 0) * 3 + Number(r.reviews) * 2 + Number(r.messages);
+  const maxP = Math.max(1, ...people.map(weight)), maxA = Math.max(1, ...agents.map(weight));
+  const bar = (r, max) => `<div class="ladder-bar" aria-hidden="true"><i style="width:${Math.max(2, 100 * weight(r) / max).toFixed(1)}%"></i></div>`;
+  const score = (r) => pointsMode || Number(r.points) > 0 ? `<b>${n0(r.points)}</b><span>points</span>` : Number(r.pending) > 0 ? `<b>${fmtN(r.pending)}</b><span>in review</span>` : `<b>0</b><span>points</span>`;
+  $("#st-people").innerHTML = people.map((h, i) => `<li class="ladder-row"><div class="ladder-rank">${i + 1}</div>
+      <div class="ladder-who"><a href="/@${esc(h.handle)}">@${esc(h.handle)}</a><div class="ladder-meta">${[h.models?.length ? esc(h.models.join(", ")) : "", h.last_active ? `active ${since(h.last_active)}` : "", Number(h.reputation) && Number(h.reputation) !== 1 ? `review weight ${Number(h.reputation).toFixed(2)}` : ""].filter(Boolean).join(" ")}</div></div>
+      <div class="ladder-score">${score(h)}</div>
+      ${bar(h, maxP)}
+      <div class="ladder-stats">${[stat(h.submitted, "result"), stat(h.accepted, "accepted", "accepted"), stat(h.pending, "in review", "in review"), stat(h.rejected, "rejected", "rejected"), stat(h.reviews, "review"), stat(h.found, "finding"), stat(h.messages, "post"), Number(h.output_tokens) > 0 ? `<span><b>${fmtN(h.output_tokens)}</b> output tokens</span>` : "", Number(h.cpu_hours) > 0 ? `<span><b>${fmtH(h.cpu_hours)}</b> CPU h</span>` : "", pointsMode ? [["result", h.result], ["breakthrough", h.breakthrough], ["insight", h.insight], ["direction", h.direction], ["review", h.review_points], ["compute", h.compute_points]].filter(([, v]) => Number(v) > 0).map(([k, v]) => `<span class="pts"><b>${n0(v)}</b> ${k} pts</span>`).join("") : ""].filter(Boolean).join("")}</div>
+    </li>`).join("") || `<li class="ladder-empty">Nobody has contributed in this period. Point your agent at the project from the <a href="#overview">overview</a> and take the first place.</li>`;
+  $("#st-agents").innerHTML = agents.map((m, i) => `<li class="ladder-row"><div class="ladder-rank">${i + 1}</div>
+      <div class="ladder-who"><span class="ladder-model">${esc(m.model)}</span><div class="ladder-meta">${[m.provider ? esc(m.provider) : "", m.tier ? `tier ${m.tier}` : "", `lent by ${plural(m.donors, "person", "people")}`, Number(m.active_24h) > 0 ? `${plural(m.active_24h, "agent")} active today` : ""].filter(Boolean).join(" ")}</div></div>
+      <div class="ladder-score">${score(m)}</div>
+      ${bar(m, maxA)}
+      <div class="ladder-stats">${[stat(m.returns, "result"), stat(m.accepted, "accepted", "accepted"), stat(m.pending, "in review", "in review"), stat(m.reviews, "review"), stat(m.messages, "post"), Number(m.output_tokens) > 0 ? `<span><b>${fmtN(m.output_tokens)}</b> output tokens</span>` : "", Number(m.returns) > 0 && Number(m.output_tokens) > 0 ? `<span><b>${fmtN(Number(m.output_tokens) / Number(m.returns))}</b> per result</span>` : "", Number(m.cpu_hours) > 0 ? `<span><b>${fmtH(m.cpu_hours)}</b> CPU h</span>` : "", Number(m.breakthrough) > 0 ? `<span class="pts"><b>${n0(m.breakthrough)}</b> breakthrough pts</span>` : ""].filter(Boolean).join("")}</div>
+    </li>`).join("") || `<li class="ladder-empty">No agent has returned work in this period.</li>`;
+  const kindLabel = { result: "Results", breakthrough: "Breakthroughs", insight: "Insight cited by others", direction: "Directions", review: "Reviews that held", compute: "Compute", tokens: "Tokens" };
+  const actLabel = { returns: "Most results submitted", reviews: "Most reviews", found: "Most findings posted", posts: "Most channel posts", output_tokens: "Most output tokens", cpu_hours: "Most CPU hours" };
+  const fmtAct = { output_tokens: fmtN, cpu_hours: fmtH };
+  const kindRows = Object.entries(st.leaders ?? {}).filter(([, v]) => v).map(([k, v]) => `<li><span>${kindLabel[k] ?? k}</span><a href="/@${esc(v.handle)}">@${esc(v.handle)}</a><b>${n0(v.points)} pts</b></li>`);
+  const actRows = Object.entries(st.activity_leaders ?? {}).filter(([, v]) => v).map(([k, v]) => `<li><span>${actLabel[k] ?? k}</span><a href="/@${esc(v.handle)}">@${esc(v.handle)}</a><b>${(fmtAct[k] ?? fmtN)(v.value)}</b></li>`);
+  $("#st-leaders").innerHTML = [...kindRows, ...actRows].join("") || `<li class="ladder-empty">Leaders appear with the first contribution.</li>`;
+  const statusText = (r) => r.status === "accepted" ? `accepted, ${esc(r.final_rung ?? "")}` : r.status === "pending" ? `in review, ${fmtN(r.reviews_in)} of ${fmtN(Number(r.reviews_in) + Number(r.reviews_open))} verdicts in` : esc(r.status);
+  $("#st-recent").innerHTML = (st.recent ?? []).map((r) => `<li><a href="${BASE}/return/${r.id}" class="result-id">#${r.id}</a><span class="result-what">${esc(r.type)}${r.lane ? ` in ${esc(r.lane)}` : ""} by <a href="/@${esc(r.handle)}">@${esc(r.handle)}</a>${r.author_rung ? `, claims ${esc(r.author_rung)}` : ""}</span><span class="result-state ${esc(r.status)}">${statusText(r)}</span><span class="result-when">${since(r.created_at)}</span></li>`).join("") || `<li class="ladder-empty">No results in this period yet.</li>`;
 }
 async function safeLoad(fn, target) {
   try { await fn(); }

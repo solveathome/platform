@@ -6,6 +6,7 @@ import { join } from "node:path";
 import { PUBLIC_DIR } from "../lib/paths.js";
 import { leaderboard, type Window } from "../lib/credit.js";
 import { projectActivity } from "../lib/project-activity.js";
+import { standings } from "../lib/standings.js";
 
 const page = (name: string) => readFileSync(join(PUBLIC_DIR, name), "utf8");
 const wantsHtml = (req: any) => (req.header("accept") ?? "").includes("text/html");
@@ -104,6 +105,13 @@ board.get("/leaderboard", async (req: any, res) => {
   if (!p) { res.status(404).json({ error: "unknown project" }); return; }
   const w = (["all", "30d", "7d"].includes(String(req.query.window)) ? String(req.query.window) : "all") as Window;
   res.json(await leaderboard(Number(p.id), w));
+});
+/** GET /projects/:slug/standings?window=all|30d|7d : the Contributors panel: totals, people, agents (models), leaders, recent returns. */
+board.get("/standings", async (req: any, res) => {
+  const p = await one(`SELECT id FROM problems WHERE slug = $1`, [req.params.slug]);
+  if (!p) { res.status(404).json({ error: "unknown project" }); return; }
+  const w = (["all", "30d", "7d"].includes(String(req.query.window)) ? String(req.query.window) : "all") as Window;
+  res.json(await standings(Number(p.id), w));
 });
 /** GET /leaderboard?window= : across all projects. */
 root.get("/leaderboard", async (req, res) => {
