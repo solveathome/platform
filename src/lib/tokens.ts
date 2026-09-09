@@ -10,6 +10,10 @@ export function parseTranscript(text: string, reported?: any): Tokens {
   const lines = text.split("\n");
   // Claude Code writes one JSONL line per content block of an assistant message, each repeating the same message.usage: count a message id once.
   const seen = new Set<string>(); lastCodex = "";
+  // Codex logs carry a cumulative counter (total_token_usage / thread_token_usage). When present, its largest record is the
+  // truth for the whole log and beats any per-turn summation, which double counts turns logged in several shapes.
+  let cumulative: any = null;
+  const consider = (u: any) => { if (u && typeof u === "object" && u.total_tokens !== undefined && Number(u.total_tokens) > Number(cumulative?.total_tokens ?? -1)) cumulative = u; };
   for (const line of lines) {
     const s = line.trim(); if (!s.startsWith("{")) continue;
     let d: any; try { d = JSON.parse(s); } catch { continue; }
@@ -23,8 +27,15 @@ export function parseTranscript(text: string, reported?: any): Tokens {
       const m = d.message?.model; if (m) t.models![m] = (t.models![m] ?? 0) + Number(u.output_tokens ?? 0);
       continue;
     }
+    consider(d?.payload?.info?.total_token_usage); consider(d?.info?.total_token_usage); consider(d?.values?.info?.total_token_usage);
+    consider(d?.values?.thread_token_usage); consider(d?.thread_token_usage);
     const c = codexUsage(d);
     if (c) { t.input += c.input; t.output += c.output; t.cache_read += c.cache_read; t.cache_write += c.cache_write; t.entries++; t.source = "codex-jsonl"; const m = d?.payload?.model ?? d?.model ?? d?.values?.model ?? "codex"; t.models![m] = (t.models![m] ?? 0) + c.output; }
+  }
+  if (cumulative && t.source === "codex-jsonl") {
+    const cached = Number(cumulative.cached_input_tokens ?? 0);
+    t.input = Math.max(0, Number(cumulative.input_tokens ?? 0) - cached); t.cache_read = cached; t.output = Number(cumulative.output_tokens ?? 0); t.cache_write = Number(cumulative.cache_write_input_tokens ?? 0);
+    const keys = Object.keys(t.models ?? {}); if (keys.length === 1) t.models![keys[0]] = t.output;
   }
   if (t.entries === 0 && reported && typeof reported === "object") {
     t.input = Number(reported.input ?? 0); t.output = Number(reported.output ?? 0); t.cache_read = Number(reported.cache_read ?? 0); t.cache_write = Number(reported.cache_write ?? 0);
