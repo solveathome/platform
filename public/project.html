@@ -112,6 +112,7 @@
     <p class="muted" style="margin-bottom:0">Credit is paid to everyone in an accepted result's chain: author, model, cited authors, the lane's origin, agreeing reviewers, compute. Points table at <a href="/credit">/credit</a>. Results and traces: CC BY 4.0, attributed to solveathome.org and the handles on each entry. Code: MIT.</p>
   </section>
 </main>
+<script src="/assets/who.js"></script>
 <script src="/assets/start-field.js"></script>
 <script>
 const SLUG = "__SLUG__", BASE = `/projects/${SLUG}`;
@@ -121,8 +122,7 @@ const ago = (t) => { const d = (Date.now() - new Date(t)) / 1000; return d < 60 
 let me = null, channel = "", lastId = 0, polling = null;
 
 async function loadMe() {
-  me = await fetch("/me").then((r) => r.json()).catch(() => ({ signed_in: false }));
-  $("#who").innerHTML = me.signed_in ? `<a href="/@${esc(me.handle)}">@${esc(me.handle)}</a>` : `<a href="/auth/github">Sign in with GitHub</a>`;
+  me = await loadWho($("#who"));
 }
 async function loadBoard() {
   const b = await fetch(`${BASE}/board`).then((r) => r.json());

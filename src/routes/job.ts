@@ -8,6 +8,7 @@ import * as files from "../lib/files.js";
 import * as credit from "../lib/credit.js";
 import { orientation } from "../lib/orientation.js";
 import { parseTranscript } from "../lib/tokens.js";
+import { randomBytes } from "node:crypto";
 
 export const job = Router({ mergeParams: true });
 const BASE = () => process.env.BASE_URL ?? "http://localhost:8600";
@@ -38,10 +39,18 @@ async function start(req: any, res: any): Promise<void> {
   const member = await one(`SELECT * FROM pool WHERE problem_id = $1 AND user_id = $2`, [req.project.id, req.user!.id]);
   const wantsJson = (req.header("accept") ?? "").includes("application/json");
   const ownerNote = "";
-  if (!member) {
-    // Not registered: orientation only. The agent must ask its person and POST /start.
-    const md = ownerNote + await orientation(req.project, BASE(), null);
-    if (wantsJson) res.json({ registered: false, orientation_md: md }); else res.type("text/markdown").send(md);
+  // Consent is per agent session (scope Q51). Without the session id minted by POST /start, the agent gets the
+  // orientation: the terms to show its person, and (for a returning handle) the choice to continue or change settings.
+  const session = req.justRegistered ? member?.session : (req.header("x-session") ?? String(req.query.session ?? "")).trim();
+  if (!member || !session || session !== member.session) {
+    const md = ownerNote + await orientation(req.project, BASE(), member ?? null);
+    if (wantsJson) res.json({ registered: !!member, session: null, orientation_md: md }); else res.type("text/markdown").send(md);
+    return;
+  }
+  if (Number(member.session_jobs) >= Number(member.session_max_jobs)) {
+    const md = `# solveathome / ${req.project.name}: session cap reached\n\nYour person allowed ${member.session_max_jobs} assignment(s) this session and you have taken ${member.session_jobs}. Stop here. Tell them what you did and where it stands (\`${BASE()}/@${req.user!.handle}\`). Continue only if they say so: \`POST ${BASE()}/projects/${req.project.slug}/start\` with \`{ "agreed": true, "ai": { "max_assignments": <n> } }\` starts a new session with their new cap. Nothing continues by default.\n`;
+    if (wantsJson) res.status(409).json({ error: "session cap reached", session_jobs: member.session_jobs, session_max_jobs: member.session_max_jobs, orientation_md: md });
+    else res.status(409).type("text/markdown").send(md);
     return;
   }
   await q(`UPDATE pool SET last_seen = now(), model = COALESCE($3, model) WHERE problem_id = $1 AND user_id = $2`, [req.project.id, req.user!.id, req.model ?? null]);
@@ -80,13 +89,15 @@ async function start(req: any, res: any): Promise<void> {
       `UPDATE jobs SET status = 'assigned', assigned_to = $2, assigned_at = now(),
          expires_at = now() + ($3::numeric * interval '1 hour') * 2
        WHERE id = $1 RETURNING expires_at`, [row.id, uid, row.budget_hours]);
+    await client.query(`UPDATE pool SET session_jobs = session_jobs + 1 WHERE problem_id = $1 AND user_id = $2`, [req.project.id, uid]);
     await client.query("COMMIT");
     row.expires_at = upd.rows[0].expires_at;
-    let md = renderBrief(row, `${BASE()}/projects/${req.project.slug}`);
-    if (req.justRegistered) md = (await orientation(req.project, BASE(), member)) + "\n\n---\n\n" + md;
+    const sess = { id: String(member.session), jobs: Number(member.session_jobs) + 1, max: Number(member.session_max_jobs), maxHours: Number(member.ai?.max_hours_per_assignment ?? 2) };
+    let md = renderBrief(row, `${BASE()}/projects/${req.project.slug}`, sess);
+    if (req.justRegistered) md = (await orientation(req.project, BASE(), member, true)) + "\n\n---\n\n" + md;
     md = ownerNote + md;
     if (member.input?.direction) md += `\n\n## Your person's direction\n\nThey said: "${String(member.input.direction).slice(0, 2000)}"\n\nIf this assignment does not serve that, you may set it aside: pursue their idea and submit it as type \`direction\` with their words in the report and their handle in \`cites.handles\`. Their name goes on the lane if it is accepted.\n`;
-    if (wantsJson) res.json({ job_id: row.id, type: row.type, brief_md: md });
+    if (wantsJson) res.json({ job_id: row.id, type: row.type, session: sess.id, session_jobs: sess.jobs, session_max_jobs: sess.max, brief_md: md });
     else res.type("text/markdown").send(md);
   } catch (e) { await client.query("ROLLBACK"); throw e; } finally { client.release(); }
 }
@@ -107,16 +118,28 @@ job.post("/release", bearer, project, async (req: any, res: any) => {
   res.json({ ok: true, job_id: id, status: "queued" });
 });
 
-/** POST /start : register what the person contributes. Body: { ai: {max_hours_per_assignment}, compute: {...}|null, input: {...}|null }. Replies with orientation + first assignment. */
+/**
+ * POST /start : the person agreed to the terms; register what they contribute and open a session.
+ * Body: { agreed: true, ai: {max_hours_per_assignment, max_assignments}, compute: {...}|null, input: {...}|null }.
+ * A returning handle may send only { agreed, ai: { max_assignments } } to keep its previous settings.
+ * Replies with orientation + session id + first assignment.
+ */
 job.post("/start", bearer, project, async (req: any, res: any) => {
   const b = req.body ?? {};
-  const ai = { max_hours_per_assignment: Math.min(24, Math.max(0.25, Number(b.ai?.max_hours_per_assignment ?? 2))) };
-  const compute = b.compute && typeof b.compute === "object" ? { cpu_hours: Math.max(0, Number(b.compute.cpu_hours ?? 0)), ram_gb: Number(b.compute.ram_gb ?? 0) || null, mathlib_cache: !!b.compute.mathlib_cache } : null;
-  const input = b.input && typeof b.input === "object" && (b.input.lane || b.input.direction) ? { lane: b.input.lane ? String(b.input.lane).slice(0, 80) : null, direction: b.input.direction ? String(b.input.direction).slice(0, 4000) : null } : null;
-  if (input?.lane) { const l = await one(`SELECT 1 FROM lanes WHERE problem_id = $1 AND slug = $2`, [req.project.id, input.lane]); if (!l) { res.status(400).json({ error: `unknown lane '${input.lane}'` }); return; } }
-  await q(`INSERT INTO pool (problem_id, user_id, model, ai, compute, input) VALUES ($1,$2,$3,$4,$5,$6)
-           ON CONFLICT (problem_id, user_id) DO UPDATE SET model = EXCLUDED.model, ai = EXCLUDED.ai, compute = EXCLUDED.compute, input = EXCLUDED.input, last_seen = now()`,
-    [req.project.id, req.user!.id, req.model ?? null, JSON.stringify(ai), compute ? JSON.stringify(compute) : null, input ? JSON.stringify(input) : null]);
+  if (b.agreed !== true) { res.status(400).json({ error: "agreed:true is required: show your person the terms from GET /start and register only after they agree" }); return; }
+  const prev = await one(`SELECT * FROM pool WHERE problem_id = $1 AND user_id = $2`, [req.project.id, req.user!.id]);
+  const keep = !!prev && b.ai?.max_hours_per_assignment === undefined && b.compute === undefined && b.input === undefined;
+  const ai = keep ? { ...prev.ai } : { max_hours_per_assignment: Math.min(24, Math.max(0.25, Number(b.ai?.max_hours_per_assignment ?? 2))) };
+  const maxJobs = Math.min(50, Math.max(1, Math.floor(Number(b.ai?.max_assignments ?? 1)) || 1));
+  const compute = keep ? prev.compute : (b.compute && typeof b.compute === "object" ? { cpu_hours: Math.max(0, Number(b.compute.cpu_hours ?? 0)), ram_gb: Number(b.compute.ram_gb ?? 0) || null, mathlib_cache: !!b.compute.mathlib_cache } : null);
+  const input = keep ? prev.input : (b.input && typeof b.input === "object" && (b.input.lane || b.input.direction) ? { lane: b.input.lane ? String(b.input.lane).slice(0, 80) : null, direction: b.input.direction ? String(b.input.direction).slice(0, 4000) : null } : null);
+  if (!keep && input?.lane) { const l = await one(`SELECT 1 FROM lanes WHERE problem_id = $1 AND slug = $2`, [req.project.id, input.lane]); if (!l) { res.status(400).json({ error: `unknown lane '${input.lane}'` }); return; } }
+  const session = randomBytes(12).toString("hex");
+  await q(`INSERT INTO pool (problem_id, user_id, model, ai, compute, input, session, session_started, session_max_jobs, session_jobs, agreed_at)
+           VALUES ($1,$2,$3,$4,$5,$6,$7,now(),$8,0,now())
+           ON CONFLICT (problem_id, user_id) DO UPDATE SET model = EXCLUDED.model, ai = EXCLUDED.ai, compute = EXCLUDED.compute, input = EXCLUDED.input, last_seen = now(),
+             session = EXCLUDED.session, session_started = now(), session_max_jobs = EXCLUDED.session_max_jobs, session_jobs = 0, agreed_at = now()`,
+    [req.project.id, req.user!.id, req.model ?? null, JSON.stringify(ai), compute ? JSON.stringify(compute) : null, input ? JSON.stringify(input) : null, session, maxJobs]);
   req.justRegistered = true;
   await start(req, res);
 });
@@ -137,6 +160,7 @@ job.post("/result", bearer, project, async (req: any, res) => {
   const b = req.body ?? {};
   const uid = req.user!.id;
   if (!b.transcript || typeof b.transcript !== "string") { res.status(400).json({ error: "transcript is required" }); return; }
+  if (b.transcript_approved !== true) { res.status(400).json({ error: "transcript_approved:true is required: show your person the scrubbed transcript and send only if they approve; if they decline, POST /release instead" }); return; }
   if (!b.report_md && !b.verdict) { res.status(400).json({ error: "report_md is required" }); return; }
 
   let jobRow: any = null;

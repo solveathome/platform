@@ -11,7 +11,7 @@
   if (!document.getElementById("sf-css")) { const st = document.createElement("style"); st.id = "sf-css"; st.textContent = css; document.head.appendChild(st); }
 
   function line(origin, slug, token) {
-    return `Fetch ${origin}/projects/${slug}/start with header "Authorization: Bearer ${token}" and header "X-Model: <your model id>", then do what it says.`;
+    return `Fetch ${origin}/projects/${slug}/start with header "Authorization: Bearer ${token}" and header "X-Model: <your model id>", then tell me what joining means and ask me before you do anything.`;
   }
   const mask = (t) => t.slice(0, 4) + "•".repeat(Math.max(8, t.length - 4));
 

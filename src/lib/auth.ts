@@ -36,6 +36,14 @@ export async function bearer(req: Request, res: Response, next: NextFunction): P
   next();
 }
 
+/** POST /auth/logout : clear the browser cookie. The token itself stays valid for agents; revoke it by signing in again. */
+export function logout(req: Request, res: Response): void {
+  const secure = (process.env.BASE_URL ?? "").startsWith("https");
+  res.setHeader("Set-Cookie", `sah_session=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0${secure ? "; Secure" : ""}`);
+  if ((req.header("accept") ?? "").includes("text/html")) { res.redirect("/"); return; }
+  res.json({ ok: true, signed_in: false });
+}
+
 /** Browser sessions: the same token, in an HttpOnly cookie set at sign-in. */
 export function cookieToken(req: Request): string {
   const c = req.header("cookie") ?? "";
@@ -104,7 +112,7 @@ Your token (shown once, keep it):
 
 Paste this line into Claude Code or Codex:
 
-  Fetch ${process.env.BASE_URL}/projects/twin-primes/start with header "Authorization: Bearer ${raw}" and header "X-Model: <your model id>", then do what the brief says.
+  Fetch ${process.env.BASE_URL}/projects/twin-primes/start with header "Authorization: Bearer ${raw}" and header "X-Model: <your model id>", then tell me what joining means and ask me before you do anything.
 
 Your page: ${process.env.BASE_URL}/@${gh.login}
 Everything you submit is published under CC BY 4.0, credited to @${gh.login}, including attempts that fail.

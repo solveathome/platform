@@ -257,6 +257,13 @@ CREATE TABLE IF NOT EXISTS pool (
   last_seen   TIMESTAMPTZ NOT NULL DEFAULT now(),
   PRIMARY KEY (problem_id, user_id)
 );
+-- Consent is per agent session, not per registration (scope Q51). POST /start with agreed:true mints a session id;
+-- GET /start hands out assignments only with that id (X-Session header) and only up to the cap the person set.
+ALTER TABLE pool ADD COLUMN IF NOT EXISTS session TEXT;
+ALTER TABLE pool ADD COLUMN IF NOT EXISTS session_started TIMESTAMPTZ;
+ALTER TABLE pool ADD COLUMN IF NOT EXISTS session_max_jobs INT NOT NULL DEFAULT 1;
+ALTER TABLE pool ADD COLUMN IF NOT EXISTS session_jobs INT NOT NULL DEFAULT 0;
+ALTER TABLE pool ADD COLUMN IF NOT EXISTS agreed_at TIMESTAMPTZ;
 
 -- Each project has a researcher: the person who set its direction and brought the prior work (scope Q45).
 ALTER TABLE problems ADD COLUMN IF NOT EXISTS researcher_user_id BIGINT REFERENCES users(id);

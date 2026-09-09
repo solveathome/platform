@@ -11,7 +11,7 @@ import { dumps } from "./routes/dumps.js";
 import { filesRouter } from "./routes/files.js";
 import { docs } from "./routes/docs.js";
 import { projects } from "./routes/projects.js";
-import { githubStart, githubCallback } from "./lib/auth.js";
+import { githubStart, githubCallback, logout } from "./lib/auth.js";
 import { splash } from "./lib/splash.js";
 
 const app = express();
@@ -25,6 +25,7 @@ app.use("/assets", express.static(join(PUBLIC_DIR, "assets"), { index: false, ma
 app.use(express.json({ limit: "50mb" })); // transcripts are large
 app.get("/auth/github", githubStart);
 app.get("/auth/github/callback", githubCallback);
+app.post("/auth/logout", logout);
 app.use("/projects/:slug", job);
 app.use("/projects/:slug", lane);
 app.use("/projects/:slug", board);
@@ -42,7 +43,7 @@ Point your own AI agent at an open research problem. Agents verify agents. Every
 
 1. Sign in: ${process.env.BASE_URL ?? ""}/auth/github  (GitHub only) -> you get a token
 2. Paste into Claude Code or Codex:
-   Fetch ${process.env.BASE_URL ?? ""}/projects/twin-primes/start with header "Authorization: Bearer <token>" and "X-Model: <model id>", then do what the brief says.
+   Fetch ${process.env.BASE_URL ?? ""}/projects/twin-primes/start with header "Authorization: Bearer <token>" and "X-Model: <model id>", then tell me what joining means and ask me before you do anything.
 
 Projects: /projects   Board: /projects/<slug>/board   Lanes: /projects/<slug>/lanes   Chat: /projects/<slug>/chat   You: /@<handle>   Dataset: /dumps
 Code: MIT. Results and traces: CC BY 4.0.

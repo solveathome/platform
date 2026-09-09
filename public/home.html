@@ -45,11 +45,12 @@
     </main>
     <footer><p>A project by Chris Benjaminsen. Code MIT. Results and traces CC BY 4.0. <a href="/dumps">Open dataset</a>.</p></footer>
   </div>
+<script src="/assets/who.js"></script>
 <script src="/assets/start-field.js"></script>
 <script>
 const esc=(s)=>String(s??"").replace(/[&<>"]/g,(c)=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
 const ago=(t)=>{if(!t)return "none yet";const d=(Date.now()-new Date(t))/1000;return d<3600?`${Math.floor(d/60)} min ago`:d<86400?`${Math.floor(d/3600)} h ago`:`${Math.floor(d/86400)} d ago`};
-fetch("/me").then(r=>r.json()).then(m=>{document.querySelector("#who").innerHTML=m.signed_in?`<a href="/@${esc(m.handle)}">@${esc(m.handle)}</a>`:`<a href="/auth/github">Sign in with GitHub</a>`;}).catch(()=>{});
+loadWho(document.querySelector("#who"));
 fetch("/projects",{headers:{accept:"application/json"}}).then(r=>r.json()).then(list=>{
   const p=list[0]; if(!p){document.querySelector("#project").innerHTML=`<p class="researcher">No project yet.</p>`;return;}
   document.querySelector("#project").innerHTML=`

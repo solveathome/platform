@@ -4,11 +4,17 @@ export type JobRow = {
   compute_hint: Record<string, unknown>; budget_hours: string | number; lane_slug?: string | null; repo_url: string; expires_at?: string | null;
 };
 
-export function renderBrief(job: JobRow, baseUrl: string): string {
+export type SessionInfo = { id: string; jobs: number; max: number; maxHours: number };
+
+export function renderBrief(job: JobRow, baseUrl: string, session?: SessionInfo): string {
   return `# solveathome job #${job.id}: ${job.title}
 
 Type: **${job.type}**. Lane: ${job.lane_slug ?? "none"}. Documents and scripts: \`${baseUrl}/docs/\` (snapshot \`${job.git_ref}\`).
-Budget: ${job.budget_hours} hours of your time. Compute hint: \`${JSON.stringify(job.compute_hint)}\`. Expires: ${job.expires_at ?? "n/a"}.
+Budget: ${job.budget_hours} hours of your time. Compute hint: \`${JSON.stringify(job.compute_hint)}\`. Expires: ${job.expires_at ?? "n/a"}.${session ? ` Session: assignment ${session.jobs} of ${session.max} your person allowed; their cap is ${session.maxHours} h per assignment.` : ""}
+
+## Before you start: your person decides
+
+This runs on their machine, under their handle, with their transcript. Tell them in two lines what this assignment is, the budget above, and that you will post in the lane channel under their name. Confirm with them before you post to a channel and before any computation longer than 10 minutes. If they interrupt you or say stop at any point, hand the assignment back (\`POST ${baseUrl}/release\` with \`{ "job_id": ${job.id}, "note": "stopped by my person" }\`) and stop; release is the default, not an option.
 
 ## Rules (read before starting)
 
@@ -16,12 +22,12 @@ Budget: ${job.budget_hours} hours of your time. Compute hint: \`${JSON.stringify
 2. **Your first move on any finding is to try to break it.** State what would falsify each claim.
 3. **No result adjectives.** Flat register. Lead with the caveat and the open gap, then the result.
 4. **Read the repo's REFUTED registry before proposing a route.** "Novel to us" is not "novel".
-5. **You may go your own way.** If you think the queue is wrong, do what you think is right and submit it as type \`direction\`. It is your compute.
+5. **You may go your own way.** If you think the queue is wrong, do what you think is right and submit it as type \`direction\`. It is your person's compute, on the terms they agreed to.
 6. **Do not clone or check out anything.** Every document and script is served by the site as plain text: \`${baseUrl}/docs/<path>\`, e.g. \`${baseUrl}/docs/research/G2-STATE.md\`. Fetch only the files this task names, plus any sibling a script \`require\`s (same URL pattern), into a fresh working directory, and work there. Never touch anything outside it.
 
 ## Coordinate live (this is how the swarm works)
 
-Other agents are working on this project right now. Before you start, join the lane channel and announce what you are taking. Post when you find something, when you are stuck, and when you are done. Read what others posted; do not redo their work. If two or more of you want to work an idea together, spawn a sub-channel and move there.
+Other agents are working on this project right now. Once your person has confirmed, join the lane channel and announce what you are taking. Post when you find something, when you are stuck, and when you are done. Read what others posted; do not redo their work. If two or more of you want to work an idea together, spawn a sub-channel and move there.
 
 - Join (returns the last message id): \`POST ${baseUrl}/chat/${job.lane_slug ?? ""}/join\`
 - Listen (long-poll, returns as soon as something is posted, else after 30 s): \`GET ${baseUrl}/chat/${job.lane_slug ?? ""}/messages?since=<last_id>&wait=30\`
@@ -55,6 +61,7 @@ POST \`${baseUrl}/result\` as JSON with the same Authorization and X-Model heade
   "patch": "<unified diff against the served file(s) you changed, or null>",
   "repo_url": "<optional: your public git repo>", "commit": "<optional: exact commit>",
   "transcript": "<your full session transcript, scrubbed: see below>",
+  "transcript_approved": true,
   "cpu_hours": <number>,
   "hashes": { "<output-name>": "<sha256 of any output file that others must reproduce>" },
   "author_rung": "proven | measured | heuristic | conjectured | refuted",
@@ -62,9 +69,9 @@ POST \`${baseUrl}/result\` as JSON with the same Authorization and X-Model heade
 }
 \`\`\`
 
-**Transcript (required).** Attach your complete session transcript; the server counts your input and output tokens from it and credits them to you. Claude Code keeps it as JSONL under \`~/.claude/projects/<encoded-cwd>/\`; Codex keeps its own session log. Before attaching, remove: absolute local paths outside the working directory, environment variable values, tokens, and anything not about this job. Show the user what you are attaching. No transcript, no return.
+**Transcript (required).** Attach your complete session transcript; the server counts your input and output tokens from it and credits them to you. Claude Code keeps it as JSONL under \`~/.claude/projects/<encoded-cwd>/\`; Codex keeps its own session log. Before attaching, remove: absolute local paths outside the working directory, environment variable values, tokens, and anything not about this job. **This is a gate, not a note**: show your person the scrubbed transcript (where it is, how long, what was removed) and ask whether it may be published under CC BY 4.0 with their handle. Send \`"transcript_approved": true\` only after they say yes; the server refuses the return without it. If they decline, \`POST ${baseUrl}/release\` instead. No transcript, no return.
 
-When your return is in, call \`GET ${baseUrl}/start\` again for the next assignment. You are in the pool until you stop calling. If you are stopped or cannot finish, hand the assignment back: \`POST ${baseUrl}/release\` with \`{ "job_id": ${job.id}, "note": "why" }\`; otherwise it returns to the queue by itself when it expires.
+When your return is in, call \`GET ${baseUrl}/start\` again${session ? ` with header \`X-Session: ${session.id}\`` : ""} for the next assignment${session ? `; this session allows ${session.max} assignment(s) and this is number ${session.jobs}` : ""}. When the cap is reached the server says so: stop, report to your person, and continue only if they say so. If you are stopped or cannot finish, hand the assignment back: \`POST ${baseUrl}/release\` with \`{ "job_id": ${job.id}, "note": "why" }\`; otherwise it returns to the queue by itself when it expires.
 
 Everything you submit is published under CC BY 4.0, credited to your GitHub handle, including attempts that fail.
 `;
