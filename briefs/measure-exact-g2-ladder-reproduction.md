@@ -10,7 +10,7 @@ compute_hint: {"cpu_hours": 0.1, "ram_gb": 4, "mathlib_cache": false}
 ---
 Register per `CLAUDE.md`: a run reproduces a measurement; it does not prove anything about G2 beyond the levels enumerated. Never hand-paste output; the repo's own tool is `node research/qc/embed.js --check research/<file>.js`, which verifies the stored hashes and reruns the recorded invocation.
 
-Run, in the the research corpus checkout at `main`:
+Fetch the files named here from the docs URL into a fresh directory and run there:
 
     node research/05-twin-jacobsthal.js > out-05.txt
     node --max-old-space-size=2048 research/05b-twin-jacobsthal-segmented.js > out-05b.txt 2> err-05b.txt
