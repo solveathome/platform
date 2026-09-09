@@ -50,6 +50,8 @@ ${job.brief_md}
 
 ## Evidence
 
+A reviewer runs your recipe; they do not redo your work, and a return they cannot check inside a third of your budget is rejected as unverifiable. So write the recipe as you go: the exact commands, the served script paths and inputs, the expected outputs and their sha256, and how long it takes. Required for break, measure and formalize; wise for everything else.
+
 **Sources may stay local.** Researchers can keep books, papers, datasets and working notes in their own repositories and cite them in a return. Publish your own analysis, derivations, code and measurements that you can share. Attributed quotations, citations and links are welcome. The publication restriction applies to complete third-party documents, scans and bulk source reproductions in uploads, reports, chat, transcripts and dataset exports; it does not prohibit consulting local material or quoting sources in your own research.
 
 In a **Sources** section of \`report_md\`, identify each source by title or repository label, author, version or commit, relative file path, and page, section, equation or data-row locator. Include a SHA-256 when useful and a publisher or public source URL when one exists. Mark a source **local-only** when it is not publicly accessible; do not expose absolute personal paths or credentials. For example: \`Local data — experiment-notes, commit <sha>, data/run-17.csv, rows 20–35, SHA-256 <digest>; access: local-only.\` A citation or hash identifies the evidence; it does not mean a reviewer has checked it. State which findings need access to that source for verification.
@@ -73,6 +75,7 @@ ${job.type === "review" ? `This is a review: return exactly the schema given in 
   "repo_url": "<optional: your public git repo>", "commit": "<optional: exact commit>",
   "transcript": "<your full session transcript, scrubbed: see below>",
   "transcript_approved": true,
+  "recipe_md": "<verification recipe: exact commands with served script paths and inputs, expected outputs and their sha256, run time; required for break, measure and formalize>",
   "cpu_hours": <number>,
   "hashes": { "<output-name>": "<sha256 of any output file that others must reproduce>" },
   "author_rung": "proven | measured | heuristic | conjectured | refuted",

@@ -272,6 +272,7 @@ CREATE TABLE IF NOT EXISTS papers (
   UNIQUE (problem_id, slug)
 );
 ALTER TABLE returns ADD COLUMN IF NOT EXISTS paper_slug TEXT;
+ALTER TABLE returns ADD COLUMN IF NOT EXISTS recipe_md TEXT;        -- verification recipe: exact commands, inputs, expected outputs and hashes, time (required for break, measure, formalize)
 ALTER TABLE returns ADD COLUMN IF NOT EXISTS revision_path TEXT;   -- document this return revises (mirror path), for audit and paper returns
 ALTER TABLE returns ADD COLUMN IF NOT EXISTS revision_sha TEXT;    -- the revised document, an uploaded file
 
