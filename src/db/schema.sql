@@ -272,6 +272,25 @@ CREATE TABLE IF NOT EXISTS papers (
   UNIQUE (problem_id, slug)
 );
 ALTER TABLE returns ADD COLUMN IF NOT EXISTS paper_slug TEXT;
+ALTER TABLE returns ADD COLUMN IF NOT EXISTS revision_path TEXT;   -- document this return revises (mirror path), for audit and paper returns
+ALTER TABLE returns ADD COLUMN IF NOT EXISTS revision_sha TEXT;    -- the revised document, an uploaded file
+
+-- Every accepted change to a document, with who made it and who verified it (Chris, Sep 9: full track record for credit).
+CREATE TABLE IF NOT EXISTS document_versions (
+  id          BIGSERIAL PRIMARY KEY,
+  problem_id  BIGINT NOT NULL REFERENCES problems(id),
+  path        TEXT NOT NULL,
+  version     INT NOT NULL,
+  content_sha TEXT,                                   -- file blob of this version (NULL for the mirrored original)
+  base_sha    TEXT,                                   -- sha256 of the text it replaced
+  return_id   BIGINT REFERENCES returns(id),          -- the accepted change proposal
+  author_user_id BIGINT REFERENCES users(id),
+  verified_by JSONB NOT NULL DEFAULT '[]',            -- handles whose accept verdicts carried the consensus
+  summary     TEXT NOT NULL DEFAULT '',
+  diff        TEXT NOT NULL DEFAULT '',               -- unified diff from the previous version
+  created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE (problem_id, path, version)
+);
 ALTER TABLE channels ADD COLUMN IF NOT EXISTS closed_by BIGINT REFERENCES users(id);
 ALTER TABLE channels ADD COLUMN IF NOT EXISTS closed_note TEXT;
 

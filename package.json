@@ -19,11 +19,13 @@
     "import-papers": "tsx scripts/import-papers.ts"
   },
   "dependencies": {
+    "diff": "^8.0.4",
     "express": "^5.1.0",
     "marked": "^15.0.12",
     "pg": "^8.13.0"
   },
   "devDependencies": {
+    "@types/diff": "^7.0.2",
     "@types/express": "^5.0.0",
     "@types/node": "^22.0.0",
     "@types/pg": "^8.11.0",

@@ -30,6 +30,7 @@ const registryGrades: Record<string, string> = {};
 const reg = existsSync(join(root, "proposals", "PROPOSALS.md")) ? readFileSync(join(root, "proposals", "PROPOSALS.md"), "utf8") : "";
 for (const m of reg.matchAll(/\|\s*\[([^\]]+\.md)\]\([^)]+\)\s*\|\s*([^|]+?)\s*\|/g)) registryGrades[m[1]] = m[2].replace(/\s+/g, " ").trim().slice(0, 200);
 
+const auditBrief = (pslug: string, path: string, t: string) => `paper.slug: ${pslug}\n\nAudit "${t}" (\`${path}\`). Read it in full, then \`paper/PAPERS.md\` and \`paper/writing-style-math.md\`. Find what is wrong, unsupported or overclaimed: every theorem, lemma and measured claim checked against the research note or script it cites at the calibration that source states; every citation checked at the page or marked unverified; the abstract claiming nothing the body does not carry; prose that inflates. Then fix it: return the revised document as one uploaded Markdown file, plus a report listing each issue (where, what, why, what you changed, and the calibration you can defend). Set \`"revision": { "path": "${path}", "file": "<sha256>" }\` and \`"paper": { "slug": "${pslug}", "file": "<sha256>" }\`. Reviewers check each issue and each change; accepted, your revision becomes the paper's next version, credited to you and verified by them, with the diff on record.`;
 let seeded = 0, jobs = 0;
 // Proposals first, drafts last: a draft is the document of record and overwrites the wrapper proposal with the same slug.
 const entries: Array<{ file: string; path: string; kind: "draft" | "proposal" }> = [];
@@ -45,9 +46,16 @@ for (const e of entries) {
   const existing = await one(`SELECT id, status FROM papers WHERE problem_id = $1 AND slug = $2`, [p.id, pslug]);
   if (existing) await q(`UPDATE papers SET title = $3, path = $4, kind = $5, grade = $6, summary = $7, status = CASE WHEN status = 'proposed' AND $5 = 'draft' THEN 'draft' ELSE status END WHERE problem_id = $1 AND slug = $2`, [p.id, pslug, t, e.path, e.kind, g, summary(text)]);
   else { await q(`INSERT INTO papers (problem_id, slug, title, path, kind, status, grade, summary) VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`, [p.id, pslug, t, e.path, e.kind, e.kind === "proposal" ? "proposed" : "draft", g, summary(text)]); seeded++; }
-  const open = await one(`SELECT 1 FROM jobs WHERE problem_id = $1 AND type = 'paper' AND status IN ('queued','assigned') AND brief_md LIKE '%paper.slug: ' || $2 || '%'`, [p.id, pslug]);
+  // Drafts get audit jobs (find issues, propose the change); proposals get write jobs. Earlier queued "referee-ready revision" paper jobs become audits.
+  await q(`UPDATE jobs SET type = 'audit', title = regexp_replace(title, '^Paper: referee-ready revision of', 'Audit:'), budget_hours = 3, brief_md = $3 WHERE problem_id = $1 AND type = 'paper' AND status = 'queued' AND brief_md LIKE '%paper.slug: ' || $2 || '%' AND title LIKE 'Paper: referee-ready revision%'`,
+    [p.id, pslug, auditBrief(pslug, e.path, t)]);
+  const open = await one(`SELECT 1 FROM jobs WHERE problem_id = $1 AND type IN ('paper','audit') AND status IN ('queued','assigned') AND brief_md LIKE '%paper.slug: ' || $2 || '%'`, [p.id, pslug]);
   if (open) continue;
   const write = e.kind === "proposal";
+  if (!write) {
+    await q(`INSERT INTO jobs (problem_id, lane_id, type, title, brief_md, git_ref, compute_hint, budget_hours, min_tier, quorum) VALUES ($1,NULL,'audit',$2,$3,'main','{}',3,1,1)`, [p.id, `Audit: "${t}"`.slice(0, 200), auditBrief(pslug, e.path, t)]);
+    jobs++; continue;
+  }
   const brief = `paper.slug: ${pslug}\n\n${write
     ? `Write the paper this proposal describes. Read \`${e.path}\` (the proposal, with its grade, records and triggers), then \`paper/PAPERS.md\` (positioning, authorship and AI-disclosure block) and \`paper/writing-style-math.md\` (the house style: claim exactly what is proven, calibration is grammar). Every result the paper states must point at the research note or script that carries it, at the calibration that note states; the prior-art position must be the registry's, not a hopeful one.`
     : `Bring this draft to referee-ready. Read \`${e.path}\` in full, then \`paper/PAPERS.md\` and \`paper/writing-style-math.md\`. Check every theorem, lemma and measured claim against the research note or script it cites, at the calibration that source states; verify every citation at the page or mark it unverified; make the abstract claim nothing the body does not carry; keep the authorship and AI-disclosure block. Fix what you can fix; where a claim cannot be supported at its stated calibration, lower the calibration in the text and say why in your report.`}

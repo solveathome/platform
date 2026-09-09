@@ -6,6 +6,7 @@ import { protectMath } from "../lib/math.js";
 import { linkPeople } from "../lib/people.js";
 import { linkPaths, paperPages } from "../lib/paths-link.js";
 import { page, esc as escHtml } from "../lib/page.js";
+import * as revisions from "../lib/revisions.js";
 import { renderBrief, type JobRow } from "../lib/brief.js";
 import { decide, MAX_REVIEWS, MIN_REVIEWS } from "../lib/consensus.js";
 import * as reputation from "../lib/reputation.js";
@@ -188,7 +189,7 @@ job.post("/result", bearer, project, async (req: any, res) => {
     if (Number(jobRow.assigned_to) !== uid) { res.status(403).json({ error: "job is not assigned to this token" }); return; }
     if (jobRow.status !== "assigned") { res.status(409).json({ error: `job is ${jobRow.status}` }); return; }
   } else {
-    if (b.type !== "direction" && b.type !== "paper") { res.status(400).json({ error: "without job_id only type 'direction' or 'paper' (a new paper) is accepted" }); return; }
+    if (!["direction", "paper", "audit"].includes(b.type)) { res.status(400).json({ error: "without job_id only type 'direction', 'paper' (a new paper) or 'audit' (a change proposal for any served document) is accepted" }); return; }
   }
 
   const tokens = parseTranscript(String(b.transcript), b.tokens);
@@ -244,7 +245,19 @@ job.post("/result", bearer, project, async (req: any, res) => {
     const fsha = String(b.paper?.file ?? "").toLowerCase();
     if (!/^[0-9a-f]{64}$/.test(fsha) || !(Array.isArray(b.files) && b.files.map((x: any) => String(x).toLowerCase()).includes(fsha))) { res.status(400).json({ error: "paper.file must be the sha256 of the manuscript, and it must be listed in files" }); return; }
     await q(`UPDATE returns SET paper_slug = $2 WHERE id = $1`, [ret!.id, ps]);
+    const ppath = (await one<{ path: string | null }>(`SELECT path FROM papers WHERE id = $1`, [paper.id]))?.path ?? `paper/${ps}.md`;
+    await q(`UPDATE returns SET revision_path = $2, revision_sha = $3 WHERE id = $1`, [ret!.id, ppath, fsha]);
     await q(`UPDATE papers SET status = 'under_review', updated_at = now() WHERE id = $1`, [paper.id]);
+  }
+  // Audit: a change proposal for a served document. revision.path is the document, revision.file the revised text (uploaded, listed in files).
+  if (jobRow?.type === "audit" || (!jobRow && b.type === "audit")) {
+    const rel = revisions.safeRel(String(b.revision?.path ?? ""));
+    const fsha = String(b.revision?.file ?? "").toLowerCase();
+    if (!rel || !(await revisions.exists(problem.slug, rel, Number(problem.id)))) { res.status(400).json({ error: "an audit return needs revision: { path, file } where path is a document served at <project>/docs/<path> (or a paper's path)" }); return; }
+    if (!/^[0-9a-f]{64}$/.test(fsha) || !(Array.isArray(b.files) && b.files.map((x: any) => String(x).toLowerCase()).includes(fsha))) { res.status(400).json({ error: "revision.file must be the sha256 of the revised document, and it must be listed in files" }); return; }
+    await q(`UPDATE returns SET revision_path = $2, revision_sha = $3 WHERE id = $1`, [ret!.id, rel, fsha]);
+    const paper = await one(`SELECT slug FROM papers WHERE problem_id = $1 AND path = $2`, [problem.id, rel]);
+    if (paper) await q(`UPDATE returns SET paper_slug = $2 WHERE id = $1`, [ret!.id, paper.slug]);
   }
   if (jobRow?.type === "curate") {
     if (!b.decision || typeof b.decision !== "object") { res.status(400).json({ error: "curate returns need a decision object" }); return; }
@@ -263,13 +276,14 @@ export async function spawnReviews(returnId: number, problemId: number, laneId: 
   const existing = await one<{ c: string }>(`SELECT count(*) AS c FROM jobs WHERE parent_return_id = $1`, [returnId]);
   const have = Number(existing?.c ?? 0);
   const toMake = Math.min(MAX_REVIEWS, Math.max(0, n - (have % 1000)));
-  const parent = await one<{ type: string; paper_slug: string | null }>(`SELECT type, paper_slug FROM returns WHERE id = $1`, [returnId]);
+  const parent = await one<{ type: string; paper_slug: string | null; revision_path: string | null }>(`SELECT type, paper_slug, revision_path FROM returns WHERE id = $1`, [returnId]);
   const paperNote = parent?.type === "paper" ? `\n\nThis return is a manuscript (paper \`${parent.paper_slug}\`). Write a referee report: for every theorem, lemma and measured claim, check that the stated calibration is the one the argument supports; check each citation at the page; check that the abstract claims nothing the body does not carry; check the AI-disclosure and authorship block. Accept means: publishable as a project draft at the calibrations it states. Reject means: name the statements that overclaim or the steps that fail, so the next revision can fix them. Your notes_md is the referee report and is published with the paper.` : "";
+  const auditNote = parent?.type === "audit" ? `\n\nThis return is a change proposal for \`${parent.revision_path}\`. Fetch the current document (GET <project base>/docs/${parent.revision_path}) and the revised file; read the diff. For every issue the author raises, check that it is real; for every change, check that it fixes the issue without lowering rigour or overclaiming; check nothing else was altered silently. Accept means: integrate this revision as the document's next version, credited to the author and verified by you. Reject means: name the changes that must not go in.` : "";
   for (let i = 0; i < toMake; i++) {
     await q(`INSERT INTO jobs (problem_id, lane_id, type, title, brief_md, min_tier, budget_hours, parent_return_id)
              VALUES ($1,$2,'review',$3,$4,1,1,$5)`,
       [problemId, laneId, `Review return #${returnId}`,
-       `Review return #${returnId}. Fetch it at GET <project base>/return/${returnId} (same headers; the project base is the URL you fetched this assignment from, minus /start; the review brief above uses it). Read the brief it answered, the report, the patch and the transcript.\n\nYour job: try to break it. Fetch the return's files (GET /files/<sha256>) and the served scripts it names (GET <project base>/docs/<path>), apply its patch if any, and reproduce in a fresh directory; that is the author's evidence. If it names a repo_url and commit, that commit is the same evidence in git form. Reproduce anything reproducible. Check every claimed rung against the ladder; assign the rung you can defend, not the author's. Check the REFUTED registry for prior closures.\n\nCheck attribution too: did the author cite the messages, returns, files and people they built on? Add "also_credit" with anything missing; a return that hides its sources is a reject.\n\nReturn: { "job_id": <this job>, "verdict": "accept" | "reject", "rung": "<your rung>", "notes_md": "<what you checked, what failed, what would falsify>", "also_credit": { "messages": [], "returns": [], "files": [], "handles": [] }, "transcript": "<scrubbed>" }` + paperNote,
+       `Review return #${returnId}. Fetch it at GET <project base>/return/${returnId} (same headers; the project base is the URL you fetched this assignment from, minus /start; the review brief above uses it). Read the brief it answered, the report, the patch and the transcript.\n\nYour job: try to break it. Fetch the return's files (GET /files/<sha256>) and the served scripts it names (GET <project base>/docs/<path>), apply its patch if any, and reproduce in a fresh directory; that is the author's evidence. If it names a repo_url and commit, that commit is the same evidence in git form. Reproduce anything reproducible. Check every claimed rung against the ladder; assign the rung you can defend, not the author's. Check the REFUTED registry for prior closures.\n\nCheck attribution too: did the author cite the messages, returns, files and people they built on? Add "also_credit" with anything missing; a return that hides its sources is a reject.\n\nReturn: { "job_id": <this job>, "verdict": "accept" | "reject", "rung": "<your rung>", "notes_md": "<what you checked, what failed, what would falsify>", "also_credit": { "messages": [], "returns": [], "files": [], "handles": [] }, "transcript": "<scrubbed>" }` + paperNote + auditNote,
        returnId]);
   }
 }
@@ -297,6 +311,7 @@ export async function resolveReturn(returnId: number): Promise<string> {
     }
     if (d.status === "accepted" && ret.type === "direction") await openLaneFromDirection(ret);
     if (ret.type === "paper" && ret.paper_slug) await settlePaper(ret, d.status);
+    if (d.status === "accepted" && ret.revision_path && ret.revision_sha) { const pr = await one<{ slug: string }>(`SELECT slug FROM problems WHERE id = $1`, [ret.problem_id]); if (pr) await revisions.integrate(ret, pr.slug, votes); }
     if (d.status === "accepted") await credit.payAcceptedReturn({ ...ret, status: "accepted", final_rung: d.rung }, votes);
     if (d.status === "accepted" && ret.type === "curate" && ret.decision) await files.applyCuration(Number(ret.id), Number(ret.user_id), ret.decision);
   }

@@ -13,6 +13,7 @@ import { BOOK_SOURCE, readPublication, publishedDocument } from "../lib/document
 import { protectMath } from "../lib/math.js";
 import { linkPeople } from "../lib/people.js";
 import { linkPaths, paperPages } from "../lib/paths-link.js";
+import { OVERLAY, revisedPaths } from "../lib/revisions.js";
 
 export const docs = Router({ mergeParams: true });
 const REPOS = process.env.DOCS_DIR ?? join(ROOT, "data", "repos");
@@ -104,19 +105,25 @@ docs.get("/docs{/*path}", async (req: any, res) => {
     return;
   }
   const ext = extname(abs).toLowerCase();
+  // The swarm edition: an accepted revision is served in place of the mirrored file, with the record one click away.
+  const ovAbs = join(OVERLAY, slug, rel);
+  const pid = (await one<{ id: number }>(`SELECT id FROM problems WHERE slug = $1`, [slug]))?.id;
+  const revised = pid ? (await revisedPaths(Number(pid))).get(rel) : undefined;
+  const src = existsSync(ovAbs) ? ovAbs : abs;
+  const revisedNote = revised ? `<span class="muted">swarm edition, version ${revised.versions}: changed by <a href="/@${esc(revised.author)}">@${esc(revised.author)}</a>${revised.verified.length ? `, verified by ${revised.verified.map((h: string) => `<a href="/@${esc(h)}">@${esc(h)}</a>`).join(", ")}` : ""} · <a href="/projects/${esc(slug)}/history/${esc(rel)}">history and diffs</a> · <a href="/projects/${esc(slug)}/docs/${esc(rel)}?original=1">original</a></span>` : "";
   if (ext === ".md" && !browser) {
-    res.set({ "Content-Type": "text/markdown; charset=utf-8", "X-Content-Type-Options": "nosniff" }).send(readFileSync(abs, "utf8")); return;
+    res.set({ "Content-Type": "text/markdown; charset=utf-8", "X-Content-Type-Options": "nosniff" }).send(readFileSync(req.query.original ? abs : src, "utf8")); return;
   }
   if (ext === ".md") {
-    const r = await renderMarkdown(readFileSync(abs, "utf8"), slug, rel);
+    const r = await renderMarkdown(readFileSync(req.query.original ? abs : src, "utf8"), slug, rel);
     const claim = await one(`SELECT c.status, c.origin_handle FROM claims c JOIN problems p ON p.id = c.problem_id WHERE p.slug = $1 AND c.path = $2`, [slug, rel]);
-    const extra = claim ? `<span class="muted">claim status <span class="status">${esc(String(claim.status).toLowerCase())}</span> · origin <a href="/@${esc(claim.origin_handle)}" style="font-weight:400">@${esc(claim.origin_handle)}</a></span>` : "";
+    const extra = (revisedNote && !req.query.original ? revisedNote + (claim ? " · " : "") : "") + (claim ? `<span class="muted">claim status <span class="status">${esc(String(claim.status).toLowerCase())}</span> · origin <a href="/@${esc(claim.origin_handle)}" style="font-weight:400">@${esc(claim.origin_handle)}</a></span>` : "");
     res.type("text/html").send(chrome(slug, r.title, crumbsFor(slug, rel), `${ledgerHtml(r.ledger)}${await linkPeople(r.html)}`, extra));
     return;
   }
   if (IMG[ext]) { res.type(IMG[ext]).set("X-Content-Type-Options", "nosniff").send(readFileSync(abs)); return; }
   if (TEXT_EXT.has(ext) && st.size <= MAX_TEXT) {
-    res.set({ "Content-Type": "text/plain; charset=utf-8", "X-Content-Type-Options": "nosniff", "Content-Security-Policy": "default-src 'none'; sandbox" }).send(readFileSync(abs, "utf8"));
+    res.set({ "Content-Type": "text/plain; charset=utf-8", "X-Content-Type-Options": "nosniff", "Content-Security-Policy": "default-src 'none'; sandbox" }).send(readFileSync(req.query.original ? abs : src, "utf8"));
     return;
   }
   res.set({ "Content-Type": "application/octet-stream", "Content-Disposition": `attachment; filename="${posix.basename(rel)}"`, "X-Content-Type-Options": "nosniff" }).send(readFileSync(abs));

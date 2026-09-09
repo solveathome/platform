@@ -13,6 +13,8 @@ import * as files from "../lib/files.js";
 import { protectMath } from "../lib/math.js";
 import { linkPeople } from "../lib/people.js";
 import { linkPaths, paperPages } from "../lib/paths-link.js";
+import { history, safeRel } from "../lib/revisions.js";
+import { page as sitePage } from "../lib/page.js";
 import { posix } from "node:path";
 
 export const papers = Router({ mergeParams: true });
@@ -50,12 +52,33 @@ papers.get("/documents", async (req: any, res) => {
   res.json({ documents: rows.map((d: any) => ({ ...d, url: `/files/${d.sha256}`, return_url: `/projects/${p.slug}/return/${d.return_id}` })) });
 });
 
+/** GET /projects/:slug/history/<path> : every accepted version of a document, who changed it, who verified it. /history/<path>/<n>/diff : the unified diff. */
+papers.get("/history/*path", async (req: any, res) => {
+  const p = await one(`SELECT id, slug, name FROM problems WHERE slug = $1`, [req.params.slug]);
+  if (!p) { res.status(404).json({ error: "unknown project" }); return; }
+  const raw = Array.isArray(req.params.path) ? req.params.path.join("/") : String(req.params.path ?? "");
+  const m = /^(.*?)\/(\d+)\/diff$/.exec(raw);
+  if (m) {
+    const rel = safeRel(m[1]); const v = await one(`SELECT diff, version, path FROM document_versions WHERE problem_id = $1 AND path = $2 AND version = $3`, [p.id, rel, Number(m[2])]);
+    if (!v) { res.status(404).type("text/plain").send("no such version"); return; }
+    res.type("text/plain").send(v.diff || "(version 1: the document as mirrored; no diff)\n"); return;
+  }
+  const rel = safeRel(raw); if (!rel) { res.status(400).json({ error: "bad path" }); return; }
+  const rows = await history(Number(p.id), rel);
+  const items = rows.map((v: any) => ({ ...v, diff_url: `/projects/${p.slug}/history/${rel}/${v.version}/diff`, content_url: v.content_sha ? `/files/${v.content_sha}` : null, return_url: v.return_id ? `/projects/${p.slug}/return/${v.return_id}` : null }));
+  if (!(req.header("accept") ?? "").includes("text/html")) { res.json({ path: rel, versions: items }); return; }
+  const body = items.length ? `<ol class="paper-list">${items.map((v: any) => `<li><span class="paper-title">Version ${v.version}</span><span class="paper-status">${esc(v.version === 1 ? "original" : "accepted")}</span><span class="paper-facts">${v.author ? `changed by <a href="/@${esc(v.author)}">${esc(v.author_name || "@" + v.author)}</a>${v.model ? ` (${esc(v.model)})` : ""}` : esc(v.summary)}${(v.verified_by ?? []).length ? `, verified by ${v.verified_by.map((h: string) => `<a href="/@${esc(h)}">@${esc(h)}</a>`).join(", ")}` : ""}, ${esc(String(v.created_at).slice(0, 10))}${v.return_url ? ` · <a href="${v.return_url}">the change proposal</a>` : ""}${v.version > 1 ? ` · <a href="${v.diff_url}">diff</a>` : ""}${v.content_url ? ` · <a href="${v.content_url}">this version</a>` : ""}</span>${v.summary && v.author ? `<span class="paper-summary-line">${esc(v.summary)}</span>` : ""}</li>`).join("")}</ol>` : `<p class="muted">The swarm has not changed this document yet. It is served as mirrored.</p>`;
+  res.type("text/html").send(sitePage({ title: `History of ${rel}`, dataPage: "history", crumbs: `<a href="/projects/${esc(p.slug)}">${esc(p.name)}</a><span>/ history /</span>${esc(rel)}`, eyebrow: "Track record", heading: rel, meta: `<p class="doc-meta"><span><a href="/projects/${esc(p.slug)}/docs/${esc(rel)}">current</a></span><span><a href="/projects/${esc(p.slug)}/docs/${esc(rel)}?original=1">original</a></span></p>`, body }));
+});
+
 papers.get("/papers/:paper", async (req: any, res) => {
   const p = await one(`SELECT id, slug, name FROM problems WHERE slug = $1`, [req.params.slug]);
   if (!p) { res.status(404).type("text/plain").send("unknown project"); return; }
   const paper = (await listPapers(Number(p.id), p.slug)).find((x) => x.slug === req.params.paper);
   if (!paper) { res.status(404).type("text/plain").send("no such paper"); return; }
   const versions = await q(`SELECT r.id, r.status, r.final_rung, r.author_rung, r.created_at, u.handle, r.model FROM returns r JOIN users u ON u.id = r.user_id WHERE r.problem_id = $1 AND r.paper_slug = $2 ORDER BY r.id DESC`, [p.id, paper.slug]);
+  const docPath = paper.path ?? `paper/${paper.slug}.md`;
+  const track = await history(Number(p.id), docPath);
   const reports = await q(`SELECT rv.id, rv.return_id, rv.verdict, rv.rung, rv.notes_md, rv.created_at, u.handle, rv.model FROM reviews rv JOIN returns r ON r.id = rv.return_id JOIN users u ON u.id = rv.user_id WHERE r.problem_id = $1 AND r.paper_slug = $2 ORDER BY rv.id DESC`, [p.id, paper.slug]);
   let source = paper.current_file_sha ? files.read(paper.current_file_sha) : null;
   let from = paper.current_file_sha ? `version from return #${paper.current_return_id}` : "";
@@ -75,7 +98,8 @@ papers.get("/papers/:paper", async (req: any, res) => {
   const body = source ? await linkPeople(md(source)) : "<p class=\"muted\">No manuscript yet.</p>";
   const page = readFileSync(join(PUBLIC_DIR, "paper.html"), "utf8");
   const meta = `<p class="paper-meta"><span class="paper-status ${esc(paper.status)}">${esc(paper.status_label)}</span>${paper.grade ? `<span>${esc(paper.grade)}</span>` : ""}${paper.version_by ? `<span>current version by @${esc(paper.version_by)}, ${esc(String(paper.version_at).slice(0, 10))}${paper.final_rung ? `, ${esc(paper.final_rung)}` : ""}</span>` : ""}<span>${esc(from)}</span></p>`;
-  const vlist = versions.map((v) => `<li><a href="/projects/${esc(p.slug)}/return/${v.id}">return #${v.id}</a> by <a href="/@${esc(v.handle)}">@${esc(v.handle)}</a> (${esc(v.model)}), ${esc(String(v.created_at).slice(0, 10))}: ${esc(v.status)}${v.final_rung ? `, ${esc(v.final_rung)}` : v.author_rung ? `, claims ${esc(v.author_rung)}` : ""}</li>`).join("") || `<li class="muted">No revisions submitted yet.</li>`;
+  const tlist = track.slice().reverse().map((v: any) => `<li>Version ${v.version}: ${v.author ? `changed by <a href="/@${esc(v.author)}">${esc(v.author_name || "@" + v.author)}</a>${v.model ? ` (${esc(v.model)})` : ""}${(v.verified_by ?? []).length ? `, verified by ${v.verified_by.map((h: string) => `<a href="/@${esc(h)}">@${esc(h)}</a>`).join(", ")}` : ""}` : esc(v.summary)}, ${esc(String(v.created_at).slice(0, 10))}${v.version > 1 ? ` · <a href="/projects/${esc(p.slug)}/history/${esc(docPath)}/${v.version}/diff">diff</a>` : ""}</li>`).join("");
+  const vlist = (tlist ? `<li><b>Track record</b> (<a href="/projects/${esc(p.slug)}/history/${esc(docPath)}">all versions</a>)<ul>${tlist}</ul></li>` : "") + versions.map((v) => `<li><a href="/projects/${esc(p.slug)}/return/${v.id}">return #${v.id}</a> by <a href="/@${esc(v.handle)}">@${esc(v.handle)}</a> (${esc(v.model)}), ${esc(String(v.created_at).slice(0, 10))}: ${esc(v.status)}${v.final_rung ? `, ${esc(v.final_rung)}` : v.author_rung ? `, claims ${esc(v.author_rung)}` : ""}</li>`).join("") || `<li class="muted">No revisions submitted yet.</li>`;
   const rlist = (await Promise.all(reports.map(async (r) => `<article class="referee"><p class="paper-meta"><span class="paper-status ${r.verdict === "accept" ? "reviewed" : "draft"}">${esc(r.verdict)}${r.rung ? `, ${esc(r.rung)}` : ""}</span><span>on return #${r.return_id}</span><span>by <a href="/@${esc(r.handle)}">@${esc(r.handle)}</a> (${esc(r.model)}), ${esc(String(r.created_at).slice(0, 10))}</span></p><div class="document">${await linkPeople(md(String(r.notes_md)))}</div></article>`))).join("") || `<p class="muted">No referee reports yet.</p>`;
   // Function replacers: a manuscript is full of "$$", which String.replace would otherwise read as a replacement pattern.
   const fill = (t: string, key: string, v: string) => t.split(key).join(v);
