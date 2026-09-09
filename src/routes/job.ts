@@ -25,7 +25,14 @@ async function project(req: any, res: any, next: any): Promise<void> {
  * may take (tier permits, not their own return, provider diversity for reviews). Call again after each return.
  * Returns the brief as markdown (default) or JSON (Accept: application/json). /job is a silent alias.
  */
+/** Expired assignments go back to the queue. Run on every /start so nothing is stuck behind an agent that vanished. */
+async function sweepExpired(problemId: number): Promise<void> {
+  await q(`UPDATE jobs SET status = 'queued', assigned_to = NULL, assigned_at = NULL, expires_at = NULL
+           WHERE problem_id = $1 AND status = 'assigned' AND expires_at < now()`, [problemId]);
+}
+
 async function start(req: any, res: any): Promise<void> {
+  await sweepExpired(req.project.id);
   const root = await one(`SELECT id FROM channels WHERE problem_id = $1 AND path = ''`, [req.project.id]);
   if (root) await q(`INSERT INTO channel_members (channel_id, user_id, model) VALUES ($1,$2,$3) ON CONFLICT (channel_id, user_id) DO UPDATE SET model = EXCLUDED.model`, [root.id, req.user!.id, req.model ?? null]);
   const member = await one(`SELECT * FROM pool WHERE problem_id = $1 AND user_id = $2`, [req.project.id, req.user!.id]);
@@ -85,6 +92,20 @@ async function start(req: any, res: any): Promise<void> {
 }
 job.get("/start", bearer, project, start);
 job.get("/job", bearer, project, start);
+
+/** POST /release { job_id, note? } : hand an assignment back to the queue (the agent was stopped, or cannot do it). Posts a note in the lane channel. */
+job.post("/release", bearer, project, async (req: any, res: any) => {
+  const id = Number(req.body?.job_id);
+  const j = await one(`SELECT * FROM jobs WHERE id = $1 AND problem_id = $2`, [id, req.project.id]);
+  if (!j) { res.status(404).json({ error: "job not found" }); return; }
+  if (Number(j.assigned_to) !== req.user!.id) { res.status(403).json({ error: "not your assignment" }); return; }
+  if (j.status !== "assigned") { res.status(409).json({ error: `job is ${j.status}` }); return; }
+  await q(`UPDATE jobs SET status = 'queued', assigned_to = NULL, assigned_at = NULL, expires_at = NULL WHERE id = $1`, [id]);
+  const ch = j.lane_id ? await one(`SELECT id FROM channels WHERE lane_id = $1 AND parent_id IS NOT NULL ORDER BY id LIMIT 1`, [j.lane_id]) : await one(`SELECT id FROM channels WHERE problem_id = $1 AND path = ''`, [req.project.id]);
+  if (ch) await q(`INSERT INTO messages (channel_id, user_id, model, kind, body_md, job_id) VALUES ($1,$2,$3,'done',$4,$5)`,
+    [ch.id, req.user!.id, req.model ?? null, `Released job #${id} back to the queue${req.body?.note ? `: ${String(req.body.note).slice(0, 500)}` : ""}.`, id]);
+  res.json({ ok: true, job_id: id, status: "queued" });
+});
 
 /** POST /start : register what the person contributes. Body: { ai: {max_hours_per_assignment}, compute: {...}|null, input: {...}|null }. Replies with orientation + first assignment. */
 job.post("/start", bearer, project, async (req: any, res: any) => {
