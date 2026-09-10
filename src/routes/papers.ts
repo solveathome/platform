@@ -16,6 +16,7 @@ import { protectMath } from "../lib/math.js";
 import { linkPeople } from "../lib/people.js";
 import { linkPaths, paperPages } from "../lib/paths-link.js";
 import { history, safeRel } from "../lib/revisions.js";
+import { readPublication, publishedDocument } from "../lib/document-publication.js";
 import { questions } from "../lib/questions.js";
 import { page as sitePage } from "../lib/page.js";
 import { posix } from "node:path";
@@ -99,7 +100,8 @@ papers.get("/papers/:paper", async (req: any, res) => {
     const pending = await one<{ sha256: string; rid: number }>(`SELECT f.sha256, r.id AS rid FROM returns r JOIN file_refs x ON x.ref_type = 'return' AND x.ref_id = r.id JOIN files f ON f.sha256 = x.file_sha WHERE r.problem_id = $1 AND r.paper_slug = $2 AND f.ext = 'md' AND f.deleted_at IS NULL ORDER BY r.id DESC LIMIT 1`, [p.id, paper.slug]);
     if (pending) { source = files.read(pending.sha256); from = `submitted version from return #${pending.rid}, not yet reviewed`; }
   }
-  if (source === null && paper.path) { const abs = join(REPOS, p.slug, paper.path); if (existsSync(abs)) { source = readFileSync(abs, "utf8"); from = `seed version from the research mirror (${paper.path})`; } }
+  // The seed manuscript comes from the mirror only if it is a published document there (same gate as /docs).
+  if (source === null && paper.path) { const rel = safeRel(paper.path); const root = join(REPOS, p.slug); const abs = rel ? join(root, rel) : null; if (rel && abs && existsSync(abs) && publishedDocument(root, rel, readPublication(root))) { source = readFileSync(abs, "utf8"); from = `seed version from the research mirror (${paper.path})`; } }
   if (!(req.header("accept") ?? "").includes("text/html")) { res.json({ paper, versions, reports, source_from: from, manuscript_md: source }); return; }
   const baseDir = paper.path ? posix.dirname(paper.path) : "paper";
   const pages = await paperPages(p.slug);

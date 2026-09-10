@@ -17,6 +17,7 @@ import { protectMath } from "../lib/math.js";
 import { linkPeople } from "../lib/people.js";
 import { linkPaths, paperPages } from "../lib/paths-link.js";
 import { OVERLAY, revisedPaths } from "../lib/revisions.js";
+import { SLUG } from "../lib/guards.js";
 
 export const docs = Router({ mergeParams: true });
 const REPOS = process.env.DOCS_DIR ?? join(ROOT, "data", "repos");
@@ -27,7 +28,8 @@ const esc = (s: string) => s.replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&l
 
 function safePath(root: string, rel: string): string | null {
   const n = normalize("/" + rel).replace(/^\/+/, "");
-  if (n.split("/").some((seg) => seg === ".." || seg === ".git" || seg.startsWith(".git"))) return null;
+  // No dot-segments and no dotfiles at all: nothing published starts with a dot, and .env, .git and the manifest never leave the disk.
+  if (n.split("/").some((seg) => seg === ".." || seg === "." || seg.startsWith("."))) return null;
   const abs = join(root, n);
   if (!abs.startsWith(root)) return null;
   return abs;
@@ -73,6 +75,7 @@ async function renderMarkdown(src: string, slug: string, rel: string): Promise<{
 
 docs.get("/docs{/*path}", async (req: any, res) => {
   const slug = String(req.params.slug);
+  if (!SLUG.test(slug)) { res.status(404).type("text/plain").send("not found\n"); return; }
   const rel = Array.isArray(req.params.path) ? req.params.path.join("/") : String(req.params.path ?? "");
   const root = join(REPOS, slug);
   if (!existsSync(root)) { res.status(404).type("text/plain").send("no documents for this project yet\n"); return; }

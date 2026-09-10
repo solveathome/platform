@@ -20,12 +20,14 @@ import { githubStart, githubCallback, logout } from "./lib/auth.js";
 import { splash } from "./lib/splash.js";
 import "./lib/markdown.js";   // safe link and image schemes in every Markdown render
 import { perIp } from "./lib/ratelimit.js";
+import { pathGuard } from "./lib/guards.js";
 
 const app = express();
 
 // Public hosts (SPLASH_HOSTS, comma-separated) serve only the splash page. The app lives on the other hosts, e.g. dev.solveathome.org.
 const SPLASH_HOSTS = new Set((process.env.SPLASH_HOSTS ?? "").split(",").map((h) => h.trim().toLowerCase()).filter(Boolean));
 app.use(splash(SPLASH_HOSTS));
+app.use(pathGuard);
 app.disable("x-powered-by");
 // Hops to trust for req.ip: 1 = the reverse proxy in front (Caddy). Behind Cloudflare the limiter reads CF-Connecting-IP instead.
 app.set("trust proxy", Number(process.env.TRUST_PROXY ?? 1));

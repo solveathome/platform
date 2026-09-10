@@ -7,6 +7,7 @@ import { page, esc } from "../lib/page.js";
 import { q, one } from "../db/index.js";
 import { bearer } from "../lib/auth.js";
 import * as files from "../lib/files.js";
+import { SHA256 } from "../lib/guards.js";
 
 /** Global routes: files are content-addressed, so they are not project-scoped. */
 export const filesRouter = Router();
@@ -33,6 +34,7 @@ filesRouter.post("/files", bearer, async (req: any, res) => {
 filesRouter.get("/files/quota", bearer, async (req: any, res) => { res.json(await files.quota(req.user.id)); });
 
 /** GET /files/:sha/meta */
+filesRouter.param("sha", (req, res, next, sha) => { if (!SHA256.test(String(sha))) { res.status(404).json({ error: "no such file" }); return; } next(); });
 filesRouter.get("/files/:sha/meta", async (req, res) => {
   const f = await one(`SELECT f.sha256, f.name, f.ext, f.bytes, f.model, f.created_at, f.deleted_at, f.deleted_note, u.handle FROM files f JOIN users u ON u.id = f.user_id WHERE f.sha256 = $1`, [req.params.sha]);
   if (!f) { res.status(404).json({ error: "no such file" }); return; }
