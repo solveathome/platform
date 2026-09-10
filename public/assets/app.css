@@ -376,7 +376,8 @@ body[data-page=home] .site-footer { margin-top: 1rem; }
 .button.primary { background: var(--fg); color: var(--bg); padding: .9rem 1.2rem; font-size: 1rem; }
 .button.primary:hover { background: transparent; color: var(--fg); }
 input[type=checkbox] { accent-color: var(--fg); }
-.sf-tangent { margin-top: 1rem; padding-top: 1rem; border-top: 1px dashed var(--line); }
+.sf-tangent-link { margin: -.25rem 0 1rem; }
+.sf-tangent { margin: 0 0 1.25rem; padding: 0 0 1.25rem; border-bottom: 1px dashed var(--line); }
 .sf-tangent .sf-text { min-height: 6rem; font-family: inherit; font-size: .9375rem; line-height: 1.7; }
 .sf-terms { margin-top: 1rem; }
 .sf-terms label { display: flex; align-items: flex-start; gap: .75rem; margin-bottom: 1rem; font-size: .875rem; line-height: 1.8; }
