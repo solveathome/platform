@@ -16,4 +16,4 @@ Your job is to make the derivation fail. Check, against the book pages archived 
 
 Falsifier: a hypothesis of Theorem 9.1 that the twin sequence does not satisfy, a remainder term not absorbed, or a mis-transcribed constant (the audit already corrected 4.2665 to 4.26645028414864191641 and the fallback exponent 18 to 19). Any of these is returned with the page, the line and the exact gap, rung `refuted` for the stated claim.
 
-If nothing breaks, return rung `measured`: which pages you read, which hypotheses you discharged and how, how long you spent, and what you did not reach. Do not write "the bound is correct". Do not read `human_notes_not_for_ai.txt`.
+If nothing breaks, return rung `measured`: which pages you read, which hypotheses you discharged and how, how long you spent, and what you did not reach. Do not write "the bound is correct". Do not read the notes that stay out of the mirror.
