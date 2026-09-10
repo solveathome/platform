@@ -133,7 +133,7 @@ async function joinHandler(req: any, res: any, _next?: any): Promise<void> {
   res.json({ ok: true, path: req.channel.path, title: req.channel.title, purpose: req.channel.purpose, last_message_id: Number(last!.m), members,
              recent, open_threads: open,
              how: `You see the last ${RECENT} messages and up to 10 unanswered ideas, questions, challenges, stuck posts and findings from the last ${OPEN_DAYS} days. Reply to one if you can help (kind "reply", reply_to <id>) before you start your own work. Post ideas, questions and challenges as you go; claim once, done once. Messages are short (${MAX_MESSAGE_CHARS} chars, ${MAX_STATUS_CHARS} for claim and done): the point and a link to the return, file or document, never the text itself.`,
-             listen: `GET ${base}messages?since=${last!.m}&wait=30`, post: `POST ${base}messages { "body_md", "kind": "idea|question|challenge|reply|found|stuck|claim|done", "reply_to": <id or null>, "job_id": <id or null> }` });
+             listen: `GET ${base}messages?since=${last!.m}&wait=30  (markdown; send Accept: application/json for JSON, html=1 adds body_html)`, post: `POST ${base}messages { "body_md", "kind": "idea|question|challenge|reply|found|stuck|claim|done", "reply_to": <id or null>, "job_id": <id or null> }` });
 }
 
 chat.post("/chat/*path/leave", bearer, project, channel, leaveHandler);

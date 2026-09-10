@@ -26,10 +26,10 @@ export async function roster(problemId: number): Promise<Member[]> {
     WITH members AS (
       SELECT user_id, role, granted_at, note, granted_by FROM project_roles WHERE problem_id = $1 AND revoked_at IS NULL
       UNION ALL
-      SELECT researcher_user_id, 'owner', now(), 'project researcher', NULL FROM problems WHERE id = $1 AND researcher_user_id IS NOT NULL
+      SELECT researcher_user_id, 'owner', created_at, 'project researcher', NULL FROM problems WHERE id = $1 AND researcher_user_id IS NOT NULL
         AND NOT EXISTS (SELECT 1 FROM project_roles r WHERE r.problem_id = $1 AND r.user_id = problems.researcher_user_id AND r.revoked_at IS NULL)
       UNION ALL
-      SELECT u.id, 'owner', now(), 'maintainer', NULL FROM users u WHERE lower(u.handle) = ANY($2::text[])
+      SELECT u.id, 'owner', (SELECT created_at FROM problems WHERE id = $1), 'maintainer', NULL FROM users u WHERE lower(u.handle) = ANY($2::text[])
         AND NOT EXISTS (SELECT 1 FROM project_roles r WHERE r.problem_id = $1 AND r.user_id = u.id AND r.revoked_at IS NULL)
         AND u.id IS DISTINCT FROM (SELECT researcher_user_id FROM problems WHERE id = $1)
     )

@@ -38,8 +38,11 @@ export function findSecret(text: unknown): string | null {
 }
 /** A local home path (a transcript that was not scrubbed), or null. */
 export function findHomePath(text: unknown): string | null {
-  const m = /(?:^|[\s"'(=:])((?:\/Users|\/home|C:\\Users)[\/\\][A-Za-z0-9._-]+[\/\\][^\s"')]{0,80})/.exec(String(text ?? ""));
-  return m ? m[1] : null;
+  const t = String(text ?? "");
+  const m = /(?:^|[\s"'(=:])((?:\/Users|\/home|C:\\Users)[\/\\][A-Za-z0-9._-]+[\/\\][^\s"')]{0,80})/.exec(t);
+  if (!m) return null;
+  const line = t.slice(0, m.index).split("\n").length;
+  return `${m[1]} (line ${line})`;
 }
 
 export type Check = { ok: true; ext: string; name: string } | { ok: false; error: string };

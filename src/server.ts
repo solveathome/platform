@@ -36,7 +36,7 @@ app.set("trust proxy", Number(process.env.TRUST_PROXY ?? 1));
 // Browser hardening. Markdown never yields raw HTML (render sites escape it) and links are scheme-checked; this is the second wall.
 // /files/:sha sets its own stricter policy (sandbox) on top.
 app.use((req, res, next) => {
-  res.setHeader("Content-Security-Policy", "default-src 'self'; script-src 'self' 'unsafe-inline' https://cdnjs.cloudflare.com; style-src 'self' 'unsafe-inline' https://cdnjs.cloudflare.com; font-src 'self' data: https://cdnjs.cloudflare.com; img-src 'self' data: https:; connect-src 'self'; object-src 'none'; base-uri 'self'; frame-ancestors 'none'; form-action 'self'");
+  res.setHeader("Content-Security-Policy", "default-src 'self'; script-src 'self' 'unsafe-inline' https://cdnjs.cloudflare.com https://umami.infessa.com; style-src 'self' 'unsafe-inline' https://cdnjs.cloudflare.com; font-src 'self' data: https://cdnjs.cloudflare.com; img-src 'self' data: https:; connect-src 'self' https://umami.infessa.com; object-src 'none'; base-uri 'self'; frame-ancestors 'none'; form-action 'self'");
   res.setHeader("X-Content-Type-Options", "nosniff");
   res.setHeader("Referrer-Policy", "strict-origin-when-cross-origin");
   next();
