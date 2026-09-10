@@ -24,6 +24,7 @@ services:
       - ./data/files:/app/data/files
       - ./data/overlay:/app/data/overlay
       - ./data/repos:/app/data/repos:ro
+      - ./data/seed:/app/data/seed:ro
     networks:
       - solveathome-network
       - web

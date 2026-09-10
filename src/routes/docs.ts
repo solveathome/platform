@@ -17,12 +17,22 @@ import { docsRedirect } from "../lib/projects.js";
 import { protectMath } from "../lib/math.js";
 import { linkPeople } from "../lib/people.js";
 import { linkPaths, paperPages } from "../lib/paths-link.js";
-import { OVERLAY, revisedPaths } from "../lib/revisions.js";
+import { OVERLAY, revisedPaths, currentText } from "../lib/revisions.js";
+import { sha256 } from "../lib/files.js";
 import { SLUG } from "../lib/guards.js";
 import { shareMeta } from "../lib/share.js";
 
 export const docs = Router({ mergeParams: true });
 const REPOS = process.env.DOCS_DIR ?? join(ROOT, "data", "repos");
+/** The seed edition (Chris, Sep 10): the body of work as the researcher brought it, copied once at the first mirror cut and never
+ *  touched again. The body of work is always the latest; Prior Work on the project page links here, so what it points at never moves. */
+const SEED = process.env.SEED_DIR ?? join(ROOT, "data", "seed");
+type Edition = "docs" | "seed";
+function seedInfo(slug: string): { date: string; note: string } | null {
+  const meta = join(SEED, `${slug}.json`);
+  try { if (existsSync(meta)) { const j = JSON.parse(readFileSync(meta, "utf8")); return { date: String(j.date ?? "").slice(0, 10), note: String(j.note ?? "") }; } } catch { /* fall through */ }
+  const dir = join(SEED, slug); return existsSync(dir) ? { date: statSync(dir).mtime.toISOString().slice(0, 10), note: "" } : null;
+}
 const TEXT_EXT = new Set([".js", ".ts", ".py", ".sh", ".txt", ".json", ".jsonl", ".csv", ".tsv", ".lean", ".tex", ".bib", ".log", ".yaml", ".yml", ".toml", ".sha256", ".ots.txt", ""]);
 const IMG: Record<string, string> = { ".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".gif": "image/gif", ".svg": "image/svg+xml", ".webp": "image/webp" };
 const MAX_TEXT = 3 * 1024 * 1024;
@@ -41,22 +51,22 @@ function chrome(slug: string, title: string, crumbs: string, body: string, extra
   return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>${esc(title)} · ${esc(slug)} · solveathome</title>${shareMeta({ title: `${title} · ${slug}`, description: `A research document served by solveathome, with accepted revisions in place and the record one click away.`, path: path || `/projects/${slug}/docs`, type: "article" })}<link rel="icon" href="/favicon.ico"><link rel="stylesheet" href="/assets/app.css?v=4"><script defer src="https://umami.infessa.com/script.js" data-website-id="3c56339a-8792-42b6-b506-628db725c596"></script></head><body data-page="docs"><header data-site-header></header><main class="shell document-main" id="main"><nav class="breadcrumb" aria-label="Breadcrumb"><a href="/projects/${esc(slug)}">${esc(slug)}</a><span>/ documents /</span>${crumbs}</nav>${extra ? `<p class="panel-note">${extra}</p>` : ""}<article class="document">${body}</article></main><footer data-site-footer></footer><script src="/assets/ui.js?v=5"></script><script src="/assets/who.js?v=3"></script><script src="/assets/math.js?v=1"></script><script>loadWho(document.querySelector("#who"));</script></body></html>`;
 }
 
-function crumbsFor(slug: string, rel: string): string {
-  const parts = rel.split("/").filter(Boolean); const out: string[] = [`<a href="/projects/${esc(slug)}/docs" style="font-weight:400">root</a>`];
+function crumbsFor(slug: string, rel: string, edition: Edition = "docs"): string {
+  const parts = rel.split("/").filter(Boolean); const out: string[] = [`<a href="/projects/${esc(slug)}/${edition}" style="font-weight:400">${edition === "seed" ? "seed" : "root"}</a>`];
   let acc = "";
-  parts.forEach((p, i) => { acc += (acc ? "/" : "") + p; out.push(i === parts.length - 1 ? esc(p) : `<a href="/projects/${esc(slug)}/docs/${esc(acc)}" style="font-weight:400">${esc(p)}</a>`); });
+  parts.forEach((p, i) => { acc += (acc ? "/" : "") + p; out.push(i === parts.length - 1 ? esc(p) : `<a href="/projects/${esc(slug)}/${edition}/${esc(acc)}" style="font-weight:400">${esc(p)}</a>`); });
   return out.join(" / ");
 }
 
-async function renderMarkdown(src: string, slug: string, rel: string): Promise<{ html: string; ledger: Record<string, string> | null; title: string }> {
-  const pages = await paperPages(slug);
+async function renderMarkdown(src: string, slug: string, rel: string, edition: Edition = "docs"): Promise<{ html: string; ledger: Record<string, string> | null; title: string }> {
+  const pages = edition === "seed" ? new Map<string, string>() : await paperPages(slug);   // the seed links stay inside the seed
   const ledger: Record<string, string> = {};
   const m = /<!--\s*ledger\n([\s\S]*?)-->\s*/.exec(src);
   if (m) { for (const line of m[1].split("\n")) { const i = line.indexOf(":"); if (i > 0) ledger[line.slice(0, i).trim()] = line.slice(i + 1).trim(); } src = src.replace(m[0], ""); }
   const title = (/^#\s+(.+)$/m.exec(src)?.[1] ?? rel.split("/").pop() ?? rel).trim();
   const math = protectMath(src);
   const safe = math.text.replace(/</g, "&lt;").replace(/>/g, "&gt;");
-  const base = `/projects/${slug}/docs/`;
+  const base = `/projects/${slug}/${edition}/`;
   const dir = posix.dirname(rel);
   const renderer = safeRenderer();
   const linkFn = renderer.link.bind(renderer);
@@ -71,16 +81,19 @@ async function renderMarkdown(src: string, slug: string, rel: string): Promise<{
     if (!/^(?:[a-z]+:|\/)/i.test(h)) h = base + posix.normalize(posix.join(dir === "." ? "" : dir, h)).replace(/^\/+/, "");
     return imgFn({ href: h, title, text } as any);
   };
-  const html = linkPaths(math.restore(marked.parse(safe, { gfm: true, breaks: false, renderer }) as string), slug, dir === "." ? "" : dir, pages);
+  const html = linkPaths(math.restore(marked.parse(safe, { gfm: true, breaks: false, renderer }) as string), slug, dir === "." ? "" : dir, pages, edition);
   return { html, ledger: m ? ledger : null, title };
 }
 
-docs.get("/docs{/*path}", async (req: any, res) => {
+docs.get("/docs{/*path}", (req: any, res) => serve(req, res, "docs"));
+docs.get("/seed{/*path}", (req: any, res) => serve(req, res, "seed"));
+async function serve(req: any, res: any, edition: Edition): Promise<void> {
   const slug = String(req.params.slug);
   if (!SLUG.test(slug)) { res.status(404).type("text/plain").send("not found\n"); return; }
   const rel = Array.isArray(req.params.path) ? req.params.path.join("/") : String(req.params.path ?? "");
-  const root = join(REPOS, slug);
-  if (!existsSync(root)) { res.status(404).type("text/plain").send("no documents for this project yet\n"); return; }
+  const seed = edition === "seed";
+  const root = join(seed ? SEED : REPOS, slug);
+  if (!existsSync(root)) { res.status(404).type("text/plain").send(seed ? "no seed edition for this project\n" : "no documents for this project yet\n"); return; }
   // Per-project redirects (projects/<slug>/project.json docs_redirects): e.g. book scans resolve to the publisher, never to local bytes.
   const to = docsRedirect(slug, rel);
   if (to) { res.set("Cache-Control", "no-store").redirect(303, to); return; }
@@ -92,8 +105,8 @@ docs.get("/docs{/*path}", async (req: any, res) => {
     const stem = rel.split("/").pop()!.replace(/\.[a-z0-9]+$/i, "").toLowerCase();
     const near = stem.length >= 3 ? Object.keys(publication.files).filter((f) => f.toLowerCase().includes(stem) || stem.includes(f.split("/").pop()!.replace(/\.[a-z0-9]+$/i, "").toLowerCase())).slice(0, 8) : [];
     const browser404 = wantsHtml(req);
-    if (browser404) { res.status(404).type("text/html").send(chrome(slug, "not found", crumbsFor(slug, rel), `<p>No document at <code>${esc(rel)}</code>.</p>${near.length ? `<p>Did you mean:</p><ul>${near.map((f) => `<li><a href="/projects/${esc(slug)}/docs/${esc(f)}">${esc(f)}</a></li>`).join("")}</ul>` : ""}`)); return; }
-    res.status(404).type("text/plain").send(`not found: ${rel}\n${near.length ? `did you mean:\n${near.map((f) => `- /projects/${slug}/docs/${f}`).join("\n")}\n` : ""}`); return;
+    if (browser404) { res.status(404).type("text/html").send(chrome(slug, "not found", crumbsFor(slug, rel), `<p>No document at <code>${esc(rel)}</code>.</p>${near.length ? `<p>Did you mean:</p><ul>${near.map((f) => `<li><a href="/projects/${esc(slug)}/${edition}/${esc(f)}">${esc(f)}</a></li>`).join("")}</ul>` : ""}`)); return; }
+    res.status(404).type("text/plain").send(`not found: ${rel}\n${near.length ? `did you mean:\n${near.map((f) => `- /projects/${slug}/${edition}/${f}`).join("\n")}\n` : ""}`); return;
   }
   const st = statSync(abs);
   if (!st.isDirectory() && !publishedDocument(root, rel, publication)) {
@@ -113,24 +126,25 @@ docs.get("/docs{/*path}", async (req: any, res) => {
     const entries = readdirSync(abs).filter((n) => !n.startsWith(".") && visible(n)).sort((a, b) => { const da = statSync(join(abs, a)).isDirectory(), db = statSync(join(abs, b)).isDirectory(); return da === db ? a.localeCompare(b) : da ? -1 : 1; });
     const readme = entries.find((n) => /^readme\.md$/i.test(n));
     let intro = "";
-    if (readme) { const r = await renderMarkdown(readFileSync(join(abs, readme), "utf8"), slug, posix.join(rel, readme)); intro = `${ledgerHtml(r.ledger)}${r.html}<hr>`; }
-    const list = entries.map((n) => { const s = statSync(join(abs, n)); const href = `/projects/${esc(slug)}/docs/${esc(posix.join(rel, n))}`; return `<li><a href="${href}">${esc(n)}${s.isDirectory() ? "/" : ""}</a>${s.isDirectory() ? "" : `<small>${s.size} B</small>`}</li>`; }).join("");
-    res.type("text/html").send(chrome(slug, rel || "root", crumbsFor(slug, rel), `${intro}<ul class="tree">${list}</ul>`));
+    if (readme) { const r = await renderMarkdown(readFileSync(join(abs, readme), "utf8"), slug, posix.join(rel, readme), edition); intro = `${ledgerHtml(r.ledger)}${r.html}<hr>`; }
+    const list = entries.map((n) => { const s = statSync(join(abs, n)); const href = `/projects/${esc(slug)}/${edition}/${esc(posix.join(rel, n))}`; return `<li><a href="${href}">${esc(n)}${s.isDirectory() ? "/" : ""}</a>${s.isDirectory() ? "" : `<small>${s.size} B</small>`}</li>`; }).join("");
+    res.type("text/html").send(chrome(slug, rel || (seed ? "seed" : "root"), crumbsFor(slug, rel, edition), `${seed ? await seedBanner(slug, rel) : ""}${intro}<ul class="tree">${list}</ul>`, seed ? seedNote(slug, rel) : ""));
     return;
   }
   const ext = extname(abs).toLowerCase();
   // The swarm edition: an accepted revision is served in place of the mirrored file, with the record one click away.
   const ovAbs = join(OVERLAY, slug, rel);
-  const pid = (await one<{ id: number }>(`SELECT id FROM problems WHERE slug = $1`, [slug]))?.id;
+  const pid = seed ? undefined : (await one<{ id: number }>(`SELECT id FROM problems WHERE slug = $1`, [slug]))?.id;
   const revised = pid ? (await revisedPaths(Number(pid))).get(rel) : undefined;
-  const src = existsSync(ovAbs) ? ovAbs : abs;
+  const src = !seed && existsSync(ovAbs) ? ovAbs : abs;
   const revisedNote = revised ? `<span class="muted">${revised.swarm ? `swarm edition, version ${revised.versions}: changed by <a href="/@${esc(revised.author)}">@${esc(revised.author)}</a>${revised.verified.length ? `, verified by ${revised.verified.map((h: string) => `<a href="/@${esc(h)}">@${esc(h)}</a>`).join(", ")}` : ""}` : `version ${revised.versions}, as cut from the research repository on ${esc(String(revised.at).slice(0, 10))}`} · <a href="/projects/${esc(slug)}/history/${esc(rel)}">history and diffs</a>${revised.swarm ? ` · <a href="/projects/${esc(slug)}/docs/${esc(rel)}?original=1">current mirror</a>` : ""}</span>` : "";
   if (ext === ".md" && !browser) {
     res.set({ "Content-Type": "text/markdown; charset=utf-8", "X-Content-Type-Options": "nosniff" }).send(readFileSync(req.query.original ? abs : src, "utf8")); return;
   }
   if (ext === ".md" && st.size > 1024 * 1024) { res.set({ "Content-Type": "text/markdown; charset=utf-8", "X-Content-Type-Options": "nosniff" }).send(readFileSync(req.query.original ? abs : src, "utf8")); return; }   // rendering is for documents, not dumps
   if (ext === ".md") {
-    const r = await renderMarkdown(readFileSync(req.query.original ? abs : src, "utf8"), slug, rel);
+    const r = await renderMarkdown(readFileSync(req.query.original ? abs : src, "utf8"), slug, rel, edition);
+    if (seed) { res.type("text/html").send(chrome(slug, r.title, crumbsFor(slug, rel, "seed"), `${await seedBanner(slug, rel, readFileSync(abs, "utf8"))}${ledgerHtml(r.ledger)}${await linkPeople(r.html)}`, seedNote(slug, rel), `/projects/${slug}/seed/${rel}`)); return; }
     const claim = await one(`SELECT c.status, c.origin_handle FROM claims c JOIN problems p ON p.id = c.problem_id WHERE p.slug = $1 AND c.path = $2`, [slug, rel]);
     const extra = (revisedNote && !req.query.original ? revisedNote + (claim ? " · " : "") : "") + (claim ? `<span class="muted">claim status <span class="status">${esc(String(claim.status).toLowerCase())}</span> · origin <a href="/@${esc(claim.origin_handle)}" style="font-weight:400">@${esc(claim.origin_handle)}</a></span>` : "");
     const banner = pid ? challengeBanner(await challengesFor(Number(pid), "document", rel), `/projects/${slug}`) : "";
@@ -145,7 +159,27 @@ docs.get("/docs{/*path}", async (req: any, res) => {
     return;
   }
   res.set({ "Content-Type": "application/octet-stream", "Content-Disposition": `attachment; filename="${posix.basename(rel)}"`, "X-Content-Type-Options": "nosniff" }).send(readFileSync(abs));
-});
+}
+
+function seedNote(slug: string, rel: string): string {
+  const info = seedInfo(slug);
+  return `<span class="muted">seed edition${info?.date ? `, as brought by the researcher on ${esc(info.date)}` : ""}; this text never changes · <a href="/projects/${esc(slug)}/docs/${esc(rel)}">the living document</a></span>`;
+}
+/** The seed page says loudly when the body of work has moved on (Chris, Sep 10): a document changed since the seed gets a big out-of-date banner. */
+async function seedBanner(slug: string, rel: string, seedText?: string): Promise<string> {
+  const live = `/projects/${esc(slug)}/docs/${esc(rel)}`;
+  if (seedText !== undefined) {
+    const now = await currentText(slug, rel);
+    if (now === null) return `<div class="panel banner-stale" role="note" style="margin:0 0 1.5rem;padding:1.1rem 1.25rem;border-left:6px solid #b3261e;background:rgba(179,38,30,.08)"><p style="margin:0;font-size:1.05rem"><b>Out of date: this document no longer exists in the body of work.</b> <span class="muted">You are reading the seed edition, the text as it was when the project began.</span></p></div>`;
+    if (sha256(now.text) !== sha256(seedText)) {
+      const pid = (await one<{ id: number }>(`SELECT id FROM problems WHERE slug = $1`, [slug]))?.id;
+      const rv = pid ? (await revisedPaths(Number(pid))).get(rel) : undefined;
+      const why = rv ? `${rv.versions - 1} recorded change${rv.versions - 1 === 1 ? "" : "s"} since the seed${rv.author ? `, latest by <a href="/@${esc(rv.author)}">@${esc(rv.author)}</a>` : ""} · <a href="${live.replace(/\/docs\//, "/history/")}">history and diffs</a>` : "changed in the research repository since the seed";
+      return `<div class="panel banner-stale" role="note" style="margin:0 0 1.5rem;padding:1.1rem 1.25rem;border-left:6px solid #b3261e;background:rgba(179,38,30,.08)"><p style="margin:0;font-size:1.05rem"><b>Out of date: the body of work has moved on.</b> You are reading the seed edition, the text as it was when the project began. <a href="${live}"><b>Read the current document →</b></a></p><p class="muted" style="margin:.4rem 0 0">${why}</p></div>`;
+    }
+  }
+  return `<div class="panel" style="margin:0 0 1.5rem;padding:.9rem 1.1rem;border-left:4px solid var(--line)"><p style="margin:0"><b>Seed edition.</b> <span class="muted">The prior work as it was when the project began${seedText !== undefined ? ", and unchanged since" : ""}. The swarm's revisions land in <a href="${live}">the living document</a>, with every accepted change on record.</span></p></div>`;
+}
 
 function ledgerHtml(l: Record<string, string> | null): string {
   if (!l) return "";

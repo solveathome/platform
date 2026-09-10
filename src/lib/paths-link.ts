@@ -27,9 +27,9 @@ function resolve(slug: string, baseDir: string, ref: string): string | null {
   return null;
 }
 
-export function linkPaths(html: string, slug: string, baseDir = "", pages: Map<string, string> = new Map()): string {
+export function linkPaths(html: string, slug: string, baseDir = "", pages: Map<string, string> = new Map(), edition: "docs" | "seed" = "docs"): string {
   const parts = html.split(/(<[^>]+>)/); let inA = 0; let inCode = 0; let codeBuf: string[] | null = null; const out: string[] = [];
-  const href = (rel: string) => pages.get(rel) ?? `/projects/${slug}/docs/${rel.split("/").map(encodeURIComponent).join("/")}`;
+  const href = (rel: string) => pages.get(rel) ?? `/projects/${slug}/${edition}/${rel.split("/").map(encodeURIComponent).join("/")}`;
   for (let i = 0; i < parts.length; i++) {
     const part = parts[i];
     if (part.startsWith("<")) {
