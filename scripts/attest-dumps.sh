@@ -24,3 +24,5 @@ for dir in "$DUMPS"/????-??-??; do
     fi
   fi
 done
+# The app runs as uid 1000 and must be able to rewrite what this root cron touched.
+chown -R 1000:1000 "$(dirname "$0")/../data/dumps" 2>/dev/null || true

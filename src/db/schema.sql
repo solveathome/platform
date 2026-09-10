@@ -504,3 +504,6 @@ CREATE INDEX IF NOT EXISTS returns_user_created_idx ON returns (user_id, created
 CREATE INDEX IF NOT EXISTS returns_problem_status_idx ON returns (problem_id, status, created_at);
 CREATE INDEX IF NOT EXISTS messages_user_created_idx ON messages (user_id, created_at);
 CREATE INDEX IF NOT EXISTS sessions_problem_seen_idx ON sessions (problem_id, last_seen);
+
+-- Audit returns can route corrections to other documents (agent feedback, Sep 10): [{path, note}], shown on those documents once the audit is accepted.
+ALTER TABLE returns ADD COLUMN IF NOT EXISTS also_fix JSONB;

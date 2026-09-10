@@ -10,7 +10,7 @@ import { join, normalize, extname, dirname, posix } from "node:path";
 import { marked } from "marked";
 import { safeRenderer } from "../lib/markdown.js";
 import { challengesFor, challengeBanner } from "../lib/tangent.js";
-import { one } from "../db/index.js";
+import { one, q } from "../db/index.js";
 import { ROOT } from "../lib/paths.js";
 import { readPublication, publishedDocument } from "../lib/document-publication.js";
 import { docsRedirect } from "../lib/projects.js";
@@ -87,7 +87,14 @@ docs.get("/docs{/*path}", async (req: any, res) => {
   const publication = readPublication(root);
   if (!publication) { res.status(503).type("text/plain").send("The document portfolio is awaiting publication review.\n"); return; }
   const abs = safePath(root, rel);
-  if (!abs || !existsSync(abs)) { res.status(404).type("text/plain").send("not found\n"); return; }
+  if (!abs || !existsSync(abs)) {
+    // Briefs and papers abbreviate paths ("research/attack-06"): offer the served documents whose name contains the stem.
+    const stem = rel.split("/").pop()!.replace(/\.[a-z0-9]+$/i, "").toLowerCase();
+    const near = stem.length >= 3 ? Object.keys(publication.files).filter((f) => f.toLowerCase().includes(stem) || stem.includes(f.split("/").pop()!.replace(/\.[a-z0-9]+$/i, "").toLowerCase())).slice(0, 8) : [];
+    const browser404 = wantsHtml(req);
+    if (browser404) { res.status(404).type("text/html").send(chrome(slug, "not found", crumbsFor(slug, rel), `<p>No document at <code>${esc(rel)}</code>.</p>${near.length ? `<p>Did you mean:</p><ul>${near.map((f) => `<li><a href="/projects/${esc(slug)}/docs/${esc(f)}">${esc(f)}</a></li>`).join("")}</ul>` : ""}`)); return; }
+    res.status(404).type("text/plain").send(`not found: ${rel}\n${near.length ? `did you mean:\n${near.map((f) => `- /projects/${slug}/docs/${f}`).join("\n")}\n` : ""}`); return;
+  }
   const st = statSync(abs);
   if (!st.isDirectory() && !publishedDocument(root, rel, publication)) {
     res.status(404).set("Cache-Control", "no-store").type("text/plain").send("This file is not part of the published document portfolio.\n"); return;
@@ -127,7 +134,9 @@ docs.get("/docs{/*path}", async (req: any, res) => {
     const claim = await one(`SELECT c.status, c.origin_handle FROM claims c JOIN problems p ON p.id = c.problem_id WHERE p.slug = $1 AND c.path = $2`, [slug, rel]);
     const extra = (revisedNote && !req.query.original ? revisedNote + (claim ? " · " : "") : "") + (claim ? `<span class="muted">claim status <span class="status">${esc(String(claim.status).toLowerCase())}</span> · origin <a href="/@${esc(claim.origin_handle)}" style="font-weight:400">@${esc(claim.origin_handle)}</a></span>` : "");
     const banner = pid ? challengeBanner(await challengesFor(Number(pid), "document", rel), `/projects/${slug}`) : "";
-    res.type("text/html").send(chrome(slug, r.title, crumbsFor(slug, rel), `${banner}${ledgerHtml(r.ledger)}${await linkPeople(r.html)}`, extra, `/projects/${slug}/docs/${rel}`));
+    const fixes = pid ? await q(`SELECT r.id, u.handle, x->>'note' AS note FROM returns r JOIN users u ON u.id = r.user_id, jsonb_array_elements(r.also_fix) x WHERE r.problem_id = $1 AND r.type = 'audit' AND r.status = 'accepted' AND NOT r.provisional AND x->>'path' = $2 ORDER BY r.id DESC LIMIT 10`, [pid, rel]) : [];
+    const fixNotes = fixes.length ? `<div class="panel" style="margin:0 0 1.5rem;padding:.9rem 1.1rem;border-left:4px solid var(--line)"><p style="margin:0 0 .4rem"><b>Notes from accepted audits</b> <span class="muted">(corrections routed to this document; not yet applied here)</span></p><ul style="margin:0;padding-left:1.1rem">${fixes.map((f: any) => `<li><a href="/projects/${esc(slug)}/return/${f.id}">audit #${f.id}</a> by <a href="/@${esc(f.handle)}">@${esc(f.handle)}</a>: ${esc(f.note)}</li>`).join("")}</ul></div>` : "";
+    res.type("text/html").send(chrome(slug, r.title, crumbsFor(slug, rel), `${banner}${fixNotes}${ledgerHtml(r.ledger)}${await linkPeople(r.html)}`, extra, `/projects/${slug}/docs/${rel}`));
     return;
   }
   if (IMG[ext]) { res.type(IMG[ext]).set({ "X-Content-Type-Options": "nosniff", "Content-Security-Policy": "default-src 'none'; sandbox" }).send(readFileSync(abs)); return; }

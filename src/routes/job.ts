@@ -166,6 +166,12 @@ async function start(req: any, res: any): Promise<void> {
     row.expires_at = upd.rows[0].expires_at;
     const sess = { id: String(session.id), jobs: Number(session.jobs) + 1, max: session.max_jobs === null ? null : Number(session.max_jobs), maxHours: Number(settings.ai?.max_hours_per_assignment ?? 2), compute: describeOffer(offer), transcriptPreapproved: settings.ai?.transcript_preapproved === true, subagents: settings.ai?.subagents?.allowed === false ? "not allowed" : settings.ai?.subagents?.max_parallel ? `allowed, up to ${settings.ai.subagents.max_parallel} at a time` : "allowed" };
     let md = renderBrief(row, `${BASE()}/projects/${req.project.slug}`, sess);
+    // An audit of a paper with a revision still under review starts from that revision, not from the last accepted text.
+    if (row.type === "audit") {
+      const pslug = /paper\.slug:\s*([a-z0-9-]+)/.exec(String(row.brief_md ?? ""))?.[1];
+      const pend = pslug ? await q(`SELECT r.id, r.revision_sha, u.handle, r.created_at FROM returns r JOIN users u ON u.id = r.user_id WHERE r.problem_id = $1 AND r.paper_slug = $2 AND r.type = 'audit' AND r.status = 'pending' AND r.id <> coalesce($3, 0) ORDER BY r.id DESC LIMIT 3`, [req.project.id, pslug, null]) : [];
+      if (pend.length) md += `\n\n## Pending revisions of this paper\n\nAnother audit of this paper is under review: ${pend.map((p: any) => `return #${p.id} by @${p.handle} (${BASE()}/projects/${req.project.slug}/return/${p.id}${p.revision_sha ? `, revised text ${BASE()}/files/${p.revision_sha}` : ""})`).join("; ")}. Read it first and build on it: audit the revised text, cite the return, and do not redo what it already fixed.`;
+    }
     if (tf.note) md = md.replace(/\n\n/, `\n\nTier this session: ${tier} (${tf.note}).\n\n`);
     if (req.justRegistered) md = (await orientation(req.project, BASE(), { ...member, ...settings, session: session.id, session_max_jobs: session.max_jobs }, true)) + "\n\n---\n\n" + md;
     md = ownerNote + md;
@@ -429,6 +435,11 @@ job.post("/result", bearer, project, async (req: any, res) => {
      b.report_md, b.patch ?? null, b.transcript, cpuHours, b.hashes ?? {}, b.author_rung ?? null, repoUrl, commit, jobRow?.assigned_session ?? xs, req.effort ?? null]);
   if (recipe) await q(`UPDATE returns SET recipe_md = $2 WHERE id = $1`, [ret!.id, recipe]);
   if (target || finding || humanMd) await q(`UPDATE returns SET target = $2, finding = $3, human_md = $4 WHERE id = $1`, [ret!.id, target ? JSON.stringify(target) : null, finding, humanMd]);
+  // Source-level notes (agent feedback, Sep 10): an audit that finds a figure wrong in another document routes the note there.
+  if (rtype === "audit" && Array.isArray(b.also_fix)) {
+    const fixes = b.also_fix.slice(0, 20).map((x: any) => ({ path: revisions.safeRel(String(x?.path ?? "")), note: String(x?.note ?? "").trim().slice(0, 1000) })).filter((x: any) => x.path && x.note);
+    if (fixes.length) await q(`UPDATE returns SET also_fix = $2 WHERE id = $1`, [ret!.id, JSON.stringify(fixes)]);
+  }
   const cites = b.cites && typeof b.cites === "object" ? { ...b.cites } : {};
   if (jobRow?.follow_up_of) { const arr = Array.isArray(cites.returns) ? cites.returns.map(Number) : []; if (!arr.includes(Number(jobRow.follow_up_of))) arr.push(Number(jobRow.follow_up_of)); cites.returns = arr; }
   if (Object.keys(cites).length) await q(`UPDATE returns SET cites = $2 WHERE id = $1`, [ret!.id, JSON.stringify(cites)]);
@@ -673,7 +684,8 @@ async function returnPage(req: any, res: any): Promise<void> {
   const dlist = decisions.length > 1 || decisions.some((x: any) => x.by !== "trusted") ? `<h3>Decision record</h3><ol class="muted" style="font-size:.875rem">${decisions.map((x: any) => `<li>${escHtml(String(x.decided_at).slice(0, 16).replace("T", " "))}: <b>${escHtml(x.status)}</b>${x.final_rung ? ` (${escHtml(x.final_rung)})` : ""}${x.provisional ? ", provisional" : ""} by ${escHtml(x.by)}${x.handle ? ` <a href="/@${escHtml(x.handle)}">@${escHtml(x.handle)}</a>` : ""}${x.note ? `: ${escHtml(x.note)}` : ""}</li>`).join("")}</ol>` : "";
   const targetLine = r.target ? `<p class="doc-meta"><span>challenges <a href="${targetUrl(r.target, P)}">${escHtml(targetLabel(r.target))}</a></span>${r.finding ? `<span class="tag">${escHtml(r.finding === "holds" ? "objection holds" : r.finding === "partial" ? "holds in part" : "does not hold")}</span>` : ""}</p>` : "";
   const human = r.human_md ? `<blockquote class="human-words" style="border-left:4px solid var(--fg);margin:0 0 1.5rem;padding:.6rem 1rem"><p class="muted" style="margin:0 0 .3rem">In ${escHtml(r.display_name || "@" + r.handle)}'s own words</p>${await md(r.human_md)}</blockquote>` : "";
-  const body = challenged + targetLine + human + (await md(r.report_md)) + (r.patch ? `<h2>Patch</h2><pre><code>${escHtml(r.patch)}</code></pre>` : "") + dlist;
+  const fixList = Array.isArray(r.also_fix) && r.also_fix.length ? `<h3>Corrections routed to other documents</h3><ul>${r.also_fix.map((f: any) => `<li><a href="${P}/docs/${escHtml(f.path)}">${escHtml(f.path)}</a>: ${escHtml(f.note)}</li>`).join("")}</ul>` : "";
+  const body = challenged + targetLine + human + (await md(r.report_md)) + fixList + (r.patch ? `<h2>Patch</h2><pre><code>${escHtml(r.patch)}</code></pre>` : "") + dlist;
   const firstLine = String(r.report_md ?? "").split("\n").map((l: string) => l.replace(/^[#>*\s-]+/, "").trim()).find((l: string) => l.length > 20) ?? "";
   res.type("text/html").send(page({ title: `Return #${r.id}`, dataPage: "return", description: `${r.type} by ${r.display_name || "@" + r.handle} (${r.model}), ${r.status}${r.final_rung ? `, ${r.final_rung}` : ""}. ${firstLine}`, path: `${P}/return/${r.id}`, crumbs: `<a href="${P}">${escHtml(req.project.name)}</a><span>/ results /</span>#${r.id}`, eyebrow: "Result", heading: r.job_title ?? `${r.type} return #${r.id}`, meta, aside, body }));
 }
