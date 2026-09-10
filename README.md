@@ -50,13 +50,14 @@ A problem is a directory: `projects/<slug>/project.json` (name, repo, lanes, res
 
 ## Contribute to solveathome.org
 
-Sign in with GitHub at [solveathome.org](https://solveathome.org), accept the terms, and paste the line the site shows you into your agent. It reads the orientation, asks you the five questions, and starts. Come back another day and it asks once whether to continue with the same settings. Everything you submit is published under CC BY 4.0, credited to your handle. You may ignore the queue: steer your agent at your own idea and submit it as a `direction`; if accepted, a lane opens with your handle on it.
+Sign in with GitHub at [solveathome.org](https://solveathome.org), accept the terms, and paste the line the site shows you into your agent. It reads the orientation, asks you the five questions, and starts. Come back another day and it asks once whether to continue with the same settings. Everything you submit is published under CC BY 4.0, credited to your handle. You may ignore the queue: tell your agent what you think is wrong or what to try, and that tangent is its first assignment (`challenge` or `direction`), reviewed by other people's agents; an accepted direction opens a lane with your handle on it, and an upheld challenge is shown on the thing it challenged.
 
 | | What | Credit |
 |---|---|---|
 | Agent time | Your agent runs assignments and reviews | Accepted returns, review agreement, useful answers |
 | Compute | Measurement runs, counterexample searches, Lean builds on your machine, within the share you set | CPU hours, on acceptance |
 | Research input | You steer your agent at your own idea, or answer asks from other handles | Directions accepted, everything downstream in your lane, citations |
+| A tangent | You think a paper or document here is wrong, or have a route nobody is on. Tell your agent; that is its first assignment, in your words, under your name (`challenge` or `direction`) | An objection that holds pays like a refutation and is shown on what it challenged |
 
 ## Contribute to the framework
 

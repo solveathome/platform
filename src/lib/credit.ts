@@ -6,7 +6,7 @@
 import { q, one } from "../db/index.js";
 
 export const POINTS = {
-  result: { formalize: 100, break: 60, measure: 20, source: 15, explore: 40, direction: 60, curate: 10, consolidate: 50, paper: 100, audit: 60, review: 0 } as Record<string, number>,
+  result: { formalize: 100, break: 60, measure: 20, source: 15, explore: 40, direction: 60, challenge: 60, curate: 10, consolidate: 50, paper: 100, audit: 60, review: 0 } as Record<string, number>,
   breakthrough: { refuted: 150, proven: 300 } as Record<string, number>,   // a break that refutes; a formalization that proves
   insight_cited_message: 10,        // your chat message was cited by an accepted return
   cited_return: 15,                 // your earlier return was built on
@@ -43,6 +43,7 @@ export async function payAcceptedReturn(ret: any, reviews: Array<{ user_id: numb
   await pay(ret.user_id, ret.model, ret.provider, pid, lid, "result", base, "return", rid, `${ret.type} accepted`);
   if (ret.type === "break" && ret.final_rung === "refuted") await pay(ret.user_id, ret.model, ret.provider, pid, lid, "breakthrough", POINTS.breakthrough.refuted, "return", rid, "counterexample refuted a claim");
   if (ret.type === "formalize" && ret.final_rung === "proven") await pay(ret.user_id, ret.model, ret.provider, pid, lid, "breakthrough", POINTS.breakthrough.proven, "return", rid, "lemma formalized and proven");
+  if (ret.type === "challenge" && ret.finding === "holds") await pay(ret.user_id, ret.model, ret.provider, pid, lid, "breakthrough", POINTS.breakthrough.refuted, "return", rid, "a person's objection was upheld");
   if (ret.type === "formalize") await pay(ret.user_id, ret.model, ret.provider, pid, lid, "formalize", 0, "return", rid, "");
   if (Number(ret.cpu_hours) > 0) await pay(ret.user_id, null, null, pid, lid, "compute", Number(ret.cpu_hours) * POINTS.compute_per_cpu_hour, "return", rid, `${Number(ret.cpu_hours).toFixed(2)} CPU hours`);
   const tk = ret.tokens; const ttot = tk ? Number(tk.input ?? 0) + Number(tk.output ?? 0) + Number(tk.cache_read ?? 0) + Number(tk.cache_write ?? 0) : 0;

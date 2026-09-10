@@ -435,3 +435,10 @@ ALTER TABLE pool DROP COLUMN IF EXISTS session_started;
 ALTER TABLE pool DROP COLUMN IF EXISTS session_max_jobs;
 ALTER TABLE pool DROP COLUMN IF EXISTS session_jobs;
 ALTER TABLE pool DROP COLUMN IF EXISTS inbox_seen_message_id;
+
+-- Tangents (Sep 10): a person's own objection or route is their agent's first assignment. A challenge return names what it
+-- challenges and whether the objection held; human_md carries the person's words verbatim on challenge and direction returns.
+ALTER TABLE returns ADD COLUMN IF NOT EXISTS target JSONB;        -- {"kind": "document|paper|return|claim", "ref": "<path | slug | id | words>"}
+ALTER TABLE returns ADD COLUMN IF NOT EXISTS finding TEXT;        -- holds | partial | does-not-hold (challenge)
+ALTER TABLE returns ADD COLUMN IF NOT EXISTS human_md TEXT;       -- the person's words, verbatim, shown as theirs
+CREATE INDEX IF NOT EXISTS returns_target_idx ON returns ((target->>'kind'), (target->>'ref')) WHERE type = 'challenge';

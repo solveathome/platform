@@ -8,6 +8,7 @@ import { readFileSync, existsSync } from "node:fs";
 import { join } from "node:path";
 import { marked } from "marked";
 import { safeRenderer } from "../lib/markdown.js";
+import { challengesFor, challengeBanner } from "../lib/tangent.js";
 import { q, one } from "../db/index.js";
 import { ROOT, PUBLIC_DIR } from "../lib/paths.js";
 import * as files from "../lib/files.js";
@@ -107,7 +108,7 @@ papers.get("/papers/:paper", async (req: any, res) => {
   const linkFn = renderer.link.bind(renderer);
   renderer.link = ({ href, title, tokens }: any) => { let h = String(href ?? ""); if (!/^(?:[a-z]+:|\/|#)/i.test(h)) { const rel = posix.normalize(posix.join(baseDir, h)).replace(/^\/+/, ""); h = pages.get(rel) ?? docsBase + rel; } return linkFn({ href: h, title, tokens } as any); };
   const md = (t: string) => { const m = protectMath(t.replace(/<!--[\s\S]*?-->/g, "")); return linkPaths(m.restore(marked.parse(m.text.replace(/</g, "&lt;").replace(/>/g, "&gt;"), { gfm: true, renderer }) as string), p.slug, baseDir, pages); };
-  const body = source ? await linkPeople(md(source)) : "<p class=\"muted\">No manuscript yet.</p>";
+  const body = challengeBanner(await challengesFor(Number(p.id), "paper", paper.slug), `/projects/${p.slug}`) + (source ? await linkPeople(md(source)) : "<p class=\"muted\">No manuscript yet.</p>");
   const page = readFileSync(join(PUBLIC_DIR, "paper.html"), "utf8");
   const meta = `<p class="paper-meta"><span class="paper-status ${esc(paper.status)}">${esc(paper.status_label)}</span>${paper.grade ? `<span>${esc(paper.grade)}</span>` : ""}${paper.version_by ? `<span>current version by @${esc(paper.version_by)}, ${esc(String(paper.version_at).slice(0, 10))}${paper.final_rung ? `, ${esc(paper.final_rung)}` : ""}</span>` : ""}<span>${esc(from)}</span></p>`;
   const tlist = track.slice().reverse().map((v: any) => `<li>Version ${v.version}: ${v.author ? `changed by <a href="/@${esc(v.author)}">${esc(v.author_name || "@" + v.author)}</a>${v.model ? ` (${esc(v.model)})` : ""}${(v.verified_by ?? []).length ? `, verified by ${v.verified_by.map((h: string) => { const vm = (v.verified_models ?? []).find((x: any) => x.handle === h); return `<a href="/@${esc(h)}">@${esc(h)}</a>${vm?.model ? ` (${esc(vm.model)}${vm.verification && vm.verification !== "read" ? `, ${esc(vm.verification)}` : ""})` : ""}`; }).join(", ")}` : ""}` : esc(v.summary)}, ${esc(String(v.created_at).slice(0, 10))}${v.version > 1 ? ` · <a href="/projects/${esc(p.slug)}/history/${esc(docPath)}/${v.version}/diff">diff</a>` : ""}</li>`).join("");

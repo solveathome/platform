@@ -19,6 +19,7 @@ import { parseOffer, describeOffer } from "../lib/compute.js";
 import { parseTranscript } from "../lib/tokens.js";
 import { needsSourceReview, SOURCE_REVIEW_MESSAGE, sourceReviewHit } from "../lib/document-publication.js";
 import { randomBytes } from "node:crypto";
+import { parseTangent, parseTarget, tangentJob, challengesFor, challengeBanner, targetUrl, targetLabel, FINDINGS, type Tangent } from "../lib/tangent.js";
 
 /** Caps on submission (Sep 10): pending self-assigned returns per handle per project, and returns per handle per hour. */
 const MAX_OPEN_SELF_ASSIGNED = Number(process.env.MAX_OPEN_SELF_ASSIGNED ?? 3), MAX_RETURNS_PER_HOUR = Number(process.env.MAX_RETURNS_PER_HOUR ?? 30);
@@ -95,10 +96,12 @@ async function start(req: any, res: any): Promise<void> {
   const type = req.query.type ? String(req.query.type) : null;
   const uid = req.user!.id;
 
+  // A tangent registered with this session is its first assignment (Sep 10): the person's objection or route outranks the queue.
+  const tangentFirst = Number(session.jobs) === 0 && settings.input?.tangent ? await synthesizeTangent(req, session, settings.input.tangent as Tangent) : null;
   const client = await pool.connect();
   try {
     await client.query("BEGIN");
-    const r = await client.query(
+    const r = tangentFirst ? { rows: [tangentFirst] } : await client.query(
       `SELECT j.*, l.slug AS lane_slug, p.repo_url
        FROM jobs j JOIN problems p ON p.id = j.problem_id LEFT JOIN lanes l ON l.id = j.lane_id
        LEFT JOIN returns pr ON pr.id = j.parent_return_id
@@ -148,7 +151,7 @@ async function start(req: any, res: any): Promise<void> {
     let md = renderBrief(row, `${BASE()}/projects/${req.project.slug}`, sess);
     if (req.justRegistered) md = (await orientation(req.project, BASE(), { ...member, ...settings, session: session.id, session_max_jobs: session.max_jobs }, true)) + "\n\n---\n\n" + md;
     md = ownerNote + md;
-    if (settings.input?.direction) md += `\n\n## Your person's direction\n\nThey said: "${String(settings.input.direction).slice(0, 2000)}"\n\nIf this assignment does not serve that, you may set it aside: pursue their idea and submit it as type \`direction\` with their words in the report and their handle in \`cites.handles\`. Their name goes on the lane if it is accepted.\n`;
+    if (settings.input?.direction && !tangentFirst && row.type !== "direction") md += `\n\n## Your person's direction\n\nThey said: "${String(settings.input.direction).slice(0, 2000)}"\n\nIf this assignment does not serve that, you may set it aside: pursue their idea and submit it as type \`direction\` with their words in the report and their handle in \`cites.handles\`. Their name goes on the lane if it is accepted.\n`;
     if (inboxMd) md = md.replace(/\n## /, `\n${inboxMd}## `);   // after the title block, before the first section
     if (ib.max_message_id > Number(session.inbox_seen_message_id ?? 0)) await q(`UPDATE sessions SET inbox_seen_message_id = $2 WHERE id = $1`, [session.id, ib.max_message_id]);
     if (wantsJson) res.json({ job_id: row.id, type: row.type, session: sess.id, session_jobs: sess.jobs, session_max_jobs: sess.max, inbox: ib, brief_md: md });
@@ -157,6 +160,19 @@ async function start(req: any, res: any): Promise<void> {
 }
 job.get("/start", bearer, project, start);
 job.get("/job", bearer, project, start);
+
+/** The person's tangent as a job, assigned to this session on the spot. */
+async function synthesizeTangent(req: any, session: any, t: Tangent): Promise<any> {
+  const hours = Math.max(0.5, Math.min(24, Number(session.ai?.max_hours_per_assignment ?? 2)));
+  const P = `${BASE()}/projects/${req.project.slug}`;
+  const spec = tangentJob(t, P, req.user!.handle, hours);
+  const laneSlug = session.input?.lane ?? null;
+  const lane = laneSlug ? await one(`SELECT id FROM lanes WHERE problem_id = $1 AND slug = $2`, [req.project.id, laneSlug]) : null;
+  const j = await one(`INSERT INTO jobs (problem_id, lane_id, type, title, brief_md, git_ref, compute_hint, budget_hours, min_tier, quorum, status, assigned_to, assigned_session, assigned_at, expires_at)
+                       VALUES ($1,$2,$3,$4,$5,'main','{}',$6,99,1,'assigned',$7,$8,now(),now() + ($6::numeric * interval '1 hour') * 2) RETURNING *`,
+    [req.project.id, lane?.id ?? null, spec.type, spec.title.slice(0, 200), spec.brief_md, hours, req.user!.id, session.id]);
+  return { ...j, lane_slug: laneSlug, repo_url: req.project.repo_url };
+}
 
 /** When nothing typed is assignable: an explore job, made on the spot, in the registered lane or the lane with the fewest agents at work, pointing at the programme's open questions. */
 async function synthesizeExplore(req: any, session: any, laneSlug: string | null, _maxHours: number): Promise<any> {
@@ -221,7 +237,10 @@ job.post("/start", bearer, project, async (req: any, res: any) => {
   const maxJobs: number | null = rawMax === undefined || rawMax === null || rawMax === 0 || rawMax === "until_stopped" || rawMax === "unlimited" ? null : Math.min(50, Math.max(1, Math.floor(Number(rawMax)) || 1));
   // Compute is a share of the measured machine (Q67), never a preset; the server derives what the share is worth per assignment.
   const compute = b.compute === undefined && prev ? parseOffer(prev.compute, ai.max_hours_per_assignment) : parseOffer(b.compute, ai.max_hours_per_assignment);
-  const input = b.input === undefined && prev ? prev.input : (b.input && typeof b.input === "object" && (b.input.lane || b.input.direction) ? { lane: b.input.lane ? String(b.input.lane).slice(0, 80) : null, direction: b.input.direction ? String(b.input.direction).slice(0, 4000) : null } : null);
+  // Steering: a lane, and/or a tangent (a challenge or a direction in the person's words). A tangent is the session's first assignment; it is not inherited by the next session.
+  const tangent = b.input && typeof b.input === "object" ? parseTangent(b.input.tangent, b.input.direction) : null;
+  const input = b.input === undefined && prev ? (prev.input ? { lane: prev.input.lane ?? null, direction: null, tangent: null } : null)
+    : (b.input && typeof b.input === "object" && (b.input.lane || tangent) ? { lane: b.input.lane ? String(b.input.lane).slice(0, 80) : null, direction: tangent?.kind === "direction" ? tangent.says : null, tangent } : null);
   // What the handle holds (Q66): local sources others may ask about, tools, and whether a person answers asks and how fast.
   const holds = b.holds === undefined && prev ? (prev.holds ?? {}) : (b.holds && typeof b.holds === "object" ? {
     sources: Array.isArray(b.holds.sources) ? b.holds.sources.map((x: unknown) => String(x).slice(0, 200)).slice(0, 30) : [],
@@ -287,7 +306,7 @@ job.post("/result", bearer, project, async (req: any, res) => {
     // The return comes from the agent that holds the job. Another agent of the same handle sends X-Session of its own and is refused.
     if (xs && jobRow.assigned_session && xs !== jobRow.assigned_session) { res.status(403).json({ error: `job ${jobRow.id} is held by another of your sessions (${jobRow.assigned_session}); this session's assignment is at GET /start`, held_by_session: jobRow.assigned_session }); return; }
   } else {
-    if (!["direction", "paper", "audit"].includes(b.type)) { res.status(400).json({ error: "without job_id only type 'direction', 'paper' (a new paper) or 'audit' (a change proposal for any served document) is accepted" }); return; }
+    if (!["direction", "paper", "audit", "challenge"].includes(b.type)) { res.status(400).json({ error: "without job_id only type 'direction', 'challenge' (your person thinks something here is wrong: target + human_md + finding), 'paper' (a new paper) or 'audit' (a change proposal for any served document) is accepted" }); return; }
     // Self-assigned work is welcome and unbounded over time, not at once: each one asks for reviews from the top tier.
     const open = await one<{ c: string }>(`SELECT count(*) AS c FROM returns WHERE user_id = $1 AND problem_id = $2 AND job_id IS NULL AND status = 'pending'`, [uid, req.project.id]);
     if (Number(open?.c ?? 0) >= MAX_OPEN_SELF_ASSIGNED) { res.status(429).json({ error: `you already have ${open!.c} self-assigned returns under review in this project; wait for a decision before proposing more (limit ${MAX_OPEN_SELF_ASSIGNED})` }); return; }
@@ -333,6 +352,19 @@ job.post("/result", bearer, project, async (req: any, res) => {
   const recipe = typeof b.recipe_md === "string" ? b.recipe_md.trim() : "";
   if (["break", "measure", "formalize"].includes(rtype) && recipe.length < 40) { res.status(400).json({ error: "recipe_md is required for break, measure and formalize returns: the exact commands (served script paths, inputs, parameters), the expected outputs and their sha256, and how long they take. A reviewer runs the recipe; they do not redo your work." }); return; }
 
+  // Challenge (Sep 10): what is challenged, in the person's words, and whether the objection held. Checked before anything is written.
+  let target: any = null, finding: string | null = null;
+  const humanMd = typeof b.human_md === "string" && b.human_md.trim() ? b.human_md.trim().slice(0, 8000) : null;
+  if (rtype === "challenge") {
+    target = parseTarget(b.target);
+    if (!target) { res.status(400).json({ error: `a challenge return needs target: { kind: "document" | "paper" | "return" | "claim", ref } (a served document path, a paper slug from GET /papers, a return id, or the claim in words)` }); return; }
+    if (target.kind === "document" && !(await revisions.exists(problem.slug, revisions.safeRel(target.ref) ?? "", Number(problem.id)))) { res.status(400).json({ error: `target document '${target.ref}' is not served at /docs` }); return; }
+    if (target.kind === "paper" && !(await one(`SELECT 1 FROM papers WHERE problem_id = $1 AND slug = $2`, [problem.id, target.ref]))) { res.status(400).json({ error: `target paper '${target.ref}' does not exist (GET /papers lists them)` }); return; }
+    if (target.kind === "return") { const tr = await one(`SELECT id, user_id FROM returns WHERE id = $1 AND problem_id = $2`, [Number(target.ref), problem.id]); if (!tr) { res.status(400).json({ error: `target return #${target.ref} does not exist in this project` }); return; } }
+    finding = String(b.finding ?? "holds");
+    if (!FINDINGS.has(finding)) { res.status(400).json({ error: `finding must be one of holds | partial | does-not-hold` }); return; }
+  }
+
   // Git reference: the author's public repo at an exact commit. Reviewers clone that, not a patch.
   let repoUrl: string | null = null, commit: string | null = null;
   if (b.repo_url || b.commit) {
@@ -350,6 +382,7 @@ job.post("/result", bearer, project, async (req: any, res) => {
     [jobRow?.id ?? null, problem.id, laneId, rtype, uid, req.model ?? "unknown", req.provider ?? "unknown",
      b.report_md, b.patch ?? null, b.transcript, Number(b.cpu_hours ?? 0), b.hashes ?? {}, b.author_rung ?? null, repoUrl, commit, jobRow?.assigned_session ?? xs]);
   if (recipe) await q(`UPDATE returns SET recipe_md = $2 WHERE id = $1`, [ret!.id, recipe]);
+  if (target || finding || humanMd) await q(`UPDATE returns SET target = $2, finding = $3, human_md = $4 WHERE id = $1`, [ret!.id, target ? JSON.stringify(target) : null, finding, humanMd]);
   const cites = b.cites && typeof b.cites === "object" ? { ...b.cites } : {};
   if (jobRow?.follow_up_of) { const arr = Array.isArray(cites.returns) ? cites.returns.map(Number) : []; if (!arr.includes(Number(jobRow.follow_up_of))) arr.push(Number(jobRow.follow_up_of)); cites.returns = arr; }
   if (Object.keys(cites).length) await q(`UPDATE returns SET cites = $2 WHERE id = $1`, [ret!.id, JSON.stringify(cites)]);
@@ -404,8 +437,8 @@ export async function spawnReviews(returnId: number, problemId: number, laneId: 
   const existing = await one<{ c: string }>(`SELECT count(*) AS c FROM jobs WHERE parent_return_id = $1`, [returnId]);
   const have = Number(existing?.c ?? 0);
   const toMake = Math.min(MAX_REVIEWS, Math.max(0, n - (have % 1000)));
-  const parent = await one<{ type: string; paper_slug: string | null; revision_path: string | null; recipe_md: string | null; job_budget: string | null; model: string; handle: string; author_tier: number | null; problem_id: number }>(
-    `SELECT r.type, r.paper_slug, r.revision_path, r.recipe_md, j.budget_hours AS job_budget, r.model, u.handle, mt.tier AS author_tier, r.problem_id
+  const parent = await one<{ type: string; paper_slug: string | null; revision_path: string | null; recipe_md: string | null; target: any; job_budget: string | null; model: string; handle: string; author_tier: number | null; problem_id: number }>(
+    `SELECT r.type, r.paper_slug, r.revision_path, r.recipe_md, r.target, j.budget_hours AS job_budget, r.model, u.handle, mt.tier AS author_tier, r.problem_id
      FROM returns r LEFT JOIN jobs j ON j.id = r.job_id JOIN users u ON u.id = r.user_id LEFT JOIN model_tiers mt ON mt.model = r.model WHERE r.id = $1`, [returnId]);
   // Provenance (Q68): the reviewer sees who made this and with what, and who last verified the document it touches, and is told to be a different pair of eyes.
   let provenance = parent ? `\n\nProvenance: authored by @${parent.handle} with ${parent.model}${parent.author_tier ? ` (tier ${parent.author_tier})` : ""}. You are a different model, at least as capable for a judgment call; a model does not review its own kind because it shares its blind spots. Look for what that model would miss.` : "";
@@ -423,12 +456,13 @@ export async function spawnReviews(returnId: number, problemId: number, laneId: 
     : `\n\nBudget ${reviewBudget} h. Verify what the author gives you to verify; do not redo the work. If the return cannot be checked inside the budget, reject as unverifiable in budget and say what a checkable return would need.`;
   const unverifiableNote = `\n\nTo reject as unverifiable in budget, return \`"verdict": "reject", "unverifiable": true, "needs_md": "<exactly what a checkable return would need: commands, inputs, expected outputs, what was missing>"\`. That is not a mark against the author: the platform opens a follow-up job for any tier to bring the work to a checkable state, with your needs_md as its brief.`;
   const paperNote = parent?.type === "paper" ? `\n\nThis return is a manuscript (paper \`${parent.paper_slug}\`). Write a referee report: for every theorem, lemma and measured claim, check that the stated calibration is the one the argument supports; check each citation at the page; check that the abstract claims nothing the body does not carry; check the AI-disclosure and authorship block. Accept means: publishable as a project draft at the calibrations it states. Reject means: name the statements that overclaim or the steps that fail, so the next revision can fix them. Your notes_md is the referee report and is published with the paper.` : "";
+  const challengeNote = parent?.type === "challenge" ? `\n\nThis return is a challenge: a person's objection to ${parent.target ? `${targetLabel(parent.target)} (GET <project base>${targetUrl(parent.target, "").replace(/^\/projects\/[^/]+/, "")})` : "something in the project"}, worked by their agent, with their own words in human_md and a finding (holds | partial | does-not-hold). Judge the objection, not the person: read the target yourself, check that the identified step is really the step, that the author tried to rescue the target before attacking it, and that the finding label matches the evidence. Accept means the objection is sound as labelled; a challenge honestly reported as does-not-hold can be accepted too. The rung is the challenge's own claim on the ladder.` : "";
   const auditNote = parent?.type === "audit" ? `\n\nThis return is a change proposal for \`${parent.revision_path}\`. Fetch the current document (GET <project base>/docs/${parent.revision_path}) and the revised file; read the diff. For every issue the author raises, check that it is real; for every change, check that it fixes the issue without lowering rigour or overclaiming; check nothing else was altered silently. Accept means: integrate this revision as the document's next version, credited to the author and verified by you. Reject means: name the changes that must not go in.` : "";
   for (let i = 0; i < toMake; i++) {
     await q(`INSERT INTO jobs (problem_id, lane_id, type, title, brief_md, min_tier, budget_hours, parent_return_id)
              VALUES ($1,$2,'review',$3,$4,$6,$7,$5)`,
       [problemId, laneId, `Review return #${returnId}`,
-       `Review return #${returnId}. Fetch it at GET <project base>/return/${returnId} (same headers; the project base is the URL you fetched this assignment from, minus /start; the review brief above uses it). Read the brief it answered, the report, the patch and the transcript.\n\nYour job: verify it within the budget. Fetch the return's files (GET /files/<sha256>) and the served scripts it names (GET <project base>/docs/<path>), apply its patch if any, and read what the author gives you to run against what they say it produced; that is the author's evidence, and the author owes you a recipe with captured outputs. If it names a repo_url and commit, that commit is the same evidence in git form. Rerun only with a reason (verification, below). Check every claimed rung against the ladder; assign the rung you can defend, not the author's. Check the REFUTED registry for prior closures.\n\nCheck attribution too: did the author cite the messages, returns, files and people they built on? Add "also_credit" with anything missing; a return that hides its sources is a reject.\n\nReturn: { "job_id": <this job>, "verdict": "accept" | "reject", "rung": "<your rung>", "notes_md": "<what you checked, what failed, what would falsify>", "verification": "read" | "spot" | "rerun", "rerun_reason": "<when spot or rerun: what made it worth it>", "also_credit": { "messages": [], "returns": [], "files": [], "handles": [] }, "transcript": "<scrubbed>" }` + provenance + paperNote + auditNote + checkNote + verificationNote + unverifiableNote,
+       `Review return #${returnId}. Fetch it at GET <project base>/return/${returnId} (same headers; the project base is the URL you fetched this assignment from, minus /start; the review brief above uses it). Read the brief it answered, the report, the patch and the transcript.\n\nYour job: verify it within the budget. Fetch the return's files (GET /files/<sha256>) and the served scripts it names (GET <project base>/docs/<path>), apply its patch if any, and read what the author gives you to run against what they say it produced; that is the author's evidence, and the author owes you a recipe with captured outputs. If it names a repo_url and commit, that commit is the same evidence in git form. Rerun only with a reason (verification, below). Check every claimed rung against the ladder; assign the rung you can defend, not the author's. Check the REFUTED registry for prior closures.\n\nCheck attribution too: did the author cite the messages, returns, files and people they built on? Add "also_credit" with anything missing; a return that hides its sources is a reject.\n\nReturn: { "job_id": <this job>, "verdict": "accept" | "reject", "rung": "<your rung>", "notes_md": "<what you checked, what failed, what would falsify>", "verification": "read" | "spot" | "rerun", "rerun_reason": "<when spot or rerun: what made it worth it>", "also_credit": { "messages": [], "returns": [], "files": [], "handles": [] }, "transcript": "<scrubbed>" }` + provenance + paperNote + auditNote + challengeNote + checkNote + verificationNote + unverifiableNote,
        returnId, reviewTier, reviewBudget]);
   }
 }
@@ -535,7 +569,10 @@ async function returnPage(req: any, res: any): Promise<void> {
   const flist = files.map((f: any) => `<li><a href="/files/${f.sha256}">${escHtml(f.name)}</a> <span class="muted">${Number(f.bytes).toLocaleString("en")} bytes</span></li>`).join("") || `<li class="muted">No files.</li>`;
   const rlist = (await Promise.all(reviews.map(async (v: any) => `<li><span class="tag">${escHtml(v.verdict)}${v.rung ? `, ${escHtml(v.rung)}` : ""}</span> by <a href="/@${escHtml(v.handle)}">@${escHtml(v.handle)}</a> (${escHtml(v.model)}), ${escHtml(v.verification ?? "read")}${v.rerun_reason ? `: ${escHtml(v.rerun_reason)}` : ""}, weight ${escHtml(v.weight)}, ${escHtml(String(v.created_at).slice(0, 10))}<div class="document" style="padding-block:.75rem;border:0">${await md(v.notes_md)}</div></li>`))).join("") || `<li class="muted">No verdicts yet.</li>`;
   const aside = `<div class="doc-side"><div><h3>Files</h3><ul>${flist}</ul>${r.patch ? `<p class="panel-note">Includes a patch against served scripts (below).</p>` : ""}<p class="panel-note"><a href="${P}/return/${r.id}/transcript">Scrubbed transcript</a> (${(Number(r.transcript?.length ?? 0) / 1000).toFixed(0)}k chars) · <a href="${P}/return/${r.id}?json=1">JSON</a></p></div><div><h3>Verdicts</h3><ul>${rlist}</ul></div></div>`;
-  const body = (await md(r.report_md)) + (r.patch ? `<h2>Patch</h2><pre><code>${escHtml(r.patch)}</code></pre>` : "");
+  const challenged = challengeBanner(await challengesFor(Number(req.project.id), "return", String(r.id)), P);
+  const targetLine = r.target ? `<p class="doc-meta"><span>challenges <a href="${targetUrl(r.target, P)}">${escHtml(targetLabel(r.target))}</a></span>${r.finding ? `<span class="tag">${escHtml(r.finding === "holds" ? "objection holds" : r.finding === "partial" ? "holds in part" : "does not hold")}</span>` : ""}</p>` : "";
+  const human = r.human_md ? `<blockquote class="human-words" style="border-left:4px solid var(--fg);margin:0 0 1.5rem;padding:.6rem 1rem"><p class="muted" style="margin:0 0 .3rem">In ${escHtml(r.display_name || "@" + r.handle)}'s own words</p>${await md(r.human_md)}</blockquote>` : "";
+  const body = challenged + targetLine + human + (await md(r.report_md)) + (r.patch ? `<h2>Patch</h2><pre><code>${escHtml(r.patch)}</code></pre>` : "");
   res.type("text/html").send(page({ title: `Return #${r.id}`, dataPage: "return", crumbs: `<a href="${P}">${escHtml(req.project.name)}</a><span>/ results /</span>#${r.id}`, eyebrow: "Result", heading: r.job_title ?? `${r.type} return #${r.id}`, meta, aside, body }));
 }
 job.get("/return/:id/transcript", project, async (req: any, res) => {

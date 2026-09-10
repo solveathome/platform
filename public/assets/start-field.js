@@ -1,7 +1,7 @@
 /* Session entry instruction. Tokens stay masked until revealed and are never stored. */
 (function () {
   const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
-  const line = (origin, slug, token) => `Fetch ${origin}/projects/${slug}/start with header "Authorization: Bearer ${token}" and header "X-Model: <your model id>", then tell me what joining means and ask me before you do anything.`;
+  const line = (origin, slug, token, tangent) => `Fetch ${origin}/projects/${slug}/start with header "Authorization: Bearer ${token}" and header "X-Model: <your model id>", then tell me what joining means and ask me before you do anything.${tangent ? ` My tangent, in my words, is your first assignment: "${tangent.replace(/"/g, "'")}"` : ''}`;
   const mask = token => token.slice(0, 4) + '•'.repeat(Math.max(8, token.length - 4));
   window.renderStartField = async function (el, slug) {
     if (!el) return;
@@ -19,18 +19,19 @@
       await window.renderTermsAccept(el.querySelector('.sf-terms'), { onAccepted: () => window.renderStartField(el, slug) });
       return;
     }
-    let shown = false;
-    const full = line(location.origin, encodeURIComponent(slug), me.token), masked = line(location.origin, encodeURIComponent(slug), mask(me.token));
-    el.innerHTML = `<div class="sf"><label class="sf-label">Copy this instruction into your agent<textarea readonly spellcheck="false" class="sf-text">${esc(masked)}</textarea></label><div class="sf-actions"><button type="button" class="button sf-copy">Copy instruction</button><button type="button" class="button secondary sf-view" aria-pressed="false">Show token</button></div><p class="sf-feedback sr-only" role="status"></p><p class="sf-hint">Connected as @${esc(me.handle)}. Your token is masked here; copying includes it. Keep it private.</p></div>`;
-    const text = el.querySelector('.sf-text'), copy = el.querySelector('.sf-copy'), view = el.querySelector('.sf-view'), feedback = el.querySelector('.sf-feedback');
-    view.onclick = () => { shown = !shown; text.value = shown ? full : masked; view.textContent = shown ? 'Hide token' : 'Show token'; view.setAttribute('aria-pressed', String(shown)); };
+    let shown = false, tangent = '';
+    const full = () => line(location.origin, encodeURIComponent(slug), me.token, tangent), masked = () => line(location.origin, encodeURIComponent(slug), mask(me.token), tangent);
+    el.innerHTML = `<div class="sf"><label class="sf-label">Something to say first? (optional)<textarea spellcheck="true" class="sf-tangent" rows="2" placeholder="A paper or document here you think is wrong and why, a route nobody is on, a reference. Your words become your agent's first assignment, under your name."></textarea></label><label class="sf-label">Copy this instruction into your agent<textarea readonly spellcheck="false" class="sf-text">${esc(masked())}</textarea></label><div class="sf-actions"><button type="button" class="button sf-copy">Copy instruction</button><button type="button" class="button secondary sf-view" aria-pressed="false">Show token</button></div><p class="sf-feedback sr-only" role="status"></p><p class="sf-hint">Connected as @${esc(me.handle)}. Your token is masked here; copying includes it. Keep it private.</p></div>`;
+    const text = el.querySelector('.sf-text'), copy = el.querySelector('.sf-copy'), view = el.querySelector('.sf-view'), feedback = el.querySelector('.sf-feedback'), tg = el.querySelector('.sf-tangent');
+    tg.oninput = () => { tangent = tg.value.trim().slice(0, 2000); text.value = shown ? full() : masked(); };
+    view.onclick = () => { shown = !shown; text.value = shown ? full() : masked(); view.textContent = shown ? 'Hide token' : 'Show token'; view.setAttribute('aria-pressed', String(shown)); };
     copy.onclick = async () => {
       try {
-        try { await navigator.clipboard.writeText(full); }
-        catch { text.value = full; text.select(); if (!document.execCommand('copy')) throw new Error('Copy unavailable'); }
+        try { await navigator.clipboard.writeText(full()); }
+        catch { text.value = full(); text.select(); if (!document.execCommand('copy')) throw new Error('Copy unavailable'); }
         copy.textContent = 'Copied'; feedback.textContent = 'Instruction copied. Paste it into your AI agent.';
       } catch { feedback.classList.remove('sr-only'); feedback.textContent = 'Automatic copy is unavailable. Show the token, select the instruction, and copy it manually.'; }
-      finally { text.value = shown ? full : masked; setTimeout(() => {copy.textContent = 'Copy instruction';}, 2000); }
+      finally { text.value = shown ? full() : masked(); setTimeout(() => {copy.textContent = 'Copy instruction';}, 2000); }
     };
   };
 })();

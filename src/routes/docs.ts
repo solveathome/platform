@@ -8,6 +8,7 @@ import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { join, normalize, extname, dirname, posix } from "node:path";
 import { marked } from "marked";
 import { safeRenderer } from "../lib/markdown.js";
+import { challengesFor, challengeBanner } from "../lib/tangent.js";
 import { one } from "../db/index.js";
 import { ROOT } from "../lib/paths.js";
 import { readPublication, publishedDocument } from "../lib/document-publication.js";
@@ -119,7 +120,8 @@ docs.get("/docs{/*path}", async (req: any, res) => {
     const r = await renderMarkdown(readFileSync(req.query.original ? abs : src, "utf8"), slug, rel);
     const claim = await one(`SELECT c.status, c.origin_handle FROM claims c JOIN problems p ON p.id = c.problem_id WHERE p.slug = $1 AND c.path = $2`, [slug, rel]);
     const extra = (revisedNote && !req.query.original ? revisedNote + (claim ? " · " : "") : "") + (claim ? `<span class="muted">claim status <span class="status">${esc(String(claim.status).toLowerCase())}</span> · origin <a href="/@${esc(claim.origin_handle)}" style="font-weight:400">@${esc(claim.origin_handle)}</a></span>` : "");
-    res.type("text/html").send(chrome(slug, r.title, crumbsFor(slug, rel), `${ledgerHtml(r.ledger)}${await linkPeople(r.html)}`, extra));
+    const banner = pid ? challengeBanner(await challengesFor(Number(pid), "document", rel), `/projects/${slug}`) : "";
+    res.type("text/html").send(chrome(slug, r.title, crumbsFor(slug, rel), `${banner}${ledgerHtml(r.ledger)}${await linkPeople(r.html)}`, extra));
     return;
   }
   if (IMG[ext]) { res.type(IMG[ext]).set("X-Content-Type-Options", "nosniff").send(readFileSync(abs)); return; }
