@@ -1,4 +1,5 @@
 import { Router } from "express";
+import { wantsHtml } from "../lib/negotiate.js";
 import { marked } from "marked";
 import { protectMath } from "../lib/math.js";
 import { linkPeople } from "../lib/people.js";
@@ -45,7 +46,7 @@ filesRouter.get("/files/:sha/meta", async (req, res) => {
 /** GET /files/:sha for a browser, Markdown file: a rendered page with where it came from. Agents (any other Accept) get the raw text below. */
 filesRouter.get("/files/:sha", async (req, res, next) => {
   const sha = String(req.params.sha);
-  if (!(req.header("accept") ?? "").includes("text/html") || !/^[0-9a-f]{64}$/.test(sha)) { next(); return; }
+  if (!wantsHtml(req) || !/^[0-9a-f]{64}$/.test(sha)) { next(); return; }
   const f = await one(`SELECT f.sha256, f.name, f.ext, f.bytes, f.model, f.created_at, f.deleted_at, f.deleted_note, u.handle FROM files f JOIN users u ON u.id = f.user_id WHERE f.sha256 = $1`, [sha]);
   if (!f || f.ext !== "md") { next(); return; }
   const body = f.deleted_at ? null : files.read(sha);

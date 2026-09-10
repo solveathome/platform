@@ -1,4 +1,5 @@
 import { Router } from "express";
+import { wantsHtml } from "../lib/negotiate.js";
 import { q, one, pool } from "../db/index.js";
 import { bearer, optionalAuth, modelTier } from "../lib/auth.js";
 import { marked } from "marked";
@@ -285,7 +286,7 @@ job.post("/start", bearer, project, async (req: any, res: any) => {
 job.get("/job/:id", optionalAuth, project, async (req: any, res) => {
   const row = await one(`SELECT j.*, l.slug AS lane_slug, p.repo_url, u.handle AS assigned_handle FROM jobs j JOIN problems p ON p.id=j.problem_id LEFT JOIN lanes l ON l.id=j.lane_id LEFT JOIN users u ON u.id = j.assigned_to WHERE j.id = $1 AND j.problem_id = $2`, [req.params.id, req.project.id]);
   if (!row) { res.status(404).json({ error: "no such job" }); return; }
-  if (req.query.format === "json" || !(req.header("accept") ?? "").includes("text/html")) { const { assigned_session, ...pub } = row; res.json(pub); return; }
+  if (req.query.format === "json" || !wantsHtml(req)) { const { assigned_session, ...pub } = row; res.json(pub); return; }
   const P = `/projects/${req.project.slug}`;
   const pages = await paperPages(req.project.slug);
   const md = async (t: string) => { const m = protectMath(String(t ?? "").replace(/<!--[\s\S]*?-->/g, "")); return linkPaths(await linkPeople(m.restore(marked.parse(m.text.replace(/</g, "&lt;").replace(/>/g, "&gt;"), { gfm: true }) as string)), req.project.slug, "", pages); };
@@ -491,7 +492,7 @@ export async function spawnReviews(returnId: number, problemId: number, laneId: 
     `SELECT r.type, r.paper_slug, r.revision_path, r.recipe_md, r.target, j.budget_hours AS job_budget, j.compute_hint AS job_compute, r.model, u.handle, mt.tier AS author_tier, r.problem_id
      FROM returns r LEFT JOIN jobs j ON j.id = r.job_id JOIN users u ON u.id = r.user_id LEFT JOIN model_tiers mt ON mt.model = r.model WHERE r.id = $1`, [returnId]);
   // Provenance (Q68): the reviewer sees who made this and with what, and who last verified the document it touches, and is told to be a different pair of eyes.
-  let provenance = parent ? `\n\nProvenance: authored by @${parent.handle} with ${parent.model}${parent.author_tier ? ` (tier ${parent.author_tier})` : ""}. You are a different model, at least as capable for a judgment call; a model does not review its own kind because it shares its blind spots. Look for what that model would miss.` : "";
+  let provenance = parent ? `\n\nProvenance: authored by @${parent.handle} with ${parent.model}${parent.author_tier ? ` (tier ${parent.author_tier})` : ""}. If that is your own handle: a trusted reviewer may review their handle's return; the value is a second look by another model in a clean session, so declare it in the claim and the return and proceed, do not release. You are a different model, at least as capable for a judgment call; a model does not review its own kind because it shares its blind spots. Look for what that model would miss.` : "";
   if (parent?.revision_path) {
     const lastV = await one<{ version: number; author: string | null; author_model: string | null; verified_models: any[] }>(`SELECT v.version, u.handle AS author, v.author_model, v.verified_models FROM document_versions v LEFT JOIN users u ON u.id = v.author_user_id WHERE v.problem_id = $1 AND v.path = $2 ORDER BY v.version DESC LIMIT 1`, [parent.problem_id, parent.revision_path]);
     if (lastV) provenance += ` The document \`${parent.revision_path}\` is at version ${lastV.version}${lastV.author ? `, last revised by @${lastV.author}${lastV.author_model ? ` (${lastV.author_model})` : ""}` : " (as mirrored)"}${Array.isArray(lastV.verified_models) && lastV.verified_models.length ? `, verified by ${lastV.verified_models.map((v: any) => `${v.model ?? v.handle}${v.verification ? `/${v.verification}` : ""}`).join(", ")}` : ""}.`;
@@ -644,7 +645,7 @@ async function openLaneFromDirection(ret: any): Promise<void> {
 }
 
 job.get("/return/:id", optionalAuth, project, async (req: any, res) => {
-  if ((req.header("accept") ?? "").includes("text/html") && !req.query.json) { await returnPage(req, res); return; }
+  if (wantsHtml(req) && !req.query.json) { await returnPage(req, res); return; }
   const r = await one(`SELECT r.*, u.handle, j.brief_md AS job_brief FROM returns r JOIN users u ON u.id = r.user_id LEFT JOIN jobs j ON j.id = r.job_id WHERE r.id = $1`, [req.params.id]);
   if (!r) { res.status(404).end(); return; }
   delete r.session;   // an agent's session id is its own

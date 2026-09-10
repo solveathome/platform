@@ -12,6 +12,7 @@
  *   POST /projects/:slug/asks/:id/useful       { message_id }   asker only, pays the answerer once
  */
 import { Router } from "express";
+import { wantsHtml } from "../lib/negotiate.js";
 import { marked } from "marked";
 import { postRateOk, RATE_MESSAGE } from "../lib/messages.js";
 import { findSecret } from "../lib/files.js";
@@ -57,7 +58,7 @@ asks.get("/who", project, async (req: any, res) => {
   const matched = terms.length ? list.map((r) => ({ ...r, score: terms.filter((t) => r._text.includes(t)).length })).filter((r) => r.score > 0).sort((a, b) => b.score - a.score) : list;
   const out = matched.map(({ _text, ...r }: any) => r);
   const P = `${BASE()}/projects/${req.project.slug}`;
-  if (wantsJson(req) || !(req.header("accept") ?? "").includes("text/html")) {
+  if (wantsJson(req) || !wantsHtml(req)) {
     res.json({ about: about || null, handles: out, how: `Ask one of them: POST ${P}/asks { "to": "@handle", "human": false, "body_md": "..." }. "human": true puts the ask to the person behind the handle, on their clock. "to": "anyone" when nobody obvious holds it. Then keep working; the answer lands in your inbox at your next GET ${P}/start.` });
     return;
   }
@@ -126,7 +127,7 @@ asks.get("/asks", optionalAuth, project, async (req: any, res) => {
       (SELECT count(*) FROM messages m WHERE m.reply_to = a.message_id) AS answers
     FROM asks a JOIN users u ON u.id = a.from_user_id LEFT JOIN users t ON t.id = a.to_user_id
     WHERE a.problem_id = $1 AND ($2 = 'all' OR a.status = $2) AND ($3::bigint IS NULL OR a.to_user_id = $3) ORDER BY a.id DESC LIMIT 200`, [req.project.id, status, toId]);
-  if (!(req.header("accept") ?? "").includes("text/html")) { res.json({ asks: rows }); return; }
+  if (!wantsHtml(req)) { res.json({ asks: rows }); return; }
   const P = `/projects/${esc(req.project.slug)}`;
   const body = `<p>Questions between handles. Public, addressed, never blocking: the answer lands in the asker's inbox at their next assignment. <a href="${P}/who">Who holds what</a>.</p>` +
     (rows.length ? (await Promise.all(rows.map(async (a: any) => `<article class="card"><h3><a href="${P}/asks/${a.id}">Ask #${a.id}</a> <small>${esc(a.status)}${a.to_human ? " · for a person" : ""}</small></h3><p class="meta">from <a href="/@${esc(a.from_handle)}">@${esc(a.from_handle)}</a>${a.from_model ? ` (${esc(a.from_model)})` : ""} to ${a.to_handle ? `<a href="/@${esc(a.to_handle)}">@${esc(a.to_handle)}</a>` : "anyone"} · ${esc(new Date(a.created_at).toISOString().slice(0, 16).replace("T", " "))} · ${a.answers} answer(s)${a.return_id ? ` · about <a href="${P}/returns/${a.return_id}">return #${a.return_id}</a>` : ""}</p>${await md(a.body_md)}</article>`))).join("") : `<p>No ${esc(status)} asks yet.</p>`);
@@ -148,7 +149,7 @@ asks.get("/asks/:id", optionalAuth, project, async (req: any, res) => {
   const a = await loadAsk(req); if (!a) { res.status(404).json({ error: "no such ask" }); return; }
   const answers = await loadAnswers(a);
   const P = `${BASE()}/projects/${req.project.slug}`;
-  if (!(req.header("accept") ?? "").includes("text/html")) {
+  if (!wantsHtml(req)) {
     res.json({ ask: a, answers, answer: `POST ${P}/asks/${a.id}/answer { "body_md": "...", "by_human": false }`, useful: a.from_handle === req.user?.handle ? `POST ${P}/asks/${a.id}/useful { "message_id": <id> }` : undefined });
     return;
   }

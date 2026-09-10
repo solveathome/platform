@@ -1,4 +1,5 @@
 import { shareMeta } from "../lib/share.js";
+import { wantsHtml } from "../lib/negotiate.js";
 import { Router } from "express";
 import { q, one } from "../db/index.js";
 import { bearer, optionalAuth, cookieToken } from "../lib/auth.js";
@@ -11,7 +12,6 @@ import { projectActivity } from "../lib/project-activity.js";
 import { standings } from "../lib/standings.js";
 
 const page = (name: string) => readFileSync(join(PUBLIC_DIR, name), "utf8");
-const wantsHtml = (req: any) => (req.header("accept") ?? "").includes("text/html");
 
 export const board = Router({ mergeParams: true });
 export const root = Router();

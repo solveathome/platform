@@ -4,6 +4,7 @@
  * GET /projects/:slug/papers/:paper     the paper page: current manuscript rendered, versions, referee reports, how to work on it
  */
 import { Router } from "express";
+import { wantsHtml } from "../lib/negotiate.js";
 import { readFileSync, existsSync } from "node:fs";
 import { join } from "node:path";
 import { marked } from "marked";
@@ -43,7 +44,7 @@ export async function listPapers(problemId: number, slug: string) {
 papers.get("/papers", async (req: any, res) => {
   const p = await one(`SELECT id, slug FROM problems WHERE slug = $1`, [req.params.slug]);
   if (!p) { res.status(404).json({ error: "unknown project" }); return; }
-  if ((req.header("accept") ?? "").includes("text/html")) { res.redirect(`/projects/${p.slug}#papers`); return; }
+  if (wantsHtml(req)) { res.redirect(`/projects/${p.slug}#papers`); return; }
   res.json({ papers: await listPapers(Number(p.id), p.slug), how: `Papers are written and revised through jobs of type 'paper' (GET /projects/${p.slug}/start). A paper return is the manuscript as an uploaded file plus paper: { slug, file }. Reviewers write referee reports; an accepted revision becomes the current version.` });
 });
 
@@ -81,7 +82,7 @@ papers.get("/history/*path", async (req: any, res) => {
   const rel = safeRel(raw); if (!rel) { res.status(400).json({ error: "bad path" }); return; }
   const rows = await history(Number(p.id), rel);
   const items = rows.map((v: any) => ({ ...v, diff_url: `/projects/${p.slug}/history/${rel}/${v.version}/diff`, content_url: v.content_sha ? `/files/${v.content_sha}` : null, return_url: v.return_id ? `/projects/${p.slug}/return/${v.return_id}` : null }));
-  if (!(req.header("accept") ?? "").includes("text/html")) { res.json({ path: rel, versions: items }); return; }
+  if (!wantsHtml(req)) { res.json({ path: rel, versions: items }); return; }
   const body = items.length ? `<ol class="paper-list">${items.map((v: any) => `<li><span class="paper-title">Version ${v.version}</span><span class="paper-status">${esc(v.version === 1 ? "original" : "accepted")}</span><span class="paper-facts">${v.author ? `changed by <a href="/@${esc(v.author)}">${esc(v.author_name || "@" + v.author)}</a>${v.model ? ` (${esc(v.model)})` : ""}` : esc(v.summary)}${(v.verified_by ?? []).length ? `, verified by ${v.verified_by.map((h: string) => { const vm = (v.verified_models ?? []).find((x: any) => x.handle === h); return `<a href="/@${esc(h)}">@${esc(h)}</a>${vm?.model ? ` (${esc(vm.model)}${vm.verification && vm.verification !== "read" ? `, ${esc(vm.verification)}` : ""})` : ""}`; }).join(", ")}` : ""}, ${esc(String(v.created_at).slice(0, 10))}${v.return_url ? ` · <a href="${v.return_url}">the change proposal</a>` : ""}${v.version > 1 ? ` · <a href="${v.diff_url}">diff</a>` : ""}${v.content_url ? ` · <a href="${v.content_url}">this version</a>` : ""}</span>${v.summary && v.author ? `<span class="paper-summary-line">${esc(v.summary)}</span>` : ""}</li>`).join("")}</ol>` : `<p class="muted">The swarm has not changed this document yet. It is served as mirrored.</p>`;
   res.type("text/html").send(sitePage({ title: `History of ${rel}`, dataPage: "history", crumbs: `<a href="/projects/${esc(p.slug)}">${esc(p.name)}</a><span>/ history /</span>${esc(rel)}`, eyebrow: "Track record", heading: rel, meta: `<p class="doc-meta"><span><a href="/projects/${esc(p.slug)}/docs/${esc(rel)}">current</a></span><span><a href="/projects/${esc(p.slug)}/docs/${esc(rel)}?original=1">original</a></span></p>`, body }));
 });
@@ -104,7 +105,7 @@ papers.get("/papers/:paper", async (req: any, res) => {
   }
   // The seed manuscript comes from the mirror only if it is a published document there (same gate as /docs).
   if (source === null && paper.path) { const rel = safeRel(paper.path); const root = join(REPOS, p.slug); const abs = rel ? join(root, rel) : null; if (rel && abs && existsSync(abs) && publishedDocument(root, rel, readPublication(root))) { source = readFileSync(abs, "utf8"); from = `seed version from the research mirror (${paper.path})`; } }
-  if (!(req.header("accept") ?? "").includes("text/html")) { res.json({ paper, versions, reports, source_from: from, manuscript_md: source }); return; }
+  if (!wantsHtml(req)) { res.json({ paper, versions, reports, source_from: from, manuscript_md: source }); return; }
   const baseDir = paper.path ? posix.dirname(paper.path) : "paper";
   const pages = await paperPages(p.slug);
   const docsBase = `/projects/${p.slug}/docs/`;

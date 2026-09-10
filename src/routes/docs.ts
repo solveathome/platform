@@ -4,6 +4,7 @@
  * Markdown is rendered with raw HTML escaped; everything else is served as inert text or as a download.
  */
 import { Router } from "express";
+import { wantsHtml } from "../lib/negotiate.js";
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { join, normalize, extname, dirname, posix } from "node:path";
 import { marked } from "marked";
@@ -96,7 +97,7 @@ docs.get("/docs{/*path}", async (req: any, res) => {
     if (statSync(join(abs, name)).isDirectory()) return Object.keys(publication.files).some(file => file.startsWith(path + "/") && publishedDocument(root, file, publication));
     return publishedDocument(root, path, publication);
   };
-  const browser = (req.header("accept") ?? "").includes("text/html");
+  const browser = wantsHtml(req);
   if (st.isDirectory() && !browser) {
     const entries = readdirSync(abs).filter((n) => !n.startsWith(".") && visible(n)).sort();
     res.type("text/plain").send(entries.map((n) => statSync(join(abs, n)).isDirectory() ? `${n}/` : n).join("\n") + "\n"); return;

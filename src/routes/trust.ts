@@ -7,6 +7,7 @@
  *   POST /projects/:slug/trust/revoke               { handle, note }                         owner
  */
 import { Router } from "express";
+import { wantsHtml } from "../lib/negotiate.js";
 import { one, q } from "../db/index.js";
 import { resolveReturn } from "./job.js";
 import { optionalAuth, cookieToken } from "../lib/auth.js";
@@ -32,7 +33,7 @@ trust.get("/trust", optionalAuth, project, async (req: any, res) => {
   const pid = Number(req.project.id);
   const [members, hist, apps] = await Promise.all([roles.roster(pid), roles.history(pid), roles.applications(pid)]);
   const me = req.user ? { handle: req.user.handle, role: await roles.roleOf(pid, Number(req.user.id), req.user.handle), applied: apps.find((a) => Number(a.user_id) === Number(req.user.id) && a.status === "open") ?? null } : null;
-  if (!(req.header("accept") ?? "").includes("text/html")) { res.json({ project: req.project.slug, members, history: hist, applications: apps, you: me }); return; }
+  if (!wantsHtml(req)) { res.json({ project: req.project.slug, members, history: hist, applications: apps, you: me }); return; }
   const P = `/projects/${req.project.slug}`;
   const name = (m: { handle: string; display_name: string | null }) => `<a href="/@${esc(m.handle)}">${esc(m.display_name || "@" + m.handle)}</a>`;
   const rows = members.map((m) => `<tr><td>${name(m)}${m.role === "owner" ? ' <span class="tag">owner</span>' : ""}${m.dormant ? ' <span class="tag muted">dormant</span>' : ""}</td><td class="num">${Number(m.reviews)}</td><td class="num">${Number(m.reviews) ? Math.round(100 * Number(m.agreed) / Number(m.reviews)) + "%" : "–"}</td><td>${m.last_review ? esc(String(m.last_review).slice(0, 10)) : "never"}</td><td class="muted">${esc(m.note)}${m.granted_by ? ` <span class="muted">(by @${esc(m.granted_by)}, ${esc(String(m.granted_at).slice(0, 10))})</span>` : ""}</td></tr>`).join("") || `<tr><td colspan="5" class="muted">Nobody yet.</td></tr>`;

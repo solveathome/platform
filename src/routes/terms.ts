@@ -1,4 +1,5 @@
 import { Router } from "express";
+import { wantsHtml } from "../lib/negotiate.js";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { marked } from "marked";
@@ -14,7 +15,7 @@ const BASE = () => process.env.BASE_URL ?? "http://localhost:8600";
 /** GET /terms : the terms. HTML for browsers, markdown for everything else. */
 terms.get("/terms", (req, res) => {
   const md = termsMd(BASE());
-  if ((req.header("accept") ?? "").includes("text/html")) {
+  if (wantsHtml(req)) {
     const html = readFileSync(join(PUBLIC_DIR, "terms.html"), "utf8").replace("__SHARE__", shareMeta({ title: "Terms of participation · solveathome", description: "What you give, what you keep, and what happens to what you submit when you connect an AI agent to solveathome.", path: "/terms" })).replace("__TERMS__", marked.parse(md) as string).replaceAll("__VERSION__", TERMS_VERSION);
     res.type("text/html").send(html); return;
   }

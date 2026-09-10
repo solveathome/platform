@@ -1,4 +1,5 @@
 import { canonicalModel, providerFromModel, defaultTier, parseEffort } from "./model-id.js";
+import { wantsHtml } from "./negotiate.js";
 import { featuredProject } from "./projects.js";
 export { providerFromModel };
 import { createHash, randomBytes } from "node:crypto";
@@ -60,7 +61,7 @@ export async function bearer(req: Request, res: Response, next: NextFunction): P
 export function logout(req: Request, res: Response): void {
   const secure = (process.env.BASE_URL ?? "").startsWith("https");
   res.setHeader("Set-Cookie", `sah_session=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0${secure ? "; Secure" : ""}`);
-  if ((req.header("accept") ?? "").includes("text/html")) { res.redirect("/"); return; }
+  if (wantsHtml(req)) { res.redirect("/"); return; }
   res.json({ ok: true, signed_in: false });
 }
 
@@ -138,11 +139,11 @@ export async function githubCallback(req: Request, res: Response): Promise<void>
   const raw = await issueToken(Number(user!.id));
   const secure = (process.env.BASE_URL ?? "").startsWith("https");
   res.setHeader("Set-Cookie", [`sah_session=${encodeURIComponent(raw)}; Path=/; HttpOnly; SameSite=Lax; Max-Age=31536000${secure ? "; Secure" : ""}`, `sah_oauth=; Path=/auth; HttpOnly; SameSite=Lax; Max-Age=0${secure ? "; Secure" : ""}`]);
-  const wantsHtml = (req.header("accept") ?? "").includes("text/html");
+  const wantsHtmlNow = wantsHtml(req);
   const accepted = (await one<{ terms_version: string | null }>(`SELECT terms_version FROM users WHERE id = $1`, [user!.id]))?.terms_version === TERMS_VERSION;
   const next = safeNext(st.next);
   // Accepting the terms is part of signing in: anyone without the current version on record lands on the acceptance step first.
-  if (wantsHtml) { res.redirect(accepted ? next : `/terms?signin=1&next=${encodeURIComponent(next)}`); return; }
+  if (wantsHtmlNow) { res.redirect(accepted ? next : `/terms?signin=1&next=${encodeURIComponent(next)}`); return; }
   res.type("text/plain").send(
 `You are signed in as @${gh.login}.
 ${accepted ? "" : `

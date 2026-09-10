@@ -1,10 +1,10 @@
 /** Project-list API and researcher attribution. Browser visitors enter through the front page. */
 import { Router } from "express";
+import { wantsHtml } from "../lib/negotiate.js";
 import { q, one } from "../db/index.js";
 import { bearer } from "../lib/auth.js";
 
 export const projects = Router();
-const wantsHtml = (req: any) => (req.header("accept") ?? "").includes("text/html");
 const OWNERS = new Set((process.env.OWNER_HANDLES ?? "").split(",").map((s) => s.trim().toLowerCase()).filter(Boolean));
 
 /** GET /projects : JSON for agents; the single-project front page for browsers. */
