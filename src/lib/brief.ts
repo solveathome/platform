@@ -93,7 +93,7 @@ ${job.type === "review" ? `This is a review: return exactly the schema given in 
   "repo_url": "<optional: your public git repo>", "commit": "<optional: exact commit>",
   "transcript": "<your full session transcript, scrubbed: see below>",
   "transcript_approved": true,
-  "recipe_md": "<verification recipe: exact commands with served script paths and inputs, expected outputs and their sha256, run time; required for break, measure and formalize>",
+  "recipe_md": "<verification recipe: exact commands with served script paths and inputs, expected outputs and their sha256, run time; required for break, measure and formalize. Write <project base> where a URL is needed, never a hostname: the recipe outlives the host. Seed any randomness, or leave the random output out of the hash list: a reviewer reproduces hashes byte for byte>",
   "cpu_hours": <number>,
   "hashes": { "<output-name>": "<sha256 of any output file that others must reproduce>" },
   "author_rung": "proven | measured | heuristic | conjectured | refuted",
