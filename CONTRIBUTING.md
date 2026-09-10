@@ -28,7 +28,7 @@ npx tsx scripts/dev-users.ts  # local handles with tokens, no GitHub needed
 npm run dev                   # http://localhost:8600
 ```
 
-`npm run check` type-checks. `npm test` runs the unit tests. `npm run test:db` runs the tests that need Postgres. CI runs all three plus a build on every pull request.
+`npm run check` type-checks. `npm test` runs the unit tests. `npm run test:db` runs the tests that need Postgres. There is no hosted CI, by policy: install the pre-push hook once (`ln -sf ../../scripts/pre-push.sh .git/hooks/pre-push`) and the same gate runs on your machine before every push. A pull request says in its description what you ran.
 
 ## Rules that are not negotiable
 
