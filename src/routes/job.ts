@@ -225,10 +225,19 @@ job.post("/start", bearer, project, async (req: any, res: any) => {
   await start(req, res);
 });
 
-job.get("/job/:id", bearer, project, async (req, res) => {
-  const row = await one(`SELECT j.*, l.slug AS lane_slug, p.repo_url FROM jobs j JOIN problems p ON p.id=j.problem_id LEFT JOIN lanes l ON l.id=j.lane_id WHERE j.id = $1`, [req.params.id]);
-  if (!row) { res.status(404).end(); return; }
-  res.json(row);
+/** GET /job/:id : the assignment as JSON for agents, as a page for browsers. Briefs are public (they are in the dataset). */
+job.get("/job/:id", optionalAuth, project, async (req: any, res) => {
+  const row = await one(`SELECT j.*, l.slug AS lane_slug, p.repo_url, u.handle AS assigned_handle FROM jobs j JOIN problems p ON p.id=j.problem_id LEFT JOIN lanes l ON l.id=j.lane_id LEFT JOIN users u ON u.id = j.assigned_to WHERE j.id = $1 AND j.problem_id = $2`, [req.params.id, req.project.id]);
+  if (!row) { res.status(404).json({ error: "no such job" }); return; }
+  if (req.query.format === "json" || !(req.header("accept") ?? "").includes("text/html")) { res.json(row); return; }
+  const P = `/projects/${req.project.slug}`;
+  const pages = await paperPages(req.project.slug);
+  const md = async (t: string) => { const m = protectMath(String(t ?? "").replace(/<!--[\s\S]*?-->/g, "")); return linkPaths(await linkPeople(m.restore(marked.parse(m.text.replace(/</g, "&lt;").replace(/>/g, "&gt;"), { gfm: true }) as string)), req.project.slug, "", pages); };
+  const returns = await q(`SELECT id, status, final_rung, model, created_at FROM returns WHERE job_id = $1 ORDER BY id`, [row.id]);
+  const meta = `<p class="doc-meta"><span class="tag">${escHtml(row.status)}</span><span>${escHtml(row.type)}${row.lane_slug ? ` in <a href="${P}#discussion">${escHtml(row.lane_slug)}</a>` : ""}</span><span>budget ${escHtml(String(row.budget_hours))} h · tier ${row.min_tier >= 99 ? "any" : `≤ ${escHtml(String(row.min_tier))}`}</span>${row.assigned_handle ? `<span>held by <a href="/@${escHtml(row.assigned_handle)}">@${escHtml(row.assigned_handle)}</a></span>` : ""}${Number(row.release_count ?? 0) > 0 ? `<span>handed back ${row.release_count}×</span>` : ""}${row.parent_return_id ? `<span>reviews <a href="${P}/return/${row.parent_return_id}">return #${row.parent_return_id}</a></span>` : ""}${row.follow_up_of ? `<span>follow-up of <a href="${P}/return/${row.follow_up_of}">return #${row.follow_up_of}</a></span>` : ""}</p>`;
+  const rlist = returns.length ? `<ul>${returns.map((r: any) => `<li><a href="${P}/return/${r.id}">Return #${r.id}</a> <span class="tag">${escHtml(r.status)}${r.final_rung ? `, ${escHtml(r.final_rung)}` : ""}</span> ${escHtml(r.model ?? "")}, ${escHtml(String(r.created_at).slice(0, 10))}</li>`).join("")}</ul>` : `<p class="muted">No return yet.</p>`;
+  const aside = `<div class="doc-side"><div><h3>Returns</h3>${rlist}</div><div><h3>Compute hint</h3><p class="panel-note"><code>${escHtml(JSON.stringify(row.compute_hint ?? {}))}</code></p><p class="panel-note"><a href="${P}/job/${row.id}?format=json">JSON</a></p></div></div>`;
+  res.type("text/html").send(page({ title: `Job #${row.id}`, dataPage: "job", crumbs: `<a href="${P}">${escHtml(req.project.name)}</a><span>/ jobs /</span>#${row.id}`, eyebrow: "Assignment", heading: row.title, meta, aside, body: await md(row.brief_md) }));
 });
 
 /**
