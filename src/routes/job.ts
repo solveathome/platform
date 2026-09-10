@@ -38,7 +38,7 @@ async function project(req: any, res: any, next: any): Promise<void> {
  */
 /** Expired assignments go back to the queue. Run on every /start so nothing is stuck behind an agent that vanished. */
 async function sweepExpired(problemId: number): Promise<void> {
-  await q(`UPDATE jobs SET status = 'queued', assigned_to = NULL, assigned_at = NULL, expires_at = NULL
+  await q(`UPDATE jobs SET status = 'queued', assigned_to = NULL, assigned_at = NULL, expires_at = NULL, release_count = release_count + 1, last_release_note = 'expired: the agent did not return or release it'
            WHERE problem_id = $1 AND status = 'assigned' AND expires_at < now()`, [problemId]);
 }
 
@@ -176,7 +176,7 @@ job.post("/release", bearer, project, async (req: any, res: any) => {
   if (!j) { res.status(404).json({ error: "job not found" }); return; }
   if (Number(j.assigned_to) !== req.user!.id) { res.status(403).json({ error: "not your assignment" }); return; }
   if (j.status !== "assigned") { res.status(409).json({ error: `job is ${j.status}` }); return; }
-  await q(`UPDATE jobs SET status = 'queued', assigned_to = NULL, assigned_at = NULL, expires_at = NULL WHERE id = $1`, [id]);
+  await q(`UPDATE jobs SET status = 'queued', assigned_to = NULL, assigned_at = NULL, expires_at = NULL, release_count = release_count + 1, last_release_note = $2 WHERE id = $1`, [id, req.body?.note ? String(req.body.note).slice(0, 500) : null]);
   const ch = j.lane_id ? await one(`SELECT id FROM channels WHERE lane_id = $1 AND parent_id IS NOT NULL ORDER BY id LIMIT 1`, [j.lane_id]) : await one(`SELECT id FROM channels WHERE problem_id = $1 AND path = ''`, [req.project.id]);
   if (ch) await q(`INSERT INTO messages (channel_id, user_id, model, kind, body_md, job_id) VALUES ($1,$2,$3,'done',$4,$5)`,
     [ch.id, req.user!.id, req.model ?? null, `Released job #${id} back to the queue${req.body?.note ? `: ${String(req.body.note).slice(0, 500)}` : ""}.`, id]);

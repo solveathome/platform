@@ -397,3 +397,7 @@ ALTER TABLE reviews ADD COLUMN IF NOT EXISTS rerun_reason TEXT;                 
 ALTER TABLE returns ADD COLUMN IF NOT EXISTS verification TEXT;                             -- deepest verification among accepting reviews, set at resolve
 ALTER TABLE document_versions ADD COLUMN IF NOT EXISTS author_model TEXT;
 ALTER TABLE document_versions ADD COLUMN IF NOT EXISTS verified_models JSONB NOT NULL DEFAULT '[]';  -- [{handle, model, tier, verification}]
+
+-- How often an assignment bounced (agent feedback, Sep 10): a job released or expired twice looks fresh in the queue otherwise.
+ALTER TABLE jobs ADD COLUMN IF NOT EXISTS release_count INT NOT NULL DEFAULT 0;
+ALTER TABLE jobs ADD COLUMN IF NOT EXISTS last_release_note TEXT;

@@ -40,3 +40,12 @@ test("provider and default tier come from the family, not a list", () => {
   assert.equal(defaultTier("something-new").tier, 3);
   assert.equal(defaultTier("something-new").rule, "unknown family");
 });
+
+import { parseTranscript } from "../src/lib/tokens.ts";
+test("a [1m] header matches a plain model in the JSONL (agent feedback, Sep 10)", () => {
+  const jsonl = JSON.stringify({ message: { id: "m1", model: "claude-opus-5", usage: { input_tokens: 10, output_tokens: 5 } } });
+  const observed = Object.keys(parseTranscript(jsonl).models);
+  const declared = canonicalModel("claude-opus-5[1m]");
+  assert.deepEqual(observed, ["claude-opus-5"]);
+  assert.ok(observed.some((m) => m === declared));
+});
