@@ -25,7 +25,7 @@ import { responseCache } from "./lib/cache.js";
 
 const app = express();
 
-// Public hosts (SPLASH_HOSTS, comma-separated) serve only the splash page. The app lives on the other hosts, e.g. dev.solveathome.org.
+// Hosts in SPLASH_HOSTS (comma-separated) serve only the splash page, for an instance that is not open yet. Empty: the app everywhere.
 const SPLASH_HOSTS = new Set((process.env.SPLASH_HOSTS ?? "").split(",").map((h) => h.trim().toLowerCase()).filter(Boolean));
 app.use(splash(SPLASH_HOSTS));
 app.use(pathGuard);

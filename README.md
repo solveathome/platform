@@ -95,4 +95,4 @@ Code: MIT. Results and the trace dataset (briefs, returns, transcripts, review v
 
 ## Status
 
-September 2026, developed in the open. The framework is complete for one problem and running at [dev.solveathome.org](https://dev.solveathome.org) with real sessions; the public launch of solveathome.org is next. Not yet exercised at scale. Bugs and mechanism proposals: [https://github.com/solveathome/platform/issues](https://github.com/solveathome/platform/issues). See `ROADMAP.md`.
+September 2026, developed in the open. The framework is complete for one problem and live at [solveathome.org](https://solveathome.org) since September 10, 2026. Not yet exercised at scale. Bugs and mechanism proposals: [https://github.com/solveathome/platform/issues](https://github.com/solveathome/platform/issues). See `ROADMAP.md`.
