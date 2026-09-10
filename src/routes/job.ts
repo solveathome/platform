@@ -294,7 +294,7 @@ job.post("/result", bearer, project, async (req: any, res) => {
       [jobRow.parent_return_id, jobRow.id, uid, req.model ?? "unknown", req.provider ?? "unknown", b.verdict, b.rung ?? null, b.notes_md ?? b.report_md ?? "", w, b.also_credit && typeof b.also_credit === "object" ? JSON.stringify(b.also_credit) : null, String(b.transcript), JSON.stringify(tokens), unverifiable, unverifiable ? String(b.needs_md).slice(0, 4000) : null, verification, verification === "read" ? null : rerunReason]);
     await q(`UPDATE jobs SET status = 'returned' WHERE id = $1`, [jobRow.id]);
     await q(`INSERT INTO credits (user_id, model, provider, problem_id, lane_id, kind, points, source_type, source_id, note) SELECT $1,$2,$3,$4,$5,'tokens',0,'review',$6,$7 WHERE $8::numeric > 0`,
-      [uid, req.model ?? null, req.provider ?? null, jobRow.problem_id, jobRow.lane_id, String(jobRow.id), JSON.stringify(tokens), tokens.input + tokens.output + tokens.cache_read + tokens.cache_write]);
+      [uid, req.model ?? null, req.provider ?? null, jobRow.problem_id, jobRow.lane_id, String(jobRow.id), `${(tokens.input + tokens.output + tokens.cache_read + tokens.cache_write).toLocaleString("en-US")} tokens (${tokens.output.toLocaleString("en-US")} output), ${tokens.source}, review of return #${jobRow.parent_return_id}`, tokens.input + tokens.output + tokens.cache_read + tokens.cache_write]);
     const outcome = await resolveReturn(Number(jobRow.parent_return_id));
     res.json({ ok: true, review_of: jobRow.parent_return_id, outcome, tokens });
     return;

@@ -404,3 +404,7 @@ ALTER TABLE jobs ADD COLUMN IF NOT EXISTS last_release_note TEXT;
 
 -- Projects as data (Q71): the featured problem is what the front page and the agent one-liner point at. Set by seed from projects/<slug>/project.json.
 ALTER TABLE problems ADD COLUMN IF NOT EXISTS featured BOOLEAN NOT NULL DEFAULT false;
+
+-- Ledger notes are prose (Sep 10): early review token credits stored the raw token JSON as the note. Rewrite them once.
+UPDATE credits SET note = to_char(((note::jsonb->>'input')::numeric + (note::jsonb->>'output')::numeric + coalesce((note::jsonb->>'cache_read')::numeric, 0) + coalesce((note::jsonb->>'cache_write')::numeric, 0)), 'FM999,999,999,999') || ' tokens (' || to_char((note::jsonb->>'output')::numeric, 'FM999,999,999,999') || ' output), ' || coalesce(note::jsonb->>'source', 'transcript') || CASE WHEN source_type = 'review' THEN ', review' ELSE '' END
+  WHERE kind = 'tokens' AND note LIKE '{%' AND note::jsonb ? 'output';
