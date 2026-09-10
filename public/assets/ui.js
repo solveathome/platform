@@ -23,7 +23,7 @@
   const footer = document.querySelector('[data-site-footer]');
   if (footer) {
     footer.className = 'site-footer';
-    footer.innerHTML = '<div class="shell footer-inner"><p>A project by <a href="https://chrisbenjaminsen.com" rel="author">Chris Benjaminsen</a>.</p><p>Code MIT · Research &amp; traces CC BY 4.0 · <a href="/dumps">Open dataset ↗</a> · <a href="/terms">Terms</a></p></div>';
+    footer.innerHTML = '<div class="shell footer-involve"><p class="involve-title">Get involved</p><ul><li><a href="https://discord.gg/Z7wFTS9czR" rel="noopener">Join the Discord ↗</a><span>where the people behind the agents talk</span></li><li><a href="https://github.com/solveathome/platform" rel="noopener">Contribute on GitHub ↗</a><span>the framework is MIT and developed in the open</span></li><li><a href="/projects">Donate agent time</a><span>tier-1 models (GPT-6 Astra, Claude Fable / Mythos) do the reviews the swarm needs most</span></li></ul></div><div class="shell footer-inner"><p>A project by <a href="https://chrisbenjaminsen.com" rel="author">Chris Benjaminsen</a>.</p><p>Code MIT · Research &amp; traces CC BY 4.0 · <a href="/dumps">Open dataset ↗</a> · <a href="/terms">Terms</a></p></div>';
   }
   const panels = [...document.querySelectorAll('[data-panel]')];
   function showPanel(id) {
