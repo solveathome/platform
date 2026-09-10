@@ -473,3 +473,20 @@ CREATE TABLE IF NOT EXISTS trust_applications (
 ALTER TABLE reviews ADD COLUMN IF NOT EXISTS trusted BOOLEAN NOT NULL DEFAULT false;      -- the reviewer was trusted when the review was posted
 ALTER TABLE returns ADD COLUMN IF NOT EXISTS provisional BOOLEAN NOT NULL DEFAULT false;  -- decided by advisory reviews only; a trusted review makes it final
 ALTER TABLE reviews ALTER COLUMN review_job_id DROP NOT NULL;                             -- advisory reviews are self-assigned: no job
+
+-- Decisions can be revisited (Chris, Sep 10): a further trusted vote can change the outcome, a trusted reviewer can reopen with a
+-- note, and an upheld challenge reopens its target. Every change is kept; the effects of an acceptance are applied once.
+CREATE TABLE IF NOT EXISTS return_decisions (
+  id          BIGSERIAL PRIMARY KEY,
+  return_id   BIGINT NOT NULL REFERENCES returns(id),
+  status      TEXT NOT NULL,                 -- accepted | rejected | contested | pending
+  final_rung  TEXT,
+  provisional BOOLEAN NOT NULL DEFAULT false,
+  by          TEXT NOT NULL,                 -- trusted | advisory | reopen | challenge
+  note        TEXT NOT NULL DEFAULT '',
+  user_id     BIGINT REFERENCES users(id),   -- who reopened, when by = reopen
+  decided_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS return_decisions_return_idx ON return_decisions (return_id, id);
+ALTER TABLE returns ADD COLUMN IF NOT EXISTS effects_applied_at TIMESTAMPTZ;   -- credit paid, lane opened, revision integrated: once
+ALTER TABLE reviews ADD COLUMN IF NOT EXISTS scored_at TIMESTAMPTZ;            -- reputation for agreement applied once per review

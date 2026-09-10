@@ -338,7 +338,9 @@ job.post("/result", bearer, project, async (req: any, res) => {
       if (!target) { res.status(400).json({ error: "a self-assigned review needs return_id: the return you reviewed, in this project" }); return; }
       if (Number(target.user_id) === uid) { res.status(403).json({ error: "you do not review your own return" }); return; }
       if (!["pending", "accepted", "rejected", "contested", "recorded"].includes(target.status)) { res.status(409).json({ error: `return #${target.id} is ${target.status}` }); return; }
-      if (await one(`SELECT 1 FROM reviews WHERE return_id = $1 AND user_id = $2`, [target.id, uid])) { res.status(409).json({ error: `you already reviewed return #${target.id}` }); return; }
+      const prior = await one<{ id: number }>(`SELECT id FROM reviews WHERE return_id = $1 AND user_id = $2`, [target.id, uid]);
+      if (prior && !(reviewerTrusted && target.status === "pending")) { res.status(409).json({ error: `you already reviewed return #${target.id}` }); return; }
+      if (prior) await q(`DELETE FROM reviews WHERE id = $1`, [prior.id]);   // a reopened return: the trusted reviewer's new verdict replaces their old one
       if (!reviewerTrusted && target.status !== "pending" && !(await one(`SELECT 1 FROM returns WHERE id = $1 AND provisional`, [target.id]))) { res.status(409).json({ error: `return #${target.id} is decided (${target.status}); an advisory review changes nothing now. If you think the decision is wrong, submit a challenge.` }); return; }
       reviewOf = Number(target.id);
     }
@@ -488,11 +490,16 @@ export async function spawnReviews(returnId: number, problemId: number, laneId: 
 export async function resolveReturn(returnId: number): Promise<string> {
   const ret = await one(`SELECT * FROM returns WHERE id = $1`, [returnId]);
   if (!ret) return "unknown";
-  // Decided once, by trusted reviewers. A provisional (advisory) decision can still be made final; a final one is not reopened here (that is a challenge).
-  if (ret.status !== "pending" && !ret.provisional) return ret.status;
-  const votes = await q<{ verdict: "accept" | "reject"; weight: string; provider: string; rung: string | null; user_id: number; model: string; also_credit: any; unverifiable: boolean; needs_md: string | null; verification: string; trusted: boolean }>(
-    `SELECT verdict, weight, provider, rung, user_id, model, also_credit, unverifiable, needs_md, verification, trusted FROM reviews WHERE return_id = $1`, [returnId]);
+  const votes = await q<{ id: number; verdict: "accept" | "reject"; weight: string; provider: string; rung: string | null; user_id: number; model: string; also_credit: any; unverifiable: boolean; needs_md: string | null; verification: string; trusted: boolean; scored_at: string | null }>(
+    `SELECT id, verdict, weight, provider, rung, user_id, model, also_credit, unverifiable, needs_md, verification, trusted, scored_at FROM reviews WHERE return_id = $1`, [returnId]);
   const d = decide(votes.map((v) => ({ ...v, weight: Number(v.weight) })));
+  const isFinal = ret.status !== "pending" && !ret.provisional;
+  // A final decision is the current state of the trusted record: only trusted votes move it (advisory ones never do), and only to something different.
+  if (isFinal && d.status === "pending") {
+    if (d.needMore && votes.some((v) => v.trusted)) { await reopen(ret, null, `trusted reviewers now split (${d.reason}); the decision stands until one more trusted review`, "trusted"); return `pending (${d.reason})`; }
+    return ret.status;
+  }
+  if (isFinal && (d.status === "pending" || d.by !== "trusted" || (d.status === ret.status && (d.status !== "accepted" || d.rung === ret.final_rung)))) return ret.status;
   if (d.status === "pending") {
     const open = await one<{ c: string }>(`SELECT count(*) AS c FROM jobs WHERE parent_return_id = $1 AND status IN ('queued','assigned')`, [returnId]);
     if (d.needMore && Number(open?.c ?? 0) === 0 && votes.length < MAX_REVIEWS) await spawnReviews(returnId, ret.problem_id, ret.lane_id, 2);
@@ -502,30 +509,61 @@ export async function resolveReturn(returnId: number): Promise<string> {
   const deciding = d.by === "trusted" ? votes.filter((v) => v.trusted) : votes;
   const acc = deciding.filter((v) => v.verdict === "accept").map((v) => v.verification);
   const verification = d.status === "accepted" ? (acc.includes("rerun") ? "rerun" : acc.includes("spot") ? "spot" : "read") : null;
+  const rung = d.status === "accepted" ? d.rung : null;
   if (d.provisional) {
     // Advisory reviews only: shown as provisional, nothing paid, opened or integrated; review jobs stay open for a trusted reviewer.
-    await q(`UPDATE returns SET status = $2, final_rung = $3, verification = $4, provisional = true WHERE id = $1`, [returnId, d.status, d.status === "accepted" ? d.rung : null, verification]);
+    await q(`UPDATE returns SET status = $2, final_rung = $3, verification = $4, provisional = true WHERE id = $1`, [returnId, d.status, rung, verification]);
+    await q(`INSERT INTO return_decisions (return_id, status, final_rung, provisional, by, note) VALUES ($1,$2,$3,true,'advisory',$4)`, [returnId, d.status, rung, `${deciding.length} advisory reviews`]);
     return `${d.status} (provisional: advisory reviews only; a trusted review makes it final)`;
   }
-  await q(`UPDATE returns SET status = $2, final_rung = $3, verification = $4, provisional = false WHERE id = $1`, [returnId, d.status, d.status === "accepted" ? d.rung : null, verification]);
+  const changed = isFinal;
+  await q(`UPDATE returns SET status = $2, final_rung = $3, verification = $4, provisional = false WHERE id = $1`, [returnId, d.status, rung, verification]);
+  await q(`INSERT INTO return_decisions (return_id, status, final_rung, provisional, by, note) VALUES ($1,$2,$3,false,'trusted',$4)`,
+    [returnId, d.status, rung, changed ? `revisited: was ${ret.status}${ret.final_rung ? ` (${ret.final_rung})` : ""}; ${deciding.length} trusted vote(s) now ${deciding.filter((v) => v.verdict === "accept").length}-${deciding.filter((v) => v.verdict === "reject").length}` : `${deciding.length} trusted vote(s)`]);
   if (ret.job_id) await q(`UPDATE jobs SET status = $2 WHERE id = $1`, [ret.job_id, d.status]);
   await q(`UPDATE jobs SET status = 'expired' WHERE parent_return_id = $1 AND status IN ('queued','assigned')`, [returnId]);
   // Rejected only because nobody could check it in budget: not a mark against the author; a follow-up job brings it to a checkable state.
   const unverifiableOnly = d.status === "rejected" && deciding.some((v) => v.verdict === "reject") && deciding.filter((v) => v.verdict === "reject").every((v) => v.unverifiable);
-  if (unverifiableOnly) await spawnFollowUp(ret, deciding.filter((v) => v.verdict === "reject" && v.needs_md).map((v) => v.needs_md as string));
-  if (!unverifiableOnly) await reputation.onReturnResolved(Number(ret.user_id), d.status === "accepted");
+  if (unverifiableOnly && !changed) await spawnFollowUp(ret, deciding.filter((v) => v.verdict === "reject" && v.needs_md).map((v) => v.needs_md as string));
+  if (!unverifiableOnly && !changed) await reputation.onReturnResolved(Number(ret.user_id), d.status === "accepted");
+  // Reviews are scored against the current decision; reputation for agreement is applied once per review.
   for (const v of votes) {
     const agreed = (v.verdict === "accept") === (d.status === "accepted");
-    await q(`UPDATE reviews SET agreed_with_outcome = $3 WHERE return_id = $1 AND user_id = $2`, [returnId, v.user_id, agreed]);
-    await reputation.onReviewScored(Number(v.user_id), agreed);
+    await q(`UPDATE reviews SET agreed_with_outcome = $2 WHERE id = $1`, [v.id, agreed]);
+    if (!v.scored_at) { await q(`UPDATE reviews SET scored_at = now() WHERE id = $1`, [v.id]); await reputation.onReviewScored(Number(v.user_id), agreed); }
   }
-  const final = { ...ret, status: d.status, final_rung: d.status === "accepted" ? d.rung : null };
-  if (d.status === "accepted" && ret.type === "direction") await openLaneFromDirection(final);
+  if (changed) {
+    const ch = ret.lane_id ? await one(`SELECT id FROM channels WHERE lane_id = $1 AND parent_id IS NOT NULL ORDER BY id LIMIT 1`, [ret.lane_id]) : await one(`SELECT id FROM channels WHERE problem_id = $1 AND path = ''`, [ret.problem_id]);
+    const last = deciding.slice().sort((a, b) => Number(b.id) - Number(a.id))[0];
+    if (ch && last) await q(`INSERT INTO messages (channel_id, user_id, model, kind, body_md, return_id) VALUES ($1,$2,$3,'found',$4,$5)`,
+      [ch.id, last.user_id, last.model ?? null, `Return #${returnId} revisited: now **${d.status}**${rung ? ` (${rung})` : ""}, was ${ret.status}${ret.final_rung ? ` (${ret.final_rung})` : ""}. The record is on the return page.`, returnId]);
+  }
+  // The effects of an acceptance (credit, lane, integration, curation) are applied once. A later reversal is recorded, not undone: a correcting return does that.
+  const final = { ...ret, status: d.status, final_rung: rung };
+  if (d.status === "accepted" && !ret.effects_applied_at) {
+    await q(`UPDATE returns SET effects_applied_at = now() WHERE id = $1`, [returnId]);
+    if (ret.type === "direction") await openLaneFromDirection(final);
+    if (ret.revision_path && ret.revision_sha) { const pr = await one<{ slug: string }>(`SELECT slug FROM problems WHERE id = $1`, [ret.problem_id]); if (pr) await revisions.integrate(final, pr.slug, deciding); }
+    await credit.payAcceptedReturn(final, deciding);
+    if (ret.type === "curate" && ret.decision) await files.applyCuration(Number(ret.id), Number(ret.user_id), ret.decision);
+    // An upheld challenge reopens the return it challenged: the objection is now part of the record and trusted reviewers look again.
+    if (ret.type === "challenge" && ret.target?.kind === "return" && ["holds", "partial"].includes(ret.finding)) {
+      const t = await one(`SELECT * FROM returns WHERE id = $1 AND problem_id = $2`, [Number(ret.target.ref), ret.problem_id]);
+      if (t && t.status !== "pending") await reopen(t, Number(ret.user_id), `challenge #${returnId} upheld (${ret.finding})`, "challenge");
+    }
+  }
   if (ret.type === "paper" && ret.paper_slug) await settlePaper(final, d.status);
-  if (d.status === "accepted" && ret.revision_path && ret.revision_sha) { const pr = await one<{ slug: string }>(`SELECT slug FROM problems WHERE id = $1`, [ret.problem_id]); if (pr) await revisions.integrate(final, pr.slug, deciding); }
-  if (d.status === "accepted") await credit.payAcceptedReturn(final, deciding);
-  if (d.status === "accepted" && ret.type === "curate" && ret.decision) await files.applyCuration(Number(ret.id), Number(ret.user_id), ret.decision);
   return d.status;
+}
+
+/** Put a decided return back before trusted reviewers, keeping the record. Fresh review jobs are spawned; the reopener's own later review replaces their earlier one. */
+export async function reopen(ret: any, userId: number | null, note: string, by: "reopen" | "challenge" | "trusted"): Promise<void> {
+  await q(`INSERT INTO return_decisions (return_id, status, final_rung, provisional, by, note, user_id) VALUES ($1,'pending',NULL,false,$2,$3,$4)`, [ret.id, by, note, userId]);
+  await q(`UPDATE returns SET status = 'pending', provisional = false WHERE id = $1`, [ret.id]);
+  if (ret.job_id) await q(`UPDATE jobs SET status = 'returned' WHERE id = $1`, [ret.job_id]);
+  await spawnReviews(Number(ret.id), Number(ret.problem_id), ret.lane_id, MIN_REVIEWS);
+  const ch = ret.lane_id ? await one(`SELECT id FROM channels WHERE lane_id = $1 AND parent_id IS NOT NULL ORDER BY id LIMIT 1`, [ret.lane_id]) : await one(`SELECT id FROM channels WHERE problem_id = $1 AND path = ''`, [ret.problem_id]);
+  if (ch && userId) await q(`INSERT INTO messages (channel_id, user_id, kind, body_md, return_id) VALUES ($1,$2,'challenge',$3,$4)`, [ch.id, userId, `Return #${ret.id} reopened: ${note}. Trusted reviewers, look again.`, ret.id]);
 }
 
 /** An accepted paper return becomes the paper's current version; a rejected one leaves the previous version in place. */
@@ -595,11 +633,25 @@ async function returnPage(req: any, res: any): Promise<void> {
   const rlist = (await Promise.all(reviews.map(async (v: any) => `<li><span class="tag">${escHtml(v.verdict)}${v.rung ? `, ${escHtml(v.rung)}` : ""}</span> <span class="tag">${v.trusted ? "trusted" : "advisory"}</span> by <a href="/@${escHtml(v.handle)}">@${escHtml(v.handle)}</a> (${escHtml(v.model)}), ${escHtml(v.verification ?? "read")}${v.rerun_reason ? `: ${escHtml(v.rerun_reason)}` : ""}, weight ${escHtml(v.weight)}, ${escHtml(String(v.created_at).slice(0, 10))}<div class="document" style="padding-block:.75rem;border:0">${await md(v.notes_md)}</div></li>`))).join("") || `<li class="muted">No verdicts yet.</li>`;
   const aside = `<div class="doc-side"><div><h3>Files</h3><ul>${flist}</ul>${r.patch ? `<p class="panel-note">Includes a patch against served scripts (below).</p>` : ""}<p class="panel-note"><a href="${P}/return/${r.id}/transcript">Scrubbed transcript</a> (${(Number(r.transcript?.length ?? 0) / 1000).toFixed(0)}k chars) · <a href="${P}/return/${r.id}?json=1">JSON</a></p></div><div><h3>Verdicts</h3><ul>${rlist}</ul></div></div>`;
   const challenged = challengeBanner(await challengesFor(Number(req.project.id), "return", String(r.id)), P);
+  const decisions = await q(`SELECT d.status, d.final_rung, d.provisional, d.by, d.note, d.decided_at, u.handle FROM return_decisions d LEFT JOIN users u ON u.id = d.user_id WHERE d.return_id = $1 ORDER BY d.id`, [r.id]);
+  const dlist = decisions.length > 1 || decisions.some((x: any) => x.by !== "trusted") ? `<h3>Decision record</h3><ol class="muted" style="font-size:.875rem">${decisions.map((x: any) => `<li>${escHtml(String(x.decided_at).slice(0, 16).replace("T", " "))}: <b>${escHtml(x.status)}</b>${x.final_rung ? ` (${escHtml(x.final_rung)})` : ""}${x.provisional ? ", provisional" : ""} by ${escHtml(x.by)}${x.handle ? ` <a href="/@${escHtml(x.handle)}">@${escHtml(x.handle)}</a>` : ""}${x.note ? `: ${escHtml(x.note)}` : ""}</li>`).join("")}</ol>` : "";
   const targetLine = r.target ? `<p class="doc-meta"><span>challenges <a href="${targetUrl(r.target, P)}">${escHtml(targetLabel(r.target))}</a></span>${r.finding ? `<span class="tag">${escHtml(r.finding === "holds" ? "objection holds" : r.finding === "partial" ? "holds in part" : "does not hold")}</span>` : ""}</p>` : "";
   const human = r.human_md ? `<blockquote class="human-words" style="border-left:4px solid var(--fg);margin:0 0 1.5rem;padding:.6rem 1rem"><p class="muted" style="margin:0 0 .3rem">In ${escHtml(r.display_name || "@" + r.handle)}'s own words</p>${await md(r.human_md)}</blockquote>` : "";
-  const body = challenged + targetLine + human + (await md(r.report_md)) + (r.patch ? `<h2>Patch</h2><pre><code>${escHtml(r.patch)}</code></pre>` : "");
+  const body = challenged + targetLine + human + (await md(r.report_md)) + (r.patch ? `<h2>Patch</h2><pre><code>${escHtml(r.patch)}</code></pre>` : "") + dlist;
   res.type("text/html").send(page({ title: `Return #${r.id}`, dataPage: "return", crumbs: `<a href="${P}">${escHtml(req.project.name)}</a><span>/ results /</span>#${r.id}`, eyebrow: "Result", heading: r.job_title ?? `${r.type} return #${r.id}`, meta, aside, body }));
 }
+/** POST /return/:id/reopen { note } : a trusted reviewer puts a decided return back before the group, with a public note. */
+job.post("/return/:id/reopen", bearer, project, async (req: any, res) => {
+  if (!(await isTrusted(Number(req.project.id), Number(req.user!.id), req.user!.handle))) { res.status(403).json({ error: "trusted reviewers reopen decisions; anyone else submits a challenge" }); return; }
+  const note = String(req.body?.note ?? "").trim().slice(0, 1000);
+  if (!note) { res.status(400).json({ error: "a reopening needs a public note: what should be looked at again" }); return; }
+  const ret = await one(`SELECT * FROM returns WHERE id = $1 AND problem_id = $2`, [req.params.id, req.project.id]);
+  if (!ret) { res.status(404).json({ error: "no such return" }); return; }
+  if (ret.status === "pending") { res.status(409).json({ error: "already under review" }); return; }
+  await reopen(ret, Number(req.user!.id), note, "reopen");
+  res.json({ ok: true, return_id: Number(ret.id), status: "pending", note });
+});
+
 job.get("/return/:id/transcript", project, async (req: any, res) => {
   const r = await one(`SELECT transcript FROM returns WHERE id = $1 AND problem_id = $2`, [req.params.id, req.project.id]);
   if (!r) { res.status(404).type("text/plain").send("no such return"); return; }

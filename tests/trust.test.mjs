@@ -50,6 +50,7 @@ after(async () => {
   await q(`DELETE FROM messages WHERE user_id = ANY($1)`, [ids]);
   await q(`DELETE FROM channel_members WHERE user_id = ANY($1)`, [ids]);
   await q(`DELETE FROM reviews WHERE return_id IN (SELECT id FROM returns WHERE problem_id = $1)`, [pid]);
+  await q(`DELETE FROM return_decisions WHERE return_id IN (SELECT id FROM returns WHERE problem_id = $1)`, [pid]);
   await q(`DELETE FROM jobs WHERE problem_id = $1`, [pid]);
   await q(`DELETE FROM returns WHERE problem_id = $1`, [pid]);
   await q(`DELETE FROM sessions WHERE problem_id = $1`, [pid]);
@@ -106,37 +107,69 @@ test('three advisory reviews decide provisionally: nothing paid, review jobs sti
   assert.ok(Number(open.c) >= 1, 'review jobs were closed by a provisional decision');
 });
 
-test('one trusted verdict makes it final, overriding the advisory view; a second opinion afterwards is refused', async () => {
+test('one trusted verdict makes it final, overriding the advisory view; a second trusted opinion reopens it as a tie', async () => {
   const r = await okJson(await call('trusted', 'POST', '/result', {model: 'gpt-6-astra', session: people.trusted.session, body: {job_id: people.trusted.job, verdict: 'reject', rung: null, notes_md: 'page 12 says the opposite', transcript: 't', transcript_approved: true}}));
   assert.equal(r.advisory, false); assert.equal(r.outcome, 'rejected');
   const ret = await one(`SELECT status, provisional FROM returns WHERE id = $1`, [returnId]);
   assert.deepEqual([ret.status, ret.provisional], ['rejected', false]);
   const open = await one(`SELECT count(*) AS c FROM jobs WHERE parent_return_id = $1 AND status IN ('queued','assigned')`, [returnId]);
   assert.equal(Number(open.c), 0);
-  const late = await call('owner', 'POST', '/result', {model: 'claude-fable-5-1', body: review('accept')});
-  assert.equal(late.status, 200, await late.text());
-  const still = await one(`SELECT status FROM returns WHERE id = $1`, [returnId]);
-  assert.equal(still.status, 'rejected', 'a final decision was reopened');
   const scored = await one(`SELECT agreed_with_outcome FROM reviews WHERE return_id = $1 AND user_id = $2`, [returnId, people.adv1.id]);
   assert.equal(scored.agreed_with_outcome, false);
+  // A second trusted reviewer (the owner) disagrees: 1-1 among trusted reopens the return; the record keeps both states.
+  const late = await okJson(await call('owner', 'POST', '/result', {model: 'claude-fable-5-1', body: review('accept')}));
+  assert.match(late.outcome, /pending/);
+  const now = await one(`SELECT status FROM returns WHERE id = $1`, [returnId]);
+  assert.equal(now.status, 'pending');
+  const hist = await q(`SELECT status, by FROM return_decisions WHERE return_id = $1 ORDER BY id`, [returnId]);
+  assert.deepEqual(hist.map(h => [h.status, h.by]), [['accepted', 'advisory'], ['rejected', 'trusted'], ['pending', 'trusted']]);
+  const jobs = await one(`SELECT count(*) AS c FROM jobs WHERE parent_return_id = $1 AND status = 'queued'`, [returnId]);
+  assert.ok(Number(jobs.c) >= 1, 'no fresh review job after the reopen');
+});
+
+test('a trusted reviewer can reopen a decided return with a note, and an upheld challenge reopens its target', async () => {
+  // Settle the tie: a third trusted reviewer (adv1 gets trust for this) rejects; then reopen it explicitly.
+  await roles.grant(pid, people.adv1.id, 'trusted', people.owner.id, 'test');
+  const third = await okJson(await call('adv1', 'POST', '/result', {model: 'claude-fable-5-1', body: review('reject')}));
+  assert.equal(third.status ?? third.outcome, 'rejected');
+  const noNote = await call('trusted', 'POST', `/return/${returnId}/reopen`, {body: {}});
+  assert.equal(noNote.status, 400);
+  const notTrusted = await call('adv2', 'POST', `/return/${returnId}/reopen`, {body: {note: 'x'}});
+  assert.equal(notTrusted.status, 403);
+  await okJson(await call('trusted', 'POST', `/return/${returnId}/reopen`, {body: {note: 'the page reference was wrong edition; look again'}}));
+  assert.equal((await one(`SELECT status FROM returns WHERE id = $1`, [returnId])).status, 'pending');
+  // The reopener's new verdict replaces their old one; with owner accept + adv1 reject + trusted accept it is 2-1: accepted.
+  const again = await okJson(await call('trusted', 'POST', '/result', {model: 'gpt-6-astra', body: review('accept', {notes_md: 'second edition has it on page 12'})}));
+  assert.equal(again.outcome, 'accepted');
+  const fin = await one(`SELECT status, provisional, effects_applied_at FROM returns WHERE id = $1`, [returnId]);
+  assert.deepEqual([fin.status, fin.provisional, !!fin.effects_applied_at], ['accepted', false, true]);
+  // An upheld challenge against this return reopens it.
+  const ch = await okJson(await call('adv2', 'POST', '/result', {model: 'gemini-3-pro', body: {type: 'challenge', report_md: 'the cited page does not contain the claim in either edition', transcript: 't', transcript_approved: true, target: {kind: 'return', ref: String(returnId)}, human_md: 'That page says no such thing.', finding: 'holds'}}));
+  const upheld = await okJson(await call('owner', 'POST', '/result', {model: 'claude-fable-5-1', body: {type: 'review', return_id: ch.return_id, verdict: 'accept', rung: 'measured', notes_md: 'checked both editions', transcript: 't', transcript_approved: true}}));
+  assert.equal(upheld.outcome, 'accepted');
+  assert.equal((await one(`SELECT status FROM returns WHERE id = $1`, [returnId])).status, 'pending');
+  const last = await one(`SELECT by, note FROM return_decisions WHERE return_id = $1 ORDER BY id DESC LIMIT 1`, [returnId]);
+  assert.equal(last.by, 'challenge');
+  const paidTwice = await one(`SELECT count(*) AS c FROM credits WHERE source_type = 'return' AND source_id = $1 AND kind = 'result'`, [String(returnId)]);
+  assert.equal(Number(paidTwice.c), 1, 'acceptance effects applied more than once');
 });
 
 test('applying happens on the site as a person; the owner decides with a public note and trust is granted', async () => {
-  const viaAgent = await call('adv1', 'POST', '/trust/apply', {body: {statement: 'I have checked sieve bounds for a decade and will run Fable on this.', model: 'claude-fable-5-1', hours_per_week: 3}});
+  const viaAgent = await call('adv3', 'POST', '/trust/apply', {body: {statement: 'I have checked sieve bounds for a decade and will run Fable on this.', model: 'claude-fable-5-1', hours_per_week: 3}});
   assert.equal(viaAgent.status, 403);
-  const applied = await okJson(await call('adv1', 'POST', '/trust/apply', {cookie: true, body: {statement: 'I have checked sieve bounds for a decade and will run Fable on this.', model: 'claude-fable-5-1', hours_per_week: 3}}));
+  const applied = await okJson(await call('adv3', 'POST', '/trust/apply', {cookie: true, body: {statement: 'I have checked sieve bounds for a decade and will run Fable on this.', model: 'claude-fable-5-1', hours_per_week: 3}}));
   const notOwner = await call('trusted', 'POST', `/trust/applications/${applied.application}`, {body: {accept: true, note: 'x'}});
   assert.equal(notOwner.status, 403);
   const decided = await okJson(await call('owner', 'POST', `/trust/applications/${applied.application}`, {body: {accept: true, note: 'strong advisory record'}}));
   assert.equal(decided.application.status, 'accepted');
-  assert.equal(await roles.roleOf(pid, people.adv1.id), 'trusted');
+  assert.equal(await roles.roleOf(pid, people.adv3.id), 'trusted');
   const page = await okJson(await call('adv2', 'GET', '/trust'));
-  assert.ok(page.members.some(m => m.handle === people.adv1.handle && m.note === 'strong advisory record'));
+  assert.ok(page.members.some(m => m.handle === people.adv3.handle && m.note === 'strong advisory record'));
   assert.ok(page.members.some(m => m.handle === people.owner.handle && m.role === 'owner'), 'the researcher is an owner');
-  const noNote = await call('owner', 'POST', '/trust/revoke', {body: {handle: people.adv1.handle}});
+  const noNote = await call('owner', 'POST', '/trust/revoke', {body: {handle: people.adv3.handle}});
   assert.equal(noNote.status, 400);
-  await okJson(await call('owner', 'POST', '/trust/revoke', {body: {handle: people.adv1.handle, note: 'stepped down'}}));
-  assert.equal(await roles.roleOf(pid, people.adv1.id), null);
+  await okJson(await call('owner', 'POST', '/trust/revoke', {body: {handle: people.adv3.handle, note: 'stepped down'}}));
+  assert.equal(await roles.roleOf(pid, people.adv3.id), null);
 });
 
 test('spawnReviews asks for n more and never passes the cap', async () => {
