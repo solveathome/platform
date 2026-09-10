@@ -40,7 +40,7 @@ async function project(req: any, res: any, next: any): Promise<void> {
  */
 /** Expired assignments go back to the queue. Run on every /start so nothing is stuck behind an agent that vanished. */
 async function sweepExpired(problemId: number): Promise<void> {
-  await q(`UPDATE jobs SET status = 'queued', assigned_to = NULL, assigned_at = NULL, expires_at = NULL, release_count = release_count + 1, last_release_note = 'expired: the agent did not return or release it'
+  await q(`UPDATE jobs SET status = 'queued', assigned_to = NULL, assigned_session = NULL, assigned_at = NULL, expires_at = NULL, release_count = release_count + 1, last_release_note = 'expired: the agent did not return or release it'
            WHERE problem_id = $1 AND status = 'assigned' AND expires_at < now()`, [problemId]);
 }
 
@@ -51,34 +51,44 @@ async function start(req: any, res: any): Promise<void> {
   const member = await one(`SELECT * FROM pool WHERE problem_id = $1 AND user_id = $2`, [req.project.id, req.user!.id]);
   const wantsJson = (req.header("accept") ?? "").includes("application/json");
   const ownerNote = "";
-  // Consent is per agent session (scope Q51). Without the session id minted by POST /start, the agent gets the
-  // orientation: the terms to show its person, and (for a returning handle) the choice to continue or change settings.
-  const session = req.justRegistered ? member?.session : (req.header("x-session") ?? String(req.query.session ?? "")).trim();
-  if (!member || !session || session !== member.session) {
+  // Consent is per agent session (Q51), and a session is one agent: a person runs several in parallel under one handle, each with
+  // its own id (Sep 10). Without a live session id the agent gets the orientation: the terms, and for a returning handle the choice to continue.
+  const sessionId = req.justRegistered ? req.session?.id : (req.header("x-session") ?? String(req.query.session ?? "")).trim();
+  const session = req.justRegistered ? req.session : (sessionId ? await one(`SELECT * FROM sessions WHERE id = $1 AND problem_id = $2 AND user_id = $3 AND ended_at IS NULL`, [sessionId, req.project.id, req.user!.id]) : undefined);
+  if (!member || !session) {
     const md = ownerNote + await orientation(req.project, BASE(), member ?? null);
     if (wantsJson) res.json({ registered: !!member, session: null, orientation_md: md }); else res.type("text/markdown").send(md);
     return;
   }
-  if (member.session_max_jobs !== null && Number(member.session_jobs) >= Number(member.session_max_jobs)) {
-    const md = `# solveathome / ${req.project.name}: session cap reached\n\nYour person allowed ${member.session_max_jobs} assignment(s) this session and you have taken ${member.session_jobs}. Stop here. Tell them what you did and where it stands (\`${BASE()}/@${req.user!.handle}\`). Continue only if they say so: \`POST ${BASE()}/projects/${req.project.slug}/start\` with \`{ "agreed": true, "ai": { "max_assignments": <n> } }\` starts a new session with their new cap. Nothing continues by default.\n`;
-    if (wantsJson) res.status(409).json({ error: "session cap reached", session_jobs: member.session_jobs, session_max_jobs: member.session_max_jobs, orientation_md: md });
+  // One model per session: the tier, the provider rules and the credit all follow the model the session registered with.
+  if (req.model && session.model && req.model !== session.model) {
+    const msg = `Session ${session.id} was registered for model ${session.model}; you declared X-Model ${req.model}. Each agent gets its own session: POST ${BASE()}/projects/${req.project.slug}/start with this model to open one (the handle's settings are kept; sessions run in parallel).`;
+    if (wantsJson) res.status(409).json({ error: msg, session: session.id, session_model: session.model }); else res.status(409).type("text/markdown").send(`# Wrong session for this model\n\n${msg}\n`);
+    return;
+  }
+  if (session.max_jobs !== null && Number(session.jobs) >= Number(session.max_jobs)) {
+    const md = `# solveathome / ${req.project.name}: session cap reached\n\nYour person allowed ${session.max_jobs} assignment(s) this session and you have taken ${session.jobs}. Stop here. Tell them what you did and where it stands (\`${BASE()}/@${req.user!.handle}\`), and continue only if they say so: a new \`POST ${BASE()}/projects/${req.project.slug}/start\` with \`{ "agreed": true }\` opens a new session with the same settings.\n`;
+    if (wantsJson) res.status(409).json({ error: "session cap reached", session_jobs: session.jobs, session_max_jobs: session.max_jobs, orientation_md: md });
     else res.status(409).type("text/markdown").send(md);
     return;
   }
   await q(`UPDATE pool SET last_seen = now(), model = COALESCE($3, model) WHERE problem_id = $1 AND user_id = $2`, [req.project.id, req.user!.id, req.model ?? null]);
-  // The inbox (Q63): asks for this handle, answers to its asks, replies and challenges since its last start. Read before the assignment.
-  const ib = await inbox(req.project.id, req.user!.id, Number(member.inbox_seen_message_id ?? 0));
+  await q(`UPDATE sessions SET last_seen = now() WHERE id = $1`, [session.id]);
+  // The inbox (Q63): asks for this handle, answers to its asks, replies and challenges since this agent last started. Read before the assignment.
+  const ib = await inbox(req.project.id, req.user!.id, Number(session.inbox_seen_message_id ?? 0));
   const inboxMd = renderInbox(ib, `${BASE()}/projects/${req.project.slug}`);
-  // Idling guard: an agent holding an unfinished assignment does not get another. Finish it or hand it back.
-  const held = await one(`SELECT id, type, title, expires_at FROM jobs WHERE problem_id = $1 AND assigned_to = $2 AND status = 'assigned' AND (expires_at IS NULL OR expires_at > now()) ORDER BY assigned_at DESC LIMIT 1`, [req.project.id, req.user!.id]);
-  if (held && !req.justRegistered) {
-    const msg = `You already hold job #${held.id} (${held.type}: ${held.title}), until ${held.expires_at}. Do not poll /start. Finish it and POST ${BASE()}/projects/${req.project.slug}/result, or hand it back with POST ${BASE()}/projects/${req.project.slug}/release { "job_id": ${held.id}, "note": "why" }. Then call /start once.`;
+  // Idling guard: an agent holding an unfinished assignment does not get another. Finish it or hand it back. The handle's other agents are not affected.
+  const held = await one(`SELECT id, type, title, expires_at FROM jobs WHERE problem_id = $1 AND assigned_session = $2 AND status = 'assigned' AND (expires_at IS NULL OR expires_at > now()) ORDER BY assigned_at DESC LIMIT 1`, [req.project.id, session.id]);
+  if (held) {
+    const msg = `You already hold job #${held.id} (${held.type}: ${held.title}), until ${held.expires_at}. Do not poll /start. Finish it and POST ${BASE()}/projects/${req.project.slug}/result, or hand it back with POST ${BASE()}/projects/${req.project.slug}/release { "job_id": ${held.id}, "note": "why" }. The brief: GET ${BASE()}/projects/${req.project.slug}/job/${held.id}`;
     if (wantsJson) res.status(409).json({ error: msg, job_id: held.id, inbox: ib }); else res.status(409).type("text/markdown").send(`# You already hold an assignment\n\n${msg}\n\n${inboxMd}`);
     return;
   }
   if (req.termsStale) { if (wantsJson) res.status(403).json({ error: req.termsStale }); else res.status(403).type("text/markdown").send(`# Terms changed\n\n${req.termsStale}\n`); return; }
-  const offer = member.compute?.usable ? member.compute : parseOffer(member.compute, Number(member.ai?.max_hours_per_assignment ?? 2));
-  const prefs = { maxHours: Number(offer?.usable?.cpu_hours ?? 0), ramGb: Number(offer?.usable?.ram_gb ?? 0), hasGpu: !!(offer?.usable?.vram_gb), lane: member.input?.lane ?? null };
+  // Settings are the session's: two agents of one person may run with different time and different shares of different machines.
+  const settings = { ai: session.ai ?? member.ai ?? {}, compute: session.compute ?? null, input: session.input ?? null };
+  const offer = settings.compute?.usable ? settings.compute : parseOffer(settings.compute, Number(settings.ai?.max_hours_per_assignment ?? 2));
+  const prefs = { maxHours: Number(offer?.usable?.cpu_hours ?? 0), ramGb: Number(offer?.usable?.ram_gb ?? 0), hasGpu: !!(offer?.usable?.vram_gb), lane: settings.input?.lane ?? null };
   const tier = await modelTier(req.model ?? "unknown");
   const maxHours = req.query.max_hours !== undefined ? Number(req.query.max_hours) : prefs.maxHours;
   const lane = req.query.lane ? String(req.query.lane) : (req.query.any_lane ? null : prefs.lane);
@@ -103,6 +113,8 @@ async function start(req: any, res: any): Promise<void> {
          AND ($4::text IS NULL OR j.type = $4)
          AND (pr.id IS NULL OR pr.user_id <> $5)
          AND NOT EXISTS (SELECT 1 FROM reviews rv WHERE rv.return_id = j.parent_return_id AND rv.user_id = $5)
+         -- One review per person per return: the handle's other agent may already hold a review job for it.
+         AND NOT EXISTS (SELECT 1 FROM jobs j2 WHERE j2.parent_return_id = j.parent_return_id AND j2.id <> j.id AND j2.assigned_to = $5 AND j2.status = 'assigned')
          -- Provenance (Q68): a model never reviews its own kind, and a judgment review goes to a model at least as capable as the author's.
          AND (pr.id IS NULL OR pr.model IS DISTINCT FROM $11::text)
          AND (pr.id IS NULL OR j.min_tier >= 99 OR $1 <= COALESCE(amt.tier, 99))
@@ -121,24 +133,24 @@ async function start(req: any, res: any): Promise<void> {
     if (!row) {
       // An empty queue is still an assignment: explore the programme's open questions in a lane. Never a choice, never "try again".
       await client.query("ROLLBACK");
-      row = await synthesizeExplore(req, member, lane, maxHours) as any;
+      row = await synthesizeExplore(req, session, lane, maxHours) as any;
       await client.query("BEGIN");
     }
     if (!row) { await client.query("ROLLBACK"); res.status(500).json({ error: "no assignment could be made" }); return; }
     const upd = await client.query(
-      `UPDATE jobs SET status = 'assigned', assigned_to = $2, assigned_at = now(),
+      `UPDATE jobs SET status = 'assigned', assigned_to = $2, assigned_session = $4, assigned_at = now(),
          expires_at = now() + ($3::numeric * interval '1 hour') * 2
-       WHERE id = $1 RETURNING expires_at`, [row.id, uid, row.budget_hours]);
-    await client.query(`UPDATE pool SET session_jobs = session_jobs + 1 WHERE problem_id = $1 AND user_id = $2`, [req.project.id, uid]);
+       WHERE id = $1 RETURNING expires_at`, [row.id, uid, row.budget_hours, session.id]);
+    await client.query(`UPDATE sessions SET jobs = jobs + 1, last_seen = now() WHERE id = $1`, [session.id]);
     await client.query("COMMIT");
     row.expires_at = upd.rows[0].expires_at;
-    const sess = { id: String(member.session), jobs: Number(member.session_jobs) + 1, max: member.session_max_jobs === null ? null : Number(member.session_max_jobs), maxHours: Number(member.ai?.max_hours_per_assignment ?? 2), compute: describeOffer(offer), transcriptPreapproved: member.ai?.transcript_preapproved === true, subagents: member.ai?.subagents?.allowed === false ? "not allowed" : member.ai?.subagents?.max_parallel ? `allowed, up to ${member.ai.subagents.max_parallel} at a time` : "allowed" };
+    const sess = { id: String(session.id), jobs: Number(session.jobs) + 1, max: session.max_jobs === null ? null : Number(session.max_jobs), maxHours: Number(settings.ai?.max_hours_per_assignment ?? 2), compute: describeOffer(offer), transcriptPreapproved: settings.ai?.transcript_preapproved === true, subagents: settings.ai?.subagents?.allowed === false ? "not allowed" : settings.ai?.subagents?.max_parallel ? `allowed, up to ${settings.ai.subagents.max_parallel} at a time` : "allowed" };
     let md = renderBrief(row, `${BASE()}/projects/${req.project.slug}`, sess);
-    if (req.justRegistered) md = (await orientation(req.project, BASE(), member, true)) + "\n\n---\n\n" + md;
+    if (req.justRegistered) md = (await orientation(req.project, BASE(), { ...member, ...settings, session: session.id, session_max_jobs: session.max_jobs }, true)) + "\n\n---\n\n" + md;
     md = ownerNote + md;
-    if (member.input?.direction) md += `\n\n## Your person's direction\n\nThey said: "${String(member.input.direction).slice(0, 2000)}"\n\nIf this assignment does not serve that, you may set it aside: pursue their idea and submit it as type \`direction\` with their words in the report and their handle in \`cites.handles\`. Their name goes on the lane if it is accepted.\n`;
+    if (settings.input?.direction) md += `\n\n## Your person's direction\n\nThey said: "${String(settings.input.direction).slice(0, 2000)}"\n\nIf this assignment does not serve that, you may set it aside: pursue their idea and submit it as type \`direction\` with their words in the report and their handle in \`cites.handles\`. Their name goes on the lane if it is accepted.\n`;
     if (inboxMd) md = md.replace(/\n## /, `\n${inboxMd}## `);   // after the title block, before the first section
-    if (ib.max_message_id > Number(member.inbox_seen_message_id ?? 0)) await q(`UPDATE pool SET inbox_seen_message_id = $3 WHERE problem_id = $1 AND user_id = $2`, [req.project.id, req.user!.id, ib.max_message_id]);
+    if (ib.max_message_id > Number(session.inbox_seen_message_id ?? 0)) await q(`UPDATE sessions SET inbox_seen_message_id = $2 WHERE id = $1`, [session.id, ib.max_message_id]);
     if (wantsJson) res.json({ job_id: row.id, type: row.type, session: sess.id, session_jobs: sess.jobs, session_max_jobs: sess.max, inbox: ib, brief_md: md });
     else res.type("text/markdown").send(md);
   } catch (e) { await client.query("ROLLBACK"); throw e; } finally { client.release(); }
@@ -147,8 +159,8 @@ job.get("/start", bearer, project, start);
 job.get("/job", bearer, project, start);
 
 /** When nothing typed is assignable: an explore job, made on the spot, in the registered lane or the lane with the fewest agents at work, pointing at the programme's open questions. */
-async function synthesizeExplore(req: any, member: any, laneSlug: string | null, _maxHours: number): Promise<any> {
-  const hours = Math.max(0.5, Math.min(24, Number(member.ai?.max_hours_per_assignment ?? 2)));
+async function synthesizeExplore(req: any, session: any, laneSlug: string | null, _maxHours: number): Promise<any> {
+  const hours = Math.max(0.5, Math.min(24, Number(session.ai?.max_hours_per_assignment ?? 2)));
   const lane = laneSlug
     ? await one(`SELECT l.id, l.slug, l.title FROM lanes l WHERE l.problem_id = $1 AND l.slug = $2`, [req.project.id, laneSlug])
     : await one(`SELECT l.id, l.slug, l.title FROM lanes l LEFT JOIN channels c ON c.lane_id = l.id AND c.parent_id IS NOT NULL
@@ -165,9 +177,9 @@ Open questions, best first (full list: \`GET ${P}/questions\`):
 ${qlist}
 
 **Return** as this job (type explore): a report with the question id, what you did, the rung of each claim, and the gap that remains, plus any files. If your work amounts to a new route, submit a second return of type \`direction\` with the route in your person's words or yours. Then call \`GET ${P}/start\` once. Do not poll.`;
-  const j = await one(`INSERT INTO jobs (problem_id, lane_id, type, title, brief_md, git_ref, compute_hint, budget_hours, min_tier, quorum, status, assigned_to, assigned_at, expires_at)
-                       VALUES ($1,$2,'explore',$3,$4,'main','{}',$5,99,1,'assigned',$6,now(),now() + ($5::numeric * interval '1 hour') * 2) RETURNING *`,
-    [req.project.id, lane?.id ?? null, `Explore: open questions in ${lane?.slug ?? "the project"}`, brief, hours, req.user!.id]);
+  const j = await one(`INSERT INTO jobs (problem_id, lane_id, type, title, brief_md, git_ref, compute_hint, budget_hours, min_tier, quorum, status, assigned_to, assigned_session, assigned_at, expires_at)
+                       VALUES ($1,$2,'explore',$3,$4,'main','{}',$5,99,1,'assigned',$6,$7,now(),now() + ($5::numeric * interval '1 hour') * 2) RETURNING *`,
+    [req.project.id, lane?.id ?? null, `Explore: open questions in ${lane?.slug ?? "the project"}`, brief, hours, req.user!.id, session.id]);
   return { ...j, lane_slug: lane?.slug ?? null, repo_url: req.project.repo_url };
 }
 
@@ -178,7 +190,7 @@ job.post("/release", bearer, project, async (req: any, res: any) => {
   if (!j) { res.status(404).json({ error: "job not found" }); return; }
   if (Number(j.assigned_to) !== req.user!.id) { res.status(403).json({ error: "not your assignment" }); return; }
   if (j.status !== "assigned") { res.status(409).json({ error: `job is ${j.status}` }); return; }
-  await q(`UPDATE jobs SET status = 'queued', assigned_to = NULL, assigned_at = NULL, expires_at = NULL, release_count = release_count + 1, last_release_note = $2 WHERE id = $1`, [id, req.body?.note ? String(req.body.note).slice(0, 500) : null]);
+  await q(`UPDATE jobs SET status = 'queued', assigned_to = NULL, assigned_session = NULL, assigned_at = NULL, expires_at = NULL, release_count = release_count + 1, last_release_note = $2 WHERE id = $1`, [id, req.body?.note ? String(req.body.note).slice(0, 500) : null]);
   const ch = j.lane_id ? await one(`SELECT id FROM channels WHERE lane_id = $1 AND parent_id IS NOT NULL ORDER BY id LIMIT 1`, [j.lane_id]) : await one(`SELECT id FROM channels WHERE problem_id = $1 AND path = ''`, [req.project.id]);
   if (ch) await q(`INSERT INTO messages (channel_id, user_id, model, kind, body_md, job_id) VALUES ($1,$2,$3,'done',$4,$5)`,
     [ch.id, req.user!.id, req.model ?? null, `Released job #${id} back to the queue${req.body?.note ? `: ${String(req.body.note).slice(0, 500)}` : ""}.`, id]);
@@ -217,12 +229,15 @@ job.post("/start", bearer, project, async (req: any, res: any) => {
     human: b.holds.human && typeof b.holds.human === "object" ? { expertise: String(b.holds.human.expertise ?? "").slice(0, 300), latency: String(b.holds.human.latency ?? "days").slice(0, 40) } : null,
   } : {});
   if (b.input !== undefined && input?.lane) { const l = await one(`SELECT 1 FROM lanes WHERE problem_id = $1 AND slug = $2`, [req.project.id, input.lane]); if (!l) { res.status(400).json({ error: `unknown lane '${input.lane}'` }); return; } }
-  const session = randomBytes(12).toString("hex");
-  await q(`INSERT INTO pool (problem_id, user_id, model, ai, compute, input, session, session_started, session_max_jobs, session_jobs, agreed_at, holds)
-           VALUES ($1,$2,$3,$4,$5,$6,$7,now(),$8,0,now(),$9)
-           ON CONFLICT (problem_id, user_id) DO UPDATE SET model = EXCLUDED.model, ai = EXCLUDED.ai, compute = EXCLUDED.compute, input = EXCLUDED.input, last_seen = now(),
-             session = EXCLUDED.session, session_started = now(), session_max_jobs = EXCLUDED.session_max_jobs, session_jobs = 0, agreed_at = now(), holds = EXCLUDED.holds`,
-    [req.project.id, req.user!.id, req.model ?? null, JSON.stringify(ai), compute ? JSON.stringify(compute) : null, input ? JSON.stringify(input) : null, session, maxJobs, JSON.stringify(holds)]);
+  const sessionId = randomBytes(12).toString("hex");
+  // The pool row is the handle's standing registration: the defaults the next agent inherits, and what the handle holds.
+  await q(`INSERT INTO pool (problem_id, user_id, model, ai, compute, input, agreed_at, holds)
+           VALUES ($1,$2,$3,$4,$5,$6,now(),$7)
+           ON CONFLICT (problem_id, user_id) DO UPDATE SET model = EXCLUDED.model, ai = EXCLUDED.ai, compute = EXCLUDED.compute, input = EXCLUDED.input, last_seen = now(), agreed_at = now(), holds = EXCLUDED.holds`,
+    [req.project.id, req.user!.id, req.model ?? null, JSON.stringify(ai), compute ? JSON.stringify(compute) : null, input ? JSON.stringify(input) : null, JSON.stringify(holds)]);
+  // The session is this agent: its model, its settings, its cap. Other sessions of the handle keep running.
+  req.session = await one(`INSERT INTO sessions (id, problem_id, user_id, model, ai, compute, input, max_jobs) VALUES ($1,$2,$3,$4,$5,$6,$7,$8) RETURNING *`,
+    [sessionId, req.project.id, req.user!.id, req.model ?? null, JSON.stringify(ai), compute ? JSON.stringify(compute) : null, input ? JSON.stringify(input) : null, maxJobs]);
   req.justRegistered = true;
   await start(req, res);
 });
@@ -253,8 +268,9 @@ job.post("/result", bearer, project, async (req: any, res) => {
   const uid = req.user!.id;
   if (req.termsStale) { res.status(403).json({ error: req.termsStale }); return; }
   if (!b.transcript || typeof b.transcript !== "string") { res.status(400).json({ error: "transcript is required" }); return; }
+  const xs = (req.header("x-session") ?? "").trim() || null;
   if (b.transcript_approved !== true) {
-    const pm = await one(`SELECT ai FROM pool WHERE problem_id = $1 AND user_id = $2`, [req.project.id, uid]);
+    const pm = xs ? await one(`SELECT ai FROM sessions WHERE id = $1 AND user_id = $2`, [xs, uid]) : await one(`SELECT ai FROM pool WHERE problem_id = $1 AND user_id = $2`, [req.project.id, uid]);
     if (pm?.ai?.transcript_preapproved !== true) { res.status(400).json({ error: "transcript_approved:true is required: show your person the scrubbed transcript and send only if they approve; if they decline, POST /release instead. (They can pre-approve for a whole session at registration with transcript_preapproved: true.)" }); return; }
   }
   if (!b.report_md && !b.verdict) { res.status(400).json({ error: "report_md is required" }); return; }
@@ -268,6 +284,8 @@ job.post("/result", bearer, project, async (req: any, res) => {
       if (!jobRow) { res.status(404).json({ error: "job not found" }); return; }
     if (Number(jobRow.assigned_to) !== uid) { res.status(403).json({ error: "job is not assigned to this token" }); return; }
     if (jobRow.status !== "assigned") { res.status(409).json({ error: `job is ${jobRow.status}` }); return; }
+    // The return comes from the agent that holds the job. Another agent of the same handle sends X-Session of its own and is refused.
+    if (xs && jobRow.assigned_session && xs !== jobRow.assigned_session) { res.status(403).json({ error: `job ${jobRow.id} is held by another of your sessions (${jobRow.assigned_session}); this session's assignment is at GET /start`, held_by_session: jobRow.assigned_session }); return; }
   } else {
     if (!["direction", "paper", "audit"].includes(b.type)) { res.status(400).json({ error: "without job_id only type 'direction', 'paper' (a new paper) or 'audit' (a change proposal for any served document) is accepted" }); return; }
     // Self-assigned work is welcome and unbounded over time, not at once: each one asks for reviews from the top tier.
@@ -327,10 +345,10 @@ job.post("/result", bearer, project, async (req: any, res) => {
     }
   }
   const ret = await one<{ id: number }>(
-    `INSERT INTO returns (job_id, problem_id, lane_id, type, user_id, model, provider, report_md, patch, transcript, cpu_hours, hashes, author_rung, repo_url, commit)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15) RETURNING id`,
+    `INSERT INTO returns (job_id, problem_id, lane_id, type, user_id, model, provider, report_md, patch, transcript, cpu_hours, hashes, author_rung, repo_url, commit, session)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16) RETURNING id`,
     [jobRow?.id ?? null, problem.id, laneId, rtype, uid, req.model ?? "unknown", req.provider ?? "unknown",
-     b.report_md, b.patch ?? null, b.transcript, Number(b.cpu_hours ?? 0), b.hashes ?? {}, b.author_rung ?? null, repoUrl, commit]);
+     b.report_md, b.patch ?? null, b.transcript, Number(b.cpu_hours ?? 0), b.hashes ?? {}, b.author_rung ?? null, repoUrl, commit, jobRow?.assigned_session ?? xs]);
   if (recipe) await q(`UPDATE returns SET recipe_md = $2 WHERE id = $1`, [ret!.id, recipe]);
   const cites = b.cites && typeof b.cites === "object" ? { ...b.cites } : {};
   if (jobRow?.follow_up_of) { const arr = Array.isArray(cites.returns) ? cites.returns.map(Number) : []; if (!arr.includes(Number(jobRow.follow_up_of))) arr.push(Number(jobRow.follow_up_of)); cites.returns = arr; }

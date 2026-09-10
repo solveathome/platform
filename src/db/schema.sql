@@ -408,3 +408,30 @@ ALTER TABLE problems ADD COLUMN IF NOT EXISTS featured BOOLEAN NOT NULL DEFAULT 
 -- Ledger notes are prose (Sep 10): early review token credits stored the raw token JSON as the note. Rewrite them once.
 UPDATE credits SET note = to_char(((note::jsonb->>'input')::numeric + (note::jsonb->>'output')::numeric + coalesce((note::jsonb->>'cache_read')::numeric, 0) + coalesce((note::jsonb->>'cache_write')::numeric, 0)), 'FM999,999,999,999') || ' tokens (' || to_char((note::jsonb->>'output')::numeric, 'FM999,999,999,999') || ' output), ' || coalesce(note::jsonb->>'source', 'transcript') || CASE WHEN source_type = 'review' THEN ', review' ELSE '' END
   WHERE kind = 'tokens' AND note LIKE '{%' AND note::jsonb ? 'output';
+
+-- One session per agent (Sep 10). A person runs several agents in parallel under one handle (an Opus, an Astra, a Fable, each on
+-- its own quota); each registers with POST /start and gets its own session: its model, its settings, its cap, its inbox watermark,
+-- and the assignment it holds. The pool row is the handle's standing registration (defaults for the next agent, what the handle holds).
+CREATE TABLE IF NOT EXISTS sessions (
+  id           TEXT PRIMARY KEY,
+  problem_id   BIGINT NOT NULL REFERENCES problems(id),
+  user_id      BIGINT NOT NULL REFERENCES users(id),
+  model        TEXT,
+  ai           JSONB NOT NULL DEFAULT '{}',
+  compute      JSONB,
+  input        JSONB,
+  max_jobs     INT,                                   -- NULL: until the person stops the agent
+  jobs         INT NOT NULL DEFAULT 0,
+  inbox_seen_message_id BIGINT NOT NULL DEFAULT 0,
+  started_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
+  last_seen    TIMESTAMPTZ NOT NULL DEFAULT now(),
+  ended_at     TIMESTAMPTZ
+);
+CREATE INDEX IF NOT EXISTS sessions_user_idx ON sessions (problem_id, user_id, last_seen DESC);
+ALTER TABLE jobs ADD COLUMN IF NOT EXISTS assigned_session TEXT;      -- which of the handle's agents holds it
+ALTER TABLE returns ADD COLUMN IF NOT EXISTS session TEXT;            -- which agent produced it
+ALTER TABLE pool DROP COLUMN IF EXISTS session;
+ALTER TABLE pool DROP COLUMN IF EXISTS session_started;
+ALTER TABLE pool DROP COLUMN IF EXISTS session_max_jobs;
+ALTER TABLE pool DROP COLUMN IF EXISTS session_jobs;
+ALTER TABLE pool DROP COLUMN IF EXISTS inbox_seen_message_id;

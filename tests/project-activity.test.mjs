@@ -11,7 +11,8 @@ before(async () => {
   await db.query(`
     CREATE TEMP TABLE users (id bigint, handle text);
     CREATE TEMP TABLE pool (problem_id bigint, user_id bigint, model text, last_seen timestamptz);
-    CREATE TEMP TABLE jobs (problem_id bigint, assigned_to bigint, status text, expires_at timestamptz);
+    CREATE TEMP TABLE sessions (id text, problem_id bigint, user_id bigint, model text, last_seen timestamptz);
+    CREATE TEMP TABLE jobs (problem_id bigint, assigned_to bigint, assigned_session text, status text, expires_at timestamptz);
     CREATE TEMP TABLE returns (id bigint, problem_id bigint, tokens jsonb, cpu_hours numeric);
     CREATE TEMP TABLE reviews (return_id bigint, tokens jsonb);
     CREATE TEMP TABLE channels (id bigint, problem_id bigint);
@@ -32,11 +33,13 @@ test('counts are project-scoped, exclude expired assignments, and count each usa
   await db.query(`
     INSERT INTO users VALUES (1, 'Alice'), (2, 'Bob'), (3, 'Carol');
     INSERT INTO pool VALUES (1, 1, 'model-a', now()), (1, 2, 'model-b', now() - interval '25 hours'), (2, 3, 'model-c', now());
+    -- Alice runs two agents at once (two sessions, two models); Bob's session is stale; Carol is on another project.
+    INSERT INTO sessions VALUES ('s-a1', 1, 1, 'model-a', now()), ('s-a2', 1, 1, 'model-a2', now() - interval '1 minute'), ('s-b', 1, 2, 'model-b', now() - interval '25 hours'), ('s-c', 2, 3, 'model-c', now());
     INSERT INTO jobs VALUES
-      (1, 1, 'assigned', now() + interval '1 hour'), (1, 1, 'assigned', null),
-      (1, 1, 'assigned', now() - interval '1 hour'), (1, null, 'queued', null),
-      (1, null, 'queued', null), (1, 2, 'returned', now() + interval '1 hour'),
-      (2, 3, 'assigned', now() + interval '1 hour'), (2, null, 'queued', null);
+      (1, 1, 's-a1', 'assigned', now() + interval '1 hour'), (1, 1, 's-a2', 'assigned', null),
+      (1, 1, 's-a1', 'assigned', now() - interval '1 hour'), (1, null, null, 'queued', null),
+      (1, null, null, 'queued', null), (1, 2, 's-b', 'returned', now() + interval '1 hour'),
+      (2, 3, 's-c', 'assigned', now() + interval '1 hour'), (2, null, null, 'queued', null);
     INSERT INTO returns VALUES
       (1, 1, '{"input":100,"output":20,"cache_read":30,"cache_write":40}', 1.25),
       (2, 1, '{"output":10}', 0.5), (3, 1, null, 0),
@@ -50,14 +53,12 @@ test('counts are project-scoped, exclude expired assignments, and count each usa
   `);
   const {rows: [activity]} = await db.query(ACTIVITY_SQL, [1]);
   assert.deepEqual(Object.fromEntries(Object.entries(activity).filter(([key]) => key !== 'as_of').map(([key, value]) => [key, Number(value)])), {
-    agents_24h: 1, contributors: 2, assignments_underway: 2, assignments_queued: 2,
+    agents_24h: 2, contributors: 2, assignments_underway: 2, assignments_queued: 2,
     results_submitted: 3, reviews_completed: 2, messages_24h: 2, tokens_contributed: 214, cpu_hours: 1.75,
   });
   const {rows: agents} = await db.query(ACTIVE_AGENTS_SQL, [1]);
-  assert.equal(agents.length, 1);
-  assert.equal(agents[0].handle, 'Alice');
-  assert.equal(agents[0].model, 'model-a');
-  assert.equal(Number(agents[0].assignments_underway), 2);
+  assert.equal(agents.length, 2);
+  assert.deepEqual(agents.map(a => [a.handle, a.model, Number(a.assignments_underway)]), [['Alice', 'model-a', 1], ['Alice', 'model-a2', 1]]);
   assert.deepEqual(Object.keys(agents[0]).sort(), ['assignments_underway', 'handle', 'last_seen', 'model']);
 });
 
@@ -65,6 +66,7 @@ test('roster limit does not truncate totals', async () => {
   await db.query(`
     INSERT INTO users SELECT n, 'Donor-' || n FROM generate_series(10, 24) n;
     INSERT INTO pool SELECT 3, n, 'test-model', now() - n * interval '1 minute' FROM generate_series(10, 24) n;
+    INSERT INTO sessions SELECT 's-' || n, 3, n, 'test-model', now() - n * interval '1 minute' FROM generate_series(10, 24) n;
   `);
   const {rows: [activity]} = await db.query(ACTIVITY_SQL, [3]);
   const {rows: agents} = await db.query(ACTIVE_AGENTS_SQL, [3]);

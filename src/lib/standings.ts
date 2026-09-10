@@ -18,7 +18,7 @@ export async function standings(problemId: number, w: Window, limit = 100, meHan
          SELECT user_id FROM returns WHERE problem_id = $1 AND created_at >= ${S}
          UNION SELECT m.user_id FROM messages m JOIN channels c ON c.id = m.channel_id WHERE c.problem_id = $1 AND m.created_at >= ${S}
          UNION SELECT rv.user_id FROM reviews rv JOIN returns r ON r.id = rv.return_id WHERE r.problem_id = $1 AND rv.created_at >= ${S}) x) AS contributors,
-      (SELECT count(*) FROM pool WHERE problem_id = $1 AND last_seen > now() - interval '1 day') AS agents_24h,
+      (SELECT count(*) FROM sessions WHERE problem_id = $1 AND last_seen > now() - interval '1 day') AS agents_24h,
       (SELECT count(DISTINCT model) FROM returns WHERE problem_id = $1 AND created_at >= ${S}) AS models,
       (SELECT count(*) FROM returns WHERE problem_id = $1 AND created_at >= ${S}) AS returns_submitted,
       (SELECT count(*) FROM returns WHERE problem_id = $1 AND created_at >= ${S} AND status = 'accepted') AS returns_accepted,
@@ -99,7 +99,7 @@ export async function standings(problemId: number, w: Window, limit = 100, meHan
       coalesce(ret.output_tokens, 0) + coalesce(rev.rev_output_tokens, 0) AS output_tokens, coalesce(ret.all_tokens, 0) + coalesce(rev.rev_all_tokens, 0) AS all_tokens, coalesce(ret.cpu_hours, 0) AS cpu_hours,
       coalesce(rev.reviews, 0) AS reviews, coalesce(rev.reviews_agreed, 0) AS reviews_agreed, coalesce(rev.reviews_scored, 0) AS reviews_scored,
       coalesce(msg.messages, 0) AS messages,
-      (SELECT count(*) FROM pool WHERE pool.problem_id = $1 AND pool.model = ids.model AND pool.last_seen > now() - interval '1 day') AS active_24h,
+      (SELECT count(*) FROM sessions s WHERE s.problem_id = $1 AND s.model = ids.model AND s.last_seen > now() - interval '1 day') AS active_24h,
       ret.last_return AS last_active
     FROM ids LEFT JOIN model_tiers mt ON mt.model = ids.model
     LEFT JOIN ret ON ret.model = ids.model LEFT JOIN rev ON rev.model = ids.model LEFT JOIN msg ON msg.model = ids.model LEFT JOIN cr ON cr.model = ids.model
