@@ -56,7 +56,7 @@ small { font-size: .875rem; }
 .who .muted { display: none; }
 .who>a:last-child:not(:first-child) { color: var(--mut); }
 .site-footer { margin-top: 4rem; color: var(--mut); font-size: .8125rem; }
-.footer-involve { border-top: 1px solid var(--line); padding-block: 1.5rem .25rem; }
+.footer-involve { border-top: 1px solid var(--line); padding-block: 1.5rem 1.75rem; }
 .footer-involve .involve-title { margin: 0 0 .6rem; font-size: .75rem; text-transform: uppercase; letter-spacing: .08em; color: var(--mut); }
 .footer-involve ul { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: repeat(auto-fit, minmax(16rem, 1fr)); gap: .75rem 2rem; }
 .footer-involve li { display: flex; flex-direction: column; gap: .15rem; }
