@@ -3,7 +3,7 @@ import {after, before, test} from 'node:test';
 import pg from 'pg';
 import {ACTIVITY_SQL, ACTIVE_AGENTS_SQL} from '../src/lib/project-activity.ts';
 
-// Use a disposable PostgreSQL database. Fixtures live only in connection-local temp tables.
+// Fixtures live only in connection-local temp tables that mirror the columns the query reads; nothing is written to the real tables.
 if (!process.env.TEST_DATABASE_URL) throw new Error('Set TEST_DATABASE_URL to run the activity query tests.');
 const db = new pg.Client({connectionString: process.env.TEST_DATABASE_URL});
 before(async () => {
@@ -13,8 +13,7 @@ before(async () => {
     CREATE TEMP TABLE pool (problem_id bigint, user_id bigint, model text, last_seen timestamptz);
     CREATE TEMP TABLE jobs (problem_id bigint, assigned_to bigint, status text, expires_at timestamptz);
     CREATE TEMP TABLE returns (id bigint, problem_id bigint, tokens jsonb, cpu_hours numeric);
-    CREATE TEMP TABLE credits (problem_id bigint, kind text, source_type text, note text);
-    CREATE TEMP TABLE reviews (return_id bigint);
+    CREATE TEMP TABLE reviews (return_id bigint, tokens jsonb);
     CREATE TEMP TABLE channels (id bigint, problem_id bigint);
     CREATE TEMP TABLE messages (channel_id bigint, created_at timestamptz);
   `);
@@ -42,12 +41,10 @@ test('counts are project-scoped, exclude expired assignments, and count each usa
       (1, 1, '{"input":100,"output":20,"cache_read":30,"cache_write":40}', 1.25),
       (2, 1, '{"output":10}', 0.5), (3, 1, null, 0),
       (4, 2, '{"input":9999}', 9999);
-    INSERT INTO credits VALUES
-      (1, 'tokens', 'review', '{"input":5,"output":2,"cache_read":3,"cache_write":4}'),
-      (1, 'tokens', 'return', '200 tokens: an accepted result credit, not extra usage'),
-      (1, 'review', 'review', 'Reviewer credit, not token usage'),
-      (2, 'tokens', 'review', '{"input":9999}');
-    INSERT INTO reviews VALUES (1), (1), (4);
+    INSERT INTO reviews VALUES
+      (1, '{"input":5,"output":2,"cache_read":3,"cache_write":4}'),
+      (1, null),
+      (4, '{"input":9999}');
     INSERT INTO channels VALUES (1, 1), (2, 1), (3, 2);
     INSERT INTO messages VALUES (1, now()), (2, now()), (1, now() - interval '25 hours'), (3, now());
   `);

@@ -63,6 +63,8 @@ test('prepared portfolio serves exact admitted bytes and redirects former book s
     assert.equal(publishedDocument(out, '../private.md', manifest), false);
     assert.equal(publishedDocument(out, 'escape.md', manifest), false);
     process.env.DOCS_DIR = repos;
+    // The route reads the swarm edition and claims from Postgres: the schema must exist (idempotent), rows are not needed.
+    await (await import('../src/db/index.ts')).migrate();
     const {docs} = await import('../src/routes/docs.ts');
     const app = express(); app.use('/projects/:slug', docs);
     const server = app.listen(0, '127.0.0.1');
