@@ -45,6 +45,8 @@ SLUG="${SLUG:-$(basename "${DEST_REPO%.git}")}"
 DOCS_DEST="${DOCS_DEST:-/data/services/solveathome/data/repos/$SLUG}"
 rsync -a --delete --exclude '.git' "$PORTFOLIO/" "$SERVER:$DOCS_DEST/" && echo "docs synced to $SERVER:$DOCS_DEST"
 ssh "$SERVER" "cd /data/services/solveathome && docker compose -f docker-compose.prod.yml exec -T backend node dist/scripts/import-papers.js" || echo "paper registry refresh failed (run import-papers on the server)"
+# Documents the swarm has history on: a cut that caught up drops the overlay; a cut that changed one is recorded as its next version.
+ssh "$SERVER" "cd /data/services/solveathome && docker compose -f docker-compose.prod.yml exec -T backend node dist/scripts/reconcile-mirror.js $SLUG 'private $SRC_SHA'" || echo "mirror reconciliation failed (run reconcile-mirror on the server)"
 
 cd "$PORTFOLIO"
 git init -q -b main

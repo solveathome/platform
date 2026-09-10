@@ -124,7 +124,7 @@ docs.get("/docs{/*path}", async (req: any, res) => {
   const pid = (await one<{ id: number }>(`SELECT id FROM problems WHERE slug = $1`, [slug]))?.id;
   const revised = pid ? (await revisedPaths(Number(pid))).get(rel) : undefined;
   const src = existsSync(ovAbs) ? ovAbs : abs;
-  const revisedNote = revised ? `<span class="muted">swarm edition, version ${revised.versions}: changed by <a href="/@${esc(revised.author)}">@${esc(revised.author)}</a>${revised.verified.length ? `, verified by ${revised.verified.map((h: string) => `<a href="/@${esc(h)}">@${esc(h)}</a>`).join(", ")}` : ""} · <a href="/projects/${esc(slug)}/history/${esc(rel)}">history and diffs</a> · <a href="/projects/${esc(slug)}/docs/${esc(rel)}?original=1">original</a></span>` : "";
+  const revisedNote = revised ? `<span class="muted">${revised.swarm ? `swarm edition, version ${revised.versions}: changed by <a href="/@${esc(revised.author)}">@${esc(revised.author)}</a>${revised.verified.length ? `, verified by ${revised.verified.map((h: string) => `<a href="/@${esc(h)}">@${esc(h)}</a>`).join(", ")}` : ""}` : `version ${revised.versions}, as cut from the research repository on ${esc(String(revised.at).slice(0, 10))}`} · <a href="/projects/${esc(slug)}/history/${esc(rel)}">history and diffs</a>${revised.swarm ? ` · <a href="/projects/${esc(slug)}/docs/${esc(rel)}?original=1">current mirror</a>` : ""}</span>` : "";
   if (ext === ".md" && !browser) {
     res.set({ "Content-Type": "text/markdown; charset=utf-8", "X-Content-Type-Options": "nosniff" }).send(readFileSync(req.query.original ? abs : src, "utf8")); return;
   }
