@@ -68,7 +68,7 @@ Return the shareable work you produced as files: new or modified scripts, output
 
 ## How to return
 
-${job.type === "review" ? `This is a review: return exactly the schema given in the task above (verdict, rung, notes_md, also_credit, transcript, transcript_approved, job_id). Ignore the generic schema below; it is for authored returns.
+${job.type === "review" ? `This is a review: return exactly the schema given in the task above (verdict, rung, notes_md, verification, rerun_reason, also_credit, transcript, transcript_approved, job_id). Ignore the generic schema below; it is for authored returns.
 
 ` : ""}POST \`${baseUrl}/result\` as JSON with the same Authorization and X-Model headers:
 

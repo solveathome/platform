@@ -32,7 +32,7 @@ export async function currentText(slug: string, rel: string, problemId?: number)
 export async function exists(slug: string, rel: string, problemId?: number): Promise<boolean> { return (await currentText(slug, rel, problemId)) !== null; }
 
 /** Integrate an accepted return's revision. Idempotent per return. */
-export async function integrate(ret: any, slug: string, votes: Array<{ verdict: string; user_id: number }>): Promise<void> {
+export async function integrate(ret: any, slug: string, votes: Array<{ verdict: string; user_id: number; model?: string; verification?: string }>): Promise<void> {
   const rel = safeRel(ret.revision_path); if (!rel || !ret.revision_sha) return;
   if (await one(`SELECT 1 FROM document_versions WHERE return_id = $1`, [ret.id])) return;
   const next = files.read(ret.revision_sha); if (next === null) return;
@@ -46,17 +46,21 @@ export async function integrate(ret: any, slug: string, votes: Array<{ verdict: 
       [ret.problem_id, rel, files.sha256(baseText), base.from === "mirror" ? "as mirrored from the research repository" : "as served"]);
     version = 1;
   }
-  const verifiers = await q<{ handle: string }>(`SELECT u.handle FROM users u WHERE u.id = ANY($1::bigint[])`, [votes.filter((v) => v.verdict === "accept").map((v) => Number(v.user_id))]);
+  const accepting = votes.filter((v) => v.verdict === "accept");
+  const verifiers = await q<{ id: number; handle: string }>(`SELECT u.id, u.handle FROM users u WHERE u.id = ANY($1::bigint[])`, [accepting.map((v) => Number(v.user_id))]);
+  const tiers = await q<{ model: string; tier: number }>(`SELECT model, tier FROM model_tiers WHERE model = ANY($1::text[])`, [accepting.map((v) => v.model ?? "").filter(Boolean)]);
+  // Provenance (Q68): who verified this version and with what, so the next reviewer knows which eyes have seen it.
+  const verifiedModels = accepting.map((v) => ({ handle: verifiers.find((u) => Number(u.id) === Number(v.user_id))?.handle ?? null, model: v.model ?? null, tier: tiers.find((t) => t.model === v.model)?.tier ?? null, verification: v.verification ?? "read" }));
   const diff = createTwoFilesPatch(`a/${rel}`, `b/${rel}`, baseText, next, `version ${version}`, `version ${version + 1}`);
   const summary = String(ret.report_md ?? "").split("\n").find((l: string) => l.trim() && !l.startsWith("#"))?.trim().slice(0, 300) ?? "";
-  await q(`INSERT INTO document_versions (problem_id, path, version, content_sha, base_sha, return_id, author_user_id, verified_by, summary, diff) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`,
-    [ret.problem_id, rel, version + 1, ret.revision_sha, files.sha256(baseText), ret.id, ret.user_id, JSON.stringify(verifiers.map((v) => v.handle)), summary, diff]);
+  await q(`INSERT INTO document_versions (problem_id, path, version, content_sha, base_sha, return_id, author_user_id, verified_by, summary, diff, author_model, verified_models) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)`,
+    [ret.problem_id, rel, version + 1, ret.revision_sha, files.sha256(baseText), ret.id, ret.user_id, JSON.stringify(verifiers.map((v) => v.handle)), summary, diff, ret.model ?? null, JSON.stringify(verifiedModels)]);
   const ov = overlayPath(slug, rel); mkdirSync(dirname(ov), { recursive: true }); writeFileSync(ov, next);
   await q(`UPDATE papers SET current_return_id = $3, current_file_sha = $4, status = 'reviewed', updated_at = now() WHERE problem_id = $1 AND (path = $2 OR (path IS NULL AND 'paper/' || slug || '.md' = $2))`, [ret.problem_id, rel, ret.id, ret.revision_sha]);
 }
 
 export async function history(problemId: number, rel: string) {
-  return q(`SELECT v.version, v.content_sha, v.return_id, v.verified_by, v.summary, v.created_at, u.handle AS author, u.display_name AS author_name, r.model, length(v.diff) AS diff_chars
+  return q(`SELECT v.version, v.content_sha, v.return_id, v.verified_by, v.verified_models, v.author_model, v.summary, v.created_at, u.handle AS author, u.display_name AS author_name, r.model, length(v.diff) AS diff_chars
             FROM document_versions v LEFT JOIN users u ON u.id = v.author_user_id LEFT JOIN returns r ON r.id = v.return_id WHERE v.problem_id = $1 AND v.path = $2 ORDER BY v.version`, [problemId, rel]);
 }
 export async function revisedPaths(problemId: number): Promise<Map<string, { versions: number; author: string; verified: string[]; at: string }>> {
