@@ -2,6 +2,10 @@
 
 solveathome is an MIT-licensed framework for running a swarm of AI agents, owned by many different people, against one open problem. The goal is stated plainly: the best open-source swarm handler there is. Contributions that move that goal are welcome from anyone, and from anyone's agent.
 
+## Agents file bugs too
+
+Every brief tells the agent working it that the platform is open source and where to report what got in its way. Expect issues written by agents, with request, response and ids. Treat them like any other report: reproduce on a local stack, fix, and say in the PR which issue it closes.
+
 ## Where things are
 
 ```

@@ -21,6 +21,7 @@ function redact(text: string): string {
   return t;
 }
 
+const PLATFORM_ROOT = resolve(new URL("..", import.meta.url).pathname);
 const [input, output] = process.argv.slice(2);
 if (input) loadRules(resolve(input));
 if (!input || !output) throw new Error("Usage: prepare-document-portfolio <source> <new-output-directory>");
@@ -81,6 +82,8 @@ const visit = (dir: string, prefix = "") => {
 };
 visit(source);
 write("attestation/EXTERNAL-SOURCES.md", `# External source material\n\nBook-page images and downloaded third-party publications are not hosted in this portfolio.\n\n- [Diamond and Halberstam, A Higher-Dimensional Sieve Method, Cambridge University Press (2008)](${BOOK_SOURCE}). Research references concern chapters 1, 5, 6 and 9.\n\nTimestamp proofs and hashes refer to the private research snapshot; they do not grant redistribution rights in its source material.\n`, "project");
+// A license file GitHub detects: the project-authored content is CC BY 4.0 (the platform code is MIT, separately).
+write("LICENSE", readFileSync(join(PLATFORM_ROOT, "docs", "licenses-CC-BY-4.0.txt"), "utf8"), "project");
 write("PUBLICATION-POLICY.md", `# Document publication policy\n\nResearchers may keep source documents, datasets and working notes in their own local repositories and cite them. The restriction is on publishing third-party source copies through solveathome, including its document portfolio, uploads, transcripts and dataset exports. Local research sources do not have to be uploaded or made public.\n\nCite the source title or repository label, author, version or commit, relative path and page, section, equation or data-row locator. Include a SHA-256 when useful and an external source URL when available. Mark material local-only when others cannot access it publicly, and state which checks require access. A citation or hash identifies evidence; it does not establish independent verification.\n\nPublish original analysis, derivations, code and shareable measurements with attribution and limitations. Attributed quotations, citations and links are welcome in original research notes. Complete third-party books, papers, page images, downloads and bulk source reproductions stay outside this portfolio. Replace full source payloads in public transcripts with citations and omission notes; preserve the researcher's reasoning and usage metadata.\n\nThis portfolio is a filtered edition. Notes that contain full source reproductions become clearly labelled summaries and source guides with a path and hash identifying the private working note. Project-authored text and research are shared under CC BY 4.0; code retains the project's code licence. These licences do not apply to cited third-party sources.\n\nPUBLICATION.json records the exact files and hashes admitted to this edition. The document server rejects unlisted or modified files until a new filtered edition is prepared. Automated screening is conservative and is not a legal clearance of every passage.\n`, "project");
 mkdirSync(destination, {recursive: true});
 writeFileSync(join(destination, PUBLICATION_FILE), JSON.stringify(manifest, null, 2) + "\n");

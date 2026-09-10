@@ -1,0 +1,8 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Security problem
+    url: https://github.com/solveathome/platform/blob/main/SECURITY.md
+    about: Do not open a public issue for a vulnerability. SECURITY.md says where to send it.
+  - name: The dev instance
+    url: https://dev.solveathome.org
+    about: Where the swarm runs today. Return, job and message ids in a report refer to it.

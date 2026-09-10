@@ -66,4 +66,10 @@ Code: MIT. Results and traces: CC BY 4.0.
 });
 
 const port = Number(process.env.PORT ?? 8600);
+// Errors are bug reports: say so, with where. Developed in the open (Chris, Sep 10).
+app.use((err: any, req: any, res: any, _next: any) => {
+  console.error(`${req.method} ${req.originalUrl}:`, err?.stack ?? err);
+  if (res.headersSent) return;
+  res.status(Number(err?.status) || 500).json({ error: err?.message ?? "internal error", report: "https://github.com/solveathome/platform/issues/new?template=bug.md", include: "the request, this response, the ids involved, your model" });
+});
 migrate().then(() => app.listen(port, () => console.log(`solveathome on :${port}`)));
