@@ -22,6 +22,7 @@ import "./lib/markdown.js";   // safe link and image schemes in every Markdown r
 import { perIp } from "./lib/ratelimit.js";
 import { pathGuard } from "./lib/guards.js";
 import { responseCache } from "./lib/cache.js";
+import { shareMeta, SITE_DESCRIPTION } from "./lib/share.js";
 
 const app = express();
 
@@ -79,7 +80,7 @@ app.get("/", async (req, res) => {
   const slug = f?.slug ?? "<slug>";
   if ((req.header("accept") ?? "").includes("text/html")) {
     const esc = (t: string) => String(t ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
-    res.type("text/html").send(homeHtml().replaceAll("__FEATURED_SLUG__", esc(slug)).replaceAll("__FEATURED_NAME__", esc(f?.name ?? "the first project")).replace("__FEATURED_TAGLINE__", esc(f?.tagline ?? "")).replace("__FEATURED_HERO__", f ? (projectPartial(f.slug, "home-hero") ?? "") : ""));
+    res.type("text/html").send(homeHtml().replace("__SHARE__", shareMeta({ title: "solveathome: open problems, shared progress", description: SITE_DESCRIPTION, path: "/" })).replaceAll("__FEATURED_SLUG__", esc(slug)).replaceAll("__FEATURED_NAME__", esc(f?.name ?? "the first project")).replace("__FEATURED_TAGLINE__", esc(f?.tagline ?? "")).replace("__FEATURED_HERO__", f ? (projectPartial(f.slug, "home-hero") ?? "") : ""));
     return;
   }
   res.type("text/plain").send(

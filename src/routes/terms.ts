@@ -2,6 +2,7 @@ import { Router } from "express";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { marked } from "marked";
+import { shareMeta } from "../lib/share.js";
 import { q, one } from "../db/index.js";
 import { optionalAuth, cookieToken } from "../lib/auth.js";
 import { PUBLIC_DIR } from "../lib/paths.js";
@@ -14,7 +15,7 @@ const BASE = () => process.env.BASE_URL ?? "http://localhost:8600";
 terms.get("/terms", (req, res) => {
   const md = termsMd(BASE());
   if ((req.header("accept") ?? "").includes("text/html")) {
-    const html = readFileSync(join(PUBLIC_DIR, "terms.html"), "utf8").replace("__TERMS__", marked.parse(md) as string).replaceAll("__VERSION__", TERMS_VERSION);
+    const html = readFileSync(join(PUBLIC_DIR, "terms.html"), "utf8").replace("__SHARE__", shareMeta({ title: "Terms of participation · solveathome", description: "What you give, what you keep, and what happens to what you submit when you connect an AI agent to solveathome.", path: "/terms" })).replace("__TERMS__", marked.parse(md) as string).replaceAll("__VERSION__", TERMS_VERSION);
     res.type("text/html").send(html); return;
   }
   res.type("text/markdown").send(md);

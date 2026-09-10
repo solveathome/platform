@@ -1,3 +1,4 @@
+import { shareMeta } from "../lib/share.js";
 import { Router } from "express";
 import { q, one } from "../db/index.js";
 import { bearer, optionalAuth, cookieToken } from "../lib/auth.js";
@@ -17,14 +18,14 @@ export const root = Router();
 
 /** GET /projects/:slug : project introduction, agent activity, and research workspace. */
 board.get("/", async (req: any, res) => {
-  const p = await one(`SELECT slug, name, summary FROM problems WHERE slug = $1`, [req.params.slug]);
+  const p = await one(`SELECT slug, name, summary, tagline FROM problems WHERE slug = $1`, [req.params.slug]);
   if (!p) { res.status(404).type("text/plain").send("unknown project"); return; }
   if (!wantsHtml(req)) { res.redirect(`/projects/${p.slug}/board`); return; }
   const escape = (text: unknown) => String(text ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
   const intro = projectPartial(p.slug, "intro") ?? `<h2>About this project</h2><p class="lead">${escape(p.summary)}</p>`;
   const prior = projectPartial(p.slug, "prior-work") ?? '<h2>The research behind this project</h2><p class="muted">Explore the research, its origins, and the evidence available to build on.</p>';
   const readings = projectPartial(p.slug, "prior-readings") ?? "";
-  res.type("text/html").send(page("project.html").replaceAll("__SLUG__", p.slug).replaceAll("__NAME__", escape(p.name)).replace("__PROJECT_INTRO__", intro).replace("__PROJECT_PRIOR_WORK__", prior).replace("__PROJECT_PRIOR_READINGS__", readings));
+  res.type("text/html").send(page("project.html").replace("__SHARE__", shareMeta({ title: `${p.name} · solveathome`, description: p.summary || p.tagline || undefined, path: `/projects/${p.slug}` })).replaceAll("__SLUG__", p.slug).replaceAll("__NAME__", escape(p.name)).replace("__PROJECT_INTRO__", intro).replace("__PROJECT_PRIOR_WORK__", prior).replace("__PROJECT_PRIOR_READINGS__", readings));
 });
 
 /** GET /me : who the cookie or bearer token belongs to (for the browser UI). */
@@ -132,7 +133,7 @@ root.get("/credit", async (_req, res) => { res.json((await leaderboard(null, "al
 
 /** GET /@handle : a contributor. Three columns: agent time, compute, research input (scope 5b). */
 root.get("/@:handle", async (req, res) => {
-  if (wantsHtml(req)) { res.type("text/html").send(page("contributor.html").replaceAll("__HANDLE__", String(req.params.handle).replace(/[^A-Za-z0-9-]/g, ""))); return; }
+  if (wantsHtml(req)) { const h = String(req.params.handle).replace(/[^A-Za-z0-9-]/g, ""); res.type("text/html").send(page("contributor.html").replace("__SHARE__", shareMeta({ title: `@${h} on solveathome`, description: `Returns, reviews and credit of @${h}: what their agents contributed to open problems, and how it was checked.`, path: `/@${h}`, type: "profile" })).replaceAll("__HANDLE__", h)); return; }
   const u = await one(`SELECT u.id, u.handle, u.display_name, u.website, u.created_at, rp.score, rp.accepted, rp.rejected, rp.review_agree, rp.review_disagree, rp.cpu_hours, rp.directions_accepted
     FROM users u LEFT JOIN reputation rp ON rp.user_id = u.id WHERE lower(u.handle) = lower($1)`, [req.params.handle]);
   if (!u) { res.status(404).json({ error: "no such contributor" }); return; }

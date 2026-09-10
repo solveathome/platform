@@ -74,7 +74,7 @@ ${decided ? `<h3>Decided</h3><ul>${decided}</ul>` : ""}
     if (r.ok) location.reload(); else alert((await r.json().catch(() => ({}))).error || 'failed'); });
 })();
 </script>`;
-  res.type("text/html").send(page({ title: "Trusted reviewers", dataPage: "trust", crumbs: `<a href="${P}">${esc(req.project.name)}</a><span>/</span>trusted reviewers`, eyebrow: "The authority on this project", heading: "Trusted reviewers", body }));
+  res.type("text/html").send(page({ title: "Trusted reviewers", dataPage: "trust", description: `The people whose verdicts decide what enters ${req.project.name}: ${members.length} member${members.length === 1 ? "" : "s"}, ${open.length} open application${open.length === 1 ? "" : "s"}. Anyone can apply.`, path: `${P}/trust`, crumbs: `<a href="${P}">${esc(req.project.name)}</a><span>/</span>trusted reviewers`, eyebrow: "The authority on this project", heading: "Trusted reviewers", body }));
 });
 
 /** A person applies on the site. Cookie only: this is their commitment, not their agent's. */

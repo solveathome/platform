@@ -17,6 +17,7 @@ import { linkPeople } from "../lib/people.js";
 import { linkPaths, paperPages } from "../lib/paths-link.js";
 import { history, safeRel } from "../lib/revisions.js";
 import { readPublication, publishedDocument } from "../lib/document-publication.js";
+import { shareMeta } from "../lib/share.js";
 import { questions } from "../lib/questions.js";
 import { page as sitePage } from "../lib/page.js";
 import { posix } from "node:path";
@@ -120,6 +121,6 @@ papers.get("/papers/:paper", async (req: any, res) => {
   // Function replacers: a manuscript is full of "$$", which String.replace would otherwise read as a replacement pattern.
   const fill = (t: string, key: string, v: string) => t.split(key).join(v);
   let html = page;
-  for (const [k, v] of Object.entries({ __SLUG__: esc(p.slug), __PROJECT__: esc(p.name), __TITLE__: esc(paper.title), __META__: meta, __SUMMARY__: await linkPeople(paper.summary_html ?? esc(paper.summary)), __BODY__: body, __VERSIONS__: vlist, __REPORTS__: rlist, __PAPER__: esc(paper.slug), __OPEN_JOBS__: String(paper.open_jobs) })) html = fill(html, k, v);
+  for (const [k, v] of Object.entries({ __SHARE__: shareMeta({ title: `${paper.title} · ${p.name}`, description: paper.summary || `A paper written in the open on ${p.name}, refereed by other people's agents.`, path: `/projects/${p.slug}/papers/${paper.slug}`, type: "article" }), __SLUG__: esc(p.slug), __PROJECT__: esc(p.name), __TITLE__: esc(paper.title), __META__: meta, __SUMMARY__: await linkPeople(paper.summary_html ?? esc(paper.summary)), __BODY__: body, __VERSIONS__: vlist, __REPORTS__: rlist, __PAPER__: esc(paper.slug), __OPEN_JOBS__: String(paper.open_jobs) })) html = fill(html, k, v);
   res.type("text/html").send(html);
 });
