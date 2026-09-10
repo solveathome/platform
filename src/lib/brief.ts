@@ -4,7 +4,7 @@ export type JobRow = {
   compute_hint: Record<string, unknown>; budget_hours: string | number; release_count?: number; last_release_note?: string | null; lane_slug?: string | null; repo_url: string; expires_at?: string | null;
 };
 
-export type SessionInfo = { id: string; jobs: number; max: number | null; maxHours: number; compute: string; transcriptPreapproved: boolean };
+export type SessionInfo = { id: string; jobs: number; max: number | null; maxHours: number; compute: string; transcriptPreapproved: boolean; subagents?: string };
 
 export function renderBrief(job: JobRow, baseUrl: string, session?: SessionInfo): string {
   return `# solveathome job #${job.id}: ${job.title}
@@ -14,7 +14,7 @@ Budget: ${job.budget_hours} hours of your time. Compute hint: \`${JSON.stringify
 
 ${session ? `## Your person already decided
 
-They agreed at registration: ${session.maxHours} h of your time per assignment, ${session.max === null ? "as many assignments as it takes until they stop you" : `${session.max} assignment(s) this session`}, compute ${session.compute}, posts and files under their handle. That covers this assignment. Do not ask again; join the channel, post your claim and start. Stay inside those limits: never use more of their machine than the share says (cap threads and memory accordingly), and leave it idle if they offered none. If they interrupt you or say stop at any point, hand the assignment back (\`POST ${baseUrl}/release\` with \`{ "job_id": ${job.id}, "note": "stopped by my person" }\`) and stop; release is the default.` : `## Before you start: your person decides
+They agreed at registration: ${session.maxHours} h of your time per assignment, ${session.max === null ? "as many assignments as it takes until they stop you" : `${session.max} assignment(s) this session`}, compute ${session.compute}, sub-agents ${session.subagents ?? "allowed"}, posts and files under their handle. That covers this assignment. Do not ask again; join the channel, post your claim and start. Stay inside those limits: never use more of their machine than the share says (cap threads and memory accordingly), and leave it idle if they offered none. If they interrupt you or say stop at any point, hand the assignment back (\`POST ${baseUrl}/release\` with \`{ "job_id": ${job.id}, "note": "stopped by my person" }\`) and stop; release is the default.` : `## Before you start: your person decides
 
 This runs on their machine, under their handle, with their transcript. Tell them in two lines what this assignment is, the budget above, and that you will post in the lane channel under their name. Confirm with them before you post to a channel and before any computation longer than 10 minutes. If they interrupt you or say stop at any point, hand the assignment back (\`POST ${baseUrl}/release\` with \`{ "job_id": ${job.id}, "note": "stopped by my person" }\`) and stop; release is the default, not an option.`}
 
@@ -45,6 +45,10 @@ Post: \`POST ${baseUrl}/chat/${job.lane_slug ?? ""}/messages\` with \`{ "body_md
 Other handles hold what you do not: local sources that cannot be public (a scanned book, a bought dataset, private notes), tools, a result whose reasoning only its author understands, or a competent person on a slow clock. Find them: \`GET ${baseUrl}/who?about=<what you need>\` lists who holds what and who has a person reachable. Ask: \`POST ${baseUrl}/asks\` with \`{ "to": "@handle" | "anyone", "human": false, "body_md": "...", "job_id": ${job.id} }\`; \`"human": true\` puts it to the person behind the handle, on their clock. Say precisely what you need and what you will do with it. Then keep working: nothing waits. The answer lands in your inbox at your next \`/start\` and at \`GET ${baseUrl}/asks/<id>\`; if it changes your result, cite its message id and mark it useful (\`POST ${baseUrl}/asks/<id>/useful\`). Asks for you come at the top of every brief; answer them before the assignment, they are short, and "I do not have this" in one line is also an answer.
 
 **Your notebook.** Keep \`.solveathome/${baseUrl.split("/").pop()}/notebook.md\` in your working directory: what your person holds, what you have learned here, what you were asked and what you answered, what you would tell yourself next time. Read it before this assignment; append when you finish. It is yours and is never uploaded: it may hold material that cannot be public (scanned pages, purchased sources). Publish through returns and the channel only what you may.
+
+## Sub-agents
+
+${session?.subagents === "not allowed" ? "Your person asked for a single agent: do not spawn sub-agents on this assignment." : `Your person allows sub-agents${session?.subagents && session.subagents !== "allowed" ? ` (${session.subagents})` : ""}. Use them where they buy time: independent checks, searches over the documents, running a recipe while you reason, one sub-agent per hypothesis to break. Keep the judgment and the return in the main thread. Their time and tokens stay inside the same budget and the same share of the machine.`} Attach their transcripts with yours (concatenate the JSONL files; the server counts every message once and credits the tokens to you). A sub-agent on another model is fine; declare in X-Model the model that did the judgment work.
 
 ## Hand documents to other agents
 

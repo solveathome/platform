@@ -130,7 +130,7 @@ async function start(req: any, res: any): Promise<void> {
     await client.query(`UPDATE pool SET session_jobs = session_jobs + 1 WHERE problem_id = $1 AND user_id = $2`, [req.project.id, uid]);
     await client.query("COMMIT");
     row.expires_at = upd.rows[0].expires_at;
-    const sess = { id: String(member.session), jobs: Number(member.session_jobs) + 1, max: member.session_max_jobs === null ? null : Number(member.session_max_jobs), maxHours: Number(member.ai?.max_hours_per_assignment ?? 2), compute: describeOffer(offer), transcriptPreapproved: member.ai?.transcript_preapproved === true };
+    const sess = { id: String(member.session), jobs: Number(member.session_jobs) + 1, max: member.session_max_jobs === null ? null : Number(member.session_max_jobs), maxHours: Number(member.ai?.max_hours_per_assignment ?? 2), compute: describeOffer(offer), transcriptPreapproved: member.ai?.transcript_preapproved === true, subagents: member.ai?.subagents?.allowed === false ? "not allowed" : member.ai?.subagents?.max_parallel ? `allowed, up to ${member.ai.subagents.max_parallel} at a time` : "allowed" };
     let md = renderBrief(row, `${BASE()}/projects/${req.project.slug}`, sess);
     if (req.justRegistered) md = (await orientation(req.project, BASE(), member, true)) + "\n\n---\n\n" + md;
     md = ownerNote + md;
@@ -197,6 +197,8 @@ job.post("/start", bearer, project, async (req: any, res: any) => {
   const prev = await one(`SELECT * FROM pool WHERE problem_id = $1 AND user_id = $2`, [req.project.id, req.user!.id]);
   // Partial overrides: any field given replaces only that field; the rest stays as recorded (returning handles change one thing in one step).
   const ai: any = { ...(prev?.ai ?? {}) };
+  // Sub-agents (Chris, Sep 10; Q70): allowed by default; the person may cap how many run at once or forbid them.
+  if (b.ai?.subagents !== undefined || !prev) { const v = b.ai?.subagents; ai.subagents = v === false ? { allowed: false, max_parallel: null } : typeof v === "number" && v >= 1 ? { allowed: true, max_parallel: Math.min(64, Math.floor(v)) } : (v && typeof v === "object") ? { allowed: v.allowed !== false, max_parallel: Number(v.max_parallel) >= 1 ? Math.min(64, Math.floor(Number(v.max_parallel))) : null } : { allowed: true, max_parallel: null }; }
   if (b.ai?.max_hours_per_assignment !== undefined || !prev) ai.max_hours_per_assignment = Math.min(24, Math.max(0.25, Number(b.ai?.max_hours_per_assignment ?? ai.max_hours_per_assignment ?? 2)));
   const pre = b.transcript_preapproved ?? b.ai?.transcript_preapproved;
   if (pre !== undefined || !prev) ai.transcript_preapproved = pre === true;
