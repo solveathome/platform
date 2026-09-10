@@ -14,7 +14,7 @@ ENV NODE_ENV=production
 COPY package.json package-lock.json ./
 RUN npm ci --omit=dev
 COPY --from=build /app/dist ./dist
-COPY briefs ./briefs
+COPY projects ./projects
 COPY docs ./docs
 COPY public ./public
 EXPOSE 8600

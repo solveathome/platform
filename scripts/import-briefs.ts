@@ -17,10 +17,14 @@ import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { migrate, q, one } from "../src/db/index.js";
 
-const dir = process.argv[2] ?? "briefs";
+import { projectDir, featuredProject } from "../src/lib/projects.js";
 await migrate();
-const p = await one<{ id: number }>(`SELECT id FROM problems WHERE slug = 'twin-primes'`);
-if (!p) throw new Error("run seed first");
+// Usage: import-briefs [slug] [dir]; the default dir is projects/<slug>/briefs, the default slug the featured project.
+const slug = process.argv[2] ?? (await featuredProject())?.slug;
+if (!slug) throw new Error("no project: run seed first, or give a slug");
+const dir = process.argv[3] ?? join(projectDir(slug) ?? "", "briefs");
+const p = await one<{ id: number }>(`SELECT id FROM problems WHERE slug = $1`, [slug]);
+if (!p) throw new Error(`unknown project ${slug}: run seed first`);
 let n = 0, updated = 0;
 for (const f of readdirSync(dir).filter((f) => f.endsWith(".md"))) {
   const src = readFileSync(join(dir, f), "utf8");

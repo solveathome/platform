@@ -8,7 +8,8 @@ import { join } from "node:path";
 import { migrate, q, one } from "../src/db/index.js";
 import { ROOT } from "../src/lib/paths.js";
 
-const slug = process.argv[2] ?? "twin-primes";
+import { featuredProject } from "../src/lib/projects.js";
+const slug = process.argv[2] ?? (await featuredProject())?.slug ?? "";
 const REPOS = process.env.DOCS_DIR ?? join(ROOT, "data", "repos");
 await migrate();
 const p = await one<{ id: number }>(`SELECT id FROM problems WHERE slug = $1`, [slug]);

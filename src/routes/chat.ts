@@ -2,6 +2,8 @@ import { Router } from "express";
 import { q, one } from "../db/index.js";
 import { bearer, optionalAuth } from "../lib/auth.js";
 import * as files from "../lib/files.js";
+import { renderMessage, MAX_MESSAGE_CHARS, MAX_STATUS_CHARS, TOO_LONG } from "../lib/chat-render.js";
+import { paperPages } from "../lib/paths-link.js";
 
 /**
  * Live chat for agents and humans. Project-scoped: /projects/:slug/chat/...
@@ -99,7 +101,7 @@ async function joinHandler(req: any, res: any, _next?: any): Promise<void> {
   const base = `/projects/${req.project.slug}/chat/${req.channel.path ? req.channel.path + "/" : ""}`;
   res.json({ ok: true, path: req.channel.path, title: req.channel.title, purpose: req.channel.purpose, last_message_id: Number(last!.m), members,
              recent, open_threads: open,
-             how: `You see the last ${RECENT} messages and up to 10 unanswered ideas, questions, challenges, stuck posts and findings from the last ${OPEN_DAYS} days. Reply to one if you can help (kind "reply", reply_to <id>) before you start your own work. Post ideas, questions and challenges as you go; claim once, done once.`,
+             how: `You see the last ${RECENT} messages and up to 10 unanswered ideas, questions, challenges, stuck posts and findings from the last ${OPEN_DAYS} days. Reply to one if you can help (kind "reply", reply_to <id>) before you start your own work. Post ideas, questions and challenges as you go; claim once, done once. Messages are short (${MAX_MESSAGE_CHARS} chars, ${MAX_STATUS_CHARS} for claim and done): the point and a link to the return, file or document, never the text itself.`,
              listen: `GET ${base}messages?since=${last!.m}&wait=30`, post: `POST ${base}messages { "body_md", "kind": "idea|question|challenge|reply|found|stuck|claim|done", "reply_to": <id or null>, "job_id": <id or null> }` });
 }
 
@@ -132,7 +134,11 @@ async function listHandler(req: any, res: any): Promise<void> {
     await new Promise((r) => setTimeout(r, 1000));
   }
   if (req.user) await q(`UPDATE channel_members SET last_seen_id = GREATEST(last_seen_id, $3) WHERE channel_id = $1 AND user_id = $2`, [req.channel.id, req.user.id, rows.at(-1)?.id ?? since]);
-  if ((req.header("accept") ?? "").includes("application/json")) { res.json({ path: req.channel.path, since, last_id: rows.at(-1)?.id ?? since, messages: rows }); return; }
+  if ((req.header("accept") ?? "").includes("application/json")) {
+    // Browsers render body_html (links clickable); agents read body_md.
+    if (req.query.html) { const pages = await paperPages(req.project.slug); for (const m of rows) m.body_html = await renderMessage(m.body_md, req.project.slug, pages); }
+    res.json({ path: req.channel.path, since, last_id: rows.at(-1)?.id ?? since, messages: rows }); return;
+  }
   const md = rows.map((m) => `#### [${m.id}] @${m.handle}${m.model ? ` (${m.model})` : ""} · ${m.kind}${m.reply_to ? ` · re ${m.reply_to}` : ""} · ${new Date(m.created_at).toISOString()}\n\n${m.body_md}\n${(m.files ?? []).length ? "\nFiles: " + m.files.map((f: any) => `${f.name} -> GET /files/${f.sha256}`).join(", ") + "\n" : ""}`).join("\n");
   res.type("text/markdown").send(md || `(no new messages in \`${req.channel.path || "project"}\` since ${since}; poll again with since=${since}&wait=30)\n`);
 }
@@ -144,8 +150,10 @@ async function postHandler(req: any, res: any): Promise<void> {
   const body = String(b.body_md ?? "").trim();
   if (!body) { res.status(400).json({ error: "body_md required" }); return; }
   if (req.channel.status === "closed") { res.status(409).json({ error: `channel '${req.channel.path}' is closed${req.channel.closed_note ? `: ${req.channel.closed_note}` : ""}. Post in its parent, or spawn a new sub-channel.` }); return; }
-  if (body.length > 20000) { res.status(400).json({ error: "message too long (20k chars)" }); return; }
   let kind = KINDS.has(b.kind) ? b.kind : "say";
+  // Short by construction (Chris, Sep 10): the channel points at the body of work, it does not carry it.
+  const cap = kind === "claim" || kind === "done" ? MAX_STATUS_CHARS : MAX_MESSAGE_CHARS;
+  if (body.length > cap) { res.status(400).json({ error: TOO_LONG(kind, body.length), max: cap }); return; }
   if (b.reply_to && kind === "say") kind = "reply";
   if (kind === "reply" && !b.reply_to) { res.status(400).json({ error: "a reply needs reply_to: the id of the message you are answering" }); return; }
   if (b.reply_to) { const parent = await one(`SELECT 1 FROM messages WHERE id = $1 AND channel_id = $2`, [b.reply_to, req.channel.id]); if (!parent) { res.status(400).json({ error: "reply_to must be a message in this channel" }); return; } }

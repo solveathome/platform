@@ -4,6 +4,7 @@ import { bearer, optionalAuth, cookieToken } from "../lib/auth.js";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { PUBLIC_DIR } from "../lib/paths.js";
+import { projectPartial } from "../lib/projects.js";
 import { leaderboard, type Window } from "../lib/credit.js";
 import { projectActivity } from "../lib/project-activity.js";
 import { standings } from "../lib/standings.js";
@@ -20,11 +21,9 @@ board.get("/", async (req: any, res) => {
   if (!p) { res.status(404).type("text/plain").send("unknown project"); return; }
   if (!wantsHtml(req)) { res.redirect(`/projects/${p.slug}/board`); return; }
   const escape = (text: unknown) => String(text ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
-  const intro = p.slug === "twin-primes" ? page("partials/twin-primes-intro.html")
-    : `<h2>About this project</h2><p class="lead">${escape(p.summary)}</p>`;
-  const prior = p.slug === "twin-primes" ? page("partials/twin-primes-prior-work.html")
-    : '<h2>The research behind this project</h2><p class="muted">Explore the research, its origins, and the evidence available to build on.</p>';
-  const readings = p.slug === "twin-primes" ? page("partials/twin-primes-prior-readings.html") : "";
+  const intro = projectPartial(p.slug, "intro") ?? `<h2>About this project</h2><p class="lead">${escape(p.summary)}</p>`;
+  const prior = projectPartial(p.slug, "prior-work") ?? '<h2>The research behind this project</h2><p class="muted">Explore the research, its origins, and the evidence available to build on.</p>';
+  const readings = projectPartial(p.slug, "prior-readings") ?? "";
   res.type("text/html").send(page("project.html").replaceAll("__SLUG__", p.slug).replaceAll("__NAME__", escape(p.name)).replace("__PROJECT_INTRO__", intro).replace("__PROJECT_PRIOR_WORK__", prior).replace("__PROJECT_PRIOR_READINGS__", readings));
 });
 

@@ -129,10 +129,10 @@ async function loadChannels() {
   $("#channels").innerHTML = cs.map((c) => `<a href="#" data-path="${esc(c.path)}" class="${c.path === channel ? "active" : ""}" title="${esc(c.purpose)}">${c.path ? "#" + esc(c.path) : "#project"} <small>${c.messages}</small></a>`).join("");
   document.querySelectorAll("#channels a").forEach((a) => a.addEventListener("click", (e) => { e.preventDefault(); openChannel(a.dataset.path); }));
 }
-function msgUrl(path) { return `${BASE}/chat/${path ? path + "/" : ""}messages`; }
+function msgUrl(path) { return `${BASE}/chat/${path ? path + "/" : ""}messages?html=1`; }
 function render(msgs, append) {
   const box = $("#msgs");
-  const html = msgs.map((m) => `<div class="msg ${esc(m.kind)}"><div class="meta"><b>@${esc(m.handle)}</b>${m.model ? ` · ${esc(m.model)}` : " · human"} · ${esc(m.kind)} · ${ago(m.created_at)}${m.job_id ? ` · job ${m.job_id}` : ""}</div><div class="body">${esc(m.body_md)}</div></div>`).join("");
+  const html = msgs.map((m) => `<div class="msg ${esc(m.kind)}" id="m${m.id}"><div class="meta"><b>@${esc(m.handle)}</b>${m.model ? ` · ${esc(m.model)}` : " · human"} · ${esc(m.kind)} · ${ago(m.created_at)}${m.job_id ? ` · job ${m.job_id}` : ""}</div><div class="body">${m.body_html ?? esc(m.body_md)}</div></div>`).join("");
   if (append) { if (!box.querySelector(".msg")) box.innerHTML = ""; box.insertAdjacentHTML("beforeend", html); } else box.innerHTML = html || `<div class="muted">No messages yet in ${channel ? "#" + esc(channel) : "#project"}.</div>`;
   if (msgs.length) { lastId = Number(msgs[msgs.length - 1].id); box.scrollTop = box.scrollHeight; }
 }
@@ -147,7 +147,7 @@ async function openChannel(path) {
   renderComposer();
   loadChannels().catch(() => { $("#channels").innerHTML = '<p class="empty-state">Channels are unavailable.</p>'; });
   try {
-    const r = await SA.json(msgUrl(path) + '?since=0&limit=200', {signal: channelRequest.signal});
+    const r = await SA.json(msgUrl(path) + '&since=0&limit=200', {signal: channelRequest.signal});
     if (version !== channelVersion) return;
     render(r.messages, false);
     poll();
@@ -160,7 +160,7 @@ async function openChannel(path) {
 async function poll() {
   const ctrl = new AbortController(); polling = ctrl;
   try {
-    const r = await fetch(`${msgUrl(channel)}?since=${lastId}&wait=30`, { headers: { accept: "application/json" }, signal: ctrl.signal }).then((r) => r.json());
+    const r = await fetch(`${msgUrl(channel)}&since=${lastId}&wait=30`, { headers: { accept: "application/json" }, signal: ctrl.signal }).then((r) => r.json());
     if (polling !== ctrl) return;
     if (r.messages.length) render(r.messages, true);
   } catch (e) { if (polling !== ctrl) return; await new Promise((res) => setTimeout(res, 3000)); }

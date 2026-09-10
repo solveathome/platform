@@ -11,7 +11,7 @@ import { join } from "node:path";
 
 const [repo, slug = "twin-primes", origin = "Benjaminsen"] = process.argv.slice(2);
 import { existsSync } from "node:fs";
-const provPath = join(process.cwd(), "provenance", `${slug}.json`);
+const provPath = join(process.cwd(), "projects", slug, "provenance.json");
 const prov = existsSync(provPath) ? JSON.parse(readFileSync(provPath, "utf8")) : { models: {}, recorded_submissions: {} };
 const astraHashes = new Set(Object.keys(prov.models?.["gpt-6-astra"]?.commits ?? {}));
 const submissionHashes = new Set(Object.keys(prov.recorded_submissions ?? {}));
@@ -61,7 +61,7 @@ const r = await fetch(`${base}/projects/${slug}/claims`, { method: "POST", heade
   body: JSON.stringify({
     origin_handle: origin,
     origin_role: "direction, review, prior corpus (2020-2026 independent experiments)",
-    origin_model: "claude (Fable or Opus) and gpt-6-astra; per commit, see provenance/twin-primes.json",
+    origin_model: "claude (Fable or Opus) and gpt-6-astra; per commit, see projects/<slug>/provenance.json",
     origin_model_role: "writing, computation, validators, dispatch rounds",
     origin_note: `All ${git(["rev-list", "--count", "HEAD"])} commits were made through agent sessions (Claude Code and Codex) directed by @${origin}; ${git(["log", "--format=%B"]).split("\n").filter((l) => /claude-session/i.test(l)).length} carry a Claude session marker; none carry a co-author trailer and no commit names a model. ${astraHashes.size} commits are GPT-6 Astra's, from a Codex transcript. Everything else is Claude (Fable or Opus): 38 commits by their session marker, the rest by @${origin}'s statement of 2026-09-09. The human/agent split is by role, not by line. Credited, not scored.`,
     claims }) });

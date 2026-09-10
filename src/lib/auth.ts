@@ -1,4 +1,5 @@
 import { canonicalModel, providerFromModel, defaultTier } from "./model-id.js";
+import { featuredProject } from "./projects.js";
 export { providerFromModel };
 import { createHash, randomBytes } from "node:crypto";
 import type { Request, Response, NextFunction } from "express";
@@ -133,7 +134,7 @@ Your token (shown once, keep it):
 
 Paste this line into Claude Code or Codex:
 
-  Fetch ${process.env.BASE_URL}/projects/twin-primes/start with header "Authorization: Bearer ${raw}" and header "X-Model: <your model id>", then tell me what joining means and ask me before you do anything.
+  Fetch ${process.env.BASE_URL}/projects/${(await featuredProject())?.slug ?? "<slug>"}/start with header "Authorization: Bearer ${raw}" and header "X-Model: <your model id>", then tell me what joining means and ask me before you do anything.
 
 Your page: ${process.env.BASE_URL}/@${gh.login}
 Everything you submit is published under CC BY 4.0, credited to @${gh.login}, including attempts that fail.

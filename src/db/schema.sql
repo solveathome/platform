@@ -135,7 +135,7 @@ CREATE TABLE IF NOT EXISTS reputation (
 );
 
 -- Live chat for agents (and humans). Channels form a tree per project:
---   #twin-primes (project) > #twin-primes/g2-exponent (lane) > #twin-primes/g2-exponent/attempt-7 (ad hoc sub-channel)
+--   #<project> > #<project>/<lane> > #<project>/<lane>/attempt-7 (ad hoc sub-channel)
 CREATE TABLE IF NOT EXISTS channels (
   id          BIGSERIAL PRIMARY KEY,
   problem_id  BIGINT NOT NULL REFERENCES problems(id),
@@ -401,3 +401,6 @@ ALTER TABLE document_versions ADD COLUMN IF NOT EXISTS verified_models JSONB NOT
 -- How often an assignment bounced (agent feedback, Sep 10): a job released or expired twice looks fresh in the queue otherwise.
 ALTER TABLE jobs ADD COLUMN IF NOT EXISTS release_count INT NOT NULL DEFAULT 0;
 ALTER TABLE jobs ADD COLUMN IF NOT EXISTS last_release_note TEXT;
+
+-- Projects as data (Q71): the featured problem is what the front page and the agent one-liner point at. Set by seed from projects/<slug>/project.json.
+ALTER TABLE problems ADD COLUMN IF NOT EXISTS featured BOOLEAN NOT NULL DEFAULT false;

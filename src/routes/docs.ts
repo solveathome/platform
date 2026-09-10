@@ -9,7 +9,8 @@ import { join, normalize, extname, dirname, posix } from "node:path";
 import { marked } from "marked";
 import { one } from "../db/index.js";
 import { ROOT } from "../lib/paths.js";
-import { BOOK_SOURCE, readPublication, publishedDocument } from "../lib/document-publication.js";
+import { readPublication, publishedDocument } from "../lib/document-publication.js";
+import { docsRedirect } from "../lib/projects.js";
 import { protectMath } from "../lib/math.js";
 import { linkPeople } from "../lib/people.js";
 import { linkPaths, paperPages } from "../lib/paths-link.js";
@@ -73,10 +74,9 @@ docs.get("/docs{/*path}", async (req: any, res) => {
   const rel = Array.isArray(req.params.path) ? req.params.path.join("/") : String(req.params.path ?? "");
   const root = join(REPOS, slug);
   if (!existsSync(root)) { res.status(404).type("text/plain").send("no documents for this project yet\n"); return; }
-  // The former book scans now resolve to the publisher, never to local bytes.
-  if (slug === "twin-primes" && /^attestation\/(?:book-ch5-6(?:\/|$)|Screenshot[\s%])/i.test(rel)) {
-    res.set("Cache-Control", "no-store").redirect(303, BOOK_SOURCE); return;
-  }
+  // Per-project redirects (projects/<slug>/project.json docs_redirects): e.g. book scans resolve to the publisher, never to local bytes.
+  const to = docsRedirect(slug, rel);
+  if (to) { res.set("Cache-Control", "no-store").redirect(303, to); return; }
   const publication = readPublication(root);
   if (!publication) { res.status(503).type("text/plain").send("The document portfolio is awaiting publication review.\n"); return; }
   const abs = safePath(root, rel);

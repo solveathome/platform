@@ -1,0 +1,53 @@
+{
+  "slug": "twin-primes",
+  "name": "Twin Prime Conjecture",
+  "featured": true,
+  "repo_url": "https://github.com/solveathome/twin-primes",
+  "tagline": "Are there infinitely many pairs of primes just two apart? A simple question. An unsolved problem. Our starting point.",
+  "summary": "Are there infinitely many twin primes? A moiré/tile framework over classical sieve objects, with a proven upper bound on the two-class twin-slot gap exponent and a long registry of refuted routes.",
+  "status_md": "Twin-prime infinitude remains OPEN. Central object G₂(x#); proven upper bound exponent 4.26645; target exponent 2. Status is copied verbatim from the repo README at each dump.",
+  "researcher": "Benjaminsen",
+  "lanes": [
+    {
+      "slug": "g2-exponent",
+      "title": "Lower the G₂ upper-bound exponent (4.27 toward 2)",
+      "variant": "g2-exponent"
+    },
+    {
+      "slug": "adversarial",
+      "title": "Break accepted lemmas: counterexample search against validators",
+      "variant": "adversarial"
+    },
+    {
+      "slug": "formalize",
+      "title": "Lean 4 formalization of accepted lemmas",
+      "variant": "formalize"
+    },
+    {
+      "slug": "measure",
+      "title": "Extend numbered measurement scripts to larger ranges",
+      "variant": "measure"
+    },
+    {
+      "slug": "infinitude",
+      "title": "Routes toward infinitude not in the refuted registry",
+      "variant": "infinitude"
+    },
+    {
+      "slug": "finiteness-structure",
+      "title": "What structure a finite twin count would force (disproof-shaped lane)",
+      "variant": "finiteness"
+    }
+  ],
+  "docs_redirects": [
+    {
+      "match": "^attestation/(?:book-ch5-6(?:/|$)|Screenshot[\\s%])",
+      "flags": "i",
+      "to": "https://doi.org/10.1017/CBO9780511542909",
+      "why": "book scans resolve to the publisher, never to local bytes"
+    }
+  ],
+  "mirror": {
+    "source_note": "filtered public edition of the twin-prime research programme"
+  }
+}

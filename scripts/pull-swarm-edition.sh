@@ -3,9 +3,9 @@
 # and show what changed against the research checkout. Nothing is written into the research repo; apply what you accept by hand.
 set -euo pipefail
 SERVER="${SERVER:-<user@host>}"
-SLUG="${1:-twin-primes}"
-SRC="${2:-<path-to-research-repo>}"
-DEST="${3:-<path-to-research-repo>-swarm-edition}"
+SLUG="${1:?project slug}"
+SRC="${2:?path to the research repo checkout}"
+DEST="${3:-$SRC-swarm-edition}"
 mkdir -p "$DEST"
 rsync -a "$SERVER:/data/services/solveathome/data/overlay/$SLUG/" "$DEST/" 2>/dev/null || { echo "no swarm edition yet (nothing accepted)"; exit 0; }
 echo "swarm edition pulled to $DEST"
