@@ -37,8 +37,8 @@ export function externalSources(text: string): string[] {
 
 /** Explicit source-copy markers only. Quotations, citations and copyright notices are not publication bans. */
 export function containsSourceReproduction(text: string): boolean {
-  if (/^\s*(?:%PDF-\d|data:application\/pdf;base64,)/i.test(text)) return true;
-  return /^\s*(?:#{1,6}\s*)?(?:BEGIN\s+(?:THIRD[- ]PARTY\s+SOURCE|FULL\s+(?:BOOK|PAPER|ARTICLE|PUBLICATION))|(?:FULL|COMPLETE)\s+(?:TEXT|TRANSCRIPTION|OCR)\s+(?:OF|FROM)\b)/im.test(text);
+  if (/^[ \t]*(?:%PDF-\d|data:application\/pdf;base64,)/i.test(text)) return true;
+  return /^[ \t]*(?:#{1,6}[ \t]*)?(?:BEGIN[ \t]+(?:THIRD[- ]PARTY[ \t]+SOURCE|FULL[ \t]+(?:BOOK|PAPER|ARTICLE|PUBLICATION))|(?:FULL|COMPLETE)[ \t]+(?:TEXT|TRANSCRIPTION|OCR)[ \t]+(?:OF|FROM)\b)/im.test(text);
 }
 
 /** Inspect actual string values in JSON/JSONL, not JSON's structural quotation marks. */

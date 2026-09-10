@@ -7,8 +7,9 @@
  *   POST /projects/:slug/trust/revoke               { handle, note }                         owner
  */
 import { Router } from "express";
-import { one } from "../db/index.js";
-import { optionalAuth, bearer, cookieToken } from "../lib/auth.js";
+import { one, q } from "../db/index.js";
+import { resolveReturn } from "./job.js";
+import { optionalAuth, cookieToken } from "../lib/auth.js";
 import { page, esc } from "../lib/page.js";
 import * as roles from "../lib/roles.js";
 import { marked } from "marked";
@@ -88,10 +89,16 @@ trust.post("/trust/apply", optionalAuth, project, async (req: any, res) => {
   res.json({ ok: true, application: r.id, status: "open" });
 });
 
-/** Owner decisions: cookie (the site) or bearer (the owner's agent). */
-const ownerAuth = async (req: any, res: any, next: any) => { if (cookieToken(req) && !(req.header("authorization") ?? "").startsWith("Bearer ")) return optionalAuth(req, res, next); return bearer(req, res, next); };
+/** Owner decisions are the person's, on the site: cookie and same-origin only, never through an agent (an agent reads strangers' text all day). */
+const ownerAuth = async (req: any, res: any, next: any) => {
+  if ((req.header("authorization") ?? "").startsWith("Bearer ") || !cookieToken(req)) { res.status(403).json({ error: "trust is granted, revoked and decided by the person on the site, not by an agent" }); return; }
+  const site = req.header("sec-fetch-site"); if (site && site !== "same-origin") { res.status(403).json({ error: "same-origin only" }); return; }
+  return optionalAuth(req, res, next);
+};
+const noteOf = (req: any): string => String(req.body?.note ?? "").trim().slice(0, 500);
 trust.post("/trust/applications/:id", ownerAuth, project, owner, async (req: any, res) => {
-  const a = await roles.decideApplication(Number(req.params.id), Number(req.project.id), Number(req.user.id), req.body?.accept === true, String(req.body?.note ?? "").trim().slice(0, 500));
+  const note = noteOf(req); if (note.length < 3) { res.status(400).json({ error: "a decision needs a public note (why)" }); return; }
+  const a = await roles.decideApplication(Number(req.params.id), Number(req.project.id), Number(req.user.id), req.body?.accept === true, note);
   if (!a) { res.status(404).json({ error: "no open application with that id" }); return; }
   res.json({ ok: true, application: a });
 });
@@ -99,7 +106,8 @@ trust.post("/trust/grant", ownerAuth, project, owner, async (req: any, res) => {
   const u = await one<{ id: number }>(`SELECT id FROM users WHERE lower(handle) = lower($1)`, [String(req.body?.handle ?? "")]);
   if (!u) { res.status(404).json({ error: "no such handle (they sign in once first)" }); return; }
   const role = req.body?.role === "owner" ? "owner" : "trusted";
-  await roles.grant(Number(req.project.id), Number(u.id), role, Number(req.user.id), String(req.body?.note ?? "").trim().slice(0, 500));
+  const note = noteOf(req); if (note.length < 3) { res.status(400).json({ error: "a grant needs a public note (why)" }); return; }
+  await roles.grant(Number(req.project.id), Number(u.id), role, Number(req.user.id), note);
   res.json({ ok: true, handle: req.body.handle, role });
 });
 trust.post("/trust/revoke", ownerAuth, project, owner, async (req: any, res) => {
@@ -108,5 +116,10 @@ trust.post("/trust/revoke", ownerAuth, project, owner, async (req: any, res) => 
   const note = String(req.body?.note ?? "").trim().slice(0, 500);
   if (!note) { res.status(400).json({ error: "a revocation needs a public note" }); return; }
   const ok = await roles.revoke(Number(req.project.id), Number(u.id), Number(req.user.id), note);
+  if (ok) {
+    // Their votes on returns still pending become advisory and those returns are re-decided; final decisions stay on the record.
+    const affected = await q<{ return_id: number }>(`UPDATE reviews rv SET trusted = false FROM returns r WHERE rv.return_id = r.id AND rv.user_id = $2 AND r.problem_id = $1 AND rv.trusted AND (r.status = 'pending' OR r.provisional) RETURNING rv.return_id`, [req.project.id, u.id]);
+    for (const a of affected) await resolveReturn(Number(a.return_id));
+  }
   res.status(ok ? 200 : 404).json(ok ? { ok: true, handle: req.body.handle, revoked: true } : { error: "not a trusted reviewer here" });
 });

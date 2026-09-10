@@ -5,6 +5,8 @@
  */
 import { canonicalModel } from "./model-id.js";
 
+/** No single return spends more than this per field; anything above is a forged or broken transcript, not usage. */
+export const MAX_TOKENS_PER_FIELD = 50_000_000;
 export type Tokens = { input: number; output: number; cache_read: number; cache_write: number; entries: number; source: "claude-jsonl" | "codex-jsonl" | "reported" | "none"; models?: Record<string, number> };
 
 export function parseTranscript(text: string, reported?: any): Tokens {
@@ -43,6 +45,8 @@ export function parseTranscript(text: string, reported?: any): Tokens {
     t.input = Number(reported.input ?? 0); t.output = Number(reported.output ?? 0); t.cache_read = Number(reported.cache_read ?? 0); t.cache_write = Number(reported.cache_write ?? 0);
     t.source = (t.input || t.output) ? "reported" : "none";
   }
+  for (const k of ["input", "output", "cache_read", "cache_write"] as const) t[k] = Math.min(Math.max(0, Number.isFinite(t[k]) ? t[k] : 0), MAX_TOKENS_PER_FIELD);
+  for (const k of Object.keys(t.models ?? {})) t.models![k] = Math.min(Math.max(0, t.models![k] || 0), MAX_TOKENS_PER_FIELD);
   return t;
 }
 

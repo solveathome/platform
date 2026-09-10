@@ -22,6 +22,14 @@ export async function issueToken(userId: number, label = "default"): Promise<str
   return raw;
 }
 
+/** True when the request carries a bearer token (or session cookie) that exists and is not revoked. Used before buffering large bodies. */
+export async function tokenExists(req: Request): Promise<boolean> {
+  const h = req.header("authorization") ?? "";
+  const raw = (h.startsWith("Bearer ") ? h.slice(7).trim() : "") || cookieToken(req);
+  if (!raw || raw.length > 200) return false;
+  return !!(await one(`SELECT 1 FROM tokens WHERE token_hash = $1 AND revoked_at IS NULL`, [hashToken(raw)]));
+}
+
 /** Bearer token auth. The agent also reports its model in X-Model, e.g. "claude-fable-5-1" or "gpt-6-astra". */
 export async function bearer(req: Request, res: Response, next: NextFunction): Promise<void> {
   const h = req.header("authorization") ?? "";
@@ -34,8 +42,9 @@ export async function bearer(req: Request, res: Response, next: NextFunction): P
   if (!row) { res.status(401).json({ error: "unknown or revoked token" }); return; }
   if (row.terms_version !== TERMS_VERSION) {
     const msg = `@${row.handle} has not accepted the current terms of participation (version ${TERMS_VERSION}). Stop and tell your person: they accept on the site, signed in, at ${process.env.BASE_URL ?? ""}/terms. An agent cannot accept for them.`;
-    // Never accepted: nothing works. Accepted an earlier version: the channel, files and release still work so a session can finish tidily; new assignments and returns wait for the person.
-    if (!row.terms_version) { res.status(403).json({ error: msg, terms: `${process.env.BASE_URL ?? ""}/terms`, version: TERMS_VERSION }); return; }
+    // Never accepted: nothing works. Accepted an earlier version: the channel, files and release still work so a session can finish tidily; everything else waits for the person.
+    const tidy = /\/(release|files(\/|$)|chat\/[^?]*\/(messages|join|leave)|chat\/(join|leave))(\?|$)/.test(req.originalUrl);
+    if (!row.terms_version || !tidy) { res.status(403).json({ error: msg, terms: `${process.env.BASE_URL ?? ""}/terms`, version: TERMS_VERSION }); return; }
     (req as any).termsStale = msg;
   }
   req.user = { id: Number(row.id), handle: row.handle };
@@ -89,39 +98,49 @@ export async function modelTier(model: string): Promise<number> {
 
 /** GitHub OAuth: /auth/github -> GitHub -> /auth/github/callback -> token shown once. */
 /** Only same-site paths may be a post-sign-in destination. */
-const safeNext = (v: unknown): string => { const n = String(v ?? ""); return /^\/(?!\/)[^\s]*$/.test(n) ? n : "/"; };
+const safeNext = (v: unknown): string => { const n = String(v ?? ""); return /^\/(?![\/\\])[^\s\\]*$/.test(n) ? n : "/"; };
 
 /** GET /auth/github?next=/where : send to GitHub; `next` rides along in `state`. */
 export async function githubStart(req: Request, res: Response): Promise<void> {
   const id = process.env.GITHUB_CLIENT_ID;
   if (!id) { res.status(500).send("GITHUB_CLIENT_ID not set"); return; }
   const cb = `${process.env.BASE_URL}/auth/github/callback`;
-  const state = Buffer.from(JSON.stringify({ next: safeNext(req.query.next), n: randomBytes(8).toString("hex") })).toString("base64url");
+  const nonce = randomBytes(12).toString("hex");
+  const state = Buffer.from(JSON.stringify({ next: safeNext(req.query.next), n: nonce })).toString("base64url");
+  // The nonce also lives in a short-lived cookie: the callback only completes in the browser that started it (no login CSRF).
+  const secure = (process.env.BASE_URL ?? "").startsWith("https");
+  res.setHeader("Set-Cookie", `sah_oauth=${nonce}; Path=/auth; HttpOnly; SameSite=Lax; Max-Age=600${secure ? "; Secure" : ""}`);
   res.redirect(`https://github.com/login/oauth/authorize?client_id=${id}&redirect_uri=${encodeURIComponent(cb)}&scope=read:user&state=${state}`);
 }
 
 export async function githubCallback(req: Request, res: Response): Promise<void> {
   const code = String(req.query.code ?? "");
+  if (!/^[A-Za-z0-9_-]{10,200}$/.test(code)) { res.status(400).type("text/plain").send("Sign-in failed (no code). Go back to the site and sign in again.\n"); return; }
+  let st: { next?: unknown; n?: unknown } = {};
+  try { st = JSON.parse(Buffer.from(String(req.query.state ?? ""), "base64url").toString("utf8")); } catch { /* no state */ }
+  const cookieNonce = /(?:^|;\s*)sah_oauth=([a-f0-9]+)/.exec(req.header("cookie") ?? "")?.[1];
+  if (!st.n || !cookieNonce || st.n !== cookieNonce) { res.status(400).type("text/plain").send("Sign-in did not start in this browser (state mismatch). Go back to the site and sign in again.\n"); return; }
   const tok = await fetch("https://github.com/login/oauth/access_token", {
-    method: "POST",
+    method: "POST", signal: AbortSignal.timeout(10_000),
     headers: { "content-type": "application/json", accept: "application/json" },
     body: JSON.stringify({ client_id: process.env.GITHUB_CLIENT_ID, client_secret: process.env.GITHUB_CLIENT_SECRET, code }),
   }).then((r) => r.json() as Promise<{ access_token?: string }>);
   if (!tok.access_token) { res.status(400).send("GitHub OAuth failed"); return; }
-  const gh = await fetch("https://api.github.com/user", { headers: { authorization: `Bearer ${tok.access_token}`, "user-agent": "solveathome" } })
+  const gh = await fetch("https://api.github.com/user", { headers: { authorization: `Bearer ${tok.access_token}`, "user-agent": "solveathome" }, signal: AbortSignal.timeout(10_000) })
     .then((r) => r.json() as Promise<{ id: number; login: string }>);
   const user = await one<{ id: number }>(
     `INSERT INTO users (github_id, handle) VALUES ($1, $2)
      ON CONFLICT (github_id) DO UPDATE SET handle = EXCLUDED.handle RETURNING id`, [gh.id, gh.login]);
   const seeded = (process.env.SEED_REVIEWERS ?? "").split(",").map((s) => s.trim().toLowerCase()).includes(gh.login.toLowerCase());
   await reputation.ensure(Number(user!.id), seeded);
+  // Signing in again is the kill switch: every earlier token of this person stops working (agents included). The docs promise this.
+  await q(`UPDATE tokens SET revoked_at = now() WHERE user_id = $1 AND revoked_at IS NULL`, [user!.id]);
   const raw = await issueToken(Number(user!.id));
   const secure = (process.env.BASE_URL ?? "").startsWith("https");
-  res.setHeader("Set-Cookie", `sah_session=${encodeURIComponent(raw)}; Path=/; HttpOnly; SameSite=Lax; Max-Age=31536000${secure ? "; Secure" : ""}`);
+  res.setHeader("Set-Cookie", [`sah_session=${encodeURIComponent(raw)}; Path=/; HttpOnly; SameSite=Lax; Max-Age=31536000${secure ? "; Secure" : ""}`, `sah_oauth=; Path=/auth; HttpOnly; SameSite=Lax; Max-Age=0${secure ? "; Secure" : ""}`]);
   const wantsHtml = (req.header("accept") ?? "").includes("text/html");
   const accepted = (await one<{ terms_version: string | null }>(`SELECT terms_version FROM users WHERE id = $1`, [user!.id]))?.terms_version === TERMS_VERSION;
-  let next = "/";
-  try { next = safeNext(JSON.parse(Buffer.from(String(req.query.state ?? ""), "base64url").toString("utf8")).next); } catch { /* no state: home */ }
+  const next = safeNext(st.next);
   // Accepting the terms is part of signing in: anyone without the current version on record lands on the acceptance step first.
   if (wantsHtml) { res.redirect(accepted ? next : `/terms?signin=1&next=${encodeURIComponent(next)}`); return; }
   res.type("text/plain").send(

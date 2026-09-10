@@ -10,6 +10,15 @@ services:
     container_name: solveathome-backend
     env_file: .env
     restart: unless-stopped
+    # Hardening (Sep 10): no root, no capabilities, no privilege escalation, a read-only image with tmpfs for /tmp, bounded memory and processes.
+    user: "1000:1000"
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    read_only: true
+    tmpfs: [/tmp]
+    mem_limit: 4g
+    pids_limit: 512
+    stop_grace_period: 20s
     volumes:
       - ./data/dumps:/app/data/dumps
       - ./data/files:/app/data/files

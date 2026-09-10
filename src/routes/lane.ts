@@ -7,7 +7,7 @@ export const lane = Router({ mergeParams: true });
 lane.get("/lanes", async (req, res) => {
   res.json(await q(`SELECT l.id, l.slug, l.title, l.variant, l.status, u.handle AS origin,
     (SELECT count(*) FROM jobs j WHERE j.lane_id = l.id AND j.status = 'queued') AS queued,
-    (SELECT count(*) FROM returns r WHERE r.lane_id = l.id AND r.status = 'accepted') AS accepted
+    (SELECT count(*) FROM returns r WHERE r.lane_id = l.id AND r.status = 'accepted' AND NOT r.provisional) AS accepted
     FROM lanes l JOIN problems p ON p.id = l.problem_id LEFT JOIN users u ON u.id = l.origin_user_id
     WHERE p.slug = $1 ORDER BY l.id`, [(req.params as any).slug]));
 });

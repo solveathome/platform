@@ -21,10 +21,13 @@ import { needsSourceReview, SOURCE_REVIEW_MESSAGE, sourceReviewHit } from "../li
 import { randomBytes } from "node:crypto";
 import { isTrusted } from "../lib/roles.js";
 import { tierForEffort } from "../lib/model-id.js";
+import { postRateOk, RATE_MESSAGE } from "../lib/messages.js";
 import { parseTangent, parseTarget, tangentJob, challengesFor, challengeBanner, targetUrl, targetLabel, FINDINGS, type Tangent } from "../lib/tangent.js";
 
 /** Caps on submission (Sep 10): pending self-assigned returns per handle per project, and returns per handle per hour. */
 const MAX_OPEN_SELF_ASSIGNED = Number(process.env.MAX_OPEN_SELF_ASSIGNED ?? 3), MAX_RETURNS_PER_HOUR = Number(process.env.MAX_RETURNS_PER_HOUR ?? 30);
+/** Per handle: live sessions (seen within a day), assignments held at once, and returns per day that may spawn review jobs before the handle has an accepted return. */
+const MAX_LIVE_SESSIONS = Number(process.env.MAX_LIVE_SESSIONS ?? 8), MAX_HELD_PER_HANDLE = Number(process.env.MAX_HELD_PER_HANDLE ?? 8), MAX_REVIEW_SPAWNS_PER_DAY = Number(process.env.MAX_REVIEW_SPAWNS_PER_DAY ?? 10);
 export const job = Router({ mergeParams: true });
 const BASE = () => process.env.BASE_URL ?? "http://localhost:8600";
 
@@ -43,6 +46,9 @@ async function project(req: any, res: any, next: any): Promise<void> {
  */
 /** Expired assignments go back to the queue. Run on every /start so nothing is stuck behind an agent that vanished. */
 async function sweepExpired(problemId: number): Promise<void> {
+  // Jobs made on the spot for one session (an explore brief on the open questions, a person's tangent) die with that session; nothing else should inherit them.
+  await q(`UPDATE jobs SET status = 'expired', last_release_note = 'expired with the session it was made for'
+           WHERE problem_id = $1 AND status = 'assigned' AND expires_at < now() AND parent_return_id IS NULL AND (title LIKE 'Explore: open questions%' OR title LIKE 'Challenge: %' OR title LIKE 'Direction: %') AND assigned_session IS NOT NULL`, [problemId]);
   await q(`UPDATE jobs SET status = 'queued', assigned_to = NULL, assigned_session = NULL, assigned_at = NULL, expires_at = NULL, release_count = release_count + 1, last_release_note = 'expired: the agent did not return or release it'
            WHERE problem_id = $1 AND status = 'assigned' AND expires_at < now()`, [problemId]);
 }
@@ -56,7 +62,7 @@ async function start(req: any, res: any): Promise<void> {
   const ownerNote = "";
   // Consent is per agent session (Q51), and a session is one agent: a person runs several in parallel under one handle, each with
   // its own id (Sep 10). Without a live session id the agent gets the orientation: the terms, and for a returning handle the choice to continue.
-  const sessionId = req.justRegistered ? req.session?.id : (req.header("x-session") ?? String(req.query.session ?? "")).trim();
+  const sessionId = req.justRegistered ? req.session?.id : String(req.header("x-session") ?? "").trim();
   const session = req.justRegistered ? req.session : (sessionId ? await one(`SELECT * FROM sessions WHERE id = $1 AND problem_id = $2 AND user_id = $3 AND ended_at IS NULL`, [sessionId, req.project.id, req.user!.id]) : undefined);
   if (!member || !session) {
     const md = ownerNote + await orientation(req.project, BASE(), member ?? null);
@@ -80,6 +86,9 @@ async function start(req: any, res: any): Promise<void> {
   // The inbox (Q63): asks for this handle, answers to its asks, replies and challenges since this agent last started. Read before the assignment.
   const ib = await inbox(req.project.id, req.user!.id, Number(session.inbox_seen_message_id ?? 0));
   const inboxMd = renderInbox(ib, `${BASE()}/projects/${req.project.slug}`);
+  // A handle holds a bounded number of assignments across all its agents: eight at once is a workshop, eighty is a queue drain.
+  const heldAll = await one<{ c: string }>(`SELECT count(*) AS c FROM jobs WHERE problem_id = $1 AND assigned_to = $2 AND status = 'assigned' AND (expires_at IS NULL OR expires_at > now())`, [req.project.id, req.user!.id]);
+  if (Number(heldAll?.c ?? 0) >= MAX_HELD_PER_HANDLE) { const msg = `Your handle already holds ${heldAll!.c} assignments across its sessions (limit ${MAX_HELD_PER_HANDLE}). Finish or release some first.`; if (wantsJson) res.status(429).json({ error: msg }); else res.status(429).type("text/markdown").send(`# Too many assignments held\n\n${msg}\n`); return; }
   // Idling guard: an agent holding an unfinished assignment does not get another. Finish it or hand it back. The handle's other agents are not affected.
   const held = await one(`SELECT id, type, title, expires_at FROM jobs WHERE problem_id = $1 AND assigned_session = $2 AND status = 'assigned' AND (expires_at IS NULL OR expires_at > now()) ORDER BY assigned_at DESC LIMIT 1`, [req.project.id, session.id]);
   if (held) {
@@ -215,6 +224,7 @@ job.post("/release", bearer, project, async (req: any, res: any) => {
   if (Number(j.assigned_to) !== req.user!.id) { res.status(403).json({ error: "not your assignment" }); return; }
   if (j.status !== "assigned") { res.status(409).json({ error: `job is ${j.status}` }); return; }
   await q(`UPDATE jobs SET status = 'queued', assigned_to = NULL, assigned_session = NULL, assigned_at = NULL, expires_at = NULL, release_count = release_count + 1, last_release_note = $2 WHERE id = $1`, [id, req.body?.note ? String(req.body.note).slice(0, 500) : null]);
+  if (!(await postRateOk(req.user!.id))) { res.json({ ok: true, job_id: id, status: "queued", note: "released; the release note was not posted (" + RATE_MESSAGE + ")" }); return; }
   const ch = j.lane_id ? await one(`SELECT id FROM channels WHERE lane_id = $1 AND parent_id IS NOT NULL ORDER BY id LIMIT 1`, [j.lane_id]) : await one(`SELECT id FROM channels WHERE problem_id = $1 AND path = ''`, [req.project.id]);
   if (ch) await q(`INSERT INTO messages (channel_id, user_id, model, kind, body_md, job_id) VALUES ($1,$2,$3,'done',$4,$5)`,
     [ch.id, req.user!.id, req.model ?? null, `Released job #${id} back to the queue${req.body?.note ? `: ${String(req.body.note).slice(0, 500)}` : ""}.`, id]);
@@ -256,6 +266,8 @@ job.post("/start", bearer, project, async (req: any, res: any) => {
     human: b.holds.human && typeof b.holds.human === "object" ? { expertise: String(b.holds.human.expertise ?? "").slice(0, 300), latency: String(b.holds.human.latency ?? "days").slice(0, 40) } : null,
   } : {});
   if (b.input !== undefined && input?.lane) { const l = await one(`SELECT 1 FROM lanes WHERE problem_id = $1 AND slug = $2`, [req.project.id, input.lane]); if (!l) { res.status(400).json({ error: `unknown lane '${input.lane}'` }); return; } }
+  const live = await one<{ c: string }>(`SELECT count(*) AS c FROM sessions WHERE problem_id = $1 AND user_id = $2 AND ended_at IS NULL AND last_seen > now() - interval '1 day'`, [req.project.id, req.user!.id]);
+  if (Number(live?.c ?? 0) >= MAX_LIVE_SESSIONS) { res.status(429).json({ error: `this handle already has ${live!.c} live sessions (limit ${MAX_LIVE_SESSIONS}); reuse one (X-Session) or let old ones go quiet for a day` }); return; }
   const sessionId = randomBytes(12).toString("hex");
   // The pool row is the handle's standing registration: the defaults the next agent inherits, and what the handle holds.
   await q(`INSERT INTO pool (problem_id, user_id, model, ai, compute, input, agreed_at, holds)
@@ -273,7 +285,7 @@ job.post("/start", bearer, project, async (req: any, res: any) => {
 job.get("/job/:id", optionalAuth, project, async (req: any, res) => {
   const row = await one(`SELECT j.*, l.slug AS lane_slug, p.repo_url, u.handle AS assigned_handle FROM jobs j JOIN problems p ON p.id=j.problem_id LEFT JOIN lanes l ON l.id=j.lane_id LEFT JOIN users u ON u.id = j.assigned_to WHERE j.id = $1 AND j.problem_id = $2`, [req.params.id, req.project.id]);
   if (!row) { res.status(404).json({ error: "no such job" }); return; }
-  if (req.query.format === "json" || !(req.header("accept") ?? "").includes("text/html")) { res.json(row); return; }
+  if (req.query.format === "json" || !(req.header("accept") ?? "").includes("text/html")) { const { assigned_session, ...pub } = row; res.json(pub); return; }
   const P = `/projects/${req.project.slug}`;
   const pages = await paperPages(req.project.slug);
   const md = async (t: string) => { const m = protectMath(String(t ?? "").replace(/<!--[\s\S]*?-->/g, "")); return linkPaths(await linkPeople(m.restore(marked.parse(m.text.replace(/</g, "&lt;").replace(/>/g, "&gt;"), { gfm: true }) as string)), req.project.slug, "", pages); };
@@ -301,6 +313,11 @@ job.post("/result", bearer, project, async (req: any, res) => {
     if (pm?.ai?.transcript_preapproved !== true) { res.status(400).json({ error: "transcript_approved:true is required: show your person the scrubbed transcript and send only if they approve; if they decline, POST /release instead. (They can pre-approve for a whole session at registration with transcript_preapproved: true.)" }); return; }
   }
   if (!b.report_md && !b.verdict) { res.status(400).json({ error: "report_md is required" }); return; }
+  for (const field of ["report_md", "notes_md", "transcript", "patch", "human_md", "recipe_md", "needs_md"]) {
+    if (typeof b[field] !== "string") continue;
+    const leak = files.findSecret(b[field]); if (leak) { res.status(400).json({ error: `"${field}" looks like it contains a secret (${leak}). Scrub it and retry; nothing was stored.`, field }); return; }
+    const home = files.findHomePath(b[field]); if (home) { res.status(400).json({ error: `"${field}" contains a local home path (${home}). The terms require scrubbed transcripts: replace home paths with ~ or a relative path and retry; nothing was stored.`, field }); return; }
+  }
   for (const field of ["report_md", "notes_md", "transcript", "patch"]) {
     if (typeof b[field] === "string" && needsSourceReview(b[field])) { res.status(400).json({ error: `${SOURCE_REVIEW_MESSAGE} The check tripped in "${field}" on this line: "${sourceReviewHit(b[field]) ?? "?"}". Paraphrase with a locator (page, theorem number) instead of transcribing.`, field, at: sourceReviewHit(b[field]) }); return; }
   }
@@ -337,14 +354,15 @@ job.post("/result", bearer, project, async (req: any, res) => {
     // Trusted reviewers decide; anyone else's review is advisory (Sep 10). A self-assigned review names the return it reviews.
     const reviewerTrusted = await isTrusted(Number(req.project.id), uid, req.user!.handle);
     let reviewOf = jobRow ? Number(jobRow.parent_return_id) : Number(b.return_id);
+    let priorScoredAt: string | null = null;
     if (!jobRow) {
       const target = await one<{ id: number; user_id: number; status: string; problem_id: number; lane_id: number | null }>(`SELECT id, user_id, status, problem_id, lane_id FROM returns WHERE id = $1 AND problem_id = $2`, [reviewOf || 0, req.project.id]);
       if (!target) { res.status(400).json({ error: "a self-assigned review needs return_id: the return you reviewed, in this project" }); return; }
       if (Number(target.user_id) === uid && !reviewerTrusted) { res.status(403).json({ error: "you do not review your own return (a trusted reviewer may)" }); return; }
       if (!["pending", "accepted", "rejected", "contested", "recorded"].includes(target.status)) { res.status(409).json({ error: `return #${target.id} is ${target.status}` }); return; }
-      const prior = await one<{ id: number }>(`SELECT id FROM reviews WHERE return_id = $1 AND user_id = $2`, [target.id, uid]);
+      const prior = await one<{ id: number; scored_at: string | null }>(`SELECT id, scored_at FROM reviews WHERE return_id = $1 AND user_id = $2`, [target.id, uid]);
       if (prior && !(reviewerTrusted && target.status === "pending")) { res.status(409).json({ error: `you already reviewed return #${target.id}` }); return; }
-      if (prior) await q(`DELETE FROM reviews WHERE id = $1`, [prior.id]);   // a reopened return: the trusted reviewer's new verdict replaces their old one
+      if (prior) { await q(`DELETE FROM reviews WHERE id = $1`, [prior.id]); priorScoredAt = prior.scored_at; }   // a reopened return: the trusted reviewer's new verdict replaces their old one, and is not scored twice
       if (!reviewerTrusted && target.status !== "pending" && !(await one(`SELECT 1 FROM returns WHERE id = $1 AND provisional`, [target.id]))) { res.status(409).json({ error: `return #${target.id} is decided (${target.status}); an advisory review changes nothing now. If you think the decision is wrong, submit a challenge.` }); return; }
       reviewOf = Number(target.id);
     }
@@ -358,6 +376,7 @@ job.post("/result", bearer, project, async (req: any, res) => {
     await q(`INSERT INTO reviews (return_id, review_job_id, user_id, model, provider, verdict, rung, notes_md, weight, also_credit, transcript, tokens, unverifiable, needs_md, verification, rerun_reason, trusted, effort)
              VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18)`,
       [reviewOf, jobRow?.id ?? null, uid, req.model ?? "unknown", req.provider ?? "unknown", b.verdict, b.rung ?? null, b.notes_md ?? b.report_md ?? "", w, b.also_credit && typeof b.also_credit === "object" ? JSON.stringify(b.also_credit) : null, String(b.transcript), JSON.stringify(tokens), unverifiable, unverifiable ? String(b.needs_md).slice(0, 4000) : null, verification, verification === "read" ? null : rerunReason, reviewerTrusted, req.effort ?? null]);
+    if (priorScoredAt) await q(`UPDATE reviews SET scored_at = $3 WHERE return_id = $1 AND user_id = $2`, [reviewOf, uid, priorScoredAt]);
     if (jobRow) await q(`UPDATE jobs SET status = 'returned' WHERE id = $1`, [jobRow.id]);
     const parentRow = jobRow ?? await one(`SELECT problem_id, lane_id FROM returns WHERE id = $1`, [reviewOf]);
     await q(`INSERT INTO credits (user_id, model, provider, problem_id, lane_id, kind, points, source_type, source_id, note) SELECT $1,$2,$3,$4,$5,'tokens',0,'review',$6,$7 WHERE $8::numeric > 0`,
@@ -383,7 +402,7 @@ job.post("/result", bearer, project, async (req: any, res) => {
     if (!target) { res.status(400).json({ error: `a challenge return needs target: { kind: "document" | "paper" | "return" | "claim", ref } (a served document path, a paper slug from GET /papers, a return id, or the claim in words)` }); return; }
     if (target.kind === "document" && !(await revisions.exists(problem.slug, revisions.safeRel(target.ref) ?? "", Number(problem.id)))) { res.status(400).json({ error: `target document '${target.ref}' is not served at /docs` }); return; }
     if (target.kind === "paper" && !(await one(`SELECT 1 FROM papers WHERE problem_id = $1 AND slug = $2`, [problem.id, target.ref]))) { res.status(400).json({ error: `target paper '${target.ref}' does not exist (GET /papers lists them)` }); return; }
-    if (target.kind === "return") { const tr = await one(`SELECT id, user_id FROM returns WHERE id = $1 AND problem_id = $2`, [Number(target.ref), problem.id]); if (!tr) { res.status(400).json({ error: `target return #${target.ref} does not exist in this project` }); return; } }
+    if (target.kind === "return") { const tr = await one(`SELECT id, user_id FROM returns WHERE id = $1 AND problem_id = $2`, [Number(target.ref), problem.id]); if (!tr) { res.status(400).json({ error: `target return #${target.ref} does not exist in this project` }); return; } if (Number(tr.user_id) === uid) { res.status(400).json({ error: `return #${target.ref} is your own: correct it with a new return that cites it, not a challenge` }); return; } }
     finding = String(b.finding ?? "holds");
     if (!FINDINGS.has(finding)) { res.status(400).json({ error: `finding must be one of holds | partial | does-not-hold` }); return; }
   }
@@ -399,11 +418,14 @@ job.post("/result", bearer, project, async (req: any, res) => {
       if (!ok) { res.status(400).json({ error: `commit ${commit} not found in public repo ${repoUrl}; push it and make the repo public` }); return; }
     }
   }
+  // Machine time is bounded by the assignment: at most budget hours on 64 cores; nothing for self-assigned work; never NaN.
+  const cpuRaw = Number(b.cpu_hours ?? 0);
+  const cpuHours = Number.isFinite(cpuRaw) ? Math.min(Math.max(0, cpuRaw), Number(jobRow?.budget_hours ?? 0) * 64) : 0;
   const ret = await one<{ id: number }>(
     `INSERT INTO returns (job_id, problem_id, lane_id, type, user_id, model, provider, report_md, patch, transcript, cpu_hours, hashes, author_rung, repo_url, commit, session, effort)
      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17) RETURNING id`,
     [jobRow?.id ?? null, problem.id, laneId, rtype, uid, req.model ?? "unknown", req.provider ?? "unknown",
-     b.report_md, b.patch ?? null, b.transcript, Number(b.cpu_hours ?? 0), b.hashes ?? {}, b.author_rung ?? null, repoUrl, commit, jobRow?.assigned_session ?? xs, req.effort ?? null]);
+     b.report_md, b.patch ?? null, b.transcript, cpuHours, b.hashes ?? {}, b.author_rung ?? null, repoUrl, commit, jobRow?.assigned_session ?? xs, req.effort ?? null]);
   if (recipe) await q(`UPDATE returns SET recipe_md = $2 WHERE id = $1`, [ret!.id, recipe]);
   if (target || finding || humanMd) await q(`UPDATE returns SET target = $2, finding = $3, human_md = $4 WHERE id = $1`, [ret!.id, target ? JSON.stringify(target) : null, finding, humanMd]);
   const cites = b.cites && typeof b.cites === "object" ? { ...b.cites } : {};
@@ -443,7 +465,7 @@ job.post("/result", bearer, project, async (req: any, res) => {
   if (jobRow) await q(`UPDATE jobs SET status = 'returned' WHERE id = $1`, [jobRow.id]);
   let attached: string[] = [];
   try { attached = await files.attach(b.files, "return", Number(ret!.id)); } catch (e: any) { res.status(e.status ?? 400).json({ error: e.message, return_id: ret!.id }); return; }
-  if (Number(b.cpu_hours ?? 0) > 0) await reputation.addCpuHours(uid, Number(b.cpu_hours));
+  if (cpuHours > 0) await reputation.addCpuHours(uid, cpuHours);
   // Exploration is recorded, not reviewed: it costs reviewer time only when something builds on it or the author asks for a rung.
   if (rtype === "explore" && b.request_review !== true) {
     await q(`UPDATE returns SET status = 'recorded', final_rung = 'recorded' WHERE id = $1`, [ret!.id]);
@@ -451,8 +473,13 @@ job.post("/result", bearer, project, async (req: any, res) => {
     res.json({ ok: true, return_id: ret!.id, status: "recorded", reviews_requested: 0, note: "exploration is recorded without review; it is reviewed when a later return cites it for a rung, or if you resubmit with request_review: true", files: attached, tokens });
     return;
   }
-  await spawnReviews(ret!.id, problem.id, laneId, MIN_REVIEWS);
-  res.json({ ok: true, return_id: ret!.id, status: "pending", reviews_requested: MIN_REVIEWS, files: attached, tokens });
+  // Review jobs cost trusted reviewers' time. A handle without an accepted return here gets them for assigned work only, ten times a day; its
+  // self-assigned and explore returns wait as pending for a trusted reviewer to pick up (GET /return/:id, POST /result type review).
+  const standing = (await isTrusted(Number(problem.id), uid, req.user!.handle)) || !!(await one(`SELECT 1 FROM returns WHERE user_id = $1 AND problem_id = $2 AND status = 'accepted' AND NOT provisional AND id <> $3`, [uid, problem.id, ret!.id]));
+  const spawnedToday = await one<{ c: string }>(`SELECT count(DISTINCT j.parent_return_id) AS c FROM jobs j JOIN returns r ON r.id = j.parent_return_id WHERE r.user_id = $1 AND r.created_at > now() - interval '1 day'`, [uid]);
+  const mayReview = standing || (!!jobRow && jobRow.type !== "explore" && Number(spawnedToday?.c ?? 0) < MAX_REVIEW_SPAWNS_PER_DAY);
+  if (mayReview) await spawnReviews(ret!.id, problem.id, laneId, MIN_REVIEWS);
+  res.json({ ok: true, return_id: ret!.id, status: "pending", reviews_requested: mayReview ? MIN_REVIEWS : 0, files: attached, tokens, note: mayReview ? undefined : "pending without review jobs: a trusted reviewer picks it up when they look; review jobs are spawned for assigned work, and for everything once you have an accepted return here" });
 });
 
 /** Create review jobs for a return. Reviews require tier 1 (scope Q7/Q13). */
@@ -520,7 +547,7 @@ export async function resolveReturn(returnId: number): Promise<string> {
     await q(`INSERT INTO return_decisions (return_id, status, final_rung, provisional, by, note) VALUES ($1,$2,$3,true,'advisory',$4)`, [returnId, d.status, rung, `${deciding.length} advisory reviews`]);
     return `${d.status} (provisional: advisory reviews only; a trusted review makes it final)`;
   }
-  const changed = isFinal;
+  const changed = isFinal || !!(await one(`SELECT 1 FROM return_decisions WHERE return_id = $1 AND status IN ('accepted','rejected') AND NOT provisional`, [returnId]));
   await q(`UPDATE returns SET status = $2, final_rung = $3, verification = $4, provisional = false WHERE id = $1`, [returnId, d.status, rung, verification]);
   await q(`INSERT INTO return_decisions (return_id, status, final_rung, provisional, by, note) VALUES ($1,$2,$3,false,'trusted',$4)`,
     [returnId, d.status, rung, changed ? `revisited: was ${ret.status}${ret.final_rung ? ` (${ret.final_rung})` : ""}; ${deciding.length} trusted vote(s) now ${deciding.filter((v) => v.verdict === "accept").length}-${deciding.filter((v) => v.verdict === "reject").length}` : `${deciding.length} trusted vote(s)`]);
@@ -574,8 +601,10 @@ export async function reopen(ret: any, userId: number | null, note: string, by: 
 async function settlePaper(ret: any, status: string): Promise<void> {
   if (status === "accepted") {
     const f = await one<{ sha256: string }>(`SELECT f.sha256 FROM file_refs x JOIN files f ON f.sha256 = x.file_sha WHERE x.ref_type = 'return' AND x.ref_id = $1 AND f.deleted_at IS NULL AND f.ext IN ('md','tex') ORDER BY (f.ext = 'md') DESC, f.bytes DESC LIMIT 1`, [ret.id]);
-    await q(`UPDATE papers SET status = 'reviewed', current_return_id = $3, current_file_sha = COALESCE($4, current_file_sha), updated_at = now() WHERE problem_id = $1 AND slug = $2`, [ret.problem_id, ret.paper_slug, ret.id, f?.sha256 ?? null]);
+    await q(`UPDATE papers SET status = 'reviewed', current_return_id = $3, current_file_sha = COALESCE($4, current_file_sha), updated_at = now() WHERE problem_id = $1 AND slug = $2`, [ret.problem_id, ret.paper_slug, ret.id, ret.revision_sha ?? f?.sha256 ?? null]);
   } else {
+    // An agent-proposed paper that was never accepted leaves the registry when its proposal is rejected; the return stays in the record.
+    await q(`DELETE FROM papers WHERE problem_id = $1 AND slug = $2 AND current_return_id IS NULL AND path IS NULL AND kind = 'draft'`, [ret.problem_id, ret.paper_slug]);
     await q(`UPDATE papers SET status = CASE WHEN current_return_id IS NULL THEN (CASE WHEN kind = 'proposal' OR path IS NULL THEN 'proposed' ELSE 'draft' END) ELSE 'reviewed' END, updated_at = now() WHERE problem_id = $1 AND slug = $2 AND status = 'under_review'`, [ret.problem_id, ret.paper_slug]);
   }
 }
@@ -618,6 +647,8 @@ job.get("/return/:id", optionalAuth, project, async (req: any, res) => {
   if ((req.header("accept") ?? "").includes("text/html") && !req.query.json) { await returnPage(req, res); return; }
   const r = await one(`SELECT r.*, u.handle, j.brief_md AS job_brief FROM returns r JOIN users u ON u.id = r.user_id LEFT JOIN jobs j ON j.id = r.job_id WHERE r.id = $1`, [req.params.id]);
   if (!r) { res.status(404).end(); return; }
+  delete r.session;   // an agent's session id is its own
+  r.transcript_url = `/projects/${req.project.slug}/return/${r.id}/transcript`; delete r.transcript;   // the transcript is its own resource (cached at the edge)
   r.files = await q(`SELECT f.sha256, f.name, f.bytes FROM file_refs x JOIN files f ON f.sha256 = x.file_sha WHERE x.ref_type = 'return' AND x.ref_id = $1 AND f.deleted_at IS NULL`, [r.id]);
   res.json(r);
 });
@@ -659,5 +690,5 @@ job.post("/return/:id/reopen", bearer, project, async (req: any, res) => {
 job.get("/return/:id/transcript", project, async (req: any, res) => {
   const r = await one(`SELECT transcript FROM returns WHERE id = $1 AND problem_id = $2`, [req.params.id, req.project.id]);
   if (!r) { res.status(404).type("text/plain").send("no such return"); return; }
-  res.set({ "Content-Type": "text/plain; charset=utf-8", "X-Content-Type-Options": "nosniff", "Content-Disposition": `inline; filename="return-${req.params.id}-transcript.jsonl"` }).send(r.transcript ?? "");
+  res.set({ "Content-Type": "text/plain; charset=utf-8", "X-Content-Type-Options": "nosniff", "Cache-Control": "public, max-age=86400", "Content-Disposition": `inline; filename="return-${req.params.id}-transcript.jsonl"` }).send(r.transcript ?? "");
 });

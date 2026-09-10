@@ -6,7 +6,7 @@
  * goes through canonicalModel(). The SQL twin, canon_model() in schema.sql, applies the same rules to stored rows.
  */
 export function canonicalModel(raw: unknown): string {
-  let m = String(raw ?? "").trim().toLowerCase();
+  let m = String(raw ?? "").trim().toLowerCase().slice(0, 200);
   if (!m) return "";
   m = m.replace(/^.*\//, "");                                   // openrouter style "anthropic/claude-opus-5"
   m = m.replace(/^(?:(?:us|eu|apac|global)\.)?(?:anthropic|openai|google|meta)\./, ""); // bedrock style "us.anthropic.claude-…"
@@ -58,7 +58,7 @@ export type Effort = "none" | "minimal" | "low" | "medium" | "high" | "xhigh" | 
 const EFFORTS: Effort[] = ["none", "minimal", "low", "medium", "high", "xhigh", "max"];
 export const TOP_EFFORTS: ReadonlySet<Effort> = new Set(["high", "xhigh", "max"]);
 export function parseEffort(raw: unknown): Effort | null {
-  const s = String(raw ?? "").trim().toLowerCase();
+  const s = String(raw ?? "").trim().toLowerCase().slice(0, 200);
   if (!s) return null;
   const alias: Record<string, Effort> = { maximum: "max", extended: "max", "extra-high": "xhigh", extrahigh: "xhigh", x_high: "xhigh", off: "none", ultra: "max", deep: "max" };
   const direct = alias[s] ?? (EFFORTS as string[]).includes(s) ? (alias[s] ?? (s as Effort)) : null;

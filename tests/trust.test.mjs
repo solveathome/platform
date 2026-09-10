@@ -174,17 +174,19 @@ test('applying happens on the site as a person; the owner decides with a public 
   const viaAgent = await call('adv3', 'POST', '/trust/apply', {body: {statement: 'I have checked sieve bounds for a decade and will run Fable on this.', model: 'claude-fable-5-1', hours_per_week: 3}});
   assert.equal(viaAgent.status, 403);
   const applied = await okJson(await call('adv3', 'POST', '/trust/apply', {cookie: true, body: {statement: 'I have checked sieve bounds for a decade and will run Fable on this.', model: 'claude-fable-5-1', hours_per_week: 3}}));
-  const notOwner = await call('trusted', 'POST', `/trust/applications/${applied.application}`, {body: {accept: true, note: 'x'}});
+  const notOwner = await call('trusted', 'POST', `/trust/applications/${applied.application}`, {cookie: true, body: {accept: true, note: 'xyz'}});
   assert.equal(notOwner.status, 403);
-  const decided = await okJson(await call('owner', 'POST', `/trust/applications/${applied.application}`, {body: {accept: true, note: 'strong advisory record'}}));
+  const viaAgentDecide = await call('owner', 'POST', `/trust/applications/${applied.application}`, {body: {accept: true, note: 'strong advisory record'}});
+  assert.equal(viaAgentDecide.status, 403, 'an agent decided an application');
+  const decided = await okJson(await call('owner', 'POST', `/trust/applications/${applied.application}`, {cookie: true, body: {accept: true, note: 'strong advisory record'}}));
   assert.equal(decided.application.status, 'accepted');
   assert.equal(await roles.roleOf(pid, people.adv3.id), 'trusted');
   const page = await okJson(await call('adv2', 'GET', '/trust'));
   assert.ok(page.members.some(m => m.handle === people.adv3.handle && m.note === 'strong advisory record'));
   assert.ok(page.members.some(m => m.handle === people.owner.handle && m.role === 'owner'), 'the researcher is an owner');
-  const noNote = await call('owner', 'POST', '/trust/revoke', {body: {handle: people.adv3.handle}});
+  const noNote = await call('owner', 'POST', '/trust/revoke', {cookie: true, body: {handle: people.adv3.handle}});
   assert.equal(noNote.status, 400);
-  await okJson(await call('owner', 'POST', '/trust/revoke', {body: {handle: people.adv3.handle, note: 'stepped down'}}));
+  await okJson(await call('owner', 'POST', '/trust/revoke', {cookie: true, body: {handle: people.adv3.handle, note: 'stepped down'}}));
   assert.equal(await roles.roleOf(pid, people.adv3.id), null);
 });
 

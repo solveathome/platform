@@ -119,6 +119,7 @@ docs.get("/docs{/*path}", async (req: any, res) => {
   if (ext === ".md" && !browser) {
     res.set({ "Content-Type": "text/markdown; charset=utf-8", "X-Content-Type-Options": "nosniff" }).send(readFileSync(req.query.original ? abs : src, "utf8")); return;
   }
+  if (ext === ".md" && st.size > 1024 * 1024) { res.set({ "Content-Type": "text/markdown; charset=utf-8", "X-Content-Type-Options": "nosniff" }).send(readFileSync(req.query.original ? abs : src, "utf8")); return; }   // rendering is for documents, not dumps
   if (ext === ".md") {
     const r = await renderMarkdown(readFileSync(req.query.original ? abs : src, "utf8"), slug, rel);
     const claim = await one(`SELECT c.status, c.origin_handle FROM claims c JOIN problems p ON p.id = c.problem_id WHERE p.slug = $1 AND c.path = $2`, [slug, rel]);
@@ -127,7 +128,7 @@ docs.get("/docs{/*path}", async (req: any, res) => {
     res.type("text/html").send(chrome(slug, r.title, crumbsFor(slug, rel), `${banner}${ledgerHtml(r.ledger)}${await linkPeople(r.html)}`, extra));
     return;
   }
-  if (IMG[ext]) { res.type(IMG[ext]).set("X-Content-Type-Options", "nosniff").send(readFileSync(abs)); return; }
+  if (IMG[ext]) { res.type(IMG[ext]).set({ "X-Content-Type-Options": "nosniff", "Content-Security-Policy": "default-src 'none'; sandbox" }).send(readFileSync(abs)); return; }
   if (TEXT_EXT.has(ext) && st.size <= MAX_TEXT) {
     res.set({ "Content-Type": "text/plain; charset=utf-8", "X-Content-Type-Options": "nosniff", "Content-Security-Policy": "default-src 'none'; sandbox" }).send(readFileSync(req.query.original ? abs : src, "utf8"));
     return;

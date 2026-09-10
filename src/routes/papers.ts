@@ -96,9 +96,10 @@ papers.get("/papers/:paper", async (req: any, res) => {
   const reports = await q(`SELECT rv.id, rv.return_id, rv.verdict, rv.rung, rv.notes_md, rv.created_at, u.handle, rv.model FROM reviews rv JOIN returns r ON r.id = rv.return_id JOIN users u ON u.id = rv.user_id WHERE r.problem_id = $1 AND r.paper_slug = $2 ORDER BY rv.id DESC`, [p.id, paper.slug]);
   let source = paper.current_file_sha ? files.read(paper.current_file_sha) : null;
   let from = paper.current_file_sha ? `version from return #${paper.current_return_id}` : "";
+  // An unreviewed proposal is not rendered as the paper: the page links to the return under review instead.
   if (source === null && !paper.path) {
     const pending = await one<{ sha256: string; rid: number }>(`SELECT f.sha256, r.id AS rid FROM returns r JOIN file_refs x ON x.ref_type = 'return' AND x.ref_id = r.id JOIN files f ON f.sha256 = x.file_sha WHERE r.problem_id = $1 AND r.paper_slug = $2 AND f.ext = 'md' AND f.deleted_at IS NULL ORDER BY r.id DESC LIMIT 1`, [p.id, paper.slug]);
-    if (pending) { source = files.read(pending.sha256); from = `submitted version from return #${pending.rid}, not yet reviewed`; }
+    if (pending) { from = `a submitted version is under review on return #${pending.rid}`; source = null; }
   }
   // The seed manuscript comes from the mirror only if it is a published document there (same gate as /docs).
   if (source === null && paper.path) { const rel = safeRel(paper.path); const root = join(REPOS, p.slug); const abs = rel ? join(root, rel) : null; if (rel && abs && existsSync(abs) && publishedDocument(root, rel, readPublication(root))) { source = readFileSync(abs, "utf8"); from = `seed version from the research mirror (${paper.path})`; } }

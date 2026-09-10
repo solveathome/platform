@@ -21,7 +21,7 @@ export async function standings(problemId: number, w: Window, limit = 100, meHan
       (SELECT count(*) FROM sessions WHERE problem_id = $1 AND last_seen > now() - interval '1 day') AS agents_24h,
       (SELECT count(DISTINCT model) FROM returns WHERE problem_id = $1 AND created_at >= ${S}) AS models,
       (SELECT count(*) FROM returns WHERE problem_id = $1 AND created_at >= ${S}) AS returns_submitted,
-      (SELECT count(*) FROM returns WHERE problem_id = $1 AND created_at >= ${S} AND status = 'accepted') AS returns_accepted,
+      (SELECT count(*) FROM returns WHERE problem_id = $1 AND created_at >= ${S} AND status = 'accepted' AND NOT provisional) AS returns_accepted,
       (SELECT count(*) FROM returns WHERE problem_id = $1 AND created_at >= ${S} AND status = 'pending') AS returns_pending,
       (SELECT count(*) FROM returns WHERE problem_id = $1 AND created_at >= ${S} AND status = 'rejected') AS returns_rejected,
       (SELECT count(*) FROM reviews rv JOIN returns r ON r.id = rv.return_id WHERE r.problem_id = $1 AND rv.created_at >= ${S}) AS reviews,
@@ -38,7 +38,7 @@ export async function standings(problemId: number, w: Window, limit = 100, meHan
 
   const peopleAll = await q(`
     WITH ret AS (
-      SELECT user_id, count(*) AS submitted, count(*) FILTER (WHERE status = 'accepted') AS accepted, count(*) FILTER (WHERE status = 'pending') AS pending,
+      SELECT user_id, count(*) AS submitted, count(*) FILTER (WHERE status = 'accepted' AND NOT provisional) AS accepted, count(*) FILTER (WHERE status = 'pending' OR provisional) AS pending,
              count(*) FILTER (WHERE status = 'rejected') AS rejected, count(*) FILTER (WHERE status = 'contested') AS contested,
              coalesce(sum((tokens->>'output')::numeric), 0) AS output_tokens,
              coalesce(sum((tokens->>'input')::numeric + (tokens->>'output')::numeric + (tokens->>'cache_read')::numeric + (tokens->>'cache_write')::numeric), 0) AS all_tokens,
@@ -81,7 +81,7 @@ export async function standings(problemId: number, w: Window, limit = 100, meHan
 
   const agents = await q(`
     WITH ret AS (
-      SELECT model, count(*) AS returns, count(*) FILTER (WHERE status = 'accepted') AS accepted, count(*) FILTER (WHERE status = 'pending') AS pending,
+      SELECT model, count(*) AS returns, count(*) FILTER (WHERE status = 'accepted' AND NOT provisional) AS accepted, count(*) FILTER (WHERE status = 'pending' OR provisional) AS pending,
              count(DISTINCT user_id) AS donors,
              coalesce(sum((tokens->>'output')::numeric), 0) AS output_tokens,
              coalesce(sum((tokens->>'input')::numeric + (tokens->>'output')::numeric + (tokens->>'cache_read')::numeric + (tokens->>'cache_write')::numeric), 0) AS all_tokens,

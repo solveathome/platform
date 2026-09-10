@@ -17,5 +17,7 @@ COPY --from=build /app/dist ./dist
 COPY projects ./projects
 COPY docs ./docs
 COPY public ./public
+RUN mkdir -p data/dumps data/files data/overlay data/repos && chown -R node:node /app/data
+USER node
 EXPOSE 8600
 CMD ["node", "dist/src/server.js"]

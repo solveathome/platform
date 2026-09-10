@@ -15,7 +15,7 @@ const {challengesFor} = await import('../src/lib/tangent.ts');
 
 const tag = `tangent-test-${Date.now().toString(36)}`;
 const slug = tag, handle = `${tag}-person`;
-let server, base, uid, pid, token, targetReturn;
+let server, base, uid, pid, token, targetReturn, otherId;
 
 before(async () => {
   await migrate();
@@ -26,8 +26,10 @@ before(async () => {
   pid = Number(p.id);
   await one(`INSERT INTO lanes (problem_id, slug, title) VALUES ($1,'lane','Lane') RETURNING id`, [pid]);
   await one(`INSERT INTO channels (problem_id, path, title) VALUES ($1,'','Project') RETURNING id`, [pid]);
-  // Something to object to: an accepted return by the same person (the author rule is about reviews, not challenges).
-  const r = await one(`INSERT INTO returns (problem_id, type, user_id, model, provider, report_md, transcript, status, final_rung) VALUES ($1,'source',$2,'m','p','claims page 12','t','accepted','measured') RETURNING id`, [pid, uid]);
+  // Something to object to: an accepted return by someone else (a person cannot challenge their own return).
+  const other = await one(`INSERT INTO users (github_id, handle, terms_version, terms_accepted_at) VALUES ($1,$2,$3,now()) RETURNING id`, [911_000_000 + Math.floor(Math.random() * 1e8), `${tag}-other`, TERMS_VERSION]);
+  otherId = Number(other.id);
+  const r = await one(`INSERT INTO returns (problem_id, type, user_id, model, provider, report_md, transcript, status, final_rung) VALUES ($1,'source',$2,'m','p','claims page 12','t','accepted','measured') RETURNING id`, [pid, otherId]);
   targetReturn = Number(r.id);
   // A queued job, to prove the tangent outranks it.
   await q(`INSERT INTO jobs (problem_id, type, title, brief_md, git_ref, compute_hint, budget_hours, min_tier, quorum, status) VALUES ($1,'source','Queued source','find the page','main','{}',1,99,1,'queued')`, [pid]);
@@ -53,8 +55,9 @@ after(async () => {
   await q(`DELETE FROM problems WHERE id = $1`, [pid]);
   await q(`DELETE FROM tokens WHERE user_id = $1`, [uid]);
   await q(`DELETE FROM reputation WHERE user_id = $1`, [uid]);
-  await q(`DELETE FROM users WHERE id = $1`, [uid]);
-  const residue = await one(`SELECT (SELECT count(*) FROM users WHERE handle = $1) + (SELECT count(*) FROM problems WHERE slug = $1) + (SELECT count(*) FROM returns WHERE user_id = $2) AS n`, [handle, uid]);
+  await q(`DELETE FROM reputation WHERE user_id = $1`, [otherId]);
+  await q(`DELETE FROM users WHERE id = ANY($1)`, [[uid, otherId]]);
+  const residue = await one(`SELECT (SELECT count(*) FROM users WHERE handle LIKE $1) + (SELECT count(*) FROM problems WHERE slug = $2) + (SELECT count(*) FROM returns WHERE user_id = $3) AS n`, [`${tag}%`, slug, uid]);
   await pool.end();
   assert.equal(Number(residue.n), 0, 'test residue left in the database');
 });

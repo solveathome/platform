@@ -9,7 +9,9 @@ if (process.env.DATABASE_URL === "") delete process.env.DATABASE_URL;   // an em
 if (existsSync(".env")) { try { process.loadEnvFile(".env"); } catch { /* unreadable .env: run with what the environment has */ } }
 
 const { Pool } = pg;
-export const pool = new Pool({ connectionString: process.env.DATABASE_URL });
+// 20 connections, and no query runs longer than 15 s: a slow public aggregate cannot hold the pool for everyone else.
+export const pool = new Pool({ connectionString: process.env.DATABASE_URL, max: Number(process.env.PG_POOL_MAX ?? 20), idleTimeoutMillis: 30_000, statement_timeout: 15_000, query_timeout: 20_000 });
+pool.on("error", (e) => console.error("pg idle client error:", e.message));
 
 export async function migrate(): Promise<void> {
   const here = dirname(fileURLToPath(import.meta.url));

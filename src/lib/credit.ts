@@ -56,37 +56,39 @@ export async function payAcceptedReturn(ret: any, reviews: Array<{ user_id: numb
       await pay(Number(lane.origin_user_id), null, null, pid, lid, "direction", base * POINTS.lane_origin_share, "return", rid, "share as the lane's origin");
   }
   // citations from the author, plus attribution restored by accepting reviewers
-  const cites: Cites[] = [ret.cites ?? {}, ...reviews.filter((r) => r.verdict === "accept" && r.also_credit).map((r) => r.also_credit as Cites)];
-  await payCites(cites, pid, lid, rid, Number(ret.user_id));
+  // The author's cites cannot pay the author; a reviewer's also_credit cannot pay that reviewer (or the author).
+  const cites: Array<{ c: Cites; exclude: number[] }> = [{ c: ret.cites ?? {}, exclude: [Number(ret.user_id)] }, ...reviews.filter((r) => r.verdict === "accept" && r.also_credit).map((r) => ({ c: r.also_credit as Cites, exclude: [Number(ret.user_id), Number(r.user_id)] }))];
+  await payCites(cites, pid, lid, rid);
   for (const r of reviews) {
     if (r.verdict === (ret.status === "accepted" ? "accept" : "reject")) await pay(r.user_id, r.model, r.provider, pid, lid, "review", POINTS.review_agreed, "return", rid, "review agreed with outcome");
     if (r.verdict === "accept" && r.also_credit && Object.values(r.also_credit).some((v) => Array.isArray(v) && v.length)) await pay(r.user_id, r.model, r.provider, pid, lid, "review", POINTS.review_also_credit_bonus, "return", rid, "restored missing attribution");
   }
 }
 
-async function payCites(list: Cites[], pid: number, lid: number | null, rid: number, authorId: number): Promise<void> {
+async function payCites(list: Array<{ c: Cites; exclude: number[] }>, pid: number, lid: number | null, rid: number): Promise<void> {
   let paid = 0; const seen = new Set<string>();
   const cap = POINTS.max_cites_paid_per_return;
-  for (const c of list) {
+  for (const { c, exclude } of list) {
+    const skip = (id: number) => exclude.includes(id);
     for (const mid of (c.messages ?? []).map(Number).filter(Number.isFinite)) {
       const key = `m${mid}`; if (seen.has(key) || paid >= cap) continue; seen.add(key);
       const m = await one<{ user_id: number; model: string | null }>(`SELECT user_id, model FROM messages WHERE id = $1`, [mid]);
-      if (m && Number(m.user_id) !== authorId) { await pay(Number(m.user_id), m.model, null, pid, lid, "insight", POINTS.insight_cited_message, "message", mid, `message cited by return #${rid}`); paid++; }
+      if (m && !skip(Number(m.user_id))) { await pay(Number(m.user_id), m.model, null, pid, lid, "insight", POINTS.insight_cited_message, "message", mid, `message cited by return #${rid}`); paid++; }
     }
     for (const xid of (c.returns ?? []).map(Number).filter(Number.isFinite)) {
       const key = `r${xid}`; if (seen.has(key) || paid >= cap) continue; seen.add(key);
       const x = await one<{ user_id: number; model: string | null; provider: string | null }>(`SELECT user_id, model, provider FROM returns WHERE id = $1`, [xid]);
-      if (x && Number(x.user_id) !== authorId) { await pay(Number(x.user_id), x.model, x.provider, pid, lid, "insight", POINTS.cited_return, "return", xid, `built on by return #${rid}`); paid++; }
+      if (x && !skip(Number(x.user_id))) { await pay(Number(x.user_id), x.model, x.provider, pid, lid, "insight", POINTS.cited_return, "return", xid, `built on by return #${rid}`); paid++; }
     }
     for (const sha of (c.files ?? []).map(String)) {
       const key = `f${sha}`; if (seen.has(key) || paid >= cap || !/^[0-9a-f]{64}$/.test(sha)) continue; seen.add(key);
       const f = await one<{ user_id: number; model: string | null }>(`SELECT user_id, model FROM files WHERE sha256 = $1`, [sha]);
-      if (f && Number(f.user_id) !== authorId) { await pay(Number(f.user_id), f.model, null, pid, lid, "file", POINTS.cited_file, "file", sha, `file used by return #${rid}`); paid++; }
+      if (f && !skip(Number(f.user_id))) { await pay(Number(f.user_id), f.model, null, pid, lid, "file", POINTS.cited_file, "file", sha, `file used by return #${rid}`); paid++; }
     }
     for (const h of (c.handles ?? []).map(String)) {
       const key = `h${h.toLowerCase()}`; if (seen.has(key) || paid >= cap) continue; seen.add(key);
       const u = await one<{ id: number }>(`SELECT id FROM users WHERE lower(handle) = lower($1)`, [h.replace(/^@/, "")]);
-      if (u && Number(u.id) !== authorId) { await pay(Number(u.id), null, null, pid, lid, "insight", POINTS.cited_handle, "return", rid, `named as a source by return #${rid}`); paid++; }
+      if (u && !skip(Number(u.id))) { await pay(Number(u.id), null, null, pid, lid, "insight", POINTS.cited_handle, "return", rid, `named as a source by return #${rid}`); paid++; }
     }
   }
 }

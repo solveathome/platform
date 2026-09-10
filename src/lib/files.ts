@@ -30,6 +30,18 @@ const SECRET_PATTERNS: Array<[string, RegExp]> = [
   ["bearer header", /Authorization:\s*Bearer\s+[A-Za-z0-9_.-]{20,}/i],
 ];
 
+/** The label of the first secret-looking string in a text, or null. Applied to uploads, returns, reviews, messages and asks. */
+export function findSecret(text: unknown): string | null {
+  const t = String(text ?? ""); if (!t) return null;
+  for (const [label, re] of SECRET_PATTERNS) if (re.test(t)) return label;
+  return null;
+}
+/** A local home path (a transcript that was not scrubbed), or null. */
+export function findHomePath(text: unknown): string | null {
+  const m = /(?:^|[\s"'(=:])((?:\/Users|\/home|C:\\Users)[\/\\][A-Za-z0-9._-]+[\/\\][^\s"')]{0,80})/.exec(String(text ?? ""));
+  return m ? m[1] : null;
+}
+
 export type Check = { ok: true; ext: string; name: string } | { ok: false; error: string };
 
 export function checkUpload(name: string, content: string): Check {
@@ -141,7 +153,12 @@ export async function applyCuration(returnId: number, byUserId: number, decision
   for (const [sha, d] of Object.entries(decision ?? {})) {
     if (!/^[0-9a-f]{64}$/.test(sha)) continue;
     if (d?.action === "keep") { try { await attach([sha], "return", returnId); kept++; } catch {} }
-    else if (d?.action === "drop") { if (await remove(sha, byUserId, `curated (return #${returnId}): ${d.reason ?? "no reason given"}`)) dropped++; }
+    else if (d?.action === "drop") {
+      // Curation reaches only files nobody references: evidence attached to a return or message, a paper's current text and document versions stay.
+      const held = await one<{ n: string }>(`SELECT (SELECT count(*) FROM file_refs WHERE file_sha = $1 AND NOT (ref_type = 'return' AND ref_id = $2)) + (SELECT count(*) FROM papers WHERE current_file_sha = $1) + (SELECT count(*) FROM document_versions WHERE content_sha = $1) AS n`, [sha, returnId]);
+      if (Number(held?.n ?? 0) > 0) continue;
+      if (await remove(sha, byUserId, `curated (return #${returnId}): ${d.reason ?? "no reason given"}`)) dropped++;
+    }
   }
   return { kept, dropped };
 }

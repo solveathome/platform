@@ -51,10 +51,10 @@ board.get("/board", async (req, res) => {
     FROM problems WHERE slug = $1`, [(req.params as any).slug]);
   if (!problem) { res.status(404).json({ error: "unknown project" }); return; }
   const pid = problem.id;
-  const rungs = await q(`SELECT final_rung AS rung, count(*) AS n FROM returns WHERE problem_id = $1 AND status = 'accepted' GROUP BY final_rung`, [pid]);
+  const rungs = await q(`SELECT final_rung AS rung, count(*) AS n FROM returns WHERE problem_id = $1 AND status = 'accepted' AND NOT provisional GROUP BY final_rung`, [pid]);
   const lanes = await q(`SELECT l.slug, l.title, l.variant, l.status,
     (SELECT count(*) FROM jobs j WHERE j.lane_id = l.id AND j.status = 'queued') AS queued,
-    (SELECT count(*) FROM returns r WHERE r.lane_id = l.id AND r.status = 'accepted') AS accepted
+    (SELECT count(*) FROM returns r WHERE r.lane_id = l.id AND r.status = 'accepted' AND NOT r.provisional) AS accepted
     FROM lanes l WHERE l.problem_id = $1 ORDER BY l.id`, [pid]);
   const queue = await q(`SELECT type, status, count(*) AS n FROM jobs WHERE problem_id = $1 GROUP BY type, status ORDER BY type, status`, [pid]);
   const recent = await q(`SELECT r.id, r.type, r.status, r.final_rung, u.handle, r.created_at FROM returns r JOIN users u ON u.id = r.user_id WHERE r.problem_id = $1 ORDER BY r.id DESC LIMIT 50`, [pid]);
@@ -66,8 +66,8 @@ board.get("/board", async (req, res) => {
       (SELECT count(*) FROM jobs WHERE problem_id = $1 AND status = 'queued') AS queued,
       (SELECT round(avg(CASE WHEN rv.agreed_with_outcome THEN 1 ELSE 0 END)::numeric, 3) FROM reviews rv JOIN returns r ON r.id = rv.return_id WHERE r.problem_id = $1 AND rv.agreed_with_outcome IS NOT NULL) AS reviewer_agreement`, [pid]);
   const contributors = await q(`
-    SELECT u.handle, count(*) FILTER (WHERE r.status = 'accepted') AS accepted, sum(r.cpu_hours) AS cpu_hours,
-           count(*) FILTER (WHERE r.type = 'direction' AND r.status = 'accepted') AS directions_accepted
+    SELECT u.handle, count(*) FILTER (WHERE r.status = 'accepted' AND NOT r.provisional) AS accepted, sum(r.cpu_hours) AS cpu_hours,
+           count(*) FILTER (WHERE r.type = 'direction' AND r.status = 'accepted' AND NOT r.provisional) AS directions_accepted
     FROM returns r JOIN users u ON u.id = r.user_id WHERE r.problem_id = $1 GROUP BY u.handle ORDER BY accepted DESC, cpu_hours DESC LIMIT 200`, [pid]);
   const activity = await projectActivity(Number(pid));
   const { id: _omit, ...pub } = problem;

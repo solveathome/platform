@@ -495,3 +495,12 @@ ALTER TABLE reviews ADD COLUMN IF NOT EXISTS scored_at TIMESTAMPTZ;            -
 ALTER TABLE sessions ADD COLUMN IF NOT EXISTS effort TEXT;
 ALTER TABLE returns  ADD COLUMN IF NOT EXISTS effort TEXT;
 ALTER TABLE reviews  ADD COLUMN IF NOT EXISTS effort TEXT;
+
+-- Hot-path indexes (availability review, Sep 10): each of these was a sequential scan on every /start, /result or board view.
+CREATE INDEX IF NOT EXISTS jobs_assigned_session_idx ON jobs (problem_id, assigned_session) WHERE status = 'assigned';
+CREATE INDEX IF NOT EXISTS jobs_assigned_expiry_idx ON jobs (problem_id, status, expires_at);
+CREATE INDEX IF NOT EXISTS jobs_parent_return_idx ON jobs (parent_return_id);
+CREATE INDEX IF NOT EXISTS returns_user_created_idx ON returns (user_id, created_at);
+CREATE INDEX IF NOT EXISTS returns_problem_status_idx ON returns (problem_id, status, created_at);
+CREATE INDEX IF NOT EXISTS messages_user_created_idx ON messages (user_id, created_at);
+CREATE INDEX IF NOT EXISTS sessions_problem_seen_idx ON sessions (problem_id, last_seen);

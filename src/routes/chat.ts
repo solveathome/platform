@@ -4,6 +4,8 @@ import { bearer, optionalAuth } from "../lib/auth.js";
 import * as files from "../lib/files.js";
 import { renderMessage, MAX_MESSAGE_CHARS, MAX_STATUS_CHARS, TOO_LONG } from "../lib/chat-render.js";
 import { paperPages } from "../lib/paths-link.js";
+import { postRateOk, RATE_MESSAGE } from "../lib/messages.js";
+import { findSecret } from "../lib/files.js";
 
 /**
  * Live chat for agents and humans. Project-scoped: /projects/:slug/chat/...
@@ -15,7 +17,8 @@ const KINDS = new Set(["say", "claim", "found", "stuck", "done", "spawn", "idea"
 /** How much of a channel a newcomer sees: the last RECENT messages, and open threads from the last OPEN_DAYS. Older history stays in the dataset, not in the agent's context. */
 const RECENT = 25, OPEN_DAYS = 7;
 /** Long-poll waiters. One cheap "anything new?" query per channel per second, shared by every waiter on it; caps keep a flood of listeners from holding the pool. */
-const MAX_WAITERS = Number(process.env.CHAT_MAX_WAITERS ?? 500), MAX_WAITERS_PER_USER = 4;
+const MAX_WAITERS = Number(process.env.CHAT_MAX_WAITERS ?? 2000), MAX_WAITERS_PER_USER = 4;
+const MAX_OPEN_CHANNELS_PER_USER = 20;
 const waiters = new Map<number, Set<{ since: number; wake: () => void }>>();
 /** Slots are reserved before the first query and released when the request ends, so parallel requests cannot all pass the check at once. */
 let activeWaits = 0;
@@ -79,6 +82,7 @@ chat.get("/chat", project, async (req: any, res) => {
 
 /** POST /chat : spawn a sub-channel. Body: { parent: "<path>", name: "attempt-7", title, purpose }. Posts a 'spawn' message in the parent. */
 chat.post("/chat", bearer, project, async (req: any, res) => {
+  { const mine = await one<{ c: string }>(`SELECT count(*) AS c FROM channels WHERE problem_id = $1 AND created_by = $2 AND status = 'open'`, [req.project.id, req.user!.id]); if (Number(mine?.c ?? 0) >= MAX_OPEN_CHANNELS_PER_USER) { res.status(429).json({ error: `you have ${mine!.c} open sub-channels here (limit ${MAX_OPEN_CHANNELS_PER_USER}); close some first` }); return; } }
   const b = req.body ?? {};
   const parentPath = String(b.parent ?? "").replace(/^\/+|\/+$/g, "");
   const name = String(b.name ?? "").toLowerCase().replace(/[^a-z0-9-]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 40);
@@ -193,8 +197,8 @@ async function postHandler(req: any, res: any): Promise<void> {
     const dup = await one(`SELECT id FROM messages WHERE user_id = $1 AND job_id = $2 AND kind = $3`, [req.user!.id, b.job_id, kind]);
     if (dup) { res.status(409).json({ error: `you already posted a ${kind} for job ${b.job_id} (message ${dup.id}). Progress logs do not belong here: post an idea, a question, a challenge, a finding, or reply to someone.` }); return; }
   }
-  const recent = await one<{ c: string }>(`SELECT count(*) AS c FROM messages WHERE user_id = $1 AND created_at > now() - interval '1 minute'`, [req.user!.id]);
-  if (Number(recent!.c) >= 30) { res.status(429).json({ error: "rate limit: 30 messages per minute per token" }); return; }
+  if (!(await postRateOk(req.user!.id))) { res.status(429).json({ error: RATE_MESSAGE }); return; }
+  const leak = findSecret(body); if (leak) { res.status(400).json({ error: `the message looks like it contains a secret (${leak}); scrub it and retry` }); return; }
   await q(`INSERT INTO channel_members (channel_id, user_id, model) VALUES ($1,$2,$3) ON CONFLICT DO NOTHING`, [req.channel.id, req.user!.id, req.model ?? null]);
   const m = await one<{ id: number }>(`INSERT INTO messages (channel_id, user_id, model, kind, reply_to, body_md, job_id, return_id) VALUES ($1,$2,$3,$4,$5,$6,$7,$8) RETURNING id`,
     [req.channel.id, req.user!.id, req.model ?? null, kind, b.reply_to ?? null, body, b.job_id ?? null, b.return_id ?? null]);

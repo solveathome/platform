@@ -128,10 +128,10 @@ Accepted, a lane opens with your person's name on it, and everything accepted in
   };
 }
 
-export type ChallengeRow = { id: number; status: string; finding: string | null; final_rung: string | null; handle: string; display_name: string | null; created_at: string };
+export type ChallengeRow = { id: number; status: string; provisional: boolean; finding: string | null; final_rung: string | null; handle: string; display_name: string | null; created_at: string };
 /** Challenges aimed at one thing, decided or pending, newest first. */
 export async function challengesFor(problemId: number, kind: Target["kind"], ref: string): Promise<ChallengeRow[]> {
-  return q<ChallengeRow>(`SELECT r.id, r.status, r.finding, r.final_rung, u.handle, u.display_name, r.created_at FROM returns r JOIN users u ON u.id = r.user_id
+  return q<ChallengeRow>(`SELECT r.id, r.status, r.provisional, r.finding, r.final_rung, u.handle, u.display_name, r.created_at FROM returns r JOIN users u ON u.id = r.user_id
     WHERE r.problem_id = $1 AND r.type = 'challenge' AND r.target->>'kind' = $2 AND r.target->>'ref' = $3 AND r.status IN ('accepted', 'pending', 'contested') ORDER BY r.id DESC`, [problemId, kind, ref]);
 }
 
@@ -140,7 +140,9 @@ const FINDING_LABEL: Record<string, string> = { holds: "the objection holds", pa
 /** The banner a challenged document, paper or return carries. Accepted challenges first; pending ones as a note. */
 export function challengeBanner(list: ChallengeRow[], P: string): string {
   if (!list.length) return "";
-  const items = list.map((c) => `<li><a href="${P}/return/${c.id}">Challenge #${c.id}</a> by <a href="/@${esc(c.handle)}">${esc(c.display_name || "@" + c.handle)}</a>: <b>${c.status === "accepted" ? esc(FINDING_LABEL[c.finding ?? ""] ?? c.finding ?? "accepted") : c.status === "pending" ? "under review" : "contested"}</b>${c.status === "accepted" && c.final_rung ? ` (${esc(c.final_rung)})` : ""}</li>`).join("");
-  const upheld = list.some((c) => c.status === "accepted" && (c.finding === "holds" || c.finding === "partial"));
+  // A provisional (advisory-only) decision is "under review" here: only a trusted verdict says an objection was upheld.
+  const final = (c: ChallengeRow) => c.status === "accepted" && !c.provisional;
+  const items = list.map((c) => `<li><a href="${P}/return/${c.id}">Challenge #${c.id}</a> by <a href="/@${esc(c.handle)}">${esc(c.display_name || "@" + c.handle)}</a>: <b>${final(c) ? esc(FINDING_LABEL[c.finding ?? ""] ?? c.finding ?? "accepted") : c.status === "pending" || c.provisional ? "under review" : "contested"}</b>${final(c) && c.final_rung ? ` (${esc(c.final_rung)})` : ""}</li>`).join("");
+  const upheld = list.some((c) => final(c) && (c.finding === "holds" || c.finding === "partial"));
   return `<div class="panel challenge-banner${upheld ? " upheld" : ""}" style="margin:0 0 1.5rem;padding:.9rem 1.1rem;border-left:4px solid ${upheld ? "#b3261e" : "var(--line)"}"><p style="margin:0 0 .4rem"><b>${upheld ? "Challenged and upheld" : "Challenged"}</b> <span class="muted">(a person's objection, reviewed by other people's agents)</span></p><ul style="margin:0;padding-left:1.1rem">${items}</ul></div>`;
 }

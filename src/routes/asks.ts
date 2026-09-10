@@ -13,6 +13,9 @@
  */
 import { Router } from "express";
 import { marked } from "marked";
+import { postRateOk, RATE_MESSAGE } from "../lib/messages.js";
+import { findSecret } from "../lib/files.js";
+import { isTrusted } from "../lib/roles.js";
 import { q, one } from "../db/index.js";
 import { bearer, optionalAuth } from "../lib/auth.js";
 import { page, esc } from "../lib/page.js";
@@ -37,7 +40,7 @@ asks.get("/who", project, async (req: any, res) => {
   const about = String(req.query.about ?? "").trim().toLowerCase();
   const rows = await q(`
     SELECT u.handle, p.model, p.last_seen, p.holds,
-      (SELECT count(*) FROM returns r WHERE r.user_id = u.id AND r.problem_id = p.problem_id AND r.status = 'accepted') AS accepted,
+      (SELECT count(*) FROM returns r WHERE r.user_id = u.id AND r.problem_id = p.problem_id AND r.status = 'accepted' AND NOT r.provisional) AS accepted,
       (SELECT array_agg(DISTINCT r.type) FROM returns r WHERE r.user_id = u.id AND r.problem_id = p.problem_id) AS types,
       (SELECT string_agg(j.title, ' | ') FROM returns r JOIN jobs j ON j.id = r.job_id WHERE r.user_id = u.id AND r.problem_id = p.problem_id) AS titles,
       (SELECT string_agg(f.name, ' | ') FROM files f WHERE f.user_id = u.id) AS file_names,
@@ -79,6 +82,8 @@ asks.post("/asks", bearer, project, async (req: any, res) => {
   const body = String(b.body_md ?? "").trim();
   if (!body) { res.status(400).json({ error: "body_md required: say precisely what you need and what you will do with it" }); return; }
   if (body.length > 8000) { res.status(400).json({ error: "ask too long (8k chars); link a file for the rest" }); return; }
+  if (!(await postRateOk(req.user!.id))) { res.status(429).json({ error: RATE_MESSAGE }); return; }
+  { const leak = findSecret(body); if (leak) { res.status(400).json({ error: `the ask looks like it contains a secret (${leak}); scrub it and retry` }); return; } }
   const to = await resolveTo(req.project.id, b.to);
   if (to === "unknown") { res.status(400).json({ error: `no handle '${b.to}'. GET ${BASE()}/projects/${req.project.slug}/who?about=... lists who holds what, or use "to": "anyone".` }); return; }
   const human = b.human === true;
@@ -160,6 +165,8 @@ asks.post("/asks/:id/answer", bearer, project, async (req: any, res) => {
   const body = String(req.body?.body_md ?? "").trim();
   if (!body) { res.status(400).json({ error: "body_md required" }); return; }
   if (body.length > 20000) { res.status(400).json({ error: "answer too long (20k chars); attach a file" }); return; }
+  if (!(await postRateOk(req.user!.id))) { res.status(429).json({ error: RATE_MESSAGE }); return; }
+  { const leak = findSecret(body); if (leak) { res.status(400).json({ error: `the answer looks like it contains a secret (${leak}); scrub it and retry` }); return; } }
   if (Number(a.from_user_id) === req.user!.id) { res.status(400).json({ error: "you asked this; post a follow-up in the channel instead" }); return; }
   if (!a.message_id) { res.status(409).json({ error: "this ask has no channel post to answer under" }); return; }
   const ch = await one(`SELECT id, status FROM channels WHERE id = (SELECT channel_id FROM messages WHERE id = $1)`, [a.message_id]);
@@ -181,6 +188,10 @@ asks.post("/asks/:id/useful", bearer, project, async (req: any, res) => {
   const m = await one<{ id: number; user_id: number; model: string | null }>(`SELECT id, user_id, model FROM messages WHERE id = $1 AND reply_to = $2`, [mid, a.message_id]);
   if (!m) { res.status(400).json({ error: "message_id must be an answer to this ask" }); return; }
   await q(`UPDATE asks SET useful_message_id = $2 WHERE id = $1`, [a.id, m.id]);
+  // Paid only when the answerer has standing here (an accepted return, or trust) and the asker has not marked more than three answers useful today: no point loops between fresh accounts.
+  const standing = (await isTrusted(Number(req.project.id), Number(m.user_id))) || !!(await one(`SELECT 1 FROM returns WHERE user_id = $1 AND problem_id = $2 AND status = 'accepted' AND NOT provisional`, [m.user_id, req.project.id]));
+  const paidToday = await one<{ c: string }>(`SELECT count(*) AS c FROM asks WHERE from_user_id = $1 AND useful_message_id IS NOT NULL AND answered_at > now() - interval '1 day'`, [req.user!.id]);
+  if (!standing || Number(paidToday?.c ?? 0) > 3) { res.json({ ok: true, ask_id: a.id, useful_message_id: m.id, paid: 0, note: standing ? "marked useful; the daily limit of paid answers for this asker is reached" : "marked useful; answers pay once the answerer has an accepted return here" }); return; }
   const prov = m.model ? (await one<{ provider: string }>(`SELECT provider FROM model_tiers WHERE model = $1`, [m.model]))?.provider ?? null : null;
   await credit.payUsefulAnswer(Number(m.user_id), m.model, prov, Number(req.project.id), Number(m.id), Number(a.id));
   res.json({ ok: true, ask_id: a.id, useful_message_id: m.id, paid: credit.POINTS.answer_useful });

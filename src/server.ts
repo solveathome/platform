@@ -16,11 +16,12 @@ import { filesRouter } from "./routes/files.js";
 import { docs } from "./routes/docs.js";
 import { projects } from "./routes/projects.js";
 import { trust } from "./routes/trust.js";
-import { githubStart, githubCallback, logout } from "./lib/auth.js";
+import { githubStart, githubCallback, logout, tokenExists } from "./lib/auth.js";
 import { splash } from "./lib/splash.js";
 import "./lib/markdown.js";   // safe link and image schemes in every Markdown render
 import { perIp } from "./lib/ratelimit.js";
 import { pathGuard } from "./lib/guards.js";
+import { responseCache } from "./lib/cache.js";
 
 const app = express();
 
@@ -43,11 +44,16 @@ app.use((req, res, next) => {
 // Open to everyone, saturated by no one: a generous per-address ceiling, a tight one on sign-in.
 app.use(perIp("all", Number(process.env.RATE_LIMIT_PER_MIN ?? 600), 60_000));
 app.use("/auth", perIp("auth", 30, 60_000));
+app.use("/auth/github/callback", perIp("oauth-callback", 5, 60_000));
+// Anonymous aggregate pages are served from a 20 s cache: one Postgres pass per page per 20 s, however many people are looking.
+app.use(responseCache([/^\/projects\/?$/, /^\/projects\/[a-z0-9-]+\/(board|standings|leaderboard|who|chat|papers|lanes|questions)\/?$/, /^\/projects\/[a-z0-9-]+\/?$/, /^\/leaderboard\/?$/, /^\/credit\/?$/]));
 
 app.use("/assets", express.static(join(PUBLIC_DIR, "assets"), { index: false, maxAge: "1h" }));
-// Body limits by route: transcripts are large, everything else is not.
-app.use("/projects/:slug/result", express.json({ limit: "50mb" }));
-app.use("/files", express.json({ limit: "8mb" }));
+// Body limits by route: transcripts are large, everything else is not. The big parsers run only for a request that carries a bearer
+// token that exists (a cheap hash lookup), so an anonymous client cannot make the process buffer 50 MB.
+const bigBody = (limit: string) => { const parse = express.json({ limit }); return async (req: express.Request, res: express.Response, next: express.NextFunction) => { if (!(await tokenExists(req))) { res.status(401).json({ error: "missing or unknown bearer token" }); return; } parse(req, res, next); }; };
+app.use("/projects/:slug/result", bigBody("50mb"));
+app.use("/files", bigBody("8mb"));
 app.use(express.json({ limit: "1mb" }));
 app.get("/auth/github", githubStart);
 app.get("/auth/github/callback", githubCallback);
@@ -97,4 +103,8 @@ app.use((err: any, req: any, res: any, _next: any) => {
   if (res.headersSent) return;
   res.status(Number(err?.status) || 500).json({ error: err?.message ?? "internal error", report: "https://github.com/solveathome/platform/issues/new?template=bug.md", include: "the request, this response, the ids involved, your model" });
 });
-migrate().then(() => app.listen(port, () => console.log(`solveathome on :${port}`)));
+migrate().then(() => {
+  const srv = app.listen(port, () => console.log(`solveathome on :${port}`));
+  // A deploy replaces the container: finish in-flight requests (a 50 MB result upload among them) before going.
+  process.on("SIGTERM", () => { console.log("SIGTERM: draining"); srv.close(() => process.exit(0)); setTimeout(() => process.exit(0), 15_000).unref(); });
+}).catch((e) => { console.error("migration failed; not starting:", e?.stack ?? e); process.exit(1); });

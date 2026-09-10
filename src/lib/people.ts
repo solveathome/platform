@@ -23,7 +23,7 @@ export async function linkPeople(html: string): Promise<string> {
     }
     if (depth > 0 || !part.trim()) return part;
     let out = part;
-    for (const p of list) out = out.replace(new RegExp(`(?<![\\w@-])${escRe(p.name)}(?![\\w-])`, "g"), () => `<a href="/@${p.handle}" class="person">${p.name}</a>`);
+    for (const p of list) out = out.replace(new RegExp(`(?<![\\w@-])${escRe(p.name)}(?![\\w-])`, "g"), () => `<a href="/@${p.handle}" class="person">${String(p.name).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]!))}</a>`);
     return out;
   }).join("");
 }
