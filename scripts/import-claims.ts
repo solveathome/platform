@@ -3,7 +3,7 @@
  * title lines in research/*.js, takes first/last commit dates and authorship from git, and upserts claims via the
  * owner endpoint. Origin is credited by handle and never scored.
  *
- * Usage: SAH_TOKEN=... SAH_BASE=https://dev.solveathome.org tsx scripts/import-claims.ts <path-to-research-repo> twin-primes Benjaminsen
+ * Usage: SAH_TOKEN=... SAH_BASE=https://solveathome.org tsx scripts/import-claims.ts <path-to-research-repo> twin-primes <researcher-handle>
  */
 import { execFileSync } from "node:child_process";
 import { readdirSync, readFileSync } from "node:fs";

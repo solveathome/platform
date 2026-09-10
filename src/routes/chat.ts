@@ -14,6 +14,33 @@ const MAX_WAIT = 60;
 const KINDS = new Set(["say", "claim", "found", "stuck", "done", "spawn", "idea", "question", "challenge", "reply"]);
 /** How much of a channel a newcomer sees: the last RECENT messages, and open threads from the last OPEN_DAYS. Older history stays in the dataset, not in the agent's context. */
 const RECENT = 25, OPEN_DAYS = 7;
+/** Long-poll waiters. One cheap "anything new?" query per channel per second, shared by every waiter on it; caps keep a flood of listeners from holding the pool. */
+const MAX_WAITERS = Number(process.env.CHAT_MAX_WAITERS ?? 500), MAX_WAITERS_PER_USER = 4;
+const waiters = new Map<number, Set<{ since: number; wake: () => void }>>();
+/** Slots are reserved before the first query and released when the request ends, so parallel requests cannot all pass the check at once. */
+let activeWaits = 0;
+const waitsByUser = new Map<number, number>();
+let pollTimer: NodeJS.Timeout | null = null;
+async function pollOnce(): Promise<void> {
+  for (const [channelId, set] of waiters) {
+    if (!set.size) { waiters.delete(channelId); continue; }
+    const floor = Math.min(...[...set].map((w) => w.since));
+    const newest = await one<{ id: string | null }>(`SELECT max(id) AS id FROM messages WHERE channel_id = $1 AND id > $2`, [channelId, floor]).catch(() => undefined);
+    const top = Number(newest?.id ?? 0);
+    if (top) for (const w of set) if (top > w.since) w.wake();
+  }
+  pollTimer = waiters.size ? setTimeout(() => { pollOnce(); }, 1000) : null;
+}
+/** Resolve when a message newer than `since` may exist in the channel, or at the deadline. */
+function waitForMessage(channelId: number, since: number, deadline: number): Promise<void> {
+  return new Promise((resolve) => {
+    const set = waiters.get(channelId) ?? new Set(); waiters.set(channelId, set);
+    const w = { since, wake: () => { clearTimeout(t); set.delete(w); resolve(); } };
+    const t = setTimeout(w.wake, Math.max(0, deadline - Date.now()));
+    set.add(w);
+    if (!pollTimer) pollTimer = setTimeout(() => { pollOnce(); }, 1000);
+  });
+}
 const CONVERSATION_KINDS = ["idea", "question", "challenge", "stuck", "found", "ask"];
 
 async function project(req: any, res: any, next: any): Promise<void> {
@@ -118,7 +145,11 @@ async function leaveHandler(req: any, res: any): Promise<void> {
  */
 chat.get("/chat/*path/messages", optionalAuth, project, channel, listHandler);
 async function listHandler(req: any, res: any): Promise<void> {
-  const wait = Math.min(MAX_WAIT, Math.max(0, Number(req.query.wait ?? 0)));
+  let wait = Math.min(MAX_WAIT, Math.max(0, Number(req.query.wait ?? 0)));
+  // Waiting is for agents with a token; a browser or an anonymous client gets what is there now.
+  if (wait > 0 && !req.user) wait = 0;
+  if (wait > 0 && ((waitsByUser.get(req.user.id) ?? 0) >= MAX_WAITERS_PER_USER || activeWaits >= MAX_WAITERS)) { res.setHeader("Retry-After", "5"); res.status(429).json({ error: "too many open listeners; one listener per channel per agent, retry in a few seconds" }); return; }
+  if (wait > 0) { activeWaits += 1; waitsByUser.set(req.user.id, (waitsByUser.get(req.user.id) ?? 0) + 1); res.on("close", () => { activeWaits -= 1; waitsByUser.set(req.user.id, (waitsByUser.get(req.user.id) ?? 1) - 1); }); }
   const limit = Math.min(200, Math.max(1, Number(req.query.limit ?? RECENT)));
   // No `since`: the last `limit` messages, not the whole history. Agents work from a window; the full record lives in the dataset.
   let since = Number(req.query.since ?? NaN);
@@ -131,7 +162,7 @@ async function listHandler(req: any, res: any): Promise<void> {
                                 FROM file_refs r JOIN files f ON f.sha256 = r.file_sha WHERE r.ref_type = 'message' AND r.ref_id = m.id AND f.deleted_at IS NULL), '[]'::json) AS files
                     FROM messages m JOIN users u ON u.id = m.user_id WHERE m.channel_id = $1 AND m.id > $2 ORDER BY m.id LIMIT $3`, [req.channel.id, since, limit]);
     if (rows.length || Date.now() >= deadline) break;
-    await new Promise((r) => setTimeout(r, 1000));
+    await waitForMessage(Number(req.channel.id), since, deadline);
   }
   if (req.user) await q(`UPDATE channel_members SET last_seen_id = GREATEST(last_seen_id, $3) WHERE channel_id = $1 AND user_id = $2`, [req.channel.id, req.user.id, rows.at(-1)?.id ?? since]);
   if ((req.header("accept") ?? "").includes("application/json")) {

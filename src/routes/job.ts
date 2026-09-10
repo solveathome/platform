@@ -20,6 +20,8 @@ import { parseTranscript } from "../lib/tokens.js";
 import { needsSourceReview, SOURCE_REVIEW_MESSAGE, sourceReviewHit } from "../lib/document-publication.js";
 import { randomBytes } from "node:crypto";
 
+/** Caps on submission (Sep 10): pending self-assigned returns per handle per project, and returns per handle per hour. */
+const MAX_OPEN_SELF_ASSIGNED = Number(process.env.MAX_OPEN_SELF_ASSIGNED ?? 3), MAX_RETURNS_PER_HOUR = Number(process.env.MAX_RETURNS_PER_HOUR ?? 30);
 export const job = Router({ mergeParams: true });
 const BASE = () => process.env.BASE_URL ?? "http://localhost:8600";
 
@@ -268,7 +270,12 @@ job.post("/result", bearer, project, async (req: any, res) => {
     if (jobRow.status !== "assigned") { res.status(409).json({ error: `job is ${jobRow.status}` }); return; }
   } else {
     if (!["direction", "paper", "audit"].includes(b.type)) { res.status(400).json({ error: "without job_id only type 'direction', 'paper' (a new paper) or 'audit' (a change proposal for any served document) is accepted" }); return; }
+    // Self-assigned work is welcome and unbounded over time, not at once: each one asks for reviews from the top tier.
+    const open = await one<{ c: string }>(`SELECT count(*) AS c FROM returns WHERE user_id = $1 AND problem_id = $2 AND job_id IS NULL AND status = 'pending'`, [uid, req.project.id]);
+    if (Number(open?.c ?? 0) >= MAX_OPEN_SELF_ASSIGNED) { res.status(429).json({ error: `you already have ${open!.c} self-assigned returns under review in this project; wait for a decision before proposing more (limit ${MAX_OPEN_SELF_ASSIGNED})` }); return; }
   }
+  const hourly = await one<{ c: string }>(`SELECT count(*) AS c FROM returns WHERE user_id = $1 AND created_at > now() - interval '1 hour'`, [uid]);
+  if (Number(hourly?.c ?? 0) >= MAX_RETURNS_PER_HOUR) { res.setHeader("Retry-After", "600"); res.status(429).json({ error: `rate limit: ${MAX_RETURNS_PER_HOUR} returns per hour per handle` }); return; }
 
   const tokens = parseTranscript(String(b.transcript), b.tokens);
   // The model an agent declares (X-Model) decides its tier. The transcript is the evidence: when it names models, the declared one must be among them.

@@ -31,8 +31,16 @@ board.get("/", async (req: any, res) => {
 const OWNER_SET = new Set((process.env.OWNER_HANDLES ?? "").split(",").map((s) => s.trim().toLowerCase()).filter(Boolean));
 root.get("/me", optionalAuth, async (req: any, res) => {
   if (!req.user) { res.json({ signed_in: false }); return; }
+  res.json({ signed_in: true, handle: req.user.handle, owner: OWNER_SET.has(String(req.user.handle).toLowerCase()) });
+});
+
+/** POST /me/token : the signed-in person's token for the start field. Cookie only, same-origin only, never on GET: a page script that can read /me cannot walk off with it by accident. */
+root.post("/me/token", optionalAuth, async (req: any, res) => {
   const viaCookie = !(req.header("authorization") ?? "").startsWith("Bearer ");
-  res.json({ signed_in: true, handle: req.user.handle, owner: OWNER_SET.has(String(req.user.handle).toLowerCase()), token: viaCookie ? cookieToken(req) : undefined });
+  const site = req.header("sec-fetch-site");
+  if (!req.user || !viaCookie || (site && site !== "same-origin")) { res.status(403).json({ error: "sign in on the site first" }); return; }
+  res.setHeader("Cache-Control", "no-store");
+  res.json({ handle: req.user.handle, token: cookieToken(req) });
 });
 
 /** GET /projects/:slug/board : project-scoped activity and research records. */

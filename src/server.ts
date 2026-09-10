@@ -17,16 +17,35 @@ import { docs } from "./routes/docs.js";
 import { projects } from "./routes/projects.js";
 import { githubStart, githubCallback, logout } from "./lib/auth.js";
 import { splash } from "./lib/splash.js";
+import "./lib/markdown.js";   // safe link and image schemes in every Markdown render
+import { perIp } from "./lib/ratelimit.js";
 
 const app = express();
 
 // Public hosts (SPLASH_HOSTS, comma-separated) serve only the splash page. The app lives on the other hosts, e.g. dev.solveathome.org.
 const SPLASH_HOSTS = new Set((process.env.SPLASH_HOSTS ?? "").split(",").map((h) => h.trim().toLowerCase()).filter(Boolean));
 app.use(splash(SPLASH_HOSTS));
-app.set("trust proxy", true);
+app.disable("x-powered-by");
+// Hops to trust for req.ip: 1 = the reverse proxy in front (Caddy). Behind Cloudflare the limiter reads CF-Connecting-IP instead.
+app.set("trust proxy", Number(process.env.TRUST_PROXY ?? 1));
+
+// Browser hardening. Markdown never yields raw HTML (render sites escape it) and links are scheme-checked; this is the second wall.
+// /files/:sha sets its own stricter policy (sandbox) on top.
+app.use((req, res, next) => {
+  res.setHeader("Content-Security-Policy", "default-src 'self'; script-src 'self' 'unsafe-inline' https://cdnjs.cloudflare.com; style-src 'self' 'unsafe-inline' https://cdnjs.cloudflare.com; font-src 'self' data: https://cdnjs.cloudflare.com; img-src 'self' data: https:; connect-src 'self'; object-src 'none'; base-uri 'self'; frame-ancestors 'none'; form-action 'self'");
+  res.setHeader("X-Content-Type-Options", "nosniff");
+  res.setHeader("Referrer-Policy", "strict-origin-when-cross-origin");
+  next();
+});
+// Open to everyone, saturated by no one: a generous per-address ceiling, a tight one on sign-in.
+app.use(perIp("all", Number(process.env.RATE_LIMIT_PER_MIN ?? 600), 60_000));
+app.use("/auth", perIp("auth", 30, 60_000));
 
 app.use("/assets", express.static(join(PUBLIC_DIR, "assets"), { index: false, maxAge: "1h" }));
-app.use(express.json({ limit: "50mb" })); // transcripts are large
+// Body limits by route: transcripts are large, everything else is not.
+app.use("/projects/:slug/result", express.json({ limit: "50mb" }));
+app.use("/files", express.json({ limit: "8mb" }));
+app.use(express.json({ limit: "1mb" }));
 app.get("/auth/github", githubStart);
 app.get("/auth/github/callback", githubCallback);
 app.post("/auth/logout", logout);

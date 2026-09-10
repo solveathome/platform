@@ -6,7 +6,7 @@ RUN npm ci
 COPY tsconfig.json ./
 COPY src ./src
 COPY scripts ./scripts
-RUN npm run build && cp src/db/schema.sql dist/src/db/schema.sql
+RUN npm run build && cp src/db/schema.sql dist/src/db/schema.sql && rm -f dist/scripts/dev-users.js
 
 FROM node:22-alpine AS production
 WORKDIR /app

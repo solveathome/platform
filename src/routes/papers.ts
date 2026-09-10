@@ -7,6 +7,7 @@ import { Router } from "express";
 import { readFileSync, existsSync } from "node:fs";
 import { join } from "node:path";
 import { marked } from "marked";
+import { safeRenderer } from "../lib/markdown.js";
 import { q, one } from "../db/index.js";
 import { ROOT, PUBLIC_DIR } from "../lib/paths.js";
 import * as files from "../lib/files.js";
@@ -102,7 +103,7 @@ papers.get("/papers/:paper", async (req: any, res) => {
   const baseDir = paper.path ? posix.dirname(paper.path) : "paper";
   const pages = await paperPages(p.slug);
   const docsBase = `/projects/${p.slug}/docs/`;
-  const renderer = new marked.Renderer();
+  const renderer = safeRenderer();
   const linkFn = renderer.link.bind(renderer);
   renderer.link = ({ href, title, tokens }: any) => { let h = String(href ?? ""); if (!/^(?:[a-z]+:|\/|#)/i.test(h)) { const rel = posix.normalize(posix.join(baseDir, h)).replace(/^\/+/, ""); h = pages.get(rel) ?? docsBase + rel; } return linkFn({ href: h, title, tokens } as any); };
   const md = (t: string) => { const m = protectMath(t.replace(/<!--[\s\S]*?-->/g, "")); return linkPaths(m.restore(marked.parse(m.text.replace(/</g, "&lt;").replace(/>/g, "&gt;"), { gfm: true, renderer }) as string), p.slug, baseDir, pages); };

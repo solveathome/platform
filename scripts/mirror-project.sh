@@ -39,7 +39,8 @@ writeFileSync(path,JSON.stringify(manifest,null,2)+'\n');
 JS
 
 # Server copy for the docs browser (deploy keys are disabled on the org; at launch the public repo can be pulled instead).
-SERVER="${SERVER:-<user@host>}"
+SERVER="${SERVER:-$(security find-generic-password -s solveathome.org -a SERVER -w 2>/dev/null || true)}"
+: "${SERVER:?set SERVER=user@host (or store it: security add-generic-password -s solveathome.org -a SERVER -w user@host)}"
 SLUG="${SLUG:-$(basename "${DEST_REPO%.git}")}"
 DOCS_DEST="${DOCS_DEST:-/data/services/solveathome/data/repos/$SLUG}"
 rsync -a --delete --exclude '.git' "$PORTFOLIO/" "$SERVER:$DOCS_DEST/" && echo "docs synced to $SERVER:$DOCS_DEST"

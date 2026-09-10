@@ -7,6 +7,7 @@ import { Router } from "express";
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { join, normalize, extname, dirname, posix } from "node:path";
 import { marked } from "marked";
+import { safeRenderer } from "../lib/markdown.js";
 import { one } from "../db/index.js";
 import { ROOT } from "../lib/paths.js";
 import { readPublication, publishedDocument } from "../lib/document-publication.js";
@@ -52,7 +53,7 @@ async function renderMarkdown(src: string, slug: string, rel: string): Promise<{
   const safe = math.text.replace(/</g, "&lt;").replace(/>/g, "&gt;");
   const base = `/projects/${slug}/docs/`;
   const dir = posix.dirname(rel);
-  const renderer = new marked.Renderer();
+  const renderer = safeRenderer();
   const linkFn = renderer.link.bind(renderer);
   renderer.link = ({ href, title, tokens }: any) => {
     let h = String(href ?? "");

@@ -1,4 +1,5 @@
-/** Local development only: create test users and print their tokens (no GitHub OAuth needed). */
+/** Local development only: create test users and print their tokens (no GitHub OAuth needed). Refuses to run against anything but a local BASE_URL. */
+if (process.env.NODE_ENV === "production" || !/^https?:\/\/(localhost|127\.0\.0\.1)(:|\/|$)/.test(process.env.BASE_URL ?? "http://localhost")) { console.error("dev-users: refusing: BASE_URL is not local"); process.exit(2); }
 import { migrate, one } from "../src/db/index.js";
 import { issueToken } from "../src/lib/auth.js";
 import * as rep from "../src/lib/reputation.js";

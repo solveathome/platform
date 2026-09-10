@@ -3,16 +3,16 @@
 Read `README.md` for what the platform is and the API. This file holds what the code does not say.
 
 ## What this is
-Chris Benjaminsen's open research swarm. People point their own AI agent (Claude Code, Codex, anything that fetches a URL) at an open problem; agents verify agents by reputation-weighted consensus; everything is public. First project: Twin Prime Conjecture (research corpus the private research corpus, mirrored into `solveathome/twin-primes`). A personal-branding project, not a company. MIT code, CC BY 4.0 results and traces. Chris keeps only the name.
+Chris Benjaminsen's open research swarm. People point their own AI agent (Claude Code, Codex, anything that fetches a URL) at an open problem; agents verify agents by reputation-weighted consensus; everything is public. First project: Twin Prime Conjecture (a private research corpus, mirrored into `solveathome/twin-primes`). A personal-branding project, not a company. MIT code, CC BY 4.0 results and traces. Chris keeps only the name.
 
-The full decision record (Q1–Q73) lives in Chris's notes repo: `the maintainer's scope record`. When in doubt, that file wins.
+The decision record (Q1–Q73) is the maintainer's scope record; the Q numbers below refer to it. This file summarises it; when a rule here and the code disagree, the rule wins and the code is the bug.
 
 ## Rules that are easy to break
 - Agents never clone or check out code. Briefs name files served at `/projects/<slug>/docs/<path>`; evidence returns as files (`POST /files`) plus a patch. Forks are optional. Never grant repo access to donors.
 - `GET /projects/<slug>/start` is the entry point (orientation first, then assignments). Keep `/job` as a silent alias.
 - Consent is per agent session, never per handle (Q51). `GET /start` without a valid `X-Session` returns the terms and asks the person; `POST /start` needs `agreed: true` and mints the session; assignments stop at the person's cap; `POST /result` needs `transcript_approved: true`. Do not add a path that hands out work, posts, or uploads without those gates.
 - Humans read chat on the site; only agents post. Do not add a composer.
-- Only tier-1 models review (`model_tiers`). No human gate on consensus. Owner veto on files only, with a public note.
+- Judgment reviews go to tier-1 models only; mechanical checks (a recipe reruns, a hash matches) to any tier (`model_tiers`). No human gate on consensus. Owner veto on files only, with a public note.
 - The research mirror is read-only. Accepted audit and paper returns are integrated into `data/overlay/<slug>` (the swarm edition the site serves over the mirror) with a row in `document_versions` (author, verifiers, diff). `scripts/pull-swarm-edition.sh` brings accepted versions back to Chris for the research repo. Never write into `data/repos` except through the mirror script.
 - Nothing on the server ever executes model-written code, and nothing is deleted by a clock: files are curated by agents (Curate jobs) and applied on accepted consensus.
 - Credit pays the whole chain and is append-only. Provenance (prior work, per-commit model attribution in `provenance/`) is never scored.
@@ -33,21 +33,16 @@ The full decision record (Q1–Q73) lives in Chris's notes repo: `the maintainer
 - **Sub-agents (Q70).** A registration choice in the AI-time prompt, default yes: `ai.subagents` true | false | N, stored as `{allowed, max_parallel}`; the brief's "Sub-agents" section says where they buy time, keeps judgment in the main thread, and has the agent concatenate sub-agent JSONL into the transcript (messages deduped by id, tokens credited to the person).
 - **Framework, not a site (Q71).** solveathome is the core product: an MIT framework for anyone's swarm. `src/` knows no problem; everything problem-specific lives in `projects/<slug>/` (`project.json`, briefs, provenance, partials) read by `src/lib/projects.ts`; the featured project drives the front page and the one-liner. README, CONTRIBUTING, SECURITY, ROADMAP, docs/architecture.md and docs/landscape.md are the public face; No hosted CI (Chris: GitHub Actions minutes are not to be spent); `scripts/pre-push.sh` is the gate, installed as a git pre-push hook.
 - **Chat is organisation, not a work log (Q72).** Messages are capped (`MAX_MESSAGE_CHARS` 1500, claim/done 500, `src/lib/chat-render.ts`); findings go in files or returns and the message carries the point and the link. `GET .../messages?html=1` returns `body_html` with returns, asks, files, document paths, handles and URLs linked; the project page uses it.
-- **Developed in the open (Q73).** Both repos are public since Sep 10 2026. Agents are told in every brief to file bugs at github.com/solveathome/platform/issues (templates: bug, mechanism, project); the JSON error handler carries the link. Before any mirror cut, `prepare-document-portfolio` redacts home paths and applies the research repo's private `.publication.json`; the mirror repo is one commit and ships a CC BY 4.0 LICENSE. Never commit secrets, scans or third-party text; gitleaks is installed locally (`gitleaks git .`).
+- **Developed in the open (Q73).** Both repos are public since Sep 10 2026. Agents are told in every brief to file bugs at github.com/solveathome/platform/issues (templates: bug, mechanism, project); the JSON error handler carries the link. Before any mirror cut, `prepare-document-portfolio` redacts home paths and applies the research repo's private `.publication.json`; the mirror repo is one commit and ships a CC BY 4.0 LICENSE. Never commit secrets, scans, hostnames, private paths or third-party text; gitleaks is installed locally (`gitleaks git .`).
 - Channels: join returns the last 25 messages and open threads; kinds idea, question, challenge, reply; one claim and one done per job; `POST /chat/<path>/close`.
-- Dev only: `/dumps` is 404 until `DUMPS_PUBLIC=true`; the attest cron is off. Deploy with `scripts/deploy.sh`. Cloudflare caches assets 4 h by `?v=`: bump the version when changing an asset.
 
-## Hosts and deploy
-- solveathome.org / www: splash only (`SPLASH_HOSTS`). App: https://dev.solveathome.org until launch.
-- server01 (`<user@host>`), `/data/services/solveathome`, shared Caddy in `/data/services/caddy` (append to the Caddyfile with `cat >>`; never `sed -i`, the container bind-mounts the inode).
-- Deploy: `scripts/deploy.sh` (takes a lock on the server; never pull into the checkout by hand while another deploy may be running).
-- Dumps: daily cron on the host runs `dist/scripts/dump.js` (local only until launch: `DUMPS_PUBLIC` unset hides /dumps, and the attest cron is off); at launch add the cron line `27 3 * * * /data/services/solveathome/scripts/attest-dumps.sh` and `scripts/attest-dumps.sh` (OpenTimestamps via `~/.local/bin/ots`, installed with pipx). Re-running a dump the same day changes the manifest; the attest script re-stamps and keeps the superseded proof.
+## Deploy
+- Production runs `docker-compose.prod.yml` behind a reverse proxy; `scripts/deploy.sh` takes a lock on the host and pulls main. The host is `SERVER` in the environment or the maintainer's keychain; it is not in the repo.
+- Dumps: a daily cron runs `dist/scripts/dump.js`; `/dumps` is 404 until `DUMPS_PUBLIC=true`; `scripts/attest-dumps.sh` stamps manifests with OpenTimestamps. Re-running a dump the same day changes the manifest; the attest script re-stamps and keeps the superseded proof.
 - One-off scripts in prod: `docker compose -f docker-compose.prod.yml exec -T backend node dist/scripts/<name>.js`.
-- Research docs on the server come from `scripts/mirror-project.sh` (rsync into `data/repos/twin-primes`); provenance via `scripts/import-claims.ts` with the owner token.
-- Dev consensus is 1/1 (`CONSENSUS_MIN_REVIEWS`, `CONSENSUS_MIN_PROVIDERS`); launch is 3/2.
-
-## Launch checklist (not done)
-Flip both repos public; cut a fresh mirror; raise consensus to 3/2; remove `SPLASH_HOSTS`; point `BASE_URL` at solveathome.org and add the callback to the OAuth app; set `DUMPS_PUBLIC=true` and re-enable the attest cron (`scripts/attest-dumps.sh`, removed from crontab Sep 9 so no hashes leave the server in dev); first dataset dump attested; Chris's launch post.
+- Research docs on the server come from `scripts/mirror-project.sh` (rsync into `data/repos/<slug>`); provenance via `scripts/import-claims.ts` with the owner token.
+- Consensus defaults are 3 reviews / 2 providers / 7 max (`CONSENSUS_*` in `.env` override them; a single-operator dev instance runs 1 / 1).
+- Cloudflare caches assets 4 h by `?v=`: bump the version when changing an asset.
 
 ## Local dev
-`cp .env.example .env`, `docker compose up -d` (Postgres on :5434; 5433 belongs to another project), `npm run seed`, `npm run import-briefs`, `npm run dev`. `scripts/dev-users.ts` mints local tokens without GitHub.
+`cp .env.example .env`, `docker compose up -d` (Postgres on :5434; 5433 belongs to another project), `npm run seed`, `npm run import-briefs`, `npm run dev`. `scripts/dev-users.ts` mints local tokens without GitHub (refuses unless `BASE_URL` is localhost).

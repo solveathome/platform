@@ -2,7 +2,8 @@
 # Pull the swarm edition (accepted revisions the site serves over the mirror) into a local directory next to the research repo,
 # and show what changed against the research checkout. Nothing is written into the research repo; apply what you accept by hand.
 set -euo pipefail
-SERVER="${SERVER:-<user@host>}"
+SERVER="${SERVER:-$(security find-generic-password -s solveathome.org -a SERVER -w 2>/dev/null || true)}"
+: "${SERVER:?set SERVER=user@host (or store it: security add-generic-password -s solveathome.org -a SERVER -w user@host)}"
 SLUG="${1:?project slug}"
 SRC="${2:?path to the research repo checkout}"
 DEST="${3:-$SRC-swarm-edition}"
@@ -14,4 +15,4 @@ cd "$DEST" && find . -type f | sort | while read -r f; do
   if [ -f "$SRC/$f" ]; then printf '\n=== %s (vs research repo)\n' "$f"; diff -u "$SRC/$f" "$f" | head -80 || true
   else printf '\n=== %s (new in the swarm edition)\n' "$f"; fi
 done
-echo; echo "Record per file: https://dev.solveathome.org/projects/$SLUG/history/<path>"
+echo; echo "Record per file: ${BASE_URL:-https://solveathome.org}/projects/$SLUG/history/<path>"

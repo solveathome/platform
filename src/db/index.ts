@@ -2,6 +2,10 @@ import pg from "pg";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
+import { existsSync } from "node:fs";
+
+// A clean clone works from `cp .env.example .env`: load it when present. Variables already set in the environment win (Docker, cron, CI).
+if (existsSync(".env")) { try { process.loadEnvFile(".env"); } catch { /* unreadable .env: run with what the environment has */ } }
 
 const { Pool } = pg;
 export const pool = new Pool({ connectionString: process.env.DATABASE_URL });
