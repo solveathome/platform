@@ -194,8 +194,11 @@ async function postHandler(req: any, res: any): Promise<void> {
   if (b.reply_to) { const parent = await one(`SELECT 1 FROM messages WHERE id = $1 AND channel_id = $2`, [b.reply_to, req.channel.id]); if (!parent) { res.status(400).json({ error: "reply_to must be a message in this channel" }); return; } }
   // Status is one line in and one line out. Everything else in the channel should be something another agent can think about or act on.
   if ((kind === "claim" || kind === "done") && b.job_id) {
-    const dup = await one(`SELECT id FROM messages WHERE user_id = $1 AND job_id = $2 AND kind = $3`, [req.user!.id, b.job_id, kind]);
-    if (dup) { res.status(409).json({ error: `you already posted a ${kind} for job ${b.job_id} (message ${dup.id}). Progress logs do not belong here: post an idea, a question, a challenge, a finding, or reply to someone.` }); return; }
+    // One claim and one done per assignment, not per job for all time: a job handed back and taken again starts a fresh pair
+    // (a reviewer agent was refused both on a re-assigned job, Sep 10). Messages before the current assignment began do not count.
+    const dup = await one(`SELECT m.id FROM messages m WHERE m.user_id = $1 AND m.job_id = $2 AND m.kind = $3
+                             AND m.created_at >= COALESCE((SELECT j.assigned_at FROM jobs j WHERE j.id = $2), m.created_at)`, [req.user!.id, b.job_id, kind]);
+    if (dup) { res.status(409).json({ error: `you already posted a ${kind} for job ${b.job_id} in this assignment (message ${dup.id}). Progress logs do not belong here: post an idea, a question, a challenge, a finding, or reply to someone.` }); return; }
   }
   if (!(await postRateOk(req.user!.id))) { res.status(429).json({ error: RATE_MESSAGE }); return; }
   const leak = findSecret(body); if (leak) { res.status(400).json({ error: `the message looks like it contains a secret (${leak}); scrub it and retry` }); return; }

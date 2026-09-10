@@ -9,6 +9,7 @@ export type ComputeOffer = {
   share: number;                // 0..1 of the machine
   machine: Machine;
   mathlib_cache: boolean;
+  cap_hours?: number | null;    // the person's own CPU-hours cap per assignment, when they gave one on top of the share
   usable: { cores: number; ram_gb: number; vram_gb: number; disk_free_gb: number | null; cpu_hours: number };  // per assignment
 };
 
@@ -29,7 +30,9 @@ export function parseOffer(raw: any, maxHoursPerAssignment: number): ComputeOffe
       os: raw.machine.os ? String(raw.machine.os).slice(0, 40) : null,
     };
     if (!m.cores && !m.ram_gb && !m.gpu) return null;
-    return finish({ share, machine: m, mathlib_cache: !!raw.mathlib_cache }, hours);
+    // A cpu_hours next to the share is the person's own cap per assignment (a reviewer agent posted both, Sep 10): the lower number wins and is the one shown.
+    const cap = raw.cpu_hours !== undefined && raw.cpu_hours !== null ? num(raw.cpu_hours, 1e4) : null;
+    return finish({ share, machine: m, mathlib_cache: !!raw.mathlib_cache, cap_hours: cap || null }, hours);
   }
   // Legacy fixed shape: treat the numbers as the whole offer (share 1 of a machine that size).
   const cpuHours = num(raw.cpu_hours, 1e4), ram = round(num(raw.ram_gb, 65536));
@@ -40,7 +43,9 @@ export function parseOffer(raw: any, maxHoursPerAssignment: number): ComputeOffe
 
 function finish(o: Omit<ComputeOffer, "usable">, hours: number): ComputeOffer {
   const cores = round(o.machine.cores * o.share), ram = round(o.machine.ram_gb * o.share), vram = round((o.machine.gpu?.vram_gb ?? 0) * o.share);
-  return { ...o, usable: { cores, ram_gb: ram, vram_gb: vram, disk_free_gb: o.machine.disk_free_gb, cpu_hours: round(cores * hours, 2) } };
+  const derived = round(cores * hours, 2);
+  const cpuHours = o.cap_hours ? Math.min(derived, round(o.cap_hours, 2)) : derived;
+  return { ...o, usable: { cores, ram_gb: ram, vram_gb: vram, disk_free_gb: o.machine.disk_free_gb, cpu_hours: cpuHours } };
 }
 
 /** One line for briefs and settings: "50% of 32 cores / 128 GB / RTX 5090 32 GB: 16 cores, 64 GB, 16 GB VRAM, 32 CPU h per assignment". */
@@ -48,7 +53,7 @@ export function describeOffer(o: ComputeOffer | null | undefined): string {
   if (!o || !o.usable) return "not offered";
   const m = o.machine, u = o.usable;
   const whole = [m.cores ? `${m.cores} cores` : null, m.ram_gb ? `${m.ram_gb} GB` : null, m.gpu ? `${m.gpu.name}${m.gpu.vram_gb ? ` ${m.gpu.vram_gb} GB` : ""}` : null].filter(Boolean).join(" / ");
-  const part = [`${u.cores} cores`, `${u.ram_gb} GB`, u.vram_gb ? `${u.vram_gb} GB VRAM` : null, `${u.cpu_hours} CPU h per assignment`].filter(Boolean).join(", ");
+  const part = [`${u.cores} cores`, `${u.ram_gb} GB`, u.vram_gb ? `${u.vram_gb} GB VRAM` : null, `${u.cpu_hours} CPU h per assignment${o.cap_hours && u.cpu_hours === round(o.cap_hours, 2) ? " (their own cap)" : ""}`].filter(Boolean).join(", ");
   return `${Math.round(o.share * 100)}% of ${whole || "the machine"}: ${part}${o.mathlib_cache ? ", Mathlib cache allowed" : ""}`;
 }
 
