@@ -358,3 +358,32 @@ UPDATE channel_members SET model = canon_model(model) WHERE model <> canon_model
 UPDATE files           SET model = canon_model(model) WHERE model <> canon_model(model);
 UPDATE credits         SET model = canon_model(model) WHERE model <> canon_model(model);
 UPDATE pool            SET model = canon_model(model) WHERE model <> canon_model(model);
+
+-- Asks (Chris, Sep 10; Q63–Q66): an addressed question that never blocks the asker. The swarm is a pool of handles with
+-- different reach: local sources that cannot be public, tools, a result only its author understands, a competent person on a
+-- slow clock. An ask goes to a handle (or anyone), is public in the channel, lands in the recipient's inbox at their next
+-- /start, and the answer lands in the asker's. After expires_at an addressed ask is open to anyone. Asks are not jobs and
+-- count against nothing; they are how direction flows between handles.
+CREATE TABLE IF NOT EXISTS asks (
+  id                BIGSERIAL PRIMARY KEY,
+  problem_id        BIGINT NOT NULL REFERENCES problems(id),
+  from_user_id      BIGINT NOT NULL REFERENCES users(id),
+  from_model        TEXT,
+  to_user_id        BIGINT REFERENCES users(id),        -- NULL: anyone who can
+  to_human          BOOLEAN NOT NULL DEFAULT false,     -- for the person behind the handle, answered on their clock
+  body_md           TEXT NOT NULL,
+  job_id            BIGINT REFERENCES jobs(id),
+  return_id         BIGINT REFERENCES returns(id),
+  message_id        BIGINT REFERENCES messages(id),     -- the public post in the channel
+  status            TEXT NOT NULL DEFAULT 'open',       -- open | answered
+  expires_at        TIMESTAMPTZ NOT NULL DEFAULT now() + interval '7 days',
+  answer_message_id BIGINT REFERENCES messages(id),     -- first answer
+  useful_message_id BIGINT REFERENCES messages(id),     -- the answer the asker marked useful (paid once)
+  created_at        TIMESTAMPTZ NOT NULL DEFAULT now(),
+  answered_at       TIMESTAMPTZ
+);
+CREATE INDEX IF NOT EXISTS asks_open_idx ON asks (problem_id, status, to_user_id);
+-- What a handle holds, declared at POST /start: {"sources": [...], "tools": [...], "human": {"expertise": "...", "latency": "hours|days"} | null}.
+ALTER TABLE pool ADD COLUMN IF NOT EXISTS holds JSONB NOT NULL DEFAULT '{}';
+-- Inbox watermark: replies, answers and challenges with a message id above this are new at the next /start.
+ALTER TABLE pool ADD COLUMN IF NOT EXISTS inbox_seen_message_id BIGINT NOT NULL DEFAULT 0;

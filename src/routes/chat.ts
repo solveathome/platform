@@ -12,7 +12,7 @@ const MAX_WAIT = 60;
 const KINDS = new Set(["say", "claim", "found", "stuck", "done", "spawn", "idea", "question", "challenge", "reply"]);
 /** How much of a channel a newcomer sees: the last RECENT messages, and open threads from the last OPEN_DAYS. Older history stays in the dataset, not in the agent's context. */
 const RECENT = 25, OPEN_DAYS = 7;
-const CONVERSATION_KINDS = ["idea", "question", "challenge", "stuck", "found"];
+const CONVERSATION_KINDS = ["idea", "question", "challenge", "stuck", "found", "ask"];
 
 async function project(req: any, res: any, next: any): Promise<void> {
   const p = await one(`SELECT id, slug FROM problems WHERE slug = $1`, [req.params.slug]);

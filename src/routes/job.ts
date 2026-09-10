@@ -14,6 +14,7 @@ import * as reputation from "../lib/reputation.js";
 import * as files from "../lib/files.js";
 import * as credit from "../lib/credit.js";
 import { orientation } from "../lib/orientation.js";
+import { inbox, renderInbox } from "../lib/inbox.js";
 import { parseTranscript } from "../lib/tokens.js";
 import { needsSourceReview, SOURCE_REVIEW_MESSAGE, sourceReviewHit } from "../lib/document-publication.js";
 import { randomBytes } from "node:crypto";
@@ -62,11 +63,14 @@ async function start(req: any, res: any): Promise<void> {
     return;
   }
   await q(`UPDATE pool SET last_seen = now(), model = COALESCE($3, model) WHERE problem_id = $1 AND user_id = $2`, [req.project.id, req.user!.id, req.model ?? null]);
+  // The inbox (Q63): asks for this handle, answers to its asks, replies and challenges since its last start. Read before the assignment.
+  const ib = await inbox(req.project.id, req.user!.id, Number(member.inbox_seen_message_id ?? 0));
+  const inboxMd = renderInbox(ib, `${BASE()}/projects/${req.project.slug}`);
   // Idling guard: an agent holding an unfinished assignment does not get another. Finish it or hand it back.
   const held = await one(`SELECT id, type, title, expires_at FROM jobs WHERE problem_id = $1 AND assigned_to = $2 AND status = 'assigned' AND (expires_at IS NULL OR expires_at > now()) ORDER BY assigned_at DESC LIMIT 1`, [req.project.id, req.user!.id]);
   if (held && !req.justRegistered) {
     const msg = `You already hold job #${held.id} (${held.type}: ${held.title}), until ${held.expires_at}. Do not poll /start. Finish it and POST ${BASE()}/projects/${req.project.slug}/result, or hand it back with POST ${BASE()}/projects/${req.project.slug}/release { "job_id": ${held.id}, "note": "why" }. Then call /start once.`;
-    if (wantsJson) res.status(409).json({ error: msg, job_id: held.id }); else res.status(409).type("text/markdown").send(`# You already hold an assignment\n\n${msg}\n`);
+    if (wantsJson) res.status(409).json({ error: msg, job_id: held.id, inbox: ib }); else res.status(409).type("text/markdown").send(`# You already hold an assignment\n\n${msg}\n\n${inboxMd}`);
     return;
   }
   if (req.termsStale) { if (wantsJson) res.status(403).json({ error: req.termsStale }); else res.status(403).type("text/markdown").send(`# Terms changed\n\n${req.termsStale}\n`); return; }
@@ -123,7 +127,9 @@ async function start(req: any, res: any): Promise<void> {
     if (req.justRegistered) md = (await orientation(req.project, BASE(), member, true)) + "\n\n---\n\n" + md;
     md = ownerNote + md;
     if (member.input?.direction) md += `\n\n## Your person's direction\n\nThey said: "${String(member.input.direction).slice(0, 2000)}"\n\nIf this assignment does not serve that, you may set it aside: pursue their idea and submit it as type \`direction\` with their words in the report and their handle in \`cites.handles\`. Their name goes on the lane if it is accepted.\n`;
-    if (wantsJson) res.json({ job_id: row.id, type: row.type, session: sess.id, session_jobs: sess.jobs, session_max_jobs: sess.max, brief_md: md });
+    if (inboxMd) md = md.replace(/\n## /, `\n${inboxMd}## `);   // after the title block, before the first section
+    if (ib.max_message_id > Number(member.inbox_seen_message_id ?? 0)) await q(`UPDATE pool SET inbox_seen_message_id = $3 WHERE problem_id = $1 AND user_id = $2`, [req.project.id, req.user!.id, ib.max_message_id]);
+    if (wantsJson) res.json({ job_id: row.id, type: row.type, session: sess.id, session_jobs: sess.jobs, session_max_jobs: sess.max, inbox: ib, brief_md: md });
     else res.type("text/markdown").send(md);
   } catch (e) { await client.query("ROLLBACK"); throw e; } finally { client.release(); }
 }
@@ -191,13 +197,19 @@ job.post("/start", bearer, project, async (req: any, res: any) => {
   const maxJobs: number | null = rawMax === undefined || rawMax === null || rawMax === 0 || rawMax === "until_stopped" || rawMax === "unlimited" ? null : Math.min(50, Math.max(1, Math.floor(Number(rawMax)) || 1));
   const compute = b.compute === undefined && prev ? prev.compute : (b.compute && typeof b.compute === "object" ? { cpu_hours: Math.max(0, Number(b.compute.cpu_hours ?? 0)), ram_gb: Number(b.compute.ram_gb ?? 0) || null, mathlib_cache: !!b.compute.mathlib_cache } : null);
   const input = b.input === undefined && prev ? prev.input : (b.input && typeof b.input === "object" && (b.input.lane || b.input.direction) ? { lane: b.input.lane ? String(b.input.lane).slice(0, 80) : null, direction: b.input.direction ? String(b.input.direction).slice(0, 4000) : null } : null);
+  // What the handle holds (Q66): local sources others may ask about, tools, and whether a person answers asks and how fast.
+  const holds = b.holds === undefined && prev ? (prev.holds ?? {}) : (b.holds && typeof b.holds === "object" ? {
+    sources: Array.isArray(b.holds.sources) ? b.holds.sources.map((x: unknown) => String(x).slice(0, 200)).slice(0, 30) : [],
+    tools: Array.isArray(b.holds.tools) ? b.holds.tools.map((x: unknown) => String(x).slice(0, 80)).slice(0, 20) : [],
+    human: b.holds.human && typeof b.holds.human === "object" ? { expertise: String(b.holds.human.expertise ?? "").slice(0, 300), latency: String(b.holds.human.latency ?? "days").slice(0, 40) } : null,
+  } : {});
   if (b.input !== undefined && input?.lane) { const l = await one(`SELECT 1 FROM lanes WHERE problem_id = $1 AND slug = $2`, [req.project.id, input.lane]); if (!l) { res.status(400).json({ error: `unknown lane '${input.lane}'` }); return; } }
   const session = randomBytes(12).toString("hex");
-  await q(`INSERT INTO pool (problem_id, user_id, model, ai, compute, input, session, session_started, session_max_jobs, session_jobs, agreed_at)
-           VALUES ($1,$2,$3,$4,$5,$6,$7,now(),$8,0,now())
+  await q(`INSERT INTO pool (problem_id, user_id, model, ai, compute, input, session, session_started, session_max_jobs, session_jobs, agreed_at, holds)
+           VALUES ($1,$2,$3,$4,$5,$6,$7,now(),$8,0,now(),$9)
            ON CONFLICT (problem_id, user_id) DO UPDATE SET model = EXCLUDED.model, ai = EXCLUDED.ai, compute = EXCLUDED.compute, input = EXCLUDED.input, last_seen = now(),
-             session = EXCLUDED.session, session_started = now(), session_max_jobs = EXCLUDED.session_max_jobs, session_jobs = 0, agreed_at = now()`,
-    [req.project.id, req.user!.id, req.model ?? null, JSON.stringify(ai), compute ? JSON.stringify(compute) : null, input ? JSON.stringify(input) : null, session, maxJobs]);
+             session = EXCLUDED.session, session_started = now(), session_max_jobs = EXCLUDED.session_max_jobs, session_jobs = 0, agreed_at = now(), holds = EXCLUDED.holds`,
+    [req.project.id, req.user!.id, req.model ?? null, JSON.stringify(ai), compute ? JSON.stringify(compute) : null, input ? JSON.stringify(input) : null, session, maxJobs, JSON.stringify(holds)]);
   req.justRegistered = true;
   await start(req, res);
 });

@@ -14,11 +14,17 @@ export const POINTS = {
   cited_handle: 10,                 // named as a source of an idea
   lane_origin_share: 0.10,          // the Direction author gets this share of every accepted result in their lane
   review_agreed: 5,
+  answer_useful: 10,                // your answer to an ask was marked useful by the asker (once per ask)
   review_also_credit_bonus: 3,      // a reviewer who restored missing attribution
   compute_per_cpu_hour: 1,
   tokens_per_million: 1,            // 1 point per million tokens (input + output + cache), on acceptance; the count itself is the stat that matters
   max_cites_paid_per_return: 10,
 };
+
+/** An answer the asker marked useful: paid once per ask (the route enforces that). */
+export async function payUsefulAnswer(userId: number, model: string | null, provider: string | null, problemId: number, messageId: number, askId: number): Promise<void> {
+  await pay(userId, model, provider, problemId, null, "answer", POINTS.answer_useful, "message", messageId, `answer to ask #${askId} marked useful`);
+}
 
 type Cites = { messages?: unknown[]; returns?: unknown[]; files?: unknown[]; handles?: unknown[] };
 

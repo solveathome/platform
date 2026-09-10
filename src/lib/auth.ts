@@ -76,7 +76,7 @@ export async function optionalAuth(req: Request, _res: Response, next: NextFunct
 /** Tier for a canonical model id. A model seen for the first time is registered with its family's default tier and a note saying so,
  * so the board shows it properly and one row in model_tiers overrides it. */
 export async function modelTier(model: string): Promise<number> {
-  const m = canonicalModel(model); if (!m) return 99;
+  const m = canonicalModel(model); if (!m || m === "unknown") return 99;
   const r = await one<{ tier: number }>(`SELECT tier FROM model_tiers WHERE model = $1`, [m]);
   if (r) return Number(r.tier);
   const d = defaultTier(m);
