@@ -38,7 +38,7 @@ export function providerFromModel(m: string): string {
  * A size marker (mini, flash, haiku) beats the family name, then the first match wins; model_tiers overrides per exact id and is what the board shows.
  */
 const FAMILY_TIERS: Array<[RegExp, number, string]> = [
-  [/haiku|mini|nano|flash|lite|small|tiny/, 4, "small family"],
+  [/(^|-)(haiku|mini|nano|flash|lite|small|tiny)(-|$)/, 4, "small family"],   // anchored: "gemini" is not "mini", "elite" is not "lite"
   [/fable|mythos/, 1, "frontier anthropic family"],
   [/^gpt-6|astra/, 1, "frontier openai family"],
   [/opus/, 2, "opus family"],
@@ -47,4 +47,30 @@ const FAMILY_TIERS: Array<[RegExp, number, string]> = [
 export function defaultTier(m: string): { tier: number; rule: string } {
   for (const [re, tier, rule] of FAMILY_TIERS) if (re.test(m)) return { tier, rule };
   return { tier: 3, rule: "unknown family" };
+}
+
+/**
+ * Thinking level (Chris, Sep 10): frontier models run at several reasoning efforts, and only the highest count as tier 1.
+ * The level comes from the X-Effort header or a marker in the id: "gpt-6-astra-high", "claude-fable-5-1 (effort: max)",
+ * "[thinking: xhigh]", ":low". Recognised: none | minimal | low | medium | high | xhigh | max. Undeclared is null.
+ */
+export type Effort = "none" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
+const EFFORTS: Effort[] = ["none", "minimal", "low", "medium", "high", "xhigh", "max"];
+export const TOP_EFFORTS: ReadonlySet<Effort> = new Set(["high", "xhigh", "max"]);
+export function parseEffort(raw: unknown): Effort | null {
+  const s = String(raw ?? "").trim().toLowerCase();
+  if (!s) return null;
+  const alias: Record<string, Effort> = { maximum: "max", extended: "max", "extra-high": "xhigh", extrahigh: "xhigh", x_high: "xhigh", off: "none", ultra: "max", deep: "max" };
+  const direct = alias[s] ?? (EFFORTS as string[]).includes(s) ? (alias[s] ?? (s as Effort)) : null;
+  if (direct) return direct;
+  const m = /(?:effort|thinking|reasoning)\s*[:=]?\s*([a-z_-]+)/.exec(s) ?? /[\[(:\-\s](none|minimal|low|medium|high|xhigh|max|maximum|extended)\s*[\])]?$/.exec(s);
+  if (!m) return null;
+  const v = alias[m[1]] ?? m[1];
+  return (EFFORTS as string[]).includes(v) ? (v as Effort) : null;
+}
+/** Tier 1 needs a top thinking level. A frontier model with a lower or undeclared level judges at tier 2; nothing else changes. */
+export function tierForEffort(tier: number, effort: Effort | null): { tier: number; note: string | null } {
+  if (tier !== 1) return { tier, note: null };
+  if (effort && TOP_EFFORTS.has(effort)) return { tier: 1, note: null };
+  return { tier: 2, note: effort ? `thinking level "${effort}" declared: tier 2 for this session (tier 1 needs high, xhigh or max)` : "no thinking level declared: tier 2 for this session (send X-Effort: max, or the level in X-Model such as \"gpt-6-astra-high\"; tier 1 needs high, xhigh or max)" };
 }

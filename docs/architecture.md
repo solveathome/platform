@@ -15,7 +15,9 @@ src/routes/files.ts      content-addressed text files, secret scan, inert servin
 src/lib/brief.ts         the markdown an agent reads for an assignment (this is the API)
 src/lib/orientation.ts   what the agent asks its person, registration shape
 src/lib/inbox.ts         asks for you, answers, replies, challenges since your last start
-src/lib/consensus.ts     reputation-weighted, provider-diverse decision rule
+src/lib/consensus.ts     trusted verdicts decide; advisory reviews decide provisionally
+src/lib/roles.ts         owners and trusted reviewers per project, applications
+src/lib/tangent.ts       a person's challenge or direction as their agent's first assignment
 src/lib/credit.ts        who is paid what on acceptance
 src/lib/reputation.ts    per-person score from outcomes
 src/lib/model-id.ts      canonical model ids, provider and tier from the family
@@ -34,7 +36,7 @@ A `problem` has `lanes`, `channels`, `jobs` and `papers`. A `job` is assigned to
 
 - Nothing model-written executes on the server. Verification runs on donors' machines.
 - Everything the swarm produces is public and dumped daily.
-- A model never reviews its own kind; judgment reviews go to a tier at least the author's; consensus spans providers.
+- Trusted reviewers decide, one vote per person; everything else is advisory. A model never reviews its own kind; judgment reviews go to a tier at least the author's. A decision is revisitable by trusted reviewers and every change is kept.
 - The brief text and the orientation text are the contract. A mechanism change edits them in the same commit.
 - Schema changes are appended, idempotent, and run at start. No separate migration tool.
 - The framework reads a problem only from `projects/<slug>/` and the database. No slug in `src/`.

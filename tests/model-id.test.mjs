@@ -37,6 +37,10 @@ test("provider and default tier come from the family, not a list", () => {
   assert.equal(defaultTier("claude-haiku-4-5").tier, 4);
   assert.equal(defaultTier("gpt-5-mini").tier, 4);
   assert.equal(defaultTier("gemini-3-flash").tier, 4);
+  assert.equal(defaultTier("gemini-3-pro").tier, 3, "gemini is not mini");
+  assert.equal(defaultTier("gemini-3-ultra").tier, 3);
+  assert.equal(defaultTier("elite-7").tier, 3, "elite is not lite");
+  assert.equal(defaultTier("gpt-5-nano").tier, 4);
   assert.equal(defaultTier("something-new").tier, 3);
   assert.equal(defaultTier("something-new").rule, "unknown family");
 });
@@ -48,4 +52,29 @@ test("a [1m] header matches a plain model in the JSONL (agent feedback, Sep 10)"
   const declared = canonicalModel("claude-opus-5[1m]");
   assert.deepEqual(observed, ["claude-opus-5"]);
   assert.ok(observed.some((m) => m === declared));
+});
+
+import { parseEffort, tierForEffort } from "../src/lib/model-id.ts";
+test("thinking level: parsed from X-Effort or the id; tier 1 needs a top level (Chris, Sep 10)", () => {
+  assert.equal(parseEffort("max"), "max");
+  assert.equal(parseEffort("High"), "high");
+  assert.equal(parseEffort("gpt-6-astra-high"), "high");
+  assert.equal(parseEffort("gpt-6-astra-xhigh"), "xhigh");
+  assert.equal(parseEffort("claude-fable-5-1 (effort: max)"), "max");
+  assert.equal(parseEffort("claude-fable-5-1 [thinking: low]"), "low");
+  assert.equal(parseEffort("claude-fable-5-1:medium"), "medium");
+  assert.equal(parseEffort("extended"), "max");
+  assert.equal(parseEffort("claude-fable-5-1"), null);
+  assert.equal(parseEffort("gpt-6-astra"), null);
+  assert.equal(parseEffort("claude-fable-5-1[1m]"), null);
+  assert.equal(tierForEffort(1, "max").tier, 1);
+  assert.equal(tierForEffort(1, "high").tier, 1);
+  assert.equal(tierForEffort(1, "medium").tier, 2);
+  assert.equal(tierForEffort(1, null).tier, 2);
+  assert.match(tierForEffort(1, null).note, /X-Effort/);
+  assert.equal(tierForEffort(2, null).tier, 2);
+  assert.equal(tierForEffort(3, "max").tier, 3);
+  // canonicalModel still strips the marker, so the model identity is unchanged by the level
+  assert.equal(canonicalModel("claude-fable-5-1 (effort: max)"), "claude-fable-5-1");
+  assert.equal(canonicalModel("gpt-6-astra-high"), "gpt-6-astra-high");
 });

@@ -68,8 +68,8 @@ after(async () => {
   assert.equal(Number(residue.n), 0, 'test residue left in the database');
 });
 
-const call = (who, method, path, {model, session, body, cookie} = {}) => fetch(base + path, {
-  method, headers: {...(cookie ? {cookie: `sah_session=${people[who].token}`, 'sec-fetch-site': 'same-origin'} : {authorization: `Bearer ${people[who].token}`}), accept: 'application/json', 'content-type': 'application/json', ...(model ? {'x-model': model} : {}), ...(session ? {'x-session': session} : {})},
+const call = (who, method, path, {model, session, body, cookie, effort = 'max'} = {}) => fetch(base + path, {
+  method, headers: {...(cookie ? {cookie: `sah_session=${people[who].token}`, 'sec-fetch-site': 'same-origin'} : {authorization: `Bearer ${people[who].token}`}), accept: 'application/json', 'content-type': 'application/json', ...(model ? {'x-model': model, 'x-effort': effort} : {}), ...(session ? {'x-session': session} : {})},
   body: body ? JSON.stringify(body) : undefined,
 });
 const okJson = async (r) => { const t = await r.text(); assert.equal(r.status, 200, t); return JSON.parse(t); };
@@ -89,9 +89,25 @@ test('review jobs are claimable by trusted handles only; contributors get no rev
   const c = await reg('adv1', 'claude-fable-5-1');
   assert.notEqual(c.type, 'review', 'a contributor was handed a review job');
   await roles.grant(pid, people.trusted.id, 'trusted', people.owner.id, 'test');
+  // A frontier model at a low thinking level is tier 2 for the session: no judgment review for it, and the brief says why.
+  const low = await okJson(await call('trusted', 'POST', '/start', {model: 'gpt-6-astra', effort: 'low', body: {agreed: true, ai: {max_hours_per_assignment: 1}, transcript_preapproved: true}}));
+  assert.match(low.brief_md, /Tier this session: 2/);
+  assert.ok(Number((await one(`SELECT min_tier FROM jobs WHERE id = $1`, [low.job_id])).min_tier) >= 2, 'a tier-1-only job went to a low-effort session');
+  await call('trusted', 'POST', '/release', {model: 'gpt-6-astra', effort: 'low', session: low.session, body: {job_id: low.job_id, note: 'test'}});
   const t = await reg('trusted', 'gpt-6-astra');
   assert.equal(t.type, 'review');
   people.trusted.session = t.session; people.trusted.job = t.job_id;
+  assert.equal((await one(`SELECT effort FROM sessions WHERE id = $1`, [t.session])).effort, 'max');
+});
+
+test('a trusted reviewer may review their own return; a contributor may not', async () => {
+  const r = await one(`INSERT INTO returns (problem_id, type, user_id, model, provider, report_md, transcript, status) VALUES ($1,'source',$2,'m','p','own work','t','pending') RETURNING id`, [pid, people.trusted.id]);
+  const own = await call('trusted', 'POST', '/result', {model: 'gpt-6-astra', body: {type: 'review', return_id: Number(r.id), verdict: 'accept', rung: 'measured', notes_md: 'checked', transcript: 't', transcript_approved: true}});
+  assert.equal(own.status, 200, await own.text());
+  assert.equal((await one(`SELECT status, provisional FROM returns WHERE id = $1`, [r.id])).status, 'accepted');
+  const r2 = await one(`INSERT INTO returns (problem_id, type, user_id, model, provider, report_md, transcript, status) VALUES ($1,'source',$2,'m','p','own work','t','pending') RETURNING id`, [pid, people.adv2.id]);
+  const notOwn = await call('adv2', 'POST', '/result', {model: 'claude-fable-5-1', body: {type: 'review', return_id: Number(r2.id), verdict: 'accept', rung: 'measured', notes_md: 'checked', transcript: 't', transcript_approved: true}});
+  assert.equal(notOwn.status, 403);
 });
 
 test('three advisory reviews decide provisionally: nothing paid, review jobs still open', async () => {

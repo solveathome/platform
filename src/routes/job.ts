@@ -20,6 +20,7 @@ import { parseTranscript } from "../lib/tokens.js";
 import { needsSourceReview, SOURCE_REVIEW_MESSAGE, sourceReviewHit } from "../lib/document-publication.js";
 import { randomBytes } from "node:crypto";
 import { isTrusted } from "../lib/roles.js";
+import { tierForEffort } from "../lib/model-id.js";
 import { parseTangent, parseTarget, tangentJob, challengesFor, challengeBanner, targetUrl, targetLabel, FINDINGS, type Tangent } from "../lib/tangent.js";
 
 /** Caps on submission (Sep 10): pending self-assigned returns per handle per project, and returns per handle per hour. */
@@ -91,8 +92,10 @@ async function start(req: any, res: any): Promise<void> {
   const settings = { ai: session.ai ?? member.ai ?? {}, compute: session.compute ?? null, input: session.input ?? null };
   const offer = settings.compute?.usable ? settings.compute : parseOffer(settings.compute, Number(settings.ai?.max_hours_per_assignment ?? 2));
   const prefs = { maxHours: Number(offer?.usable?.cpu_hours ?? 0), ramGb: Number(offer?.usable?.ram_gb ?? 0), hasGpu: !!(offer?.usable?.vram_gb), lane: settings.input?.lane ?? null };
-  const tier = await modelTier(req.model ?? "unknown");
-  // Review assignments go to trusted reviewers (Sep 10); everyone else reviews advisorily, self-assigned.
+  // Tier 1 needs a top thinking level (Chris, Sep 10): a frontier model at a lower or undeclared level judges at tier 2.
+  const tf = tierForEffort(await modelTier(req.model ?? "unknown"), req.effort ?? null);
+  const tier = tf.tier;
+  // Review assignments go to trusted reviewers (Sep 10); everyone else reviews advisorily, self-assigned. Trusted reviewers may review their own returns.
   const trusted = await isTrusted(Number(req.project.id), Number(req.user!.id), req.user!.handle);
   const maxHours = req.query.max_hours !== undefined ? Number(req.query.max_hours) : prefs.maxHours;
   const lane = req.query.lane ? String(req.query.lane) : (req.query.any_lane ? null : prefs.lane);
@@ -117,7 +120,7 @@ async function start(req: any, res: any): Promise<void> {
          AND (COALESCE(j.compute_hint->>'gpu', 'false') IN ('false', '0', '') OR $10::boolean)
          AND ($3::text IS NULL OR l.slug = $3)
          AND ($4::text IS NULL OR j.type = $4)
-         AND (pr.id IS NULL OR pr.user_id <> $5)
+         AND (pr.id IS NULL OR pr.user_id <> $5 OR $12::boolean)
          AND (pr.id IS NULL OR $12::boolean)
          AND NOT EXISTS (SELECT 1 FROM reviews rv WHERE rv.return_id = j.parent_return_id AND rv.user_id = $5)
          -- One review per person per return: the handle's other agent may already hold a review job for it.
@@ -153,6 +156,7 @@ async function start(req: any, res: any): Promise<void> {
     row.expires_at = upd.rows[0].expires_at;
     const sess = { id: String(session.id), jobs: Number(session.jobs) + 1, max: session.max_jobs === null ? null : Number(session.max_jobs), maxHours: Number(settings.ai?.max_hours_per_assignment ?? 2), compute: describeOffer(offer), transcriptPreapproved: settings.ai?.transcript_preapproved === true, subagents: settings.ai?.subagents?.allowed === false ? "not allowed" : settings.ai?.subagents?.max_parallel ? `allowed, up to ${settings.ai.subagents.max_parallel} at a time` : "allowed" };
     let md = renderBrief(row, `${BASE()}/projects/${req.project.slug}`, sess);
+    if (tf.note) md = md.replace(/\n\n/, `\n\nTier this session: ${tier} (${tf.note}).\n\n`);
     if (req.justRegistered) md = (await orientation(req.project, BASE(), { ...member, ...settings, session: session.id, session_max_jobs: session.max_jobs }, true)) + "\n\n---\n\n" + md;
     md = ownerNote + md;
     if (settings.input?.direction && !tangentFirst && row.type !== "direction") md += `\n\n## Your person's direction\n\nThey said: "${String(settings.input.direction).slice(0, 2000)}"\n\nIf this assignment does not serve that, you may set it aside: pursue their idea and submit it as type \`direction\` with their words in the report and their handle in \`cites.handles\`. Their name goes on the lane if it is accepted.\n`;
@@ -259,8 +263,8 @@ job.post("/start", bearer, project, async (req: any, res: any) => {
            ON CONFLICT (problem_id, user_id) DO UPDATE SET model = EXCLUDED.model, ai = EXCLUDED.ai, compute = EXCLUDED.compute, input = EXCLUDED.input, last_seen = now(), agreed_at = now(), holds = EXCLUDED.holds`,
     [req.project.id, req.user!.id, req.model ?? null, JSON.stringify(ai), compute ? JSON.stringify(compute) : null, input ? JSON.stringify(input) : null, JSON.stringify(holds)]);
   // The session is this agent: its model, its settings, its cap. Other sessions of the handle keep running.
-  req.session = await one(`INSERT INTO sessions (id, problem_id, user_id, model, ai, compute, input, max_jobs) VALUES ($1,$2,$3,$4,$5,$6,$7,$8) RETURNING *`,
-    [sessionId, req.project.id, req.user!.id, req.model ?? null, JSON.stringify(ai), compute ? JSON.stringify(compute) : null, input ? JSON.stringify(input) : null, maxJobs]);
+  req.session = await one(`INSERT INTO sessions (id, problem_id, user_id, model, ai, compute, input, max_jobs, effort) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING *`,
+    [sessionId, req.project.id, req.user!.id, req.model ?? null, JSON.stringify(ai), compute ? JSON.stringify(compute) : null, input ? JSON.stringify(input) : null, maxJobs, req.effort ?? null]);
   req.justRegistered = true;
   await start(req, res);
 });
@@ -336,7 +340,7 @@ job.post("/result", bearer, project, async (req: any, res) => {
     if (!jobRow) {
       const target = await one<{ id: number; user_id: number; status: string; problem_id: number; lane_id: number | null }>(`SELECT id, user_id, status, problem_id, lane_id FROM returns WHERE id = $1 AND problem_id = $2`, [reviewOf || 0, req.project.id]);
       if (!target) { res.status(400).json({ error: "a self-assigned review needs return_id: the return you reviewed, in this project" }); return; }
-      if (Number(target.user_id) === uid) { res.status(403).json({ error: "you do not review your own return" }); return; }
+      if (Number(target.user_id) === uid && !reviewerTrusted) { res.status(403).json({ error: "you do not review your own return (a trusted reviewer may)" }); return; }
       if (!["pending", "accepted", "rejected", "contested", "recorded"].includes(target.status)) { res.status(409).json({ error: `return #${target.id} is ${target.status}` }); return; }
       const prior = await one<{ id: number }>(`SELECT id FROM reviews WHERE return_id = $1 AND user_id = $2`, [target.id, uid]);
       if (prior && !(reviewerTrusted && target.status === "pending")) { res.status(409).json({ error: `you already reviewed return #${target.id}` }); return; }
@@ -351,9 +355,9 @@ job.post("/result", bearer, project, async (req: any, res) => {
     const verification = ["read", "spot", "rerun"].includes(b.verification) ? b.verification : "read";
     const rerunReason = String(b.rerun_reason ?? "").trim().slice(0, 2000);
     if (verification !== "read" && !rerunReason) { res.status(400).json({ error: `verification "${verification}" needs rerun_reason: what made rerunning worth it (an output missing or not matching the code, a bug you found, a claim the captured output does not show). If none, the review is "read".` }); return; }
-    await q(`INSERT INTO reviews (return_id, review_job_id, user_id, model, provider, verdict, rung, notes_md, weight, also_credit, transcript, tokens, unverifiable, needs_md, verification, rerun_reason, trusted)
-             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17)`,
-      [reviewOf, jobRow?.id ?? null, uid, req.model ?? "unknown", req.provider ?? "unknown", b.verdict, b.rung ?? null, b.notes_md ?? b.report_md ?? "", w, b.also_credit && typeof b.also_credit === "object" ? JSON.stringify(b.also_credit) : null, String(b.transcript), JSON.stringify(tokens), unverifiable, unverifiable ? String(b.needs_md).slice(0, 4000) : null, verification, verification === "read" ? null : rerunReason, reviewerTrusted]);
+    await q(`INSERT INTO reviews (return_id, review_job_id, user_id, model, provider, verdict, rung, notes_md, weight, also_credit, transcript, tokens, unverifiable, needs_md, verification, rerun_reason, trusted, effort)
+             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18)`,
+      [reviewOf, jobRow?.id ?? null, uid, req.model ?? "unknown", req.provider ?? "unknown", b.verdict, b.rung ?? null, b.notes_md ?? b.report_md ?? "", w, b.also_credit && typeof b.also_credit === "object" ? JSON.stringify(b.also_credit) : null, String(b.transcript), JSON.stringify(tokens), unverifiable, unverifiable ? String(b.needs_md).slice(0, 4000) : null, verification, verification === "read" ? null : rerunReason, reviewerTrusted, req.effort ?? null]);
     if (jobRow) await q(`UPDATE jobs SET status = 'returned' WHERE id = $1`, [jobRow.id]);
     const parentRow = jobRow ?? await one(`SELECT problem_id, lane_id FROM returns WHERE id = $1`, [reviewOf]);
     await q(`INSERT INTO credits (user_id, model, provider, problem_id, lane_id, kind, points, source_type, source_id, note) SELECT $1,$2,$3,$4,$5,'tokens',0,'review',$6,$7 WHERE $8::numeric > 0`,
@@ -396,10 +400,10 @@ job.post("/result", bearer, project, async (req: any, res) => {
     }
   }
   const ret = await one<{ id: number }>(
-    `INSERT INTO returns (job_id, problem_id, lane_id, type, user_id, model, provider, report_md, patch, transcript, cpu_hours, hashes, author_rung, repo_url, commit, session)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16) RETURNING id`,
+    `INSERT INTO returns (job_id, problem_id, lane_id, type, user_id, model, provider, report_md, patch, transcript, cpu_hours, hashes, author_rung, repo_url, commit, session, effort)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17) RETURNING id`,
     [jobRow?.id ?? null, problem.id, laneId, rtype, uid, req.model ?? "unknown", req.provider ?? "unknown",
-     b.report_md, b.patch ?? null, b.transcript, Number(b.cpu_hours ?? 0), b.hashes ?? {}, b.author_rung ?? null, repoUrl, commit, jobRow?.assigned_session ?? xs]);
+     b.report_md, b.patch ?? null, b.transcript, Number(b.cpu_hours ?? 0), b.hashes ?? {}, b.author_rung ?? null, repoUrl, commit, jobRow?.assigned_session ?? xs, req.effort ?? null]);
   if (recipe) await q(`UPDATE returns SET recipe_md = $2 WHERE id = $1`, [ret!.id, recipe]);
   if (target || finding || humanMd) await q(`UPDATE returns SET target = $2, finding = $3, human_md = $4 WHERE id = $1`, [ret!.id, target ? JSON.stringify(target) : null, finding, humanMd]);
   const cites = b.cites && typeof b.cites === "object" ? { ...b.cites } : {};

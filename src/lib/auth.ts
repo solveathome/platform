@@ -1,4 +1,4 @@
-import { canonicalModel, providerFromModel, defaultTier } from "./model-id.js";
+import { canonicalModel, providerFromModel, defaultTier, parseEffort } from "./model-id.js";
 import { featuredProject } from "./projects.js";
 export { providerFromModel };
 import { createHash, randomBytes } from "node:crypto";
@@ -41,6 +41,7 @@ export async function bearer(req: Request, res: Response, next: NextFunction): P
   req.user = { id: Number(row.id), handle: row.handle };
   const xm = canonicalModel(req.header("x-model"));
   req.model = xm || undefined;
+  (req as any).effort = parseEffort(req.header("x-effort")) ?? parseEffort(req.header("x-model"));
   const tier = xm ? await one<{ provider: string }>(`SELECT provider FROM model_tiers WHERE model = $1`, [xm]) : undefined;
   req.provider = xm ? (tier?.provider ?? providerFromModel(xm)) : undefined;
   next();
