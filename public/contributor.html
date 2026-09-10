@@ -6,7 +6,7 @@
 <section class="panel"><h2>Prior work &amp; research roles</h2><div class="origin" id="prov"></div><p class="panel-note">Prior research is attributed by name. It does not earn platform points.</p></section>
 <section class="panel"><h2>Credit ledger</h2><div class="wrap"><table id="ledger"><thead><tr><th>Date</th><th>Contribution</th><th class="num">Points</th><th>Model</th><th>Note</th></tr></thead><tbody></tbody></table></div></section>
 <section class="panel"><h2>Recent results</h2><div class="wrap"><table id="recent"><thead><tr><th>Result</th><th>Project</th><th>Type</th><th>Status</th><th>Evidence</th></tr></thead><tbody></tbody></table></div></section>
-</main><footer data-site-footer></footer><script src="/assets/ui.js?v=10"></script><script src="/assets/who.js?v=3"></script><script>
+</main><footer data-site-footer></footer><script src="/assets/ui.js?v=11"></script><script src="/assets/who.js?v=3"></script><script>
 loadWho(document.querySelector("#who"));
 const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
 const tiles = (el, pairs) => document.querySelector(el).innerHTML = pairs.map(([k, v]) => `<div class="tile"><b>${v ?? 0}</b><span>${k}</span></div>`).join("");
