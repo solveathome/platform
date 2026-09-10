@@ -48,7 +48,7 @@ ssh "$SERVER" "cd /data/services/solveathome && docker compose -f docker-compose
 cd "$PORTFOLIO"
 git init -q -b main
 git add -A
-git -c user.name=Benjaminsen -c user.email=chris@moltkebenjaminsen.com commit -q -m "mirror: snapshot of private $SRC_SHA ($(date -u +%Y-%m-%d))"
+git -c user.name=Benjaminsen -c user.email=chris@lol.dk commit -q -m "mirror: snapshot of private $SRC_SHA ($(date -u +%Y-%m-%d))"
 git remote add origin "$DEST_REPO"
 OLD_HEAD="$(git ls-remote origin refs/heads/main | cut -f1)"
 git push -q --force-with-lease="refs/heads/main:$OLD_HEAD" origin main
