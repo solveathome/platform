@@ -15,6 +15,7 @@ import * as files from "../lib/files.js";
 import * as credit from "../lib/credit.js";
 import { orientation } from "../lib/orientation.js";
 import { inbox, renderInbox } from "../lib/inbox.js";
+import { parseOffer, describeOffer } from "../lib/compute.js";
 import { parseTranscript } from "../lib/tokens.js";
 import { needsSourceReview, SOURCE_REVIEW_MESSAGE, sourceReviewHit } from "../lib/document-publication.js";
 import { randomBytes } from "node:crypto";
@@ -74,7 +75,8 @@ async function start(req: any, res: any): Promise<void> {
     return;
   }
   if (req.termsStale) { if (wantsJson) res.status(403).json({ error: req.termsStale }); else res.status(403).type("text/markdown").send(`# Terms changed\n\n${req.termsStale}\n`); return; }
-  const prefs = { maxHours: Number(member.compute?.cpu_hours ?? 0), lane: member.input?.lane ?? null };
+  const offer = member.compute?.usable ? member.compute : parseOffer(member.compute, Number(member.ai?.max_hours_per_assignment ?? 2));
+  const prefs = { maxHours: Number(offer?.usable?.cpu_hours ?? 0), ramGb: Number(offer?.usable?.ram_gb ?? 0), hasGpu: !!(offer?.usable?.vram_gb), lane: member.input?.lane ?? null };
   const tier = await modelTier(req.model ?? "unknown");
   const maxHours = req.query.max_hours !== undefined ? Number(req.query.max_hours) : prefs.maxHours;
   const lane = req.query.lane ? String(req.query.lane) : (req.query.any_lane ? null : prefs.lane);
@@ -92,6 +94,8 @@ async function start(req: any, res: any): Promise<void> {
          AND j.problem_id = $7
          AND j.min_tier >= $1
          AND COALESCE((j.compute_hint->>'cpu_hours')::numeric, 0) <= $2
+         AND COALESCE((j.compute_hint->>'ram_gb')::numeric, 0) <= GREATEST($9::numeric, 8)
+         AND (COALESCE(j.compute_hint->>'gpu', 'false') IN ('false', '0', '') OR $10::boolean)
          AND ($3::text IS NULL OR l.slug = $3)
          AND ($4::text IS NULL OR j.type = $4)
          AND (pr.id IS NULL OR pr.user_id <> $5)
@@ -105,7 +109,7 @@ async function start(req: any, res: any): Promise<void> {
          CASE WHEN pr.id IS NOT NULL AND pr.provider <> $6 THEN 0 ELSE 1 END,
          j.created_at
        LIMIT 1 FOR UPDATE OF j SKIP LOCKED`,
-      [tier, maxHours, lane, type, uid, req.provider, req.project.id, tier],
+      [tier, maxHours, lane, type, uid, req.provider, req.project.id, tier, prefs.ramGb, prefs.hasGpu],
     );
     let row = r.rows[0] as (JobRow & { id: number; budget_hours: string }) | undefined;
     if (!row) {
@@ -122,7 +126,7 @@ async function start(req: any, res: any): Promise<void> {
     await client.query(`UPDATE pool SET session_jobs = session_jobs + 1 WHERE problem_id = $1 AND user_id = $2`, [req.project.id, uid]);
     await client.query("COMMIT");
     row.expires_at = upd.rows[0].expires_at;
-    const sess = { id: String(member.session), jobs: Number(member.session_jobs) + 1, max: member.session_max_jobs === null ? null : Number(member.session_max_jobs), maxHours: Number(member.ai?.max_hours_per_assignment ?? 2), compute: member.compute ? `${member.compute.cpu_hours ?? 0} CPU h / ${member.compute.ram_gb ?? "?"} GB` : "not offered", transcriptPreapproved: member.ai?.transcript_preapproved === true };
+    const sess = { id: String(member.session), jobs: Number(member.session_jobs) + 1, max: member.session_max_jobs === null ? null : Number(member.session_max_jobs), maxHours: Number(member.ai?.max_hours_per_assignment ?? 2), compute: describeOffer(offer), transcriptPreapproved: member.ai?.transcript_preapproved === true };
     let md = renderBrief(row, `${BASE()}/projects/${req.project.slug}`, sess);
     if (req.justRegistered) md = (await orientation(req.project, BASE(), member, true)) + "\n\n---\n\n" + md;
     md = ownerNote + md;
@@ -195,7 +199,8 @@ job.post("/start", bearer, project, async (req: any, res: any) => {
   // Assignment count: the default is to keep going until the person stops the agent (NULL). A number caps the session.
   const rawMax = b.ai?.max_assignments;
   const maxJobs: number | null = rawMax === undefined || rawMax === null || rawMax === 0 || rawMax === "until_stopped" || rawMax === "unlimited" ? null : Math.min(50, Math.max(1, Math.floor(Number(rawMax)) || 1));
-  const compute = b.compute === undefined && prev ? prev.compute : (b.compute && typeof b.compute === "object" ? { cpu_hours: Math.max(0, Number(b.compute.cpu_hours ?? 0)), ram_gb: Number(b.compute.ram_gb ?? 0) || null, mathlib_cache: !!b.compute.mathlib_cache } : null);
+  // Compute is a share of the measured machine (Q67), never a preset; the server derives what the share is worth per assignment.
+  const compute = b.compute === undefined && prev ? parseOffer(prev.compute, ai.max_hours_per_assignment) : parseOffer(b.compute, ai.max_hours_per_assignment);
   const input = b.input === undefined && prev ? prev.input : (b.input && typeof b.input === "object" && (b.input.lane || b.input.direction) ? { lane: b.input.lane ? String(b.input.lane).slice(0, 80) : null, direction: b.input.direction ? String(b.input.direction).slice(0, 4000) : null } : null);
   // What the handle holds (Q66): local sources others may ask about, tools, and whether a person answers asks and how fast.
   const holds = b.holds === undefined && prev ? (prev.holds ?? {}) : (b.holds && typeof b.holds === "object" ? {

@@ -10,6 +10,7 @@
     "build": "tsc",
     "build:icons": "node scripts/build-icons.mjs",
     "check": "tsc --noEmit",
+    "test:compute": "node --import tsx --test tests/compute.test.mjs",
     "test:model-id": "node --import tsx --test tests/model-id.test.mjs",
     "test:activity": "node --import tsx --test tests/project-activity.test.mjs",
     "seed": "tsx scripts/seed.ts",

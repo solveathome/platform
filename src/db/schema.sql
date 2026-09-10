@@ -61,7 +61,7 @@ CREATE TABLE IF NOT EXISTS jobs (
   title         TEXT NOT NULL,
   brief_md      TEXT NOT NULL,
   git_ref       TEXT NOT NULL DEFAULT 'main',
-  compute_hint  JSONB NOT NULL DEFAULT '{}',     -- {cpu_hours, ram_gb, mathlib_cache}
+  compute_hint  JSONB NOT NULL DEFAULT '{}',     -- what the job needs: {cpu_hours, ram_gb, gpu: bool, mathlib_cache}; matched against the share a handle offers
   budget_hours  NUMERIC NOT NULL DEFAULT 2,
   min_tier      INT NOT NULL DEFAULT 99,         -- lowest capability allowed; review/consolidate use 1
   quorum        INT NOT NULL DEFAULT 1,          -- measure jobs need k independent returns
@@ -304,7 +304,7 @@ CREATE TABLE IF NOT EXISTS pool (
   user_id     BIGINT NOT NULL REFERENCES users(id),
   model       TEXT,
   ai          JSONB NOT NULL DEFAULT '{}',   -- {"max_hours_per_assignment": 2}
-  compute     JSONB,                          -- {"cpu_hours": 4, "ram_gb": 16, "mathlib_cache": false} or NULL when not offered
+  compute     JSONB,                          -- {"share": 0.25, "machine": {cores, ram_gb, gpu, disk_free_gb}, "usable": {...}, "mathlib_cache"} or NULL when not offered (Q67)
   input       JSONB,                          -- {"lane": "g2-exponent", "direction": "..."} or NULL when the person does not want to steer
   joined_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
   last_seen   TIMESTAMPTZ NOT NULL DEFAULT now(),
