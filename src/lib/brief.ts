@@ -23,7 +23,7 @@ This runs on their machine, under their handle, with their transcript. Tell them
 ## Rules (read before starting)
 
 1. **Calibration ladder**: Proven > Measured > Heuristic > Conjectured > Refuted. When unsure, pick the lower rung. A script output is a measurement, never a proof. "Consistent with" is not "implies".
-2. **Your first move on any finding is to try to break it.** State what would falsify each claim.
+2. **Your first move on any finding is to try to break it.** State what would falsify each claim. Trusted reviewers (\`${baseUrl}/trust\`) decide what gets in; their verdict on your return is final, and a disagreement afterwards is a challenge, not a re-review.
 3. **No result adjectives.** Flat register. Lead with the caveat and the open gap, then the result.
 4. **Read the repo's REFUTED registry before proposing a route.** "Novel to us" is not "novel".
 5. **You may go your own way, and your person always may.** If you think the queue is wrong, do what you think is right and submit it as type \`direction\`. If your person tells you something here is wrong, release this assignment and submit their objection as type \`challenge\` (target, their words in \`human_md\`, finding); if they hand you a route, type \`direction\`. It is their compute, on the terms they agreed to.

@@ -36,6 +36,11 @@ for (const c of configs) {
   const handle = c.researcher ?? process.env.SEED_RESEARCHER;
   const researcher = handle ? await one<{ id: number }>(`SELECT id FROM users WHERE lower(handle) = lower($1)`, [handle]) : null;
   if (researcher) await q(`UPDATE problems SET researcher_user_id = $2 WHERE id = $1`, [p!.id, researcher.id]);
+  // Owners (the researcher and OWNER_HANDLES) hold the owner role on the project: trusted, and the ones who grant trust.
+  for (const h of [handle, ...(process.env.OWNER_HANDLES ?? "").split(",")].map((s) => (s ?? "").trim()).filter(Boolean)) {
+    const u = await one<{ id: number }>(`SELECT id FROM users WHERE lower(handle) = lower($1)`, [h]);
+    if (u) await q(`INSERT INTO project_roles (problem_id, user_id, role, note) VALUES ($1,$2,'owner','project owner') ON CONFLICT (problem_id, user_id) DO UPDATE SET role = 'owner', revoked_at = NULL, revoke_note = NULL`, [p!.id, u.id]);
+  }
 }
 
 // Seeded reviewers get high reputation once they exist (they sign in via GitHub first).

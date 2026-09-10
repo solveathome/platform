@@ -15,6 +15,7 @@ import { papers } from "./routes/papers.js";
 import { filesRouter } from "./routes/files.js";
 import { docs } from "./routes/docs.js";
 import { projects } from "./routes/projects.js";
+import { trust } from "./routes/trust.js";
 import { githubStart, githubCallback, logout } from "./lib/auth.js";
 import { splash } from "./lib/splash.js";
 import "./lib/markdown.js";   // safe link and image schemes in every Markdown render
@@ -55,12 +56,15 @@ app.use("/projects/:slug", board);
 app.use("/projects/:slug", papers);
 app.use("/projects/:slug", chat);
 app.use("/projects/:slug", asks);
+app.use("/projects/:slug", trust);
 app.use("/projects/:slug", docs);
 app.use(projects);
 app.use(root);
 app.use(dumps);
 app.use(terms);
 app.use(filesRouter);
+// The footer's "become a trusted reviewer" lands on the featured project's trust page.
+app.get("/trust", async (_req, res) => { const f = await featuredProject(); res.redirect(302, f ? `/projects/${f.slug}/trust` : "/projects"); });
 const homeHtml = () => readFileSync(join(PUBLIC_DIR, "home.html"), "utf8");
 app.get("/", async (req, res) => {
   const f = await featuredProject();

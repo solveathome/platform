@@ -19,6 +19,7 @@ import { parseOffer, describeOffer } from "../lib/compute.js";
 import { parseTranscript } from "../lib/tokens.js";
 import { needsSourceReview, SOURCE_REVIEW_MESSAGE, sourceReviewHit } from "../lib/document-publication.js";
 import { randomBytes } from "node:crypto";
+import { isTrusted } from "../lib/roles.js";
 import { parseTangent, parseTarget, tangentJob, challengesFor, challengeBanner, targetUrl, targetLabel, FINDINGS, type Tangent } from "../lib/tangent.js";
 
 /** Caps on submission (Sep 10): pending self-assigned returns per handle per project, and returns per handle per hour. */
@@ -91,6 +92,8 @@ async function start(req: any, res: any): Promise<void> {
   const offer = settings.compute?.usable ? settings.compute : parseOffer(settings.compute, Number(settings.ai?.max_hours_per_assignment ?? 2));
   const prefs = { maxHours: Number(offer?.usable?.cpu_hours ?? 0), ramGb: Number(offer?.usable?.ram_gb ?? 0), hasGpu: !!(offer?.usable?.vram_gb), lane: settings.input?.lane ?? null };
   const tier = await modelTier(req.model ?? "unknown");
+  // Review assignments go to trusted reviewers (Sep 10); everyone else reviews advisorily, self-assigned.
+  const trusted = await isTrusted(Number(req.project.id), Number(req.user!.id), req.user!.handle);
   const maxHours = req.query.max_hours !== undefined ? Number(req.query.max_hours) : prefs.maxHours;
   const lane = req.query.lane ? String(req.query.lane) : (req.query.any_lane ? null : prefs.lane);
   const type = req.query.type ? String(req.query.type) : null;
@@ -115,6 +118,7 @@ async function start(req: any, res: any): Promise<void> {
          AND ($3::text IS NULL OR l.slug = $3)
          AND ($4::text IS NULL OR j.type = $4)
          AND (pr.id IS NULL OR pr.user_id <> $5)
+         AND (pr.id IS NULL OR $12::boolean)
          AND NOT EXISTS (SELECT 1 FROM reviews rv WHERE rv.return_id = j.parent_return_id AND rv.user_id = $5)
          -- One review per person per return: the handle's other agent may already hold a review job for it.
          AND NOT EXISTS (SELECT 1 FROM jobs j2 WHERE j2.parent_return_id = j.parent_return_id AND j2.id <> j.id AND j2.assigned_to = $5 AND j2.status = 'assigned')
@@ -130,7 +134,7 @@ async function start(req: any, res: any): Promise<void> {
          CASE WHEN pr.id IS NOT NULL AND pr.provider <> $6 THEN 0 ELSE 1 END,
          j.created_at
        LIMIT 1 FOR UPDATE OF j SKIP LOCKED`,
-      [tier, maxHours, lane, type, uid, req.provider, req.project.id, tier, prefs.ramGb, prefs.hasGpu, req.model ?? null],
+      [tier, maxHours, lane, type, uid, req.provider, req.project.id, tier, prefs.ramGb, prefs.hasGpu, req.model ?? null, trusted],
     );
     let row = r.rows[0] as (JobRow & { id: number; budget_hours: string }) | undefined;
     if (!row) {
@@ -306,7 +310,7 @@ job.post("/result", bearer, project, async (req: any, res) => {
     // The return comes from the agent that holds the job. Another agent of the same handle sends X-Session of its own and is refused.
     if (xs && jobRow.assigned_session && xs !== jobRow.assigned_session) { res.status(403).json({ error: `job ${jobRow.id} is held by another of your sessions (${jobRow.assigned_session}); this session's assignment is at GET /start`, held_by_session: jobRow.assigned_session }); return; }
   } else {
-    if (!["direction", "paper", "audit", "challenge"].includes(b.type)) { res.status(400).json({ error: "without job_id only type 'direction', 'challenge' (your person thinks something here is wrong: target + human_md + finding), 'paper' (a new paper) or 'audit' (a change proposal for any served document) is accepted" }); return; }
+    if (!["direction", "paper", "audit", "challenge", "review"].includes(b.type)) { res.status(400).json({ error: "without job_id only type 'direction', 'challenge' (your person thinks something here is wrong: target + human_md + finding), 'review' (an advisory review of any return: return_id + verdict), 'paper' (a new paper) or 'audit' (a change proposal for any served document) is accepted" }); return; }
     // Self-assigned work is welcome and unbounded over time, not at once: each one asks for reviews from the top tier.
     const open = await one<{ c: string }>(`SELECT count(*) AS c FROM returns WHERE user_id = $1 AND problem_id = $2 AND job_id IS NULL AND status = 'pending'`, [uid, req.project.id]);
     if (Number(open?.c ?? 0) >= MAX_OPEN_SELF_ASSIGNED) { res.status(429).json({ error: `you already have ${open!.c} self-assigned returns under review in this project; wait for a decision before proposing more (limit ${MAX_OPEN_SELF_ASSIGNED})` }); return; }
@@ -324,8 +328,20 @@ job.post("/result", bearer, project, async (req: any, res) => {
   if (tokens.models && (Object.keys(tokens.models).length === 0 || tokens.models.codex !== undefined) && req.model) { const n = tokens.models.codex ?? tokens.output; delete tokens.models.codex; if (n > 0) tokens.models[req.model] = (tokens.models[req.model] ?? 0) + n; }
 
   // Review job: record the review and try to decide the parent return.
-  if (jobRow?.type === "review") {
+  if (jobRow?.type === "review" || (!jobRow && b.type === "review")) {
     if (!["accept", "reject"].includes(b.verdict)) { res.status(400).json({ error: "verdict must be accept|reject" }); return; }
+    // Trusted reviewers decide; anyone else's review is advisory (Sep 10). A self-assigned review names the return it reviews.
+    const reviewerTrusted = await isTrusted(Number(req.project.id), uid, req.user!.handle);
+    let reviewOf = jobRow ? Number(jobRow.parent_return_id) : Number(b.return_id);
+    if (!jobRow) {
+      const target = await one<{ id: number; user_id: number; status: string; problem_id: number; lane_id: number | null }>(`SELECT id, user_id, status, problem_id, lane_id FROM returns WHERE id = $1 AND problem_id = $2`, [reviewOf || 0, req.project.id]);
+      if (!target) { res.status(400).json({ error: "a self-assigned review needs return_id: the return you reviewed, in this project" }); return; }
+      if (Number(target.user_id) === uid) { res.status(403).json({ error: "you do not review your own return" }); return; }
+      if (!["pending", "accepted", "rejected", "contested", "recorded"].includes(target.status)) { res.status(409).json({ error: `return #${target.id} is ${target.status}` }); return; }
+      if (await one(`SELECT 1 FROM reviews WHERE return_id = $1 AND user_id = $2`, [target.id, uid])) { res.status(409).json({ error: `you already reviewed return #${target.id}` }); return; }
+      if (!reviewerTrusted && target.status !== "pending" && !(await one(`SELECT 1 FROM returns WHERE id = $1 AND provisional`, [target.id]))) { res.status(409).json({ error: `return #${target.id} is decided (${target.status}); an advisory review changes nothing now. If you think the decision is wrong, submit a challenge.` }); return; }
+      reviewOf = Number(target.id);
+    }
     const w = await reputation.score(uid);
     const unverifiable = b.verdict === "reject" && b.unverifiable === true;
     if (unverifiable && !String(b.needs_md ?? "").trim()) { res.status(400).json({ error: "an unverifiable rejection needs needs_md: what a checkable return would need (commands, inputs, expected outputs, what was missing)" }); return; }
@@ -333,14 +349,15 @@ job.post("/result", bearer, project, async (req: any, res) => {
     const verification = ["read", "spot", "rerun"].includes(b.verification) ? b.verification : "read";
     const rerunReason = String(b.rerun_reason ?? "").trim().slice(0, 2000);
     if (verification !== "read" && !rerunReason) { res.status(400).json({ error: `verification "${verification}" needs rerun_reason: what made rerunning worth it (an output missing or not matching the code, a bug you found, a claim the captured output does not show). If none, the review is "read".` }); return; }
-    await q(`INSERT INTO reviews (return_id, review_job_id, user_id, model, provider, verdict, rung, notes_md, weight, also_credit, transcript, tokens, unverifiable, needs_md, verification, rerun_reason)
-             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)`,
-      [jobRow.parent_return_id, jobRow.id, uid, req.model ?? "unknown", req.provider ?? "unknown", b.verdict, b.rung ?? null, b.notes_md ?? b.report_md ?? "", w, b.also_credit && typeof b.also_credit === "object" ? JSON.stringify(b.also_credit) : null, String(b.transcript), JSON.stringify(tokens), unverifiable, unverifiable ? String(b.needs_md).slice(0, 4000) : null, verification, verification === "read" ? null : rerunReason]);
-    await q(`UPDATE jobs SET status = 'returned' WHERE id = $1`, [jobRow.id]);
+    await q(`INSERT INTO reviews (return_id, review_job_id, user_id, model, provider, verdict, rung, notes_md, weight, also_credit, transcript, tokens, unverifiable, needs_md, verification, rerun_reason, trusted)
+             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17)`,
+      [reviewOf, jobRow?.id ?? null, uid, req.model ?? "unknown", req.provider ?? "unknown", b.verdict, b.rung ?? null, b.notes_md ?? b.report_md ?? "", w, b.also_credit && typeof b.also_credit === "object" ? JSON.stringify(b.also_credit) : null, String(b.transcript), JSON.stringify(tokens), unverifiable, unverifiable ? String(b.needs_md).slice(0, 4000) : null, verification, verification === "read" ? null : rerunReason, reviewerTrusted]);
+    if (jobRow) await q(`UPDATE jobs SET status = 'returned' WHERE id = $1`, [jobRow.id]);
+    const parentRow = jobRow ?? await one(`SELECT problem_id, lane_id FROM returns WHERE id = $1`, [reviewOf]);
     await q(`INSERT INTO credits (user_id, model, provider, problem_id, lane_id, kind, points, source_type, source_id, note) SELECT $1,$2,$3,$4,$5,'tokens',0,'review',$6,$7 WHERE $8::numeric > 0`,
-      [uid, req.model ?? null, req.provider ?? null, jobRow.problem_id, jobRow.lane_id, String(jobRow.id), `${(tokens.input + tokens.output + tokens.cache_read + tokens.cache_write).toLocaleString("en-US")} tokens (${tokens.output.toLocaleString("en-US")} output), ${tokens.source}, review of return #${jobRow.parent_return_id}`, tokens.input + tokens.output + tokens.cache_read + tokens.cache_write]);
-    const outcome = await resolveReturn(Number(jobRow.parent_return_id));
-    res.json({ ok: true, review_of: jobRow.parent_return_id, outcome, tokens });
+      [uid, req.model ?? null, req.provider ?? null, parentRow.problem_id, parentRow.lane_id, String(jobRow?.id ?? `r${reviewOf}`), `${(tokens.input + tokens.output + tokens.cache_read + tokens.cache_write).toLocaleString("en-US")} tokens (${tokens.output.toLocaleString("en-US")} output), ${tokens.source}, review of return #${reviewOf}`, tokens.input + tokens.output + tokens.cache_read + tokens.cache_write]);
+    const outcome = await resolveReturn(reviewOf);
+    res.json({ ok: true, review_of: reviewOf, outcome, advisory: !reviewerTrusted, tokens });
     return;
   }
 
@@ -436,7 +453,7 @@ job.post("/result", bearer, project, async (req: any, res) => {
 export async function spawnReviews(returnId: number, problemId: number, laneId: number | null, n: number): Promise<void> {
   const existing = await one<{ c: string }>(`SELECT count(*) AS c FROM jobs WHERE parent_return_id = $1`, [returnId]);
   const have = Number(existing?.c ?? 0);
-  const toMake = Math.min(MAX_REVIEWS, Math.max(0, n - (have % 1000)));
+  const toMake = Math.max(0, Math.min(n, MAX_REVIEWS - have));   // n more, never past the cap
   const parent = await one<{ type: string; paper_slug: string | null; revision_path: string | null; recipe_md: string | null; target: any; job_budget: string | null; model: string; handle: string; author_tier: number | null; problem_id: number }>(
     `SELECT r.type, r.paper_slug, r.revision_path, r.recipe_md, r.target, j.budget_hours AS job_budget, r.model, u.handle, mt.tier AS author_tier, r.problem_id
      FROM returns r LEFT JOIN jobs j ON j.id = r.job_id JOIN users u ON u.id = r.user_id LEFT JOIN model_tiers mt ON mt.model = r.model WHERE r.id = $1`, [returnId]);
@@ -469,37 +486,45 @@ export async function spawnReviews(returnId: number, problemId: number, laneId: 
 
 /** Apply the consensus rule to a return; escalate or resolve. */
 export async function resolveReturn(returnId: number): Promise<string> {
-  const votes = await q<{ verdict: "accept" | "reject"; weight: string; provider: string; rung: string | null; user_id: number; model: string; also_credit: any; unverifiable: boolean; needs_md: string | null; verification: string }>(
-    `SELECT verdict, weight, provider, rung, user_id, model, also_credit, unverifiable, needs_md, verification FROM reviews WHERE return_id = $1`, [returnId]);
-  const d = decide(votes.map((v) => ({ ...v, weight: Number(v.weight) })));
   const ret = await one(`SELECT * FROM returns WHERE id = $1`, [returnId]);
+  if (!ret) return "unknown";
+  // Decided once, by trusted reviewers. A provisional (advisory) decision can still be made final; a final one is not reopened here (that is a challenge).
+  if (ret.status !== "pending" && !ret.provisional) return ret.status;
+  const votes = await q<{ verdict: "accept" | "reject"; weight: string; provider: string; rung: string | null; user_id: number; model: string; also_credit: any; unverifiable: boolean; needs_md: string | null; verification: string; trusted: boolean }>(
+    `SELECT verdict, weight, provider, rung, user_id, model, also_credit, unverifiable, needs_md, verification, trusted FROM reviews WHERE return_id = $1`, [returnId]);
+  const d = decide(votes.map((v) => ({ ...v, weight: Number(v.weight) })));
   if (d.status === "pending") {
     const open = await one<{ c: string }>(`SELECT count(*) AS c FROM jobs WHERE parent_return_id = $1 AND status IN ('queued','assigned')`, [returnId]);
     if (d.needMore && Number(open?.c ?? 0) === 0 && votes.length < MAX_REVIEWS) await spawnReviews(returnId, ret.problem_id, ret.lane_id, 2);
     return `pending (${d.reason})`;
   }
   // The return carries the deepest verification an accepting reviewer did (Q69): a later citer knows whether anyone reran it.
-  const acc = votes.filter((v) => v.verdict === "accept").map((v) => v.verification);
+  const deciding = d.by === "trusted" ? votes.filter((v) => v.trusted) : votes;
+  const acc = deciding.filter((v) => v.verdict === "accept").map((v) => v.verification);
   const verification = d.status === "accepted" ? (acc.includes("rerun") ? "rerun" : acc.includes("spot") ? "spot" : "read") : null;
-  await q(`UPDATE returns SET status = $2, final_rung = $3, verification = $4 WHERE id = $1`, [returnId, d.status, d.status === "accepted" ? d.rung : null, verification]);
-  if (ret.job_id) await q(`UPDATE jobs SET status = $2 WHERE id = $1`, [ret.job_id, d.status]);
-  await q(`UPDATE jobs SET status = 'expired' WHERE parent_return_id = $1 AND status = 'queued'`, [returnId]);
-  // Rejected only because nobody could check it in budget: not a mark against the author; a follow-up job brings it to a checkable state.
-  const unverifiableOnly = d.status === "rejected" && votes.some((v) => v.verdict === "reject") && votes.filter((v) => v.verdict === "reject").every((v) => v.unverifiable);
-  if (unverifiableOnly) await spawnFollowUp(ret, votes.filter((v) => v.verdict === "reject" && v.needs_md).map((v) => v.needs_md as string));
-  if (d.status !== "contested") {
-    if (!unverifiableOnly) await reputation.onReturnResolved(Number(ret.user_id), d.status === "accepted");
-    for (const v of votes) {
-      const agreed = (v.verdict === "accept") === (d.status === "accepted");
-      await q(`UPDATE reviews SET agreed_with_outcome = $3 WHERE return_id = $1 AND user_id = $2`, [returnId, v.user_id, agreed]);
-      await reputation.onReviewScored(Number(v.user_id), agreed);
-    }
-    if (d.status === "accepted" && ret.type === "direction") await openLaneFromDirection(ret);
-    if (ret.type === "paper" && ret.paper_slug) await settlePaper(ret, d.status);
-    if (d.status === "accepted" && ret.revision_path && ret.revision_sha) { const pr = await one<{ slug: string }>(`SELECT slug FROM problems WHERE id = $1`, [ret.problem_id]); if (pr) await revisions.integrate(ret, pr.slug, votes); }
-    if (d.status === "accepted") await credit.payAcceptedReturn({ ...ret, status: "accepted", final_rung: d.rung }, votes);
-    if (d.status === "accepted" && ret.type === "curate" && ret.decision) await files.applyCuration(Number(ret.id), Number(ret.user_id), ret.decision);
+  if (d.provisional) {
+    // Advisory reviews only: shown as provisional, nothing paid, opened or integrated; review jobs stay open for a trusted reviewer.
+    await q(`UPDATE returns SET status = $2, final_rung = $3, verification = $4, provisional = true WHERE id = $1`, [returnId, d.status, d.status === "accepted" ? d.rung : null, verification]);
+    return `${d.status} (provisional: advisory reviews only; a trusted review makes it final)`;
   }
+  await q(`UPDATE returns SET status = $2, final_rung = $3, verification = $4, provisional = false WHERE id = $1`, [returnId, d.status, d.status === "accepted" ? d.rung : null, verification]);
+  if (ret.job_id) await q(`UPDATE jobs SET status = $2 WHERE id = $1`, [ret.job_id, d.status]);
+  await q(`UPDATE jobs SET status = 'expired' WHERE parent_return_id = $1 AND status IN ('queued','assigned')`, [returnId]);
+  // Rejected only because nobody could check it in budget: not a mark against the author; a follow-up job brings it to a checkable state.
+  const unverifiableOnly = d.status === "rejected" && deciding.some((v) => v.verdict === "reject") && deciding.filter((v) => v.verdict === "reject").every((v) => v.unverifiable);
+  if (unverifiableOnly) await spawnFollowUp(ret, deciding.filter((v) => v.verdict === "reject" && v.needs_md).map((v) => v.needs_md as string));
+  if (!unverifiableOnly) await reputation.onReturnResolved(Number(ret.user_id), d.status === "accepted");
+  for (const v of votes) {
+    const agreed = (v.verdict === "accept") === (d.status === "accepted");
+    await q(`UPDATE reviews SET agreed_with_outcome = $3 WHERE return_id = $1 AND user_id = $2`, [returnId, v.user_id, agreed]);
+    await reputation.onReviewScored(Number(v.user_id), agreed);
+  }
+  const final = { ...ret, status: d.status, final_rung: d.status === "accepted" ? d.rung : null };
+  if (d.status === "accepted" && ret.type === "direction") await openLaneFromDirection(final);
+  if (ret.type === "paper" && ret.paper_slug) await settlePaper(final, d.status);
+  if (d.status === "accepted" && ret.revision_path && ret.revision_sha) { const pr = await one<{ slug: string }>(`SELECT slug FROM problems WHERE id = $1`, [ret.problem_id]); if (pr) await revisions.integrate(final, pr.slug, deciding); }
+  if (d.status === "accepted") await credit.payAcceptedReturn(final, deciding);
+  if (d.status === "accepted" && ret.type === "curate" && ret.decision) await files.applyCuration(Number(ret.id), Number(ret.user_id), ret.decision);
   return d.status;
 }
 
@@ -561,13 +586,13 @@ async function returnPage(req: any, res: any): Promise<void> {
   const r = await one(`SELECT r.*, u.handle, u.display_name, j.title AS job_title, j.type AS job_type, l.slug AS lane FROM returns r JOIN users u ON u.id = r.user_id LEFT JOIN jobs j ON j.id = r.job_id LEFT JOIN lanes l ON l.id = r.lane_id WHERE r.id = $1 AND r.problem_id = $2`, [req.params.id, req.project.id]);
   if (!r) { res.status(404).type("text/plain").send("no such return"); return; }
   const files = await q(`SELECT f.sha256, f.name, f.ext, f.bytes FROM file_refs x JOIN files f ON f.sha256 = x.file_sha WHERE x.ref_type = 'return' AND x.ref_id = $1 AND f.deleted_at IS NULL ORDER BY f.name`, [r.id]);
-  const reviews = await q(`SELECT rv.id, rv.verdict, rv.rung, rv.notes_md, rv.weight, rv.created_at, u.handle, rv.model, rv.verification, rv.rerun_reason FROM reviews rv JOIN users u ON u.id = rv.user_id WHERE rv.return_id = $1 ORDER BY rv.id`, [r.id]);
+  const reviews = await q(`SELECT rv.id, rv.verdict, rv.rung, rv.notes_md, rv.weight, rv.created_at, u.handle, rv.model, rv.verification, rv.rerun_reason, rv.trusted FROM reviews rv JOIN users u ON u.id = rv.user_id WHERE rv.return_id = $1 ORDER BY rv.id`, [r.id]);
   const pages = await paperPages(req.project.slug);
   const md = async (t: string) => { const m = protectMath(String(t ?? "").replace(/<!--[\s\S]*?-->/g, "")); return linkPaths(await linkPeople(m.restore(marked.parse(m.text.replace(/</g, "&lt;").replace(/>/g, "&gt;"), { gfm: true }) as string)), req.project.slug, "", pages); };
   const P = `/projects/${req.project.slug}`;
-  const meta = `<p class="doc-meta"><span class="tag">${escHtml(r.status)}${r.final_rung ? `, ${escHtml(r.final_rung)}` : r.author_rung ? `, claims ${escHtml(r.author_rung)}` : ""}${r.verification ? `, verified by ${escHtml(r.verification === "read" ? "reading" : r.verification === "spot" ? "spot rerun" : "full rerun")}` : ""}</span><span>${escHtml(r.type)}${r.lane ? ` in <a href="${P}#discussion">${escHtml(r.lane)}</a>` : ""}</span><span>by <a href="/@${escHtml(r.handle)}">${escHtml(r.display_name || "@" + r.handle)}</a> (${escHtml(r.model)})</span><span>${escHtml(String(r.created_at).slice(0, 16).replace("T", " "))} UTC</span>${r.job_id ? `<span>answers assignment #${r.job_id}${r.job_title ? `: ${escHtml(r.job_title)}` : ""}</span>` : ""}${r.paper_slug ? `<span>revision of <a href="${P}/papers/${escHtml(r.paper_slug)}">${escHtml(r.paper_slug)}</a></span>` : ""}${Number(r.cpu_hours) > 0 ? `<span>${escHtml(r.cpu_hours)} CPU h</span>` : ""}</p>`;
+  const meta = `<p class="doc-meta"><span class="tag">${escHtml(r.status)}${r.provisional ? " (provisional: advisory reviews only, awaiting a trusted reviewer)" : ""}${r.final_rung ? `, ${escHtml(r.final_rung)}` : r.author_rung ? `, claims ${escHtml(r.author_rung)}` : ""}${r.verification ? `, verified by ${escHtml(r.verification === "read" ? "reading" : r.verification === "spot" ? "spot rerun" : "full rerun")}` : ""}</span><span>${escHtml(r.type)}${r.lane ? ` in <a href="${P}#discussion">${escHtml(r.lane)}</a>` : ""}</span><span>by <a href="/@${escHtml(r.handle)}">${escHtml(r.display_name || "@" + r.handle)}</a> (${escHtml(r.model)})</span><span>${escHtml(String(r.created_at).slice(0, 16).replace("T", " "))} UTC</span>${r.job_id ? `<span>answers assignment #${r.job_id}${r.job_title ? `: ${escHtml(r.job_title)}` : ""}</span>` : ""}${r.paper_slug ? `<span>revision of <a href="${P}/papers/${escHtml(r.paper_slug)}">${escHtml(r.paper_slug)}</a></span>` : ""}${Number(r.cpu_hours) > 0 ? `<span>${escHtml(r.cpu_hours)} CPU h</span>` : ""}</p>`;
   const flist = files.map((f: any) => `<li><a href="/files/${f.sha256}">${escHtml(f.name)}</a> <span class="muted">${Number(f.bytes).toLocaleString("en")} bytes</span></li>`).join("") || `<li class="muted">No files.</li>`;
-  const rlist = (await Promise.all(reviews.map(async (v: any) => `<li><span class="tag">${escHtml(v.verdict)}${v.rung ? `, ${escHtml(v.rung)}` : ""}</span> by <a href="/@${escHtml(v.handle)}">@${escHtml(v.handle)}</a> (${escHtml(v.model)}), ${escHtml(v.verification ?? "read")}${v.rerun_reason ? `: ${escHtml(v.rerun_reason)}` : ""}, weight ${escHtml(v.weight)}, ${escHtml(String(v.created_at).slice(0, 10))}<div class="document" style="padding-block:.75rem;border:0">${await md(v.notes_md)}</div></li>`))).join("") || `<li class="muted">No verdicts yet.</li>`;
+  const rlist = (await Promise.all(reviews.map(async (v: any) => `<li><span class="tag">${escHtml(v.verdict)}${v.rung ? `, ${escHtml(v.rung)}` : ""}</span> <span class="tag">${v.trusted ? "trusted" : "advisory"}</span> by <a href="/@${escHtml(v.handle)}">@${escHtml(v.handle)}</a> (${escHtml(v.model)}), ${escHtml(v.verification ?? "read")}${v.rerun_reason ? `: ${escHtml(v.rerun_reason)}` : ""}, weight ${escHtml(v.weight)}, ${escHtml(String(v.created_at).slice(0, 10))}<div class="document" style="padding-block:.75rem;border:0">${await md(v.notes_md)}</div></li>`))).join("") || `<li class="muted">No verdicts yet.</li>`;
   const aside = `<div class="doc-side"><div><h3>Files</h3><ul>${flist}</ul>${r.patch ? `<p class="panel-note">Includes a patch against served scripts (below).</p>` : ""}<p class="panel-note"><a href="${P}/return/${r.id}/transcript">Scrubbed transcript</a> (${(Number(r.transcript?.length ?? 0) / 1000).toFixed(0)}k chars) · <a href="${P}/return/${r.id}?json=1">JSON</a></p></div><div><h3>Verdicts</h3><ul>${rlist}</ul></div></div>`;
   const challenged = challengeBanner(await challengesFor(Number(req.project.id), "return", String(r.id)), P);
   const targetLine = r.target ? `<p class="doc-meta"><span>challenges <a href="${targetUrl(r.target, P)}">${escHtml(targetLabel(r.target))}</a></span>${r.finding ? `<span class="tag">${escHtml(r.finding === "holds" ? "objection holds" : r.finding === "partial" ? "holds in part" : "does not hold")}</span>` : ""}</p>` : "";

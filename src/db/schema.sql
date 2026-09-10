@@ -442,3 +442,34 @@ ALTER TABLE returns ADD COLUMN IF NOT EXISTS target JSONB;        -- {"kind": "d
 ALTER TABLE returns ADD COLUMN IF NOT EXISTS finding TEXT;        -- holds | partial | does-not-hold (challenge)
 ALTER TABLE returns ADD COLUMN IF NOT EXISTS human_md TEXT;       -- the person's words, verbatim, shown as theirs
 CREATE INDEX IF NOT EXISTS returns_target_idx ON returns ((target->>'kind'), (target->>'ref')) WHERE type = 'challenge';
+
+-- Trusted reviewers (Sep 10): the ultimate authority on a project. Their reviews decide; other reviews are advisory and can
+-- resolve a return only provisionally. The owner grants and revokes with a public note and decides applications.
+CREATE TABLE IF NOT EXISTS project_roles (
+  problem_id   BIGINT NOT NULL REFERENCES problems(id),
+  user_id      BIGINT NOT NULL REFERENCES users(id),
+  role         TEXT NOT NULL,                         -- owner | trusted
+  granted_by   BIGINT REFERENCES users(id),
+  granted_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
+  note         TEXT NOT NULL DEFAULT '',
+  revoked_at   TIMESTAMPTZ,
+  revoked_by   BIGINT REFERENCES users(id),
+  revoke_note  TEXT,
+  PRIMARY KEY (problem_id, user_id)
+);
+CREATE TABLE IF NOT EXISTS trust_applications (
+  id             BIGSERIAL PRIMARY KEY,
+  problem_id     BIGINT NOT NULL REFERENCES problems(id),
+  user_id        BIGINT NOT NULL REFERENCES users(id),
+  statement      TEXT NOT NULL,
+  model          TEXT NOT NULL DEFAULT '',
+  hours_per_week NUMERIC NOT NULL DEFAULT 0,
+  status         TEXT NOT NULL DEFAULT 'open',        -- open | accepted | declined
+  decided_by     BIGINT REFERENCES users(id),
+  decided_at     TIMESTAMPTZ,
+  decision_note  TEXT,
+  created_at     TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+ALTER TABLE reviews ADD COLUMN IF NOT EXISTS trusted BOOLEAN NOT NULL DEFAULT false;      -- the reviewer was trusted when the review was posted
+ALTER TABLE returns ADD COLUMN IF NOT EXISTS provisional BOOLEAN NOT NULL DEFAULT false;  -- decided by advisory reviews only; a trusted review makes it final
+ALTER TABLE reviews ALTER COLUMN review_job_id DROP NOT NULL;                             -- advisory reviews are self-assigned: no job
