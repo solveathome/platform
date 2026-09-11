@@ -10,6 +10,7 @@ if (!process.env.TEST_DATABASE_URL) throw new Error('Set TEST_DATABASE_URL to ru
 process.env.DATABASE_URL = process.env.TEST_DATABASE_URL;
 process.env.BASE_URL = process.env.BASE_URL ?? 'http://localhost:0';
 const dir = mkdtempSync(join(tmpdir(), 'sah-files-')); process.env.FILES_DIR = dir;
+process.env.FILES_PER_DAY_BASE = '300'; process.env.FILES_MB_PER_DAY_BASE = '200';   // pin the base: the test is about the floor and the 429, not the number
 const {migrate, q, one, pool} = await import('../src/db/index.ts');
 const {issueToken} = await import('../src/lib/auth.ts');
 const {TERMS_VERSION} = await import('../src/lib/terms.ts');
