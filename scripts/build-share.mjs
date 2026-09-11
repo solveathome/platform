@@ -3,7 +3,7 @@
 // rsvg-convert (fonts from the system). The PNG is committed; run this when the copy or the picture changes.
 //   node scripts/build-share.mjs twin-primes
 import { execFileSync } from "node:child_process";
-import { readFileSync, writeFileSync, mkdirSync } from "node:fs";
+import { readFileSync, writeFileSync, mkdirSync, existsSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { join, dirname } from "node:path";
 
@@ -64,7 +64,38 @@ const svg = `<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.
   <text x="80" y="576" font-family="Avenir Next" font-weight="500" font-size="21" fill="${MUT}">solveathome.org/projects/${esc(slug)}</text>
   <text x="1120" y="576" font-family="Avenir Next" font-weight="400" font-size="21" fill="${MUT}" text-anchor="end">${esc(share.footer ?? "open problem · worked in the open · CC BY 4.0")}</text>
 </svg>`;
-if (slug !== "--site") {
+/** A project that ships its own artwork (projects/<slug>/brand/share-bg.jpg) gets a photographic card: the picture under dark
+ *  bands top and bottom, the logo and the question above, the URL and footer below, the middle left clear. Also rendered at
+ *  Substack's header size when an --header <path> is given. */
+const bgPath = join(root, "projects", slug === "--site" ? "none" : slug, "brand", "share-bg.jpg");
+const hasBg = slug !== "--site" && existsSync(bgPath);
+function photoCard(W, H) {
+  const bg = readFileSync(bgPath).toString("base64");
+  const k = W / 1200;   // scale every measure from the 1200-wide layout
+  const f = (n) => (n * k).toFixed(1);
+  return `<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="${W}" height="${H}" viewBox="0 0 ${W} ${H}">
+  <defs>
+    <linearGradient id="top" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="${BG}" stop-opacity=".92"/><stop offset="1" stop-color="${BG}" stop-opacity="0"/></linearGradient>
+    <linearGradient id="bottom" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="${BG}" stop-opacity="0"/><stop offset="1" stop-color="${BG}" stop-opacity=".9"/></linearGradient>
+  </defs>
+  <rect width="${W}" height="${H}" fill="${BG}"/>
+  <image x="0" y="0" width="${W}" height="${H}" preserveAspectRatio="xMidYMid slice" href="data:image/jpeg;base64,${bg}" xlink:href="data:image/jpeg;base64,${bg}"/>
+  <rect x="0" y="0" width="${W}" height="${f(250)}" fill="url(#top)"/>
+  <rect x="0" y="${H - 170 * k}" width="${W}" height="${f(170)}" fill="url(#bottom)"/>
+  <image x="${f(72)}" y="${f(56)}" height="${f(40)}" width="${(40 * k * logoBuf.readUInt32BE(16) / logoBuf.readUInt32BE(20)).toFixed(1)}" href="data:image/png;base64,${logo}" xlink:href="data:image/png;base64,${logo}"/>
+  <text x="${f(72)}" y="${f(168)}" font-family="Avenir Next" font-weight="600" font-size="${f(54)}" fill="${FG}">${esc(question)}</text>
+  <text x="${f(72)}" y="${f(212)}" font-family="Avenir Next" font-weight="400" font-size="${f(24)}" fill="${MUT}">${esc(line2)}</text>
+  <text x="${f(72)}" y="${H - 56 * k}" font-family="Avenir Next" font-weight="500" font-size="${f(21)}" fill="${MUT}">solveathome.org/projects/${esc(slug)}</text>
+  <text x="${W - 72 * k}" y="${H - 56 * k}" font-family="Avenir Next" font-weight="400" font-size="${f(21)}" fill="${MUT}" text-anchor="end">${esc(share.footer ?? "open problem · worked in the open · CC BY 4.0")}</text>
+</svg>`;
+}
+// A photographic card is a JPEG (a PNG of a photo is five times the weight); rsvg renders PNG, ImageMagick encodes.
+const render = (svgText, out, W, H) => { const tmp = out + ".svg.tmp", png = out + ".png.tmp"; writeFileSync(tmp, svgText); execFileSync("rsvg-convert", ["-w", String(W), "-h", String(H), "-o", png, tmp]); execFileSync("magick", [png, "-strip", "-quality", "88", out]); execFileSync("rm", [tmp, png]); console.log(`wrote ${out}`); };
+if (hasBg) {
+  render(photoCard(1200, 630), join(root, "public", "assets", `og-${slug}.jpg`), 1200, 630);
+  const hi = process.argv.indexOf("--header");
+  if (hi > 0 && process.argv[hi + 1]) render(photoCard(1456, 816), process.argv[hi + 1], 1456, 816);
+} else if (slug !== "--site") {
   const out = join(root, "public", "assets", `og-${slug}.png`);
   mkdirSync(dirname(out), { recursive: true });
   const svgPath = join(root, "public", "assets", `og-${slug}.svg.tmp`);
