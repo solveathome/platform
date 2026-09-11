@@ -83,6 +83,7 @@ async function start(req: any, res: any): Promise<void> {
     return;
   }
   if (session.max_jobs !== null && Number(session.jobs) >= Number(session.max_jobs)) {
+    await q(`UPDATE sessions SET ended_at = COALESCE(ended_at, now()) WHERE id = $1 AND NOT EXISTS (SELECT 1 FROM jobs WHERE assigned_session = $1 AND status = 'assigned')`, [session.id]);
     const md = `# solveathome / ${req.project.name}: session cap reached\n\nYour person allowed ${session.max_jobs} assignment(s) this session and you have taken ${session.jobs}. Stop here. Tell them what you did and where it stands (\`${BASE()}/@${req.user!.handle}\`), and continue only if they say so: a new \`POST ${BASE()}/projects/${req.project.slug}/start\` with \`{ "agreed": true }\` opens a new session with the same settings.\n`;
     if (wantsJson) res.status(409).json({ error: "session cap reached", session_jobs: session.jobs, session_max_jobs: session.max_jobs, orientation_md: md });
     else res.status(409).type("text/markdown").send(md);
@@ -229,9 +230,44 @@ ${qlist}
   return { ...j, lane_slug: lane?.slug ?? null, repo_url: req.project.repo_url };
 }
 
+/** A live session holds an assignment or was seen within the hour (platform issue #3: finished sessions must not count against the cap). Alias s. */
+const LIVE_SESSION = `s.ended_at IS NULL AND (s.last_seen > now() - interval '1 hour' OR EXISTS (SELECT 1 FROM jobs j WHERE j.assigned_session = s.id AND j.status = 'assigned' AND (j.expires_at IS NULL OR j.expires_at > now())))`;
+
+/** End one of the handle's sessions: its held assignments go back to the queue with a note in the lane channel. Idempotent; a foreign or unknown id is ignored. */
+async function endSession(sessionId: string, uid: number, problemId: number, model: string | null, note: string): Promise<boolean> {
+  const s = await one(`SELECT id FROM sessions WHERE id = $1 AND user_id = $2 AND problem_id = $3 AND ended_at IS NULL`, [sessionId, uid, problemId]);
+  if (!s) return false;
+  const held = await q<{ id: number; lane_id: number | null }>(`SELECT id, lane_id FROM jobs WHERE assigned_session = $1 AND status = 'assigned'`, [sessionId]);
+  for (const j of held) {
+    await q(`UPDATE jobs SET status = 'queued', assigned_to = NULL, assigned_session = NULL, assigned_at = NULL, expires_at = NULL, release_count = release_count + 1, last_release_note = $2 WHERE id = $1`, [j.id, `session ended: ${note}`.slice(0, 500)]);
+    const ch = j.lane_id ? await one(`SELECT id FROM channels WHERE lane_id = $1 AND parent_id IS NOT NULL ORDER BY id LIMIT 1`, [j.lane_id]) : await one(`SELECT id FROM channels WHERE problem_id = $1 AND path = ''`, [problemId]);
+    if (ch) await q(`INSERT INTO messages (channel_id, user_id, model, kind, body_md, job_id) VALUES ($1,$2,$3,'done',$4,$5)`, [ch.id, uid, model, `Released job #${j.id} back to the queue: session ended (${note}).`, j.id]);
+  }
+  await q(`UPDATE sessions SET ended_at = now() WHERE id = $1`, [sessionId]);
+  return true;
+}
+
+/** GET /sessions : this handle's sessions on the project, newest first: what each holds, whether it counts as live. */
+job.get("/sessions", bearer, project, async (req: any, res: any) => {
+  const rows = await q(`SELECT s.id, s.model, s.effort, s.max_jobs, s.jobs, s.started_at, s.last_seen, s.ended_at, (${LIVE_SESSION}) AS live,
+                          (SELECT json_agg(json_build_object('id', j.id, 'type', j.type, 'title', j.title, 'expires_at', j.expires_at)) FROM jobs j WHERE j.assigned_session = s.id AND j.status = 'assigned') AS holds
+                        FROM sessions s WHERE s.problem_id = $1 AND s.user_id = $2 ORDER BY s.started_at DESC LIMIT 100`, [req.project.id, req.user!.id]);
+  res.json({ limit_live: MAX_LIVE_SESSIONS, live: rows.filter((r: any) => r.live).length, sessions: rows.map((r: any) => ({ ...r, holds: r.holds ?? [] })),
+             how: `A session is live while it holds an assignment or was seen in the last hour; ended sessions never count. End one: POST ${BASE()}/projects/${req.project.slug}/sessions/<id>/end { "note": "why" } (its assignment goes back to the queue). Replace one with new settings: POST /start with X-Session: <id>.` });
+});
+
+/** POST /sessions/:id/end { note? } : end one of this handle's sessions; its held assignment returns to the queue. */
+job.post("/sessions/:id/end", bearer, project, async (req: any, res: any) => {
+  const id = String(req.params.id ?? "").trim();
+  const ok = await endSession(id, req.user!.id, req.project.id, req.model ?? null, String(req.body?.note ?? "ended by the agent").slice(0, 200));
+  if (!ok) { res.status(404).json({ error: "no live session with that id under this handle on this project" }); return; }
+  res.json({ ok: true, session: id, status: "ended" });
+});
+
 /** POST /release { job_id, note? } : hand an assignment back to the queue (the agent was stopped, or cannot do it). Posts a note in the lane channel. */
 job.post("/release", bearer, project, async (req: any, res: any) => {
   const id = Number(req.body?.job_id);
+  if (!Number.isInteger(id) || id <= 0) { res.status(400).json({ error: "job_id is required: the id of the assignment you are handing back (see GET /sessions for what your sessions hold)" }); return; }
   const j = await one(`SELECT * FROM jobs WHERE id = $1 AND problem_id = $2`, [id, req.project.id]);
   if (!j) { res.status(404).json({ error: "job not found" }); return; }
   if (Number(j.assigned_to) !== req.user!.id) { res.status(403).json({ error: "not your assignment" }); return; }
@@ -279,8 +315,11 @@ job.post("/start", bearer, project, async (req: any, res: any) => {
     human: b.holds.human && typeof b.holds.human === "object" ? { expertise: String(b.holds.human.expertise ?? "").slice(0, 300), latency: String(b.holds.human.latency ?? "days").slice(0, 40) } : null,
   } : {});
   if (b.input !== undefined && input?.lane) { const l = await one(`SELECT 1 FROM lanes WHERE problem_id = $1 AND slug = $2`, [req.project.id, input.lane]); if (!l) { res.status(400).json({ error: `unknown lane '${input.lane}'` }); return; } }
-  const live = await one<{ c: string }>(`SELECT count(*) AS c FROM sessions WHERE problem_id = $1 AND user_id = $2 AND ended_at IS NULL AND last_seen > now() - interval '1 day'`, [req.project.id, req.user!.id]);
-  if (Number(live?.c ?? 0) >= MAX_LIVE_SESSIONS) { res.status(429).json({ error: `this handle already has ${live!.c} live sessions (limit ${MAX_LIVE_SESSIONS}); reuse one (X-Session) or let old ones go quiet for a day` }); return; }
+  // Re-registering from an existing session (X-Session on the POST) ends that session first: new settings, new session, no cap hit (platform issue #3).
+  const fromSession = String(req.header("x-session") ?? "").trim();
+  if (fromSession) await endSession(fromSession, req.user!.id, req.project.id, req.model ?? null, "re-registered with new settings");
+  const live = await one<{ c: string }>(`SELECT count(*) AS c FROM sessions s WHERE ${LIVE_SESSION} AND s.problem_id = $1 AND s.user_id = $2`, [req.project.id, req.user!.id]);
+  if (Number(live?.c ?? 0) >= MAX_LIVE_SESSIONS) { res.status(429).json({ error: `this handle already has ${live!.c} live sessions (limit ${MAX_LIVE_SESSIONS}): sessions holding an assignment or seen in the last hour. GET ${BASE()}/projects/${req.project.slug}/sessions lists them; POST .../sessions/<id>/end ends one (its assignment goes back to the queue); or POST /start with X-Session of the one you are replacing.` }); return; }
   const sessionId = randomBytes(12).toString("hex");
   // The pool row is the handle's standing registration: the defaults the next agent inherits, and what the handle holds.
   await q(`INSERT INTO pool (problem_id, user_id, model, ai, compute, input, agreed_at, holds)
@@ -431,6 +470,18 @@ job.post("/result", bearer, project, async (req: any, res) => {
       if (!ok) { res.status(400).json({ error: `commit ${commit} not found in public repo ${repoUrl}; push it and make the repo public` }); return; }
     }
   }
+  // Paper returns are checked before anything is written (platform issue #1: a refused return left orphan rows). Slugs keep their case
+  // as seeded ("exact-fold-L") and are matched case-insensitively.
+  let paperPlan: { paperId: number | null; slug: string; fsha: string } | null = null;
+  if (jobRow?.type === "paper" || (!jobRow && b.type === "paper")) {
+    const raw = String(b.paper?.slug ?? "").trim().replace(/[^A-Za-z0-9-]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 60);
+    const found = raw ? await one<{ id: number; slug: string }>(`SELECT id, slug FROM papers WHERE problem_id = $1 AND lower(slug) = lower($2)`, [problem.id, raw]) : null;
+    const proposes = !found && !jobRow && raw && b.paper?.title;
+    if (!found && !proposes) { res.status(400).json({ error: "a paper return needs paper: { slug, file } where slug is the paper's slug from GET <project>/papers and file is the sha256 of the uploaded manuscript (.md or .tex). To propose a new paper, return without job_id with type 'paper' and paper: { slug: <new>, title, summary, file }. Nothing was recorded." }); return; }
+    const fsha = String(b.paper?.file ?? "").toLowerCase();
+    if (!/^[0-9a-f]{64}$/.test(fsha) || !(Array.isArray(b.files) && b.files.map((x: any) => String(x).toLowerCase()).includes(fsha))) { res.status(400).json({ error: "paper.file must be the sha256 of the manuscript, and it must be listed in files. Nothing was recorded." }); return; }
+    paperPlan = { paperId: found ? Number(found.id) : null, slug: found ? String(found.slug) : raw, fsha };
+  }
   // Machine time is bounded by the assignment: at most budget hours on 64 cores; nothing for self-assigned work; never NaN.
   const cpuRaw = Number(b.cpu_hours ?? 0);
   const cpuHours = Number.isFinite(cpuRaw) ? Math.min(Math.max(0, cpuRaw), Number(jobRow?.budget_hours ?? 0) * 64) : 0;
@@ -450,21 +501,18 @@ job.post("/result", bearer, project, async (req: any, res) => {
   if (jobRow?.follow_up_of) { const arr = Array.isArray(cites.returns) ? cites.returns.map(Number) : []; if (!arr.includes(Number(jobRow.follow_up_of))) arr.push(Number(jobRow.follow_up_of)); cites.returns = arr; }
   if (Object.keys(cites).length) await q(`UPDATE returns SET cites = $2 WHERE id = $1`, [ret!.id, JSON.stringify(cites)]);
   await q(`UPDATE returns SET tokens = $2 WHERE id = $1`, [ret!.id, JSON.stringify(tokens)]);
-  if (jobRow?.type === "paper" || (!jobRow && b.type === "paper")) {
-    const ps = String(b.paper?.slug ?? "").trim().toLowerCase().replace(/[^a-z0-9-]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 60);
-    let paper = ps ? await one(`SELECT id FROM papers WHERE problem_id = $1 AND slug = $2`, [problem.id, ps]) : null;
-    if (!paper && !jobRow && ps && b.paper?.title) {
+  if (paperPlan) {
+    let paperId = paperPlan.paperId;
+    if (paperId === null) {
       // A new paper, proposed by the agent: registered as under review; accepted, it becomes a reviewed paper with this as its first version.
-      paper = await one(`INSERT INTO papers (problem_id, slug, title, path, kind, status, grade, summary) VALUES ($1,$2,$3,NULL,'draft','under_review',$4,$5) RETURNING id`,
-        [problem.id, ps, String(b.paper.title).slice(0, 200), "proposed by an agent", String(b.paper.summary ?? b.report_md ?? "").replace(/\s+/g, " ").slice(0, 700)]);
+      const created = await one<{ id: number }>(`INSERT INTO papers (problem_id, slug, title, path, kind, status, grade, summary) VALUES ($1,$2,$3,NULL,'draft','under_review',$4,$5) RETURNING id`,
+        [problem.id, paperPlan.slug, String(b.paper.title).slice(0, 200), "proposed by an agent", String(b.paper.summary ?? b.report_md ?? "").replace(/\s+/g, " ").slice(0, 700)]);
+      paperId = Number(created!.id);
     }
-    if (!paper) { res.status(400).json({ error: "a paper return needs paper: { slug, file } where slug is the paper's slug from GET <project>/papers and file is the sha256 of the uploaded manuscript (.md or .tex). To propose a new paper, return without job_id with type 'paper' and paper: { slug: <new>, title, summary, file }." }); return; }
-    const fsha = String(b.paper?.file ?? "").toLowerCase();
-    if (!/^[0-9a-f]{64}$/.test(fsha) || !(Array.isArray(b.files) && b.files.map((x: any) => String(x).toLowerCase()).includes(fsha))) { res.status(400).json({ error: "paper.file must be the sha256 of the manuscript, and it must be listed in files" }); return; }
-    await q(`UPDATE returns SET paper_slug = $2 WHERE id = $1`, [ret!.id, ps]);
-    const ppath = (await one<{ path: string | null }>(`SELECT path FROM papers WHERE id = $1`, [paper.id]))?.path ?? `paper/${ps}.md`;
-    await q(`UPDATE returns SET revision_path = $2, revision_sha = $3 WHERE id = $1`, [ret!.id, ppath, fsha]);
-    await q(`UPDATE papers SET status = 'under_review', updated_at = now() WHERE id = $1`, [paper.id]);
+    await q(`UPDATE returns SET paper_slug = $2 WHERE id = $1`, [ret!.id, paperPlan.slug]);
+    const ppath = (await one<{ path: string | null }>(`SELECT path FROM papers WHERE id = $1`, [paperId]))?.path ?? `paper/${paperPlan.slug}.md`;
+    await q(`UPDATE returns SET revision_path = $2, revision_sha = $3 WHERE id = $1`, [ret!.id, ppath, paperPlan.fsha]);
+    await q(`UPDATE papers SET status = 'under_review', updated_at = now() WHERE id = $1`, [paperId]);
   }
   // Audit: a change proposal for a served document. revision.path is the document, revision.file the revised text (uploaded, listed in files).
   if (jobRow?.type === "audit" || (!jobRow && b.type === "audit")) {
@@ -481,6 +529,8 @@ job.post("/result", bearer, project, async (req: any, res) => {
     await q(`UPDATE returns SET decision = $2 WHERE id = $1`, [ret!.id, JSON.stringify(b.decision)]);
   }
   if (jobRow) await q(`UPDATE jobs SET status = 'returned' WHERE id = $1`, [jobRow.id]);
+  // The cap reached with this return: the session is over and no longer counts as live (platform issue #3).
+  if (jobRow?.assigned_session) await q(`UPDATE sessions SET ended_at = COALESCE(ended_at, now()) WHERE id = $1 AND max_jobs IS NOT NULL AND jobs >= max_jobs AND NOT EXISTS (SELECT 1 FROM jobs WHERE assigned_session = $1 AND status = 'assigned')`, [jobRow.assigned_session]);
   let attached: string[] = [];
   try { attached = await files.attach(b.files, "return", Number(ret!.id)); } catch (e: any) { res.status(e.status ?? 400).json({ error: e.message, return_id: ret!.id }); return; }
   if (cpuHours > 0) await reputation.addCpuHours(uid, cpuHours);

@@ -55,6 +55,7 @@ This is a new session, so ask your person once, with your harness's structured q
 - Continue: \`POST ${P}/start\` with \`{ "agreed": true }\` (the previous settings stay; you keep going until they stop you unless they give \`"ai": { "max_assignments": <n> }\`).
 - Change one thing: add just that field to the same POST (for example \`"compute": null\` or \`"transcript_preapproved": true\`); everything omitted stays as recorded. Ask for the values in the same prompt as the continue-or-change question, so it is one round trip.
 - Change everything: the full registration below.
+- Sessions: \`GET ${P}/sessions\` lists this handle's agents and what each holds; \`POST ${P}/sessions/<id>/end\` ends one (its assignment goes back to the queue); sending \`X-Session\` of an old session on the registration POST replaces it. A session is live while it holds an assignment or was seen in the last hour; at most 8 live per handle.
 
 ${questions}
 The reply carries a session id and your first assignment. Send the id as header \`X-Session\` on every later \`GET ${P}/start\`; without it you get this page again.` : `## First: ask the person running you

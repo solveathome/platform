@@ -30,7 +30,7 @@ before(async () => {
   laneId = Number(l.id);
   const c = await one(`INSERT INTO channels (problem_id, path, title) VALUES ($1,'','Project') RETURNING id`, [pid]);
   ids.channels.push(Number(c.id));
-  for (const n of [1, 2, 3]) {
+  for (const n of [1, 2, 3, 4, 5]) {
     const j = await one(`INSERT INTO jobs (problem_id, lane_id, type, title, brief_md, git_ref, compute_hint, budget_hours, min_tier, quorum, status)
                          VALUES ($1,$2,'source',$3,'find the page','main','{}',1,99,1,'queued') RETURNING id`, [pid, laneId, `Source ${n}`]);
     ids.jobs.push(Number(j.id));
@@ -45,6 +45,8 @@ after(async () => {
   server?.close();
   // Delete what the test created, children first; then prove nothing is left.
   await q(`DELETE FROM messages WHERE user_id = $1`, [uid]);
+  await q(`DELETE FROM credits WHERE user_id = $1`, [uid]);
+  await q(`DELETE FROM reviews WHERE user_id = $1`, [uid]);
   await q(`DELETE FROM channel_members WHERE user_id = $1`, [uid]);
   await q(`DELETE FROM returns WHERE problem_id = $1`, [pid]);
   await q(`DELETE FROM jobs WHERE problem_id = $1`, [pid]);
@@ -111,4 +113,39 @@ test('without a live session the agent gets the orientation, not an assignment',
   const body = await none.json();
   assert.equal(body.session, null); assert.equal(body.registered, true);
   assert.match(body.orientation_md, /Many agents, one handle/);
+});
+
+test('release without job_id is a 400, not a 500', async () => {
+  const r = await call('POST', '/release', {model: 'claude-opus-5', session: opus.session, body: {}});
+  assert.equal(r.status, 400); assert.match((await r.json()).error, /job_id is required/);
+});
+
+test('sessions are listed, ended, replaced, and finished ones do not count against the cap', async () => {
+  // Fable holds a job: it is live; Opus returned its job and is idle but was seen just now: still live.
+  const list = await okJson(await call('GET', '/sessions', {model: 'claude-opus-5'}));
+  const f = list.sessions.find(s => s.id === fable.session), o = list.sessions.find(s => s.id === opus.session);
+  assert.equal(f.live, true); assert.equal(f.holds.length, 1); assert.equal(Number(f.holds[0].id), Number(fable.job_id));
+  assert.equal(o.live, true); assert.equal(o.holds.length, 0);
+  // Ending Fable's session hands its job back with a note.
+  const end = await okJson(await call('POST', `/sessions/${fable.session}/end`, {model: 'claude-fable-5-1', body: {note: 'person closed the laptop'}}));
+  assert.equal(end.status, 'ended');
+  const j = await one(`SELECT status, assigned_session, last_release_note FROM jobs WHERE id = $1`, [fable.job_id]);
+  assert.equal(j.status, 'queued'); assert.equal(j.assigned_session, null); assert.match(j.last_release_note, /session ended: person closed the laptop/);
+  assert.equal((await call('POST', `/sessions/${fable.session}/end`, {model: 'claude-fable-5-1'})).status, 404, 'ending twice is a 404');
+  // Idle for over an hour with nothing held: not live. Fill the handle with eight such sessions; registration still works.
+  for (let i = 0; i < 8; i++) await q(`INSERT INTO sessions (id, problem_id, user_id, model, last_seen) VALUES ($1,$2,$3,'claude-opus-5', now() - interval '2 hours')`, [`idle-${tag}-${i}`, pid, uid]);
+  await q(`UPDATE sessions SET last_seen = now() - interval '2 hours' WHERE id = $1`, [opus.session]);
+  const again = await register('claude-fable-5-1');
+  assert.ok(again.session, 'registered despite eight idle sessions');
+  // A capped session ends with its last return, and replacing it from the registration POST ends it too.
+  const capped = await okJson(await call('POST', '/start', {model: 'claude-astra-1', body: {agreed: true, ai: {max_assignments: 1}, transcript_preapproved: true}}));
+  assert.ok(capped.job_id);
+  await okJson(await call('POST', '/result', {model: 'claude-astra-1', session: capped.session, body: {job_id: capped.job_id, report_md: 'Found it on the stated page.', transcript: 'prose transcript', transcript_approved: true}}));
+  const ended = await one(`SELECT ended_at FROM sessions WHERE id = $1`, [capped.session]);
+  assert.ok(ended.ended_at, 'the cap reached with the return ends the session');
+  const replaced = await okJson(await call('POST', '/start', {model: 'claude-fable-5-1', session: again.session, body: {agreed: true, ai: {max_assignments: 1}}}));
+  assert.notEqual(replaced.session, again.session);
+  const old = await one(`SELECT ended_at FROM sessions WHERE id = $1`, [again.session]);
+  assert.ok(old.ended_at, 'X-Session on the registration POST ends the session it replaces');
+  fable.session = replaced.session;
 });
