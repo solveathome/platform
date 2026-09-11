@@ -140,8 +140,11 @@ async function start(req: any, res: any): Promise<void> {
   const tangentFirst = Number(session.jobs) === 0 && settings.input?.tangent ? await synthesizeTangent(req, session, settings.input.tangent as Tangent) : null;
   // Tier 1 alternates (Chris, Sep 11): frontier agents are not a review pool. After a review or an audit the next assignment prefers
   // research (paper, explore, direction, break); after research, verification comes first again. A fresh session starts with verification.
-  const lastType = session.last_type ?? null;
-  const preferResearch = tier === 1 && (lastType === "review" || lastType === "audit");
+  // Need-aware (Chris, Sep 11 evening: "NOBODY calls ?type=review"): the reviews-to-research ratio follows the backlog this session can take.
+  // With 119 reviews and 20 research jobs waiting, a frontier session does four verifications, then one research turn; with equal backlogs, one and one.
+  const need = tier === 1 ? await backlogFor(req, tier, trusted, prefs, uid) : { reviews: 0, research: 0 };
+  const runOfReviews = Math.min(4, Math.max(1, Math.ceil(need.reviews / Math.max(1, need.research))));
+  const preferResearch = tier === 1 && Number(session.review_streak ?? 0) >= runOfReviews;
   const client = await pool.connect();
   try {
     await client.query("BEGIN");
@@ -186,7 +189,7 @@ async function start(req: any, res: any): Promise<void> {
     if (!row) {
       // An empty queue is still an assignment: explore the programme's open questions in a lane. Never a choice, never "try again".
       await client.query("ROLLBACK");
-      row = await synthesizeExplore(req, session, lane, maxHours) as any;
+      row = await synthesizeExplore(req, session, lane, maxHours, await computeBlocked(req, tier, prefs, maxHours)) as any;
       await client.query("BEGIN");
     }
     if (!row) { await client.query("ROLLBACK"); res.status(500).json({ error: "no assignment could be made" }); return; }
@@ -194,7 +197,7 @@ async function start(req: any, res: any): Promise<void> {
       `UPDATE jobs SET status = 'assigned', assigned_to = $2, assigned_session = $4, assigned_at = now(),
          expires_at = now() + ($3::numeric * interval '1 hour') * 2
        WHERE id = $1 RETURNING expires_at`, [row.id, uid, row.budget_hours, session.id]);
-    await client.query(`UPDATE sessions SET jobs = jobs + 1, last_seen = now(), last_type = $2 WHERE id = $1`, [session.id, row.type]);
+    await client.query(`UPDATE sessions SET jobs = jobs + 1, last_seen = now(), last_type = $2, review_streak = CASE WHEN $2 IN ('review','audit') THEN review_streak + 1 ELSE 0 END WHERE id = $1`, [session.id, row.type]);
     await client.query("COMMIT");
     row.expires_at = upd.rows[0].expires_at;
     const sess = { id: String(session.id), jobs: Number(session.jobs) + 1, max: session.max_jobs === null ? null : Number(session.max_jobs), maxHours: Number(settings.ai?.max_hours_per_assignment ?? 2), compute: describeOffer(offer), transcriptPreapproved: settings.ai?.transcript_preapproved === true, subagents: settings.ai?.subagents?.allowed === false ? "not allowed" : settings.ai?.subagents?.max_parallel ? `allowed, up to ${settings.ai.subagents.max_parallel} at a time` : "allowed", files: await files.quota(uid).then((f) => ({ left: f.files_left, bytes_left: f.bytes_left, per_day: f.files_per_day })) };
@@ -237,6 +240,23 @@ async function synthesizeTangent(req: any, session: any, t: Tangent): Promise<an
   return { ...j, lane_slug: laneSlug, repo_url: req.project.repo_url };
 }
 
+/** What is waiting that this session could take: review jobs it is eligible for (trusted, not its own kind, tier allows) and research jobs that fit its offer. */
+async function backlogFor(req: any, tier: number, trusted: boolean, prefs: { maxHours: number; ramGb: number; hasGpu: boolean }, uid: number): Promise<{ reviews: number; research: number }> {
+  const reviews = trusted ? Number((await one<{ c: string }>(`SELECT count(*) AS c FROM jobs j JOIN returns pr ON pr.id = j.parent_return_id LEFT JOIN model_tiers amt ON amt.model = pr.model
+      WHERE j.problem_id = $1 AND j.status = 'queued' AND j.type = 'review' AND pr.model IS DISTINCT FROM $2::text AND (j.min_tier >= 99 OR $3 <= COALESCE(amt.tier, 99))
+        AND NOT EXISTS (SELECT 1 FROM reviews rv WHERE rv.return_id = pr.id AND rv.user_id = $4)`, [req.project.id, req.model ?? null, tier, uid]))?.c ?? 0) : 0;
+  const research = Number((await one<{ c: string }>(`SELECT count(*) AS c FROM jobs j WHERE j.problem_id = $1 AND j.status = 'queued' AND j.type <> 'review' AND j.min_tier >= $2
+      AND COALESCE((j.compute_hint->>'cpu_hours')::numeric, 0) <= $3 AND COALESCE((j.compute_hint->>'ram_gb')::numeric, 0) <= CASE WHEN $4::numeric > 0 THEN $4::numeric ELSE 8 END`, [req.project.id, tier, prefs.maxHours, prefs.ramGb]))?.c ?? 0);
+  return { reviews, research };
+}
+/** Typed work for this tier that only the session's compute offer keeps it from: named in the explore fallback so the person can raise the share. */
+async function computeBlocked(req: any, tier: number, prefs: { maxHours: number; ramGb: number }, maxHours: number): Promise<{ n: number; types: string; ram: number; hours: number } | null> {
+  const r = await one<{ n: string; types: string; ram: string; hours: string }>(`SELECT count(*) AS n, string_agg(DISTINCT j.type, ', ' ORDER BY j.type) AS types, max(COALESCE((j.compute_hint->>'ram_gb')::numeric, 0)) AS ram, max(COALESCE((j.compute_hint->>'cpu_hours')::numeric, 0)) AS hours
+      FROM jobs j WHERE j.problem_id = $1 AND j.status = 'queued' AND j.type <> 'review' AND j.min_tier >= $2
+        AND (COALESCE((j.compute_hint->>'ram_gb')::numeric, 0) > CASE WHEN $3::numeric > 0 THEN $3::numeric ELSE 8 END OR COALESCE((j.compute_hint->>'cpu_hours')::numeric, 0) > $4)`, [req.project.id, tier, prefs.ramGb, maxHours]);
+  return Number(r?.n ?? 0) > 0 ? { n: Number(r!.n), types: r!.types, ram: Number(r!.ram), hours: Number(r!.hours) } : null;
+}
+
 /** Explore assignments made on the spot are named by what they point at (`Explore: Q-id`, `Leads: kind`), so the next session is handed something else. */
 const SERVED_WINDOW = "14 days";
 /** The lead hunts, in rotation, once every open question has been handed out inside the window. Each needs no compute. */
@@ -246,7 +266,7 @@ const LEAD_KINDS = ["prior-art", "break", "registry", "synthesis", "route", "sta
  *  One open question per job, the one no session was handed inside the window (Chris, Sep 11: the same five questions went to every
  *  session and came back "already scored"); when every open question is in hand, a lead hunt from a rotating menu, so an agent with
  *  nothing typed to do goes looking for new leads instead of re-treading the list. */
-async function synthesizeExplore(req: any, session: any, laneSlug: string | null, _maxHours: number): Promise<any> {
+async function synthesizeExplore(req: any, session: any, laneSlug: string | null, _maxHours: number, blocked: { n: number; types: string; ram: number; hours: number } | null = null): Promise<any> {
   const hours = Math.max(0.5, Math.min(24, Number(session.ai?.max_hours_per_assignment ?? 2)));
   const lane = laneSlug
     ? await one(`SELECT l.id, l.slug, l.title FROM lanes l WHERE l.problem_id = $1 AND l.slug = $2`, [req.project.id, laneSlug])
@@ -256,11 +276,13 @@ async function synthesizeExplore(req: any, session: any, laneSlug: string | null
   const P = `${BASE()}/projects/${req.project.slug}`;
   const served = new Set((await q<{ qid: string }>(`SELECT DISTINCT substring(title from 'Explore: (Q-[A-Za-z0-9_-]+)') AS qid FROM jobs WHERE problem_id = $1 AND type = 'explore' AND title LIKE 'Explore: Q-%' AND assigned_at > now() - interval '${SERVED_WINDOW}'`, [req.project.id])).map((r) => r.qid));
   const pick = openQuestions(req.project.slug, 1000).find((x) => !served.has(x.id)) ?? null;
+  const offered = session.compute?.usable ? `${Number(session.compute.usable.ram_gb ?? 0)} GB and ${Number(session.compute.usable.cpu_hours ?? 0)} CPU hours` : "no compute";
+  const blockedNote = blocked ? `**Typed work is waiting for your tier: ${blocked.n} assignment(s) (${blocked.types}) need up to ${blocked.ram} GB RAM and ${blocked.hours} CPU hours, and this session offers ${offered}.** If your person can spare more, re-register (\`POST ${P}/start\` with the full body and \`X-Session: ${session.id}\`) with a larger \`compute.share\` or \`cpu_hours\`, and the next \`/start\` hands you one of them. Until then, this is what fits.\n\n` : "";
   const tail = `\n\n**Return** as this job (type explore): a report with what you did, the rung of each claim, and the gap that remains, plus any files. If your work amounts to a new route, submit a second return of type \`direction\` with the route in your person's words or yours; if it finds a served document wrong, an \`audit\` return with the revised file. Then call \`GET ${P}/start\` once. Do not poll.`;
   let title: string; let brief: string;
   if (pick) {
     title = `Explore: ${pick.id} in ${lane?.slug ?? "the project"}`;
-    brief = `Nothing typed is queued for your tier, lane and budget right now, so this is your assignment. It needs no compute: reading, deriving, checking the registries and drafting a direction are always in scope.
+    brief = blockedNote + `Nothing typed that fits is queued for your tier, lane and budget right now, so this is your assignment. It needs no compute: reading, deriving, checking the registries and drafting a direction are always in scope.
 
 **Your question**, one of ${openQuestions(req.project.slug, 1000).length} open or partial in \`research/QUESTIONS.md\` (full list: \`GET ${P}/questions\`; each session is handed a different one):
 
@@ -284,7 +306,7 @@ async function synthesizeExplore(req: any, session: any, laneSlug: string | null
     };
     const [what, body] = hunts[kind];
     title = `Leads: ${what}`;
-    brief = `Nothing typed is queued for your tier, lane and budget, and every open question in \`research/QUESTIONS.md\` has been handed to a session in the last two weeks. This is a lead hunt, in lane **${lane?.slug ?? "any"}**, for up to ${hours} h: the swarm needs new leads more than another pass over the list. It needs no compute unless you choose to run something that fits your offer.
+    brief = blockedNote + `Nothing typed that fits is queued for your tier, lane and budget, and every open question in \`research/QUESTIONS.md\` has been handed to a session in the last two weeks. This is a lead hunt, in lane **${lane?.slug ?? "any"}**, for up to ${hours} h: the swarm needs new leads more than another pass over the list. It needs no compute unless you choose to run something that fits your offer.
 
 ${body}
 

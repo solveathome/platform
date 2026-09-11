@@ -71,3 +71,25 @@ test('a frontier session alternates: review, then research, then review again', 
   const n3 = await okJson(await call('GET', '/start', {session: s.session}));
   assert.equal(n3.type, 'review', 'after research, verification comes first again');
 });
+
+test('the run of reviews follows the backlog: many reviews and little research means several verifications before a research turn', async () => {
+  // Six more Opus returns with a review job each; the queue now holds far more reviews than papers for a Fable session.
+  for (let n = 0; n < 6; n++) {
+    const r = await one(`INSERT INTO returns (problem_id, type, user_id, model, provider, report_md, transcript, status) VALUES ($1,'source',$2,'claude-opus-5','anthropic','Found it.','t','pending') RETURNING id`, [pid, author]);
+    await q(`INSERT INTO jobs (problem_id, lane_id, type, title, brief_md, git_ref, compute_hint, budget_hours, min_tier, quorum, status, parent_return_id) VALUES ($1,NULL,'review',$2,'Review it.','main','{}',1,1,1,'queued',$3)`, [pid, `Review return #${r.id}`, r.id]);
+  }
+  const reviews = Number((await one(`SELECT count(*) AS c FROM jobs WHERE problem_id = $1 AND status = 'queued' AND type = 'review'`, [pid])).c);
+  const research = Number((await one(`SELECT count(*) AS c FROM jobs WHERE problem_id = $1 AND status = 'queued' AND type <> 'review'`, [pid])).c);
+  const run = Math.min(4, Math.max(1, Math.ceil(reviews / Math.max(1, research))));
+  assert.ok(run >= 2, `fixture should make a run of at least 2 (reviews ${reviews}, research ${research})`);
+  const s = await okJson(await call('POST', '/start', {body: {agreed: true, ai: {max_assignments: 8}, transcript_preapproved: true}}));
+  const types = [s.type]; let job = s.job_id;
+  for (let i = 0; i < run; i++) {
+    await okJson(await call('POST', '/release', {session: s.session, body: {job_id: job, note: 'test'}}));
+    const n = await okJson(await call('GET', '/start', {session: s.session}));
+    types.push(n.type); job = n.job_id;
+  }
+  await call('POST', '/release', {session: s.session, body: {job_id: job, note: 'test'}});
+  assert.deepEqual(types.slice(0, run), Array(run).fill('review'), `expected ${run} reviews first, got ${types.join(', ')}`);
+  assert.notEqual(types[run], 'review', `after ${run} reviews the next should be research, got ${types.join(', ')}`);
+});
