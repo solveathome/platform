@@ -17,6 +17,7 @@ const roles = await import('../src/lib/roles.ts');
 const {decide} = await import('../src/lib/consensus.ts');
 const reputation = await import('../src/lib/reputation.ts');
 const {trustedByModel} = await import('../src/lib/roles.ts');
+const {patchHash} = await import('../src/lib/duplicates.ts');
 
 const tag = `trust-test-${Date.now().toString(36)}`;
 const slug = tag;
@@ -227,6 +228,24 @@ test('anyone elevates a recorded return into review with a note, on the record; 
   assert.deepEqual([typeof v.review_id, v.return_status, v.final_rung, v.provisional, typeof v.effects_applied_at], ['number', 'accepted', 'measured', false, 'string']);
   const gpt = await fetch(base + '/start', {headers: {'user-agent': 'Mozilla/5.0 ChatGPT-User/1.0', accept: 'application/json'}});
   assert.equal(gpt.status, 401); assert.match((await gpt.json()).for_your_person, /Codex/);
+});
+
+test('the same change submitted twice is folded (issue #51): a duplicate of an accepted return is superseded on the spot; a duplicate of a pending one folds when it is accepted', async () => {
+  const P1 = '--- a/research/n.md\n+++ b/research/n.md\n@@ -1 +1 @@\n-a\n+b\n', P2 = '--- a/research/m.md\n+++ b/research/m.md\n@@ -1 +1 @@\n-c\n+d\n';
+  const acc = await one(`INSERT INTO returns (problem_id, type, user_id, model, provider, report_md, transcript, status, patch, patch_hash) VALUES ($1,'direction',$2,'m','p','route','t','accepted',$3,$4) RETURNING id`, [pid, people.adv2.id, P1, patchHash(P1)]);
+  const dup = await okJson(await call('adv3', 'POST', '/result', {model: 'claude-fable-5-1', body: {type: 'direction', report_md: '# Same route\nAgain.', patch: P1.replace(/\n/g, '\r\n'), transcript: 't', transcript_approved: true}}));
+  assert.deepEqual([dup.status, dup.superseded_by, dup.reviews_requested], ['superseded', Number(acc.id), 0]);
+  assert.equal(Number((await one(`SELECT count(*) AS c FROM jobs WHERE parent_return_id = $1`, [dup.return_id])).c), 0, 'a superseded return got review jobs');
+  const j = await okJson(await call('adv1', 'GET', `/return/${acc.id}`)); assert.deepEqual(j.duplicates, [dup.return_id]);
+  // Pending twin: labelled now, folded when the first is accepted.
+  const pend = await one(`INSERT INTO returns (problem_id, type, user_id, model, provider, report_md, transcript, status, patch, patch_hash) VALUES ($1,'direction',$2,'claude-opus-5','anthropic','route two','t','pending',$3,$4) RETURNING id`, [pid, people.adv2.id, P2, patchHash(P2)]);
+  const second = await okJson(await call('adv3', 'POST', '/result', {model: 'claude-fable-5-1', body: {type: 'direction', report_md: '# Route two\nAgain.', patch: P2, transcript: 't', transcript_approved: true}}));
+  assert.equal(second.status, 'pending'); assert.ok(second.warnings.some(w => w.includes(`pending return #${pend.id}`)));
+  await okJson(await call('trusted', 'POST', '/result', {model: 'gpt-6-astra', body: {type: 'review', return_id: Number(pend.id), verdict: 'accept', rung: 'heuristic', notes_md: 'fine', transcript: 't', transcript_approved: true}}));
+  const folded = await one(`SELECT status, superseded_by FROM returns WHERE id = $1`, [second.return_id]);
+  assert.deepEqual([folded.status, Number(folded.superseded_by)], ['superseded', Number(pend.id)]);
+  assert.equal(Number((await one(`SELECT count(*) AS c FROM jobs WHERE parent_return_id = $1 AND status IN ('queued','assigned')`, [second.return_id])).c), 0, 'the folded return still holds open review jobs');
+  await q(`DELETE FROM jobs WHERE parent_return_id = ANY($1)`, [[dup.return_id, second.return_id]]);
 });
 
 test('three advisory reviews decide provisionally: nothing paid, review jobs still open', async () => {

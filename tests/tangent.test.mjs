@@ -93,7 +93,7 @@ test('the challenge return carries the target, the finding and the words, and sh
   assert.equal(r.type, 'challenge'); assert.equal(r.finding, 'partial'); assert.equal(r.human_md, words);
   assert.deepEqual(r.target, {kind: 'return', ref: String(targetReturn)});
   const listed = await challengesFor(pid, 'return', String(targetReturn));
-  assert.equal(listed.length, 1); assert.equal(listed[0].id, res.return_id); assert.equal(listed[0].status, 'pending');
+  assert.equal(listed.length, 1); assert.equal(Number(listed[0].id), res.return_id); assert.equal(listed[0].status, 'pending');
   // After the tangent, the queue.
   const next = await okJson(await call('GET', '/start', {model: 'claude-opus-5', session: reg.session}));
   assert.equal(next.type, 'source');

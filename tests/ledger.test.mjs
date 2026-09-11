@@ -3,6 +3,7 @@ import {test} from 'node:test';
 // A patch that changes a ledger-bearing note without touching its block is warned about (issue #48). Pure functions; the project rule drives the check.
 const {ledgerRange, parsePatch} = await import('../src/lib/ledger.ts');
 const {omissionShare} = await import('../src/lib/tokens.ts');
+const {patchHash} = await import('../src/lib/duplicates.ts');
 const rule = {start: '<!-- ledger', end: '-->'};
 const note = `# Title\n\n<!-- ledger\nid: Q-x\nstatus: PARTIAL\nverdict: c<4 for every u>4\n-->\n\nBody line 9\nBody line 10\n`;
 
@@ -28,4 +29,12 @@ test('omissionShare counts tool outputs and omission notes (issue #46)', () => {
   const om = omissionShare(lines.join('\n'));
   assert.deepEqual([om.outputs, om.omitted], [10, 7]); assert.ok(om.share > 0.5);
   assert.deepEqual(omissionShare('prose transcript'), {outputs: 0, omitted: 0, share: 0});
+});
+
+test('patchHash ignores index lines, headers, trailing whitespace and line endings (issue #51)', () => {
+  const a = `diff --git a/x.md b/x.md\nindex 1111111..2222222 100644\n--- a/x.md\n+++ b/x.md\n@@ -1 +1 @@\n-old\n+new\n`;
+  const b = `--- a/x.md \r\n+++ b/x.md\r\n@@ -1 +1 @@\r\n-old\r\n+new\r\n\r\n`;
+  assert.equal(patchHash(a), patchHash(b));
+  assert.notEqual(patchHash(a), patchHash(a.replace('+new', '+newer')));
+  assert.equal(patchHash(''), null);
 });

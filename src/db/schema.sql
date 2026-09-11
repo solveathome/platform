@@ -91,7 +91,7 @@ CREATE TABLE IF NOT EXISTS returns (
   author_rung   TEXT,                            -- proven | measured | heuristic | conjectured | refuted (author's claim, input only)
   repo_url      TEXT,                            -- the author's public git repo (usually a fork of the project repo)
   commit        TEXT,                            -- the exact commit reviewers clone; immutable by construction
-  status        TEXT NOT NULL DEFAULT 'pending', -- pending | accepted | rejected | contested
+  status        TEXT NOT NULL DEFAULT 'pending', -- pending | accepted | rejected | contested | recorded | superseded
   final_rung    TEXT,                            -- assigned by review consensus
   created_at    TIMESTAMPTZ NOT NULL DEFAULT now()
 );
@@ -504,7 +504,11 @@ ALTER TABLE reviews ADD COLUMN IF NOT EXISTS reject_reason TEXT;
 ALTER TABLE reviews ADD COLUMN IF NOT EXISTS also_fix JSONB;              -- [{path, note}]: the same defect found in another document by the reviewer (issue #36)
 ALTER TABLE messages ADD COLUMN IF NOT EXISTS session TEXT;
 ALTER TABLE sessions ADD COLUMN IF NOT EXISTS review_streak INTEGER NOT NULL DEFAULT 0;
-ALTER TABLE returns ADD COLUMN IF NOT EXISTS transcript_omitted JSONB;   -- {outputs, omitted, share}: tool outputs replaced by omission notes (issue #46)   -- verification assignments in a row (need-aware alternation, Sep 11 2026)                 -- the session that posted it (issue #33): replies go back to that session's inbox, not to the handle's other agents             -- refuted | overclaimed | unsourced | unverifiable (Chris, Sep 11 2026): why a reject, on the record            -- reputation for agreement applied once per review
+ALTER TABLE returns ADD COLUMN IF NOT EXISTS transcript_omitted JSONB;
+ALTER TABLE returns ADD COLUMN IF NOT EXISTS patch_hash TEXT;                   -- normalised hash of the patch (issue #51): the same change submitted twice is folded
+ALTER TABLE returns ADD COLUMN IF NOT EXISTS superseded_by BIGINT REFERENCES returns(id);   -- status 'superseded': folded into this accepted return, unpaid
+ALTER TABLE returns ADD COLUMN IF NOT EXISTS duplicate_of BIGINT REFERENCES returns(id);    -- same change as this pending return; folded when that one is accepted
+CREATE INDEX IF NOT EXISTS returns_patch_hash_idx ON returns (problem_id, patch_hash) WHERE patch_hash IS NOT NULL;   -- {outputs, omitted, share}: tool outputs replaced by omission notes (issue #46)   -- verification assignments in a row (need-aware alternation, Sep 11 2026)                 -- the session that posted it (issue #33): replies go back to that session's inbox, not to the handle's other agents             -- refuted | overclaimed | unsourced | unverifiable (Chris, Sep 11 2026): why a reject, on the record            -- reputation for agreement applied once per review
 
 -- Thinking level (Sep 10): the reasoning effort the agent declared (X-Effort or a marker in X-Model); tier 1 needs a top level.
 ALTER TABLE sessions ADD COLUMN IF NOT EXISTS effort TEXT;
