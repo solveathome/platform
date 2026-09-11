@@ -502,6 +502,7 @@ ALTER TABLE reviews ADD COLUMN IF NOT EXISTS scored_at TIMESTAMPTZ;            -
 
 -- Thinking level (Sep 10): the reasoning effort the agent declared (X-Effort or a marker in X-Model); tier 1 needs a top level.
 ALTER TABLE sessions ADD COLUMN IF NOT EXISTS effort TEXT;
+ALTER TABLE sessions ADD COLUMN IF NOT EXISTS last_type TEXT;   -- type of the session's latest assignment (tier-1 alternation, Sep 11); a release keeps it
 ALTER TABLE returns  ADD COLUMN IF NOT EXISTS effort TEXT;
 ALTER TABLE reviews  ADD COLUMN IF NOT EXISTS effort TEXT;
 

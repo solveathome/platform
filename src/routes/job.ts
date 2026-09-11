@@ -131,6 +131,10 @@ async function start(req: any, res: any): Promise<void> {
 
   // A tangent registered with this session is its first assignment (Sep 10): the person's objection or route outranks the queue.
   const tangentFirst = Number(session.jobs) === 0 && settings.input?.tangent ? await synthesizeTangent(req, session, settings.input.tangent as Tangent) : null;
+  // Tier 1 alternates (Chris, Sep 11): frontier agents are not a review pool. After a review or an audit the next assignment prefers
+  // research (paper, explore, direction, break); after research, verification comes first again. A fresh session starts with verification.
+  const lastType = session.last_type ?? null;
+  const preferResearch = tier === 1 && (lastType === "review" || lastType === "audit");
   const client = await pool.connect();
   try {
     await client.query("BEGIN");
@@ -159,12 +163,14 @@ async function start(req: any, res: any): Promise<void> {
          -- Division of labour (Chris, Sep 9): top tier moves research forward, validates and integrates; lower tiers hunt
          -- negative proofs and run the processing that donated CPU allows.
          CASE WHEN $8 = 1
-           THEN CASE j.type WHEN 'review' THEN 0 WHEN 'audit' THEN 1 WHEN 'paper' THEN 2 WHEN 'explore' THEN 3 WHEN 'direction' THEN 3 WHEN 'curate' THEN 4 WHEN 'source' THEN 5 WHEN 'formalize' THEN 6 ELSE 7 END
+           THEN CASE WHEN $13::boolean
+             THEN CASE j.type WHEN 'paper' THEN 0 WHEN 'explore' THEN 1 WHEN 'direction' THEN 1 WHEN 'break' THEN 2 WHEN 'audit' THEN 3 WHEN 'review' THEN 4 WHEN 'curate' THEN 5 WHEN 'source' THEN 6 WHEN 'formalize' THEN 7 ELSE 8 END
+             ELSE CASE j.type WHEN 'review' THEN 0 WHEN 'audit' THEN 1 WHEN 'paper' THEN 2 WHEN 'explore' THEN 3 WHEN 'direction' THEN 3 WHEN 'curate' THEN 4 WHEN 'source' THEN 5 WHEN 'formalize' THEN 6 ELSE 7 END END
            ELSE CASE j.type WHEN 'break' THEN 0 WHEN 'measure' THEN 0 WHEN 'formalize' THEN 1 WHEN 'review' THEN 2 WHEN 'source' THEN 3 WHEN 'curate' THEN 4 ELSE 5 END END,
          CASE WHEN pr.id IS NOT NULL AND pr.provider <> $6 THEN 0 ELSE 1 END,
          j.created_at
        LIMIT 1 FOR UPDATE OF j SKIP LOCKED`,
-      [tier, maxHours, lane, type, uid, req.provider, req.project.id, tier, prefs.ramGb, prefs.hasGpu, req.model ?? null, trusted],
+      [tier, maxHours, lane, type, uid, req.provider, req.project.id, tier, prefs.ramGb, prefs.hasGpu, req.model ?? null, trusted, preferResearch],
     );
     let row = r.rows[0] as (JobRow & { id: number; budget_hours: string }) | undefined;
     if (!row) {
@@ -178,7 +184,7 @@ async function start(req: any, res: any): Promise<void> {
       `UPDATE jobs SET status = 'assigned', assigned_to = $2, assigned_session = $4, assigned_at = now(),
          expires_at = now() + ($3::numeric * interval '1 hour') * 2
        WHERE id = $1 RETURNING expires_at`, [row.id, uid, row.budget_hours, session.id]);
-    await client.query(`UPDATE sessions SET jobs = jobs + 1, last_seen = now() WHERE id = $1`, [session.id]);
+    await client.query(`UPDATE sessions SET jobs = jobs + 1, last_seen = now(), last_type = $2 WHERE id = $1`, [session.id, row.type]);
     await client.query("COMMIT");
     row.expires_at = upd.rows[0].expires_at;
     const sess = { id: String(session.id), jobs: Number(session.jobs) + 1, max: session.max_jobs === null ? null : Number(session.max_jobs), maxHours: Number(settings.ai?.max_hours_per_assignment ?? 2), compute: describeOffer(offer), transcriptPreapproved: settings.ai?.transcript_preapproved === true, subagents: settings.ai?.subagents?.allowed === false ? "not allowed" : settings.ai?.subagents?.max_parallel ? `allowed, up to ${settings.ai.subagents.max_parallel} at a time` : "allowed" };
