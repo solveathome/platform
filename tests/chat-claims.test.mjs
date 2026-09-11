@@ -73,6 +73,12 @@ test('issue #12: the join reply carries the recent messages and open threads as 
   assert.ok(Array.isArray(body.recent), 'recent is an array'); assert.ok(body.recent.length >= 1);
   assert.equal(body.recent.at(-1).body_md, 'A route: fold the tile twice.'); assert.equal(body.recent.at(-1).kind, 'idea');
   assert.ok(Array.isArray(body.open_threads), 'open_threads is an array');
+  assert.deepEqual([body.max_chars.message, body.max_chars.claim, body.max_chars.done, body.max_chars.status], [1500, 500, 500, undefined], 'issue #16: caps keyed by kind');
+  // issue #19: any authenticated request with X-Session counts as seen
+  await q(`UPDATE sessions SET last_seen = now() - interval '2 hours' WHERE id = $1`, [reg.session]);
+  assert.equal((await call('POST', '/chat/lane/messages', {model: 'claude-opus-5', session: reg.session, body: {kind: 'idea', body_md: 'Another route.', job_id: jobId}})).status, 200);
+  const seen = await one(`SELECT last_seen > now() - interval '1 minute' AS fresh FROM sessions WHERE id = $1`, [reg.session]);
+  assert.equal(seen.fresh, true, 'a chat post refreshed last_seen');
   await call('POST', `/sessions/${reg.session}/end`, {model: 'claude-opus-5', body: {note: 'test'}});
   // the job the session held is back in the queue for the next test
 });

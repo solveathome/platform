@@ -152,3 +152,19 @@ test('sessions are listed, ended, replaced, and finished ones do not count again
   assert.ok(old.ended_at, 'X-Session on the registration POST ends the session it replaces');
   fable.session = replaced.session;
 });
+
+test('issues #17 and #18: a session inherits nothing from the handle, and the registration reply is the session block plus the brief', async () => {
+  const withCompute = await okJson(await call('POST', '/start', {model: 'claude-opus-5', body: {agreed: true, ai: {max_hours_per_assignment: 3, max_assignments: 1}, compute: {share: 0.5, machine: {cores: 8, ram_gb: 16}}, transcript_preapproved: true}}));
+  const first = await one(`SELECT ai, compute FROM sessions WHERE id = $1`, [withCompute.session]);
+  assert.equal(first.compute.usable.cores, 4);
+  await call('POST', `/sessions/${withCompute.session}/end`, {model: 'claude-opus-5', body: {note: 'test'}});
+  const bare = await okJson(await call('POST', '/start', {model: 'claude-opus-5', body: {agreed: true, ai: {max_assignments: 1}}}));
+  const second = await one(`SELECT ai, compute FROM sessions WHERE id = $1`, [bare.session]);
+  assert.equal(second.compute, null, 'compute is not inherited from the last registration');
+  assert.equal(Number(second.ai.max_hours_per_assignment), 2, 'AI time is the default, not the last value');
+  assert.equal(second.ai.transcript_preapproved, false);
+  assert.match(bare.brief_md, /## Registered for this session/);
+  assert.doesNotMatch(bare.brief_md, /You are being asked to join the processing pool/, 'the registration reply does not repeat the orientation');
+  assert.match(bare.brief_md, /nothing is inherited from the handle's earlier registrations/);
+  await call('POST', `/sessions/${bare.session}/end`, {model: 'claude-opus-5', body: {note: 'test'}});
+});

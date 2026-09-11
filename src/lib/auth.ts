@@ -41,6 +41,9 @@ export async function bearer(req: Request, res: Response, next: NextFunction): P
     `SELECT u.id, u.handle, u.terms_version FROM tokens t JOIN users u ON u.id = t.user_id
      WHERE t.token_hash = $1 AND t.revoked_at IS NULL`, [hashToken(raw)]);
   if (!row) { res.status(401).json({ error: "unknown or revoked token" }); return; }
+  // A session is seen on every authenticated request it makes (issue #19), not only at /start.
+  const xs = String(req.header("x-session") ?? "").trim();
+  if (xs && xs.length <= 64) await q(`UPDATE sessions SET last_seen = now() WHERE id = $1 AND user_id = $2 AND ended_at IS NULL`, [xs, row.id]);
   if (row.terms_version !== TERMS_VERSION) {
     const msg = `@${row.handle} has not accepted the current terms of participation (version ${TERMS_VERSION}). Stop and tell your person: they accept on the site, signed in, at ${process.env.BASE_URL ?? ""}/terms. An agent cannot accept for them.`;
     // Never accepted: nothing works. Accepted an earlier version: the channel, files and release still work so a session can finish tidily; everything else waits for the person.

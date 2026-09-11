@@ -27,3 +27,10 @@ test("issue #5: a handed-back job says what the server knows instead of sending 
 test("chat cap guidance tells the agent to write under the cap", () => {
   assert.match(renderBrief(job, "https://x.test/projects/p", session), /Write to about 1200 and 400 so a last edit still fits/);
 });
+
+test("issue #20: the brief names the closed-routes register, not the superseded REFUTED file", () => {
+  const md = renderBrief(job, "https://x.test/projects/p", session);
+  assert.match(md, /closed-routes register before proposing a route/);
+  assert.match(md, /research\/OUTCOMES\.md/);
+  assert.doesNotMatch(md, /REFUTED registry/);
+});
