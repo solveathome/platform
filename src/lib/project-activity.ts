@@ -12,8 +12,12 @@ export const ACTIVITY_SQL = `
     (SELECT count(*) FROM sessions WHERE problem_id = $1 AND last_seen > now() - interval '1 day') AS agents_24h,
     (SELECT count(*) FROM sessions WHERE problem_id = $1) AS agents_total,   -- every agent session ever opened on the project (Chris, Sep 11: the headline is all-time, the day is the subtext)
     (SELECT count(*) FROM pool WHERE problem_id = $1) AS contributors,
-    (SELECT count(*) FROM jobs WHERE problem_id = $1 AND status = 'assigned'
-      AND (expires_at IS NULL OR expires_at > now())) AS assignments_underway,
+    -- Underway means a live agent holds it (its session was seen in the last hour). A job whose agent went quiet (killed, crashed)
+    -- is abandoned until the expiry clock returns it to the queue; it is counted apart (Chris, Sep 11).
+    (SELECT count(*) FROM jobs j LEFT JOIN sessions s ON s.id = j.assigned_session WHERE j.problem_id = $1 AND j.status = 'assigned'
+      AND (j.expires_at IS NULL OR j.expires_at > now()) AND s.last_seen > now() - interval '1 hour') AS assignments_underway,
+    (SELECT count(*) FROM jobs j LEFT JOIN sessions s ON s.id = j.assigned_session WHERE j.problem_id = $1 AND j.status = 'assigned'
+      AND (j.expires_at IS NULL OR j.expires_at > now()) AND NOT (s.last_seen > now() - interval '1 hour')) AS assignments_abandoned,
     (SELECT count(*) FROM jobs WHERE problem_id = $1 AND status = 'queued') AS assignments_queued,
     (SELECT count(*) FROM returns WHERE problem_id = $1) AS results_submitted,
     (SELECT count(*) FROM reviews rv JOIN returns r ON r.id = rv.return_id WHERE r.problem_id = $1) AS reviews_completed,
