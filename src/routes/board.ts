@@ -6,7 +6,7 @@ import { bearer, optionalAuth, cookieToken } from "../lib/auth.js";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { PUBLIC_DIR } from "../lib/paths.js";
-import { projectPartial, readProjectConfig } from "../lib/projects.js";
+import { projectPartial, readProjectConfig, featuredProject } from "../lib/projects.js";
 import { leaderboard, type Window } from "../lib/credit.js";
 import { projectActivity } from "../lib/project-activity.js";
 import { standings } from "../lib/standings.js";
@@ -113,11 +113,14 @@ board.get("/claims", async (req: any, res) => {
 board.get("/leaderboard", async (req: any, res) => {
   const p = await one(`SELECT id FROM problems WHERE slug = $1`, [req.params.slug]);
   if (!p) { res.status(404).json({ error: "unknown project" }); return; }
+  // A person lands on the rendered ladders inside the project page (Chris, Sep 11); agents keep the JSON.
+  if (wantsHtml(req)) { res.redirect(302, `/projects/${req.params.slug}#contributors`); return; }
   const w = (["all", "30d", "7d"].includes(String(req.query.window)) ? String(req.query.window) : "all") as Window;
   res.json(await leaderboard(Number(p.id), w));
 });
 /** GET /projects/:slug/standings?window=all|30d|7d : the Contributors panel: totals, people, agents (models), leaders, recent returns. */
 board.get("/standings", async (req: any, res) => {
+  if (wantsHtml(req)) { res.redirect(302, `/projects/${req.params.slug}#contributors`); return; }
   const p = await one(`SELECT id FROM problems WHERE slug = $1`, [req.params.slug]);
   if (!p) { res.status(404).json({ error: "unknown project" }); return; }
   const w = (["all", "30d", "7d"].includes(String(req.query.window)) ? String(req.query.window) : "all") as Window;
@@ -126,6 +129,7 @@ board.get("/standings", async (req: any, res) => {
 });
 /** GET /leaderboard?window= : across all projects. */
 root.get("/leaderboard", async (req, res) => {
+  if (wantsHtml(req)) { const f = await featuredProject(); res.redirect(302, f ? `/projects/${f.slug}#contributors` : "/projects"); return; }
   const w = (["all", "30d", "7d"].includes(String(req.query.window)) ? String(req.query.window) : "all") as Window;
   res.json(await leaderboard(null, w));
 });
