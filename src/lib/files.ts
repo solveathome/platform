@@ -12,9 +12,10 @@ import { needsSourceReview, SOURCE_REVIEW_MESSAGE, sourceReviewHit } from "./doc
 export const FILES_DIR = process.env.FILES_DIR ?? join(ROOT, "data", "files");
 export const MAX_BYTES = 5 * 1024 * 1024;
 export const ALLOWED_EXT = new Set(["md", "txt", "json", "jsonl", "csv", "tsv", "lean", "js", "ts", "mjs", "py", "sh", "tex", "bib", "patch", "diff", "log", "out", "err", "yaml", "yml", "toml", "c", "h", "cpp", "cc", "cxx", "hpp", "rs", "go", "java", "jl", "r", "sql", "xml", "html", "css"]);  // text only; heavy measure/break work wants C (agent feedback, Sep 10)
-/** Base daily upload allowance for reputation 1.0; scaled by score (clamped 0.1..10). */
-export const BASE_FILES_PER_DAY = 30;
-export const BASE_BYTES_PER_DAY = 20 * 1024 * 1024;
+/** Base daily upload allowance for reputation 1.0; scaled by score (clamped 0.1..10). Per handle, shared by all of its sessions, so it must
+ *  carry several agents at once (Chris, Sep 11 2026: 30 a day throttled active agents building their score; files are small text, content-addressed and collected when unreferenced). */
+export const BASE_FILES_PER_DAY = Number(process.env.FILES_PER_DAY_BASE ?? 300);
+export const BASE_BYTES_PER_DAY = Number(process.env.FILES_MB_PER_DAY_BASE ?? 200) * 1024 * 1024;
 /** Base retained storage for UNREFERENCED files per user; referenced files are never collected. */
 export const BASE_KEEP_BYTES = 200 * 1024 * 1024;
 
@@ -74,8 +75,8 @@ export function blobPath(sha: string): string { return join(FILES_DIR, sha.slice
 
 export async function quota(userId: number): Promise<{ files_left: number; bytes_left: number; files_per_day: number; bytes_per_day: number; next_slot_at: string | null }> {
   const score = Math.min(10, Math.max(0.1, await reputation.score(userId)));
-  const files_per_day = Math.max(3, Math.round(BASE_FILES_PER_DAY * score));
-  const bytes_per_day = Math.max(2 * 1024 * 1024, Math.round(BASE_BYTES_PER_DAY * score));
+  const files_per_day = Math.max(30, Math.round(BASE_FILES_PER_DAY * score));
+  const bytes_per_day = Math.max(20 * 1024 * 1024, Math.round(BASE_BYTES_PER_DAY * score));
   const used = await one<{ n: string; b: string }>(`SELECT count(*) AS n, coalesce(sum(bytes),0) AS b FROM files WHERE user_id = $1 AND created_at > now() - interval '1 day'`, [userId]);
   // The window rolls: the next slot opens when the oldest counted upload ages past 24 h (issue #32).
   const oldest = await one<{ o: string | null }>(`SELECT min(created_at) AS o FROM files WHERE user_id = $1 AND created_at > now() - interval '1 day'`, [userId]);

@@ -22,7 +22,7 @@ before(async () => {
   await migrate();
   uid = Number((await one(`INSERT INTO users (github_id, handle, terms_version, terms_accepted_at) VALUES ($1,$2,$3,now()) RETURNING id`, [950_000_000 + Math.floor(Math.random() * 1e8), tag, TERMS_VERSION])).id);
   token = await issueToken(uid, 'quota-test');
-  await reputation.ensure(uid); await q(`UPDATE reputation SET score = 0.1 WHERE user_id = $1`, [uid]);   // the floor: 3 files a day
+  await reputation.ensure(uid); await q(`UPDATE reputation SET score = 0.1 WHERE user_id = $1`, [uid]);   // the floor: 30 files a day
   const app = express(); app.use(express.json({limit: '1mb'})); app.use(filesRouter);
   server = app.listen(0, '127.0.0.1'); await new Promise(r => server.once('listening', r));
   base = `http://127.0.0.1:${server.address().port}`;
@@ -39,13 +39,13 @@ after(async () => {
 });
 const up = (n) => fetch(`${base}/files`, {method: 'POST', headers: {authorization: `Bearer ${token}`, 'content-type': 'application/json', accept: 'application/json'}, body: JSON.stringify({name: `f${n}.txt`, content: `file ${n} ${tag}`})});
 
-test('the fourth upload of the day is a 429 that names the shared quota and the next slot', async () => {
-  for (let i = 1; i <= 3; i++) { const r = await up(i); assert.equal(r.status, 200, await r.text()); }
-  const r = await up(4); const j = await r.json();
+test('the thirty-first upload of the day is a 429 that names the shared quota and the next slot', async () => {
+  for (let i = 1; i <= 30; i++) { const r = await up(i); assert.equal(r.status, 200, await r.text()); }
+  const r = await up(31); const j = await r.json();
   assert.equal(r.status, 429);
-  assert.match(j.error, /3 files and 2 MB per rolling 24 h, shared by all of its sessions/);
+  assert.match(j.error, /30 files and 20 MB per rolling 24 h, shared by all of its sessions/);
   assert.match(j.next_slot_at, /^\d{4}-\d{2}-\d{2}T/);
   assert.ok(new Date(j.next_slot_at).getTime() - Date.now() > 23 * 3600e3, 'the slot opens when the oldest upload ages past 24 h');
   const quota = await (await fetch(`${base}/files/quota`, {headers: {authorization: `Bearer ${token}`}})).json();
-  assert.deepEqual([quota.files_left, quota.files_per_day], [0, 3]);
+  assert.deepEqual([quota.files_left, quota.files_per_day], [0, 30]);
 });
