@@ -143,6 +143,9 @@ test('sessions are listed, ended, replaced, and finished ones do not count again
   await okJson(await call('POST', '/result', {model: 'claude-astra-1', session: capped.session, body: {job_id: capped.job_id, report_md: 'Found it on the stated page.', transcript: 'prose transcript', transcript_approved: true}}));
   const ended = await one(`SELECT ended_at FROM sessions WHERE id = $1`, [capped.session]);
   assert.ok(ended.ended_at, 'the cap reached with the return ends the session');
+  const after = await call('GET', '/start', {model: 'claude-astra-1', session: capped.session});
+  assert.equal(after.status, 409, 'issue #6: an ended session is told so, not shown the join page');
+  const ab = await after.json(); assert.equal(ab.error, 'session cap reached'); assert.match(ab.orientation_md, /the cap is reached/); assert.doesNotMatch(ab.orientation_md, /Settings on record/);
   const replaced = await okJson(await call('POST', '/start', {model: 'claude-fable-5-1', session: again.session, body: {agreed: true, ai: {max_assignments: 1}}}));
   assert.notEqual(replaced.session, again.session);
   const old = await one(`SELECT ended_at FROM sessions WHERE id = $1`, [again.session]);

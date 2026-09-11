@@ -17,8 +17,9 @@ import * as credit from "../lib/credit.js";
 import { orientation } from "../lib/orientation.js";
 import { inbox, renderInbox } from "../lib/inbox.js";
 import { parseOffer, describeOffer } from "../lib/compute.js";
+import { join } from "node:path";
 import { parseTranscript } from "../lib/tokens.js";
-import { needsSourceReview, SOURCE_REVIEW_MESSAGE, sourceReviewHit } from "../lib/document-publication.js";
+import { needsSourceReview, SOURCE_REVIEW_MESSAGE, sourceReviewHit, readPublication } from "../lib/document-publication.js";
 import { randomBytes } from "node:crypto";
 import { isTrusted } from "../lib/roles.js";
 import { tierForEffort } from "../lib/model-id.js";
@@ -70,7 +71,15 @@ async function start(req: any, res: any): Promise<void> {
   // Consent is per agent session (Q51), and a session is one agent: a person runs several in parallel under one handle, each with
   // its own id (Sep 10). Without a live session id the agent gets the orientation: the terms, and for a returning handle the choice to continue.
   const sessionId = req.justRegistered ? req.session?.id : String(req.header("x-session") ?? "").trim();
-  const session = req.justRegistered ? req.session : (sessionId ? await one(`SELECT * FROM sessions WHERE id = $1 AND problem_id = $2 AND user_id = $3 AND ended_at IS NULL`, [sessionId, req.project.id, req.user!.id]) : undefined);
+  const session = req.justRegistered ? req.session : (sessionId ? await one(`SELECT * FROM sessions WHERE id = $1 AND problem_id = $2 AND user_id = $3`, [sessionId, req.project.id, req.user!.id]) : undefined);
+  if (session?.ended_at) {
+    // The session is over (cap reached, ended, or replaced): say so (issue #6). The join page would invite a second registration the person did not allow.
+    const capped = session.max_jobs !== null && Number(session.jobs) >= Number(session.max_jobs);
+    const md = `# solveathome / ${req.project.name}: this session has ended\n\n${capped ? `Your person allowed ${session.max_jobs} assignment(s) this session and you took ${session.jobs}: the cap is reached.` : `Session ${session.id} ended at ${String(session.ended_at).slice(0, 19).replace("T", " ")} UTC.`} Stop here. Tell your person what you did and where it stands (\`${BASE()}/@${req.user!.handle}\`). Continue only if they say so: then \`POST ${BASE()}/projects/${req.project.slug}/start\` with \`{ "agreed": true }\` and their new cap (\`"ai": { "max_assignments": <n> }\`), sending \`X-Session: ${session.id}\` so this session is replaced, not added to.\n`;
+    if (wantsJson) res.status(409).json({ error: capped ? "session cap reached" : "session ended", session: session.id, session_jobs: session.jobs, session_max_jobs: session.max_jobs, ended_at: session.ended_at, orientation_md: md });
+    else res.status(409).type("text/markdown").send(md);
+    return;
+  }
   if (!member || !session) {
     const md = ownerNote + await orientation(req.project, BASE(), member ?? null);
     if (wantsJson) res.json({ registered: !!member, session: null, orientation_md: md }); else res.type("text/markdown").send(md);
@@ -172,7 +181,11 @@ async function start(req: any, res: any): Promise<void> {
     await client.query("COMMIT");
     row.expires_at = upd.rows[0].expires_at;
     const sess = { id: String(session.id), jobs: Number(session.jobs) + 1, max: session.max_jobs === null ? null : Number(session.max_jobs), maxHours: Number(settings.ai?.max_hours_per_assignment ?? 2), compute: describeOffer(offer), transcriptPreapproved: settings.ai?.transcript_preapproved === true, subagents: settings.ai?.subagents?.allowed === false ? "not allowed" : settings.ai?.subagents?.max_parallel ? `allowed, up to ${settings.ai.subagents.max_parallel} at a time` : "allowed" };
+    if (Number(row.release_count ?? 0) > 0) row.prior_claims = await q(`SELECT m.id, u.handle, m.model, m.created_at FROM messages m JOIN users u ON u.id = m.user_id WHERE m.job_id = $1 AND m.kind = 'claim' ORDER BY m.id`, [row.id]);
     let md = renderBrief(row, `${BASE()}/projects/${req.project.slug}`, sess);
+    // Reviews this handle cannot take with this model (a model never reviews its own kind) wait for its other agents: say so, or the handle stacks returns nobody reviews.
+    const waiting = row.type !== "review" ? await one<{ c: string; models: string[] }>(`SELECT count(*) AS c, array_agg(DISTINCT pr.model) AS models FROM jobs j JOIN returns pr ON pr.id = j.parent_return_id WHERE j.problem_id = $1 AND j.type = 'review' AND j.status = 'queued' AND pr.user_id = $2 AND pr.model = $3`, [req.project.id, uid, req.model ?? ""]) : null;
+    if (Number(waiting?.c ?? 0) > 0) { const others = (await q<{ model: string }>(`SELECT model FROM model_tiers WHERE tier <= $1 AND model <> $2 ORDER BY tier, model`, [Number(tier), req.model ?? ""])).map((m) => m.model); md += `\n\n## Reviews waiting for your person's other agents\n\n${waiting!.c} review job(s) of this handle's own returns are queued and cannot go to ${req.model}: a model never reviews its own kind. They wait for an agent on another model at tier ${tier} or above${others.length ? ` (${others.join(", ")})` : ""}. Until one reviews them, this handle's returns stack unreviewed; tell your person when you report.`; }
     // An audit of a paper with a revision still under review starts from that revision, not from the last accepted text.
     if (row.type === "audit") {
       const pslug = /paper\.slug:\s*([a-z0-9-]+)/.exec(String(row.brief_md ?? ""))?.[1];
@@ -548,10 +561,14 @@ job.post("/result", bearer, project, async (req: any, res) => {
   const mayReview = standing || (!!jobRow && jobRow.type !== "explore" && Number(spawnedToday?.c ?? 0) < MAX_REVIEW_SPAWNS_PER_DAY);
   if (mayReview) await spawnReviews(ret!.id, problem.id, laneId, MIN_REVIEWS);
   // A sha named in the recipe should be one of the declared hashes or an uploaded file; a typo there costs a reviewer a rerun (agent feedback, Sep 10).
-  const known = new Set<string>([...attached, ...(Array.isArray(b.files) ? b.files.map((x: any) => String(x).toLowerCase()) : []), ...JSON.stringify(b.hashes ?? {}).match(/[0-9a-f]{64}/g) ?? []]);
+  // Known (issue #7): declared hashes, this return's files, cited files, anything in the file store (a cited return's file, a pinned version), and the served portfolio's own hashes.
+  const known = new Set<string>([...attached, ...(Array.isArray(b.files) ? b.files.map((x: any) => String(x).toLowerCase()) : []), ...(Array.isArray(cites.files) ? cites.files.map((x: any) => String(x).toLowerCase()) : []), ...JSON.stringify(b.hashes ?? {}).match(/[0-9a-f]{64}/g) ?? []]);
   const found = (recipe.match(/[0-9a-f]{64}/g) ?? []) as string[];
-  const stray: string[] = Array.from(new Set(found.map((x) => x.toLowerCase()))).filter((x) => !known.has(x));
-  const warnings = stray.length ? [`recipe_md names ${stray.length} sha256 value(s) that are neither in hashes nor among your files: ${stray.map((x: string) => x.slice(0, 12) + "…").join(", ")}. If one is an expected output hash, put it in hashes too; if it is a typo, a reviewer's rerun will not match.`] : undefined;
+  const candidates = Array.from(new Set(found.map((x) => x.toLowerCase()))).filter((x) => !known.has(x));
+  const portfolio = candidates.length ? new Set(Object.values(readPublication(join(revisions.REPOS, problem.slug))?.files ?? {}).map((f: any) => String(f?.sha256 ?? "").toLowerCase())) : new Set<string>();
+  const stray: string[] = [];
+  for (const x of candidates) { if (portfolio.has(x)) continue; if (await one(`SELECT 1 FROM files WHERE sha256 = $1 AND deleted_at IS NULL`, [x])) continue; stray.push(x); }
+  const warnings = stray.length ? [`recipe_md names ${stray.length} sha256 value(s) that are neither in hashes, nor among your or cited files, nor a served document: ${stray.map((x: string) => x.slice(0, 12) + "…").join(", ")}. If one is an expected output hash, put it in hashes too; if it is a typo, a reviewer's rerun will not match.`] : undefined;
   res.json({ ok: true, return_id: ret!.id, status: "pending", reviews_requested: mayReview ? MIN_REVIEWS : 0, files: attached, tokens, warnings, note: mayReview ? undefined : "pending without review jobs: a trusted reviewer picks it up when they look; review jobs are spawned for assigned work, and for everything once you have an accepted return here" });
 });
 

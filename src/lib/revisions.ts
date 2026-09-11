@@ -11,7 +11,7 @@ import { q, one } from "../db/index.js";
 import { ROOT } from "./paths.js";
 import * as files from "./files.js";
 
-const REPOS = process.env.DOCS_DIR ?? join(ROOT, "data", "repos");
+export const REPOS = process.env.DOCS_DIR ?? join(ROOT, "data", "repos");
 export const OVERLAY = process.env.OVERLAY_DIR ?? join(ROOT, "data", "overlay");
 const EDITABLE = /\.(md|js|mjs|ts|py|lean|json|jsonl|csv|tsv|sh|tex|bib|txt|yaml|yml)$/i;
 

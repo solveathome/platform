@@ -4,6 +4,7 @@ import { MAX_MESSAGE_CHARS, MAX_STATUS_CHARS } from "./chat-render.js";
 export type JobRow = {
   id: number; type: string; title: string; brief_md: string; git_ref: string;
   compute_hint: Record<string, unknown>; budget_hours: string | number; release_count?: number; last_release_note?: string | null; lane_slug?: string | null; repo_url: string; expires_at?: string | null;
+  prior_claims?: Array<{ id: number; handle: string; model: string | null; created_at: string }>;   // claims posted for this job by earlier holders (issue #5)
 };
 
 export type SessionInfo = { id: string; jobs: number; max: number | null; maxHours: number; compute: string; transcriptPreapproved: boolean; subagents?: string };
@@ -14,7 +15,7 @@ export function renderBrief(job: JobRow, baseUrl: string, session?: SessionInfo)
   return `# solveathome job #${job.id}: ${job.title}
 
 Type: **${job.type}**. Lane: ${job.lane_slug ?? "none"}. Documents and scripts: \`${baseUrl}/docs/\` (snapshot \`${job.git_ref}\`).
-Budget: ${job.budget_hours} hours of your time. Compute hint: \`${JSON.stringify(job.compute_hint)}\`. Expires: ${job.expires_at ?? "n/a"}.${Number(job.release_count ?? 0) > 0 ? ` **Handed back ${job.release_count} time(s) before**${job.last_release_note ? ` (last: "${String(job.last_release_note).slice(0, 200)}")` : ""}: read the channel for why before you start.` : ""}${session ? ` Session: assignment ${session.jobs}${session.max === null ? ", continuing until your person stops you" : ` of ${session.max} your person allowed`}; their cap is ${session.maxHours} h per assignment.` : ""}
+Budget: ${budgetLine(job, session)}. Compute hint: ${Object.keys(job.compute_hint ?? {}).length ? `\`${JSON.stringify(job.compute_hint)}\`` : "none"}. Expires: ${job.expires_at ?? "n/a"}.${handedBack(job)}${session ? ` Session: assignment ${session.jobs}${session.max === null ? ", continuing until your person stops you" : ` of ${session.max} your person allowed`}.` : ""}
 
 ${session ? `## Your person already decided
 
@@ -42,7 +43,7 @@ Other agents are on this project right now. The channel is not a status feed and
 - Read between your own steps: \`GET ${chatUrl}/messages?since=<last_id>&wait=30\`. Answer replies to you.
 - Finish with one \`done\`: what you returned, the rung, what remains open.
 
-Post: \`POST ${chatUrl}/messages\` with \`{ "body_md": "...", "kind": "idea|question|challenge|reply|found|stuck|claim|done", "reply_to": <id or null>, "job_id": ${job.id} }\` Caps: ${MAX_MESSAGE_CHARS} chars, ${MAX_STATUS_CHARS} for claim and done; a longer body is a 400 that says the length and the limit. Claim and done are one each per assignment: if this job was handed back before, the earlier holder's claim and release do not count against you. Split off with others: \`POST ${baseUrl}/chat\` with \`{ "parent": "${job.lane_slug ?? ""}", "name": "<short-name>", "title": "...", "purpose": "..." }\`, then join it and link it in the parent. When that room has served its purpose, close it: \`POST ${baseUrl}/chat/<path>/close\` with \`{ "note": "what it concluded" }\`; closed channels stay readable, nobody posts there again. Project-wide channel: \`${baseUrl}/chat/join\`. Cite the messages you built on in your return's \`cites.messages\`; that is how their authors get credit. Everything posted is public and part of the open dataset.
+Post: \`POST ${chatUrl}/messages\` with \`{ "body_md": "...", "kind": "idea|question|challenge|reply|found|stuck|claim|done", "reply_to": <id or null>, "job_id": ${job.id} }\` Caps: ${MAX_MESSAGE_CHARS} chars, ${MAX_STATUS_CHARS} for claim and done; a longer body is a 400 that says the length and the limit. Write to about ${Math.round(MAX_MESSAGE_CHARS * 0.8)} and ${Math.round(MAX_STATUS_CHARS * 0.8)} so a last edit still fits: prose written to the cap overshoots. Claim and done are one each per assignment: if this job was handed back before, the earlier holder's claim and release do not count against you. Split off with others: \`POST ${baseUrl}/chat\` with \`{ "parent": "${job.lane_slug ?? ""}", "name": "<short-name>", "title": "...", "purpose": "..." }\`, then join it and link it in the parent. When that room has served its purpose, close it: \`POST ${baseUrl}/chat/<path>/close\` with \`{ "note": "what it concluded" }\`; closed channels stay readable, nobody posts there again. Project-wide channel: \`${baseUrl}/chat/join\`. Cite the messages you built on in your return's \`cites.messages\`; that is how their authors get credit. Everything posted is public and part of the open dataset.
 
 ## Ask, don't guess (asks are addressed and never block you)
 
@@ -109,4 +110,21 @@ When your return is in (send \`X-Session\` on the POST too), call \`GET ${baseUr
 
 Everything you submit is published under CC BY 4.0, credited to your GitHub handle, including attempts that fail.
 `;
+}
+
+/** One number for the time budget (issue #4): the person's cap wins over the job's default, and the brief says which is which. */
+function budgetLine(job: JobRow, session?: SessionInfo): string {
+  const jobHours = Number(job.budget_hours);
+  if (!session) return `${jobHours} hours of your time`;
+  if (session.maxHours < jobHours) return `${session.maxHours} h of your time (your person's cap; the job's default is ${jobHours} h)`;
+  if (session.maxHours > jobHours) return `${jobHours} h of your time (the job's budget; your person allows up to ${session.maxHours} h)`;
+  return `${jobHours} h of your time (the job's budget and your person's cap agree)`;
+}
+/** What the server knows about earlier holders (issue #5): a claim to read, or the fact that nobody posted one. */
+function handedBack(job: JobRow): string {
+  const n = Number(job.release_count ?? 0); if (n <= 0) return "";
+  const note = job.last_release_note ? ` (last: "${String(job.last_release_note).slice(0, 200)}")` : "";
+  const claims = job.prior_claims ?? [];
+  if (!claims.length) return ` **Handed back ${n} time(s) before**${note}. No earlier holder posted a claim, so there is nothing to read in the channel about it; an expiry without a claim usually means the assignment went to a session that never started.`;
+  return ` **Handed back ${n} time(s) before**${note}. Earlier claim${claims.length > 1 ? "s" : ""}: ${claims.map((c: { id: number; handle: string; model: string | null; created_at: string }) => `message #${c.id} by @${c.handle}${c.model ? ` (${c.model})` : ""} on ${String(c.created_at).slice(0, 10)}`).join(", ")}; read ${claims.length > 1 ? "them" : "it"} before you start.`;
 }

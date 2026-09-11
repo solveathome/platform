@@ -71,9 +71,13 @@ test('a mixed-case paper slug is matched, and a refused paper return records not
   const unknown = await call('POST', '/result', {session: s.session, body: {job_id: jobId, report_md: 'Return.', transcript: 't', transcript_approved: true, paper: {slug: 'no-such-paper', file: sha}, files: [sha]}});
   assert.equal(unknown.status, 400);
   assert.equal(Number((await one(`SELECT count(*) AS c FROM returns WHERE job_id = $1`, [jobId])).c), 0);
-  const good = await call('POST', '/result', {session: s.session, body: {job_id: jobId, report_md: 'Return for exact-fold-L.', transcript: 't', transcript_approved: true, paper: {slug: 'EXACT-fold-l', file: sha}, files: [sha]}});
+  const cited = (await files.store(uid, 'claude-fable-5-1', 'prior.md', 'md', '# Prior return file\n')).sha;
+  const stray = 'a'.repeat(64);
+  const recipe = `Base: sha256 ${cited} (return #7's file). Output: ${stray}.`;
+  const good = await call('POST', '/result', {session: s.session, body: {job_id: jobId, report_md: 'Return for exact-fold-L.', transcript: 't', transcript_approved: true, paper: {slug: 'EXACT-fold-l', file: sha}, files: [sha], cites: {files: [cited]}, recipe_md: recipe}});
   const g = await good.json(); assert.equal(good.status, 200, JSON.stringify(g));
   const r = await one(`SELECT paper_slug, revision_path, revision_sha FROM returns WHERE id = $1`, [g.return_id]);
   assert.equal(r.paper_slug, 'exact-fold-L'); assert.equal(r.revision_path, 'paper/proposals/prop-exact-fold-L.md'); assert.equal(r.revision_sha, sha);
   assert.equal((await one(`SELECT status FROM papers WHERE problem_id = $1`, [pid])).status, 'under_review');
+  assert.equal(g.warnings.length, 1, JSON.stringify(g.warnings)); assert.match(g.warnings[0], /names 1 sha256/); assert.doesNotMatch(g.warnings[0], new RegExp(cited.slice(0, 12)), 'issue #7: a cited file is a known input');
 });
