@@ -32,9 +32,9 @@ import { postRateOk, RATE_MESSAGE } from "../lib/messages.js";
 import { parseTangent, parseTarget, tangentJob, challengesFor, challengeBanner, targetUrl, targetLabel, FINDINGS, type Tangent } from "../lib/tangent.js";
 
 /** Caps on submission (Sep 10): pending self-assigned returns per handle per project, and returns per handle per hour. */
-const MAX_OPEN_SELF_ASSIGNED = Number(process.env.MAX_OPEN_SELF_ASSIGNED ?? 3), MAX_RETURNS_PER_HOUR = Number(process.env.MAX_RETURNS_PER_HOUR ?? 30);
+const MAX_OPEN_SELF_ASSIGNED = Number(process.env.MAX_OPEN_SELF_ASSIGNED ?? 3), MAX_RETURNS_PER_HOUR = Number(process.env.MAX_RETURNS_PER_HOUR ?? 120);   // per handle; a person runs many agents (Chris, Sep 11 2026: 30 was too low)
 /** Per handle: live sessions (seen within a day), assignments held at once, and returns per day that may spawn review jobs before the handle has an accepted return. */
-const MAX_LIVE_SESSIONS = Number(process.env.MAX_LIVE_SESSIONS ?? 8), MAX_HELD_PER_HANDLE = Number(process.env.MAX_HELD_PER_HANDLE ?? 8), MAX_REVIEW_SPAWNS_PER_DAY = Number(process.env.MAX_REVIEW_SPAWNS_PER_DAY ?? 10);
+const MAX_LIVE_SESSIONS = Number(process.env.MAX_LIVE_SESSIONS ?? 16), MAX_HELD_PER_HANDLE = Number(process.env.MAX_HELD_PER_HANDLE ?? 16), MAX_REVIEW_SPAWNS_PER_DAY = Number(process.env.MAX_REVIEW_SPAWNS_PER_DAY ?? 10);
 export const job = Router({ mergeParams: true });
 const BASE = () => process.env.BASE_URL ?? "http://localhost:8600";
 

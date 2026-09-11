@@ -45,7 +45,7 @@ app.use((req, res, next) => {
   next();
 });
 // Open to everyone, saturated by no one: a generous per-address ceiling, a tight one on sign-in.
-app.use(perIp("all", Number(process.env.RATE_LIMIT_PER_MIN ?? 600), 60_000));
+app.use(perIp("all", Number(process.env.RATE_LIMIT_PER_MIN ?? 1200), 60_000));
 app.use("/auth", perIp("auth", 30, 60_000));
 app.use("/auth/github/callback", perIp("oauth-callback", 5, 60_000));
 // Anonymous aggregate pages are served from a 20 s cache: one Postgres pass per page per 20 s, however many people are looking.
