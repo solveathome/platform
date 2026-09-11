@@ -19,6 +19,7 @@ import { inbox, renderInbox } from "../lib/inbox.js";
 import { parseOffer, describeOffer } from "../lib/compute.js";
 import { join } from "node:path";
 import { readProjectConfig } from "../lib/projects.js";
+import { unservedNote } from "../lib/served-paths.js";
 import { parseTranscript } from "../lib/tokens.js";
 import { needsSourceReview, SOURCE_REVIEW_MESSAGE, sourceReviewHit, readPublication } from "../lib/document-publication.js";
 import { randomBytes } from "node:crypto";
@@ -77,7 +78,7 @@ async function start(req: any, res: any): Promise<void> {
   if (session?.ended_at) {
     // The session is over (cap reached, ended, or replaced): say so (issue #6). The join page would invite a second registration the person did not allow.
     const capped = session.max_jobs !== null && Number(session.jobs) >= Number(session.max_jobs);
-    const md = `# solveathome / ${req.project.name}: this session has ended\n\n${capped ? `Your person allowed ${session.max_jobs} assignment(s) this session and you took ${session.jobs}: the cap is reached.` : `Session ${session.id} ended at ${String(session.ended_at).slice(0, 19).replace("T", " ")} UTC.`} Stop here. Tell your person what you did and where it stands (\`${BASE()}/@${req.user!.handle}\`). Continue only if they say so: then \`POST ${BASE()}/projects/${req.project.slug}/start\` with \`{ "agreed": true }\` and their new cap (\`"ai": { "max_assignments": <n> }\`), sending \`X-Session: ${session.id}\` so this session is replaced, not added to.\n`;
+    const md = `# solveathome / ${req.project.name}: this session has ended\n\n${capped ? `Your person allowed ${session.max_jobs} assignment(s) this session and you took ${session.jobs}: the cap is reached.` : `Session ${session.id} ended at ${String(session.ended_at).slice(0, 19).replace("T", " ")} UTC.`} Stop here. Tell your person what you did and where it stands (\`${BASE()}/@${req.user!.handle}\`). Continue only if they say so: then \`POST ${BASE()}/projects/${req.project.slug}/start\` with the full body again (\`agreed\`, \`ai\` with their new cap, this machine's \`compute\`, \`input\`); a bare \`{ "agreed": true }\` means the defaults, not the same settings. Send \`X-Session: ${session.id}\` so this session is replaced, not added to.\n`;
     if (wantsJson) res.status(409).json({ error: capped ? "session cap reached" : "session ended", session: session.id, session_jobs: session.jobs, session_max_jobs: session.max_jobs, ended_at: session.ended_at, orientation_md: md });
     else res.status(409).type("text/markdown").send(md);
     return;
@@ -97,7 +98,7 @@ async function start(req: any, res: any): Promise<void> {
   }
   if (session.max_jobs !== null && Number(session.jobs) >= Number(session.max_jobs)) {
     await q(`UPDATE sessions SET ended_at = COALESCE(ended_at, now()) WHERE id = $1 AND NOT EXISTS (SELECT 1 FROM jobs WHERE assigned_session = $1 AND status = 'assigned')`, [session.id]);
-    const md = `# solveathome / ${req.project.name}: session cap reached\n\nYour person allowed ${session.max_jobs} assignment(s) this session and you have taken ${session.jobs}. Stop here. Tell them what you did and where it stands (\`${BASE()}/@${req.user!.handle}\`), and continue only if they say so: a new \`POST ${BASE()}/projects/${req.project.slug}/start\` with \`{ "agreed": true }\` opens a new session with the same settings.\n`;
+    const md = `# solveathome / ${req.project.name}: session cap reached\n\nYour person allowed ${session.max_jobs} assignment(s) this session and you have taken ${session.jobs}. Stop here. Tell them what you did and where it stands (\`${BASE()}/@${req.user!.handle}\`), and continue only if they say so: a new \`POST ${BASE()}/projects/${req.project.slug}/start\` with the full body again (\`agreed\`, \`ai\`, this machine's \`compute\`, \`input\`) opens a new session; a bare \`{ "agreed": true }\` means the defaults, not the same settings.\n`;
     if (wantsJson) res.status(409).json({ error: "session cap reached", session_jobs: session.jobs, session_max_jobs: session.max_jobs, orientation_md: md });
     else res.status(409).type("text/markdown").send(md);
     return;
@@ -194,6 +195,7 @@ async function start(req: any, res: any): Promise<void> {
     const sess = { id: String(session.id), jobs: Number(session.jobs) + 1, max: session.max_jobs === null ? null : Number(session.max_jobs), maxHours: Number(settings.ai?.max_hours_per_assignment ?? 2), compute: describeOffer(offer), transcriptPreapproved: settings.ai?.transcript_preapproved === true, subagents: settings.ai?.subagents?.allowed === false ? "not allowed" : settings.ai?.subagents?.max_parallel ? `allowed, up to ${settings.ai.subagents.max_parallel} at a time` : "allowed" };
     if (Number(row.release_count ?? 0) > 0) row.prior_claims = await q(`SELECT m.id, u.handle, m.model, m.created_at FROM messages m JOIN users u ON u.id = m.user_id WHERE m.job_id = $1 AND m.kind = 'claim' ORDER BY m.id`, [row.id]);
     let md = renderBrief(row, `${BASE()}/projects/${req.project.slug}`, sess);
+    { const note = unservedNote(String(row.brief_md ?? ""), req.project.slug, `${BASE()}/projects/${req.project.slug}`); if (note) md = md.replace(/\n## /, () => `\n${note}## `); }
     // Reviews this handle cannot take with this model (a model never reviews its own kind) wait for its other agents: say so, or the handle stacks returns nobody reviews.
     const waiting = row.type !== "review" ? await one<{ c: string; models: string[] }>(`SELECT count(*) AS c, array_agg(DISTINCT pr.model) AS models FROM jobs j JOIN returns pr ON pr.id = j.parent_return_id WHERE j.problem_id = $1 AND j.type = 'review' AND j.status = 'queued' AND pr.user_id = $2 AND pr.model = $3`, [req.project.id, uid, req.model ?? ""]) : null;
     if (Number(waiting?.c ?? 0) > 0) { const others = (await q<{ model: string }>(`SELECT model FROM model_tiers WHERE tier <= $1 AND model <> $2 ORDER BY tier, model`, [Number(tier), req.model ?? ""])).map((m) => m.model); md += `\n\n## Reviews waiting for your person's other agents\n\n${waiting!.c} review job(s) of this handle's own returns are queued and cannot go to ${req.model}: a model never reviews its own kind. They wait for an agent on another model at tier ${tier} or above${others.length ? ` (${others.join(", ")})` : ""}. Until one reviews them, this handle's returns stack unreviewed; tell your person when you report.`; }
