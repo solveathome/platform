@@ -397,6 +397,8 @@ job.post("/result", bearer, project, async (req: any, res) => {
     if (typeof b[field] !== "string") continue;
     const leak = files.findSecret(b[field]); if (leak) { res.status(400).json({ error: `"${field}" looks like it contains a secret (${leak}). Scrub it and retry; nothing was stored.`, field }); return; }
     const home = files.findHomePath(b[field]); if (home) { res.status(400).json({ error: `"${field}" contains a local home path (${home}). The terms require scrubbed transcripts: replace home paths with ~ or a relative path and retry; nothing was stored.`, field }); return; }
+    // Harness metadata identifies the installation or account, not the work (issue #28): a transcript that still carries one is not scrubbed.
+    const harness = files.findHarnessId(b[field]); if (harness) { res.status(400).json({ error: `"${field}" still carries a harness identifier: ${harness}. Claude Code writes ownerAccountUuid, ownerOrganizationUuid and bridgeSessionId in the first lines and a signed atis value on every atis-latch line; redact those values (or drop the atis-latch lines) and retry; nothing was stored.`, field }); return; }
   }
   for (const field of ["report_md", "notes_md", "transcript", "patch"]) {
     if (typeof b[field] === "string" && needsSourceReview(b[field])) { res.status(400).json({ error: `${SOURCE_REVIEW_MESSAGE} The check tripped in "${field}" on this line: "${sourceReviewHit(b[field]) ?? "?"}". Paraphrase with a locator (page, theorem number) instead of transcribing.`, field, at: sourceReviewHit(b[field]) }); return; }
@@ -768,6 +770,15 @@ job.get("/return/:id", optionalAuth, project, async (req: any, res) => {
   // Integration is manual and separate from acceptance (issue #21): say where the patch stands. Decision by the author's own trusted handle is on the record (issue #23).
   if (r.patch) r.patch_status = (await one(`SELECT 1 FROM document_versions WHERE return_id = $1`, [r.id])) ? "integrated" : "pending integration: the integrator applies accepted patches to the research repository by hand; build on the served file plus this patch until then";
   r.decided_by_author_handle = !!(await one(`SELECT 1 FROM reviews WHERE return_id = $1 AND trusted AND user_id = $2 AND verdict = CASE WHEN $3 = 'accepted' THEN 'accept' ELSE 'reject' END`, [r.id, r.user_id, r.status]));
+  // The reviews and the decision record travel with the return (issue #29). `returns.decision` is a curate return's own input, so it is `curation` here;
+  // `decision` is the latest decision row (null while nothing has been decided) with the reviews that carried it, and `decisions` the whole record, oldest first.
+  if (r.type === "curate") r.curation = r.decision; delete r.decision;
+  r.reviews = (await q(`SELECT rv.id, u.handle, rv.model, rv.verdict, rv.rung, rv.verification, rv.rerun_reason, rv.trusted, rv.weight, rv.notes_md, rv.created_at FROM reviews rv JOIN users u ON u.id = rv.user_id WHERE rv.return_id = $1 ORDER BY rv.id`, [r.id])).map((v: any) => ({ ...v, id: Number(v.id), weight: Number(v.weight) }));
+  r.decisions = (await q(`SELECT d.status, d.final_rung, d.provisional, d.by, d.note, d.decided_at, u.handle AS decided_by FROM return_decisions d LEFT JOIN users u ON u.id = d.user_id WHERE d.return_id = $1 ORDER BY d.id`, [r.id])).map((d: any) => {
+    const carried = d.status === "pending" || !["trusted", "advisory"].includes(d.by) ? [] : r.reviews.filter((v: any) => v.trusted === (d.by === "trusted") && (v.verdict === "accept") === (d.status === "accepted")).map((v: any) => v.id);
+    return { ...d, review_ids: carried };
+  });
+  r.decision = r.decisions.length ? r.decisions[r.decisions.length - 1] : null;
   // pg returns bigint and numeric as strings (issue #25): ids and hours are numbers to a client.
   for (const k of Object.keys(r)) if (typeof r[k] === "string" && /(^|_)id$|cpu_hours|^weight$/.test(k) && /^-?\d+(\.\d+)?$/.test(r[k])) r[k] = Number(r[k]);
   res.json(r);

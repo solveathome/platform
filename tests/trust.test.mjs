@@ -110,6 +110,31 @@ test('a trusted reviewer may review their own return; a contributor may not', as
   assert.equal(notOwn.status, 403);
 });
 
+test('the return JSON carries the reviews and the decision record; a transcript with a harness identifier is refused (issues #28, #29)', async () => {
+  const r = await one(`INSERT INTO returns (problem_id, type, user_id, model, provider, report_md, transcript, status) VALUES ($1,'source',$2,'m','p','own work','t','pending') RETURNING id`, [pid, people.trusted.id]);
+  const id = Number(r.id);
+  const before = await okJson(await call('adv1', 'GET', `/return/${id}`));
+  assert.equal(before.decision, null, 'nothing decided yet');
+  assert.deepEqual([before.decisions, before.reviews], [[], []]);
+  assert.ok(!('curation' in before), 'a non-curate return has no curation object');
+  // Harness-written identifiers refused before anything is stored: the signed atis value, or an account id left as a UUID.
+  const atis = '{"type": "atis-latch", "atis": "v1.5bd3062313744de1.NvQETbIz66ofBWZ7.8e9298b0.vPSkzMiroJKX_9f9LbjfP7Lv_BFf4saxqJz9JbsbbfUft", "sessionId": "[REDACTED]"}';
+  const leak = await call('trusted', 'POST', '/result', {model: 'gpt-6-astra', body: {type: 'review', return_id: id, verdict: 'accept', rung: 'measured', notes_md: 'checked', transcript: `{"type": "message"}\n${atis}`, transcript_approved: true}});
+  assert.equal(leak.status, 400);
+  const leakBody = await leak.json();
+  assert.equal(leakBody.field, 'transcript'); assert.match(leakBody.error, /atis \(line 2\)/);
+  assert.equal(Number((await one(`SELECT count(*) AS c FROM reviews WHERE return_id = $1`, [id])).c), 0, 'the refused review was stored');
+  const own = await okJson(await call('trusted', 'POST', '/result', {model: 'gpt-6-astra', body: {type: 'review', return_id: id, verdict: 'accept', rung: 'measured', notes_md: 'checked', transcript: '{"type": "atis-latch", "atis": "[REDACTED]"}', transcript_approved: true}}));
+  assert.equal(own.outcome, 'accepted');
+  const after = await okJson(await call('adv1', 'GET', `/return/${id}`));
+  assert.equal(after.status, 'accepted');
+  assert.equal(after.reviews.length, 1); assert.equal(after.reviews[0].handle, people.trusted.handle); assert.equal(after.reviews[0].trusted, true); assert.equal(typeof after.reviews[0].id, 'number');
+  assert.deepEqual([after.decision.status, after.decision.final_rung, after.decision.by, after.decision.provisional, after.decision.review_ids], ['accepted', 'measured', 'trusted', false, [after.reviews[0].id]]);
+  assert.ok(after.decision.decided_at, 'a decision has a time');
+  assert.equal(after.decisions.length, 1);
+  assert.equal(after.decided_by_author_handle, true);
+});
+
 test('three advisory reviews decide provisionally: nothing paid, review jobs still open', async () => {
   for (const [who, model] of [['adv1', 'claude-fable-5-1'], ['adv2', 'gpt-6-astra'], ['adv3', 'gemini-3-pro']]) {
     const r = await okJson(await call(who, 'POST', '/result', {model, body: review('accept')}));

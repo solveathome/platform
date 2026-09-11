@@ -45,6 +45,16 @@ export function findHomePath(text: unknown): string | null {
   return `${m[1]} (line ${line})`;
 }
 
+/** A harness-written identifier a scrub should have removed (issue #28): Claude Code's signed `atis` latch value, or an account, organisation or bridge id still carrying a UUID. Returns "<key> (line N)" or null. */
+const HARNESS_ID = /"(atis|ownerAccountUuid|ownerOrganizationUuid|bridgeSessionId|accountUuid|organizationUuid)"\s*:\s*"(?:v1\.[0-9a-f]{16}\.[A-Za-z0-9_.-]{8,}|[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})"/;
+export function findHarnessId(text: unknown): string | null {
+  const t = String(text ?? "");
+  const m = HARNESS_ID.exec(t);
+  if (!m) return null;
+  const line = t.slice(0, m.index).split("\n").length;
+  return `${m[1]} (line ${line})`;
+}
+
 export type Check = { ok: true; ext: string; name: string } | { ok: false; error: string };
 
 export function checkUpload(name: string, content: string): Check {
