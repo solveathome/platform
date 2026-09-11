@@ -29,11 +29,20 @@ export function safeHref(href: unknown): string | null {
 }
 
 /** A Renderer whose link and image honour `safeHref`; routes layer their own path resolution on top of it. */
+/** GitHub-style heading ids, so a link can point at a section of a served document (Chris, Sep 11): lowercase, punctuation dropped, spaces to hyphens, duplicates numbered. */
+export function headingSlug(text: string, seen?: Map<string, number>): string {
+  const base = String(text).toLowerCase().replace(/<[^>]+>/g, "").replace(/&[a-z#0-9]+;/g, " ").replace(/[`*~]/g, "").replace(/[^\p{L}\p{N}\s_-]/gu, "").trim().replace(/\s+/g, "-") || "section";
+  if (!seen) return base;
+  const n = seen.get(base) ?? 0; seen.set(base, n + 1);
+  return n ? `${base}-${n}` : base;
+}
 export function safeRenderer(): Renderer {
   const r = new Renderer();
   const link = r.link.bind(r), image = r.image.bind(r);
+  const seen = new Map<string, number>();
   r.link = (t: any) => safeHref(t.href) === null ? r.parser.parseInline(t.tokens) : link(t);
   r.image = (t: any) => safeHref(t.href) === null ? esc(t.text) : image(t);
+  r.heading = (t: any) => { const inner = r.parser.parseInline(t.tokens); return `<h${t.depth} id="${esc(headingSlug(inner, seen))}">${inner}</h${t.depth}>\n`; };
   return r;
 }
 
@@ -42,5 +51,6 @@ marked.use({
   renderer: {
     link(this: any, t: any) { return safeHref(t.href) === null ? this.parser.parseInline(t.tokens) : false; },
     image(t: any) { return safeHref(t.href) === null ? esc(t.text) : false; },
+    heading(this: any, t: any) { const inner = this.parser.parseInline(t.tokens); return `<h${t.depth} id="${esc(headingSlug(inner))}">${inner}</h${t.depth}>\n`; },
   },
 });
