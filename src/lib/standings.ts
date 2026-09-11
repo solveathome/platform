@@ -6,6 +6,9 @@
  */
 import { q, one } from "../db/index.js";
 import { POINTS, type Window } from "./credit.js";
+/** Base points a return pays on acceptance, as SQL (from the credit table): what a pending return is worth if it gets in. */
+const BASE_POINTS_SQL = `CASE type ${Object.entries(POINTS.result).map(([t, p]) => `WHEN '${t}' THEN ${Number(p)}`).join(" ")} ELSE 20 END`;
+const PENDING_POINTS_SQL = `coalesce(sum(CASE WHEN status = 'pending' OR provisional THEN ${BASE_POINTS_SQL} ELSE 0 END), 0) AS pending_points`;
 
 const since = (w: Window) => w === "7d" ? "now() - interval '7 days'" : w === "30d" ? "now() - interval '30 days'" : "'epoch'::timestamptz";
 
@@ -42,7 +45,7 @@ export async function standings(problemId: number, w: Window, limit = 100, meHan
              count(*) FILTER (WHERE status = 'rejected') AS rejected, count(*) FILTER (WHERE status = 'contested') AS contested,
              coalesce(sum((tokens->>'output')::numeric), 0) AS output_tokens,
              coalesce(sum((tokens->>'input')::numeric + (tokens->>'output')::numeric + (tokens->>'cache_read')::numeric + (tokens->>'cache_write')::numeric), 0) AS all_tokens,
-             coalesce(sum(cpu_hours), 0) AS cpu_hours, max(created_at) AS last_return, min(created_at) AS first_return,
+             coalesce(sum(cpu_hours), 0) AS cpu_hours, max(created_at) AS last_return, min(created_at) AS first_return, ${PENDING_POINTS_SQL},
              jsonb_object_agg(type, n) FILTER (WHERE type IS NOT NULL) AS types, array_agg(DISTINCT model) FILTER (WHERE model IS NOT NULL) AS models
       FROM (SELECT r.*, count(*) OVER (PARTITION BY r.user_id, r.type) AS n FROM returns r WHERE r.problem_id = $1 AND r.created_at >= ${S}) t
       GROUP BY user_id),
@@ -61,7 +64,7 @@ export async function standings(problemId: number, w: Window, limit = 100, meHan
       FROM credits WHERE problem_id = $1 AND created_at >= ${S} GROUP BY user_id),
     ids AS (SELECT user_id FROM ret UNION SELECT user_id FROM rev UNION SELECT user_id FROM msg UNION SELECT user_id FROM cr)
     SELECT u.handle, u.created_at AS joined,
-      coalesce(cr.points, 0) AS points, coalesce(cr.result, 0) AS result, coalesce(cr.breakthrough, 0) AS breakthrough, coalesce(cr.integrated, 0) AS integrated, coalesce(cr.insight, 0) AS insight,
+      coalesce(cr.points, 0) AS points, coalesce(ret.pending_points, 0) AS pending_points, coalesce(cr.result, 0) AS result, coalesce(cr.breakthrough, 0) AS breakthrough, coalesce(cr.integrated, 0) AS integrated, coalesce(cr.insight, 0) AS insight,
       coalesce(cr.direction, 0) AS direction, coalesce(cr.review, 0) AS review_points, coalesce(cr.compute, 0) AS compute_points, coalesce(cr.tokens, 0) AS token_points,
       coalesce(ret.submitted, 0) AS submitted, coalesce(ret.accepted, 0) AS accepted, coalesce(ret.pending, 0) AS pending, coalesce(ret.rejected, 0) AS rejected, coalesce(ret.contested, 0) AS contested,
       coalesce(ret.output_tokens, 0) + coalesce(rev.rev_output_tokens, 0) AS output_tokens, coalesce(ret.all_tokens, 0) + coalesce(rev.rev_all_tokens, 0) AS all_tokens, coalesce(ret.cpu_hours, 0) AS cpu_hours,
@@ -85,7 +88,7 @@ export async function standings(problemId: number, w: Window, limit = 100, meHan
              count(DISTINCT user_id) AS donors,
              coalesce(sum((tokens->>'output')::numeric), 0) AS output_tokens,
              coalesce(sum((tokens->>'input')::numeric + (tokens->>'output')::numeric + (tokens->>'cache_read')::numeric + (tokens->>'cache_write')::numeric), 0) AS all_tokens,
-             coalesce(sum(cpu_hours), 0) AS cpu_hours, max(created_at) AS last_return
+             coalesce(sum(cpu_hours), 0) AS cpu_hours, max(created_at) AS last_return, ${PENDING_POINTS_SQL}
       FROM returns WHERE problem_id = $1 AND created_at >= ${S} AND model IS NOT NULL GROUP BY model),
     rev AS (SELECT rv.model, count(*) AS reviews, count(*) FILTER (WHERE rv.agreed_with_outcome) AS reviews_agreed, count(*) FILTER (WHERE rv.agreed_with_outcome IS NOT NULL) AS reviews_scored,
                    coalesce(sum((rv.tokens->>'output')::numeric), 0) AS rev_output_tokens, coalesce(sum((rv.tokens->>'input')::numeric + (rv.tokens->>'output')::numeric + (rv.tokens->>'cache_read')::numeric + (rv.tokens->>'cache_write')::numeric), 0) AS rev_all_tokens
@@ -94,7 +97,7 @@ export async function standings(problemId: number, w: Window, limit = 100, meHan
     cr AS (SELECT model, sum(points) AS points, sum(points) FILTER (WHERE kind = 'breakthrough') AS breakthrough FROM credits WHERE problem_id = $1 AND created_at >= ${S} AND model IS NOT NULL GROUP BY model),
     ids AS (SELECT model FROM ret UNION SELECT model FROM rev UNION SELECT model FROM msg UNION SELECT model FROM cr)
     SELECT ids.model, mt.provider, mt.tier,
-      coalesce(cr.points, 0) AS points, coalesce(cr.breakthrough, 0) AS breakthrough,
+      coalesce(cr.points, 0) AS points, coalesce(ret.pending_points, 0) AS pending_points, coalesce(cr.breakthrough, 0) AS breakthrough,
       coalesce(ret.returns, 0) AS returns, coalesce(ret.accepted, 0) AS accepted, coalesce(ret.pending, 0) AS pending, coalesce(ret.donors, 0) AS donors,
       coalesce(ret.output_tokens, 0) + coalesce(rev.rev_output_tokens, 0) AS output_tokens, coalesce(ret.all_tokens, 0) + coalesce(rev.rev_all_tokens, 0) AS all_tokens, coalesce(ret.cpu_hours, 0) AS cpu_hours,
       coalesce(rev.reviews, 0) AS reviews, coalesce(rev.reviews_agreed, 0) AS reviews_agreed, coalesce(rev.reviews_scored, 0) AS reviews_scored,

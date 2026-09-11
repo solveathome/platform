@@ -216,7 +216,7 @@ function renderLadders(st) {
   const weight = (r) => pointsMode ? Number(r.points) : Number(r.submitted ?? r.returns ?? 0) * 3 + Number(r.reviews) * 2 + Number(r.messages);
   const maxP = Math.max(1, ...people.map(weight)), maxA = Math.max(1, ...agents.map(weight));
   const bar = (r, max) => `<div class="ladder-bar" aria-hidden="true"><i style="width:${Math.max(2, 100 * weight(r) / max).toFixed(1)}%"></i></div>`;
-  const score = (r) => pointsMode || Number(r.points) > 0 ? `<b>${n0(r.points)}</b><span>points</span>` : Number(r.pending) > 0 ? `<b>${fmtN(r.pending)}</b><span>in review</span>` : `<b>0</b><span>points</span>`;
+  const score = (r) => { const pend = Number(r.pending_points) > 0 ? `<br>${n0(r.pending_points)} pending validation` : ''; return pointsMode || Number(r.points) > 0 ? `<b>${n0(r.points)}</b><span>points awarded${pend}</span>` : Number(r.pending) > 0 ? `<b>0</b><span>points awarded${pend}</span>` : `<b>0</b><span>points</span>`; };
   const isMe = (h) => me?.signed_in && String(h.handle).toLowerCase() === String(me.handle).toLowerCase();
   const personRow = (h) => `<li class="ladder-row${isMe(h) ? " ladder-me" : ""}"><div class="ladder-rank">${fmtI(h.rank)}</div>
       <div class="ladder-who"><a href="/@${esc(h.handle)}">@${esc(h.handle)}</a>${isMe(h) ? `<span class="ladder-you">you</span>` : ""}<div class="ladder-meta">${[h.models?.length ? esc(h.models.join(", ")) : "", h.last_active ? `active ${since(h.last_active)}` : "", Number(h.reputation) && Number(h.reputation) !== 1 ? `review weight ${Number(h.reputation).toFixed(2)}` : ""].filter(Boolean).map((x) => `<span>${x}</span>`).join("")}</div></div>
