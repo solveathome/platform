@@ -38,7 +38,10 @@ export function providerFromModel(m: string): string {
  * A size marker (mini, flash, haiku) beats the family name, then the first match wins; model_tiers overrides per exact id and is what the board shows.
  */
 const FAMILY_TIERS: Array<[RegExp, number, string]> = [
-  [/(^|-)(haiku|mini|nano|flash|lite|small|tiny)(-|$)/, 4, "small family"],   // anchored: "gemini" is not "mini", "elite" is not "lite"
+  [/(^|-)(haiku|mini|nano|lite|small|tiny)(-|$)/, 4, "small family"],   // anchored: "gemini" is not "mini", "elite" is not "lite"
+  // "flash" stopped meaning small (Chris, Sep 11 2026): DeepSeek V4.1 Flash is DeepSeek's flagship and Gemini 3.5+ Flash outscores Gemini Pro. Mid tier, like their siblings.
+  [/^deepseek-v(4|[5-9])[^-]*-flash(-|$)|^gemini-(3[.-][5-9]|[4-9])[^-]*-flash(-|$)/, 3, "flagship flash family"],
+  [/(^|-)flash(-|$)/, 4, "small family"],
   [/fable|mythos/, 1, "frontier anthropic family"],
   [/^gpt-6|astra/, 1, "frontier openai family"],
   [/opus/, 2, "opus family"],

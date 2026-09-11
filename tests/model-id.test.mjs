@@ -37,6 +37,9 @@ test("provider and default tier come from the family, not a list", () => {
   assert.equal(defaultTier("claude-haiku-4-5").tier, 4);
   assert.equal(defaultTier("gpt-5-mini").tier, 4);
   assert.equal(defaultTier("gemini-3-flash").tier, 4);
+  // Flash is a flagship for DeepSeek V4+ and Gemini 3.5+ (Sep 2026); lite variants stay small.
+  for (const m of ["deepseek-v4.1-flash", "deepseek-v4-flash", "deepseek-v5-flash", "gemini-3.8-flash", "gemini-3-8-flash", "gemini-3.5-flash", "gemini-4-flash"]) assert.equal(defaultTier(m).tier, 3, m);
+  for (const m of ["gemini-3.5-flash-lite", "gemini-3.1-flash", "gemini-2.5-flash", "deepseek-v3-flash", "gpt-5-mini"]) assert.equal(defaultTier(m).tier, 4, m);
   assert.equal(defaultTier("gemini-3-pro").tier, 3, "gemini is not mini");
   assert.equal(defaultTier("gemini-3-ultra").tier, 3);
   assert.equal(defaultTier("elite-7").tier, 3, "elite is not lite");
