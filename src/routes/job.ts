@@ -175,6 +175,8 @@ async function start(req: any, res: any): Promise<void> {
              THEN CASE j.type WHEN 'paper' THEN 0 WHEN 'explore' THEN 1 WHEN 'direction' THEN 1 WHEN 'break' THEN 2 WHEN 'audit' THEN 3 WHEN 'review' THEN 4 WHEN 'curate' THEN 5 WHEN 'source' THEN 6 WHEN 'formalize' THEN 7 ELSE 8 END
              ELSE CASE j.type WHEN 'review' THEN 0 WHEN 'audit' THEN 1 WHEN 'paper' THEN 2 WHEN 'explore' THEN 3 WHEN 'direction' THEN 3 WHEN 'curate' THEN 4 WHEN 'source' THEN 5 WHEN 'formalize' THEN 6 ELSE 7 END END
            ELSE CASE j.type WHEN 'break' THEN 0 WHEN 'measure' THEN 0 WHEN 'formalize' THEN 1 WHEN 'review' THEN 2 WHEN 'source' THEN 3 WHEN 'curate' THEN 4 ELSE 5 END END,
+         -- Other people's returns before your own handle's (Chris, Sep 11: his agents kept reviewing his own work while others' waited), then another provider's, then the oldest.
+         CASE WHEN pr.id IS NOT NULL AND pr.user_id = $5 THEN 1 ELSE 0 END,
          CASE WHEN pr.id IS NOT NULL AND pr.provider <> $6 THEN 0 ELSE 1 END,
          j.created_at
        LIMIT 1 FOR UPDATE OF j SKIP LOCKED`,
@@ -620,11 +622,12 @@ job.post("/result", bearer, project, async (req: any, res) => {
     res.json({ ok: true, return_id: ret!.id, status: "recorded", reviews_requested: 0, note: "exploration is recorded without review; it is reviewed when a later return cites it for a rung, or if you resubmit with request_review: true", files: attached, tokens });
     return;
   }
-  // Review jobs cost trusted reviewers' time. A handle without an accepted return here gets them for assigned work only, ten times a day; its
-  // self-assigned and explore returns wait as pending for a trusted reviewer to pick up (GET /return/:id, POST /result type review).
+  // Review jobs cost trusted reviewers' time. A handle without an accepted return here gets them ten times a day, for any return that asks
+  // for review (until Sep 11 2026 its self-assigned and requested-review explore returns got none at all, so newcomers' work sat pending and
+  // reviewers only ever saw the owner's returns).
   const standing = (await isTrusted(Number(problem.id), uid, req.user!.handle, { model: req.model, effort: req.effort })) || !!(await one(`SELECT 1 FROM returns WHERE user_id = $1 AND problem_id = $2 AND status = 'accepted' AND NOT provisional AND id <> $3`, [uid, problem.id, ret!.id]));
   const spawnedToday = await one<{ c: string }>(`SELECT count(DISTINCT j.parent_return_id) AS c FROM jobs j JOIN returns r ON r.id = j.parent_return_id WHERE r.user_id = $1 AND r.created_at > now() - interval '1 day'`, [uid]);
-  const mayReview = standing || (!!jobRow && jobRow.type !== "explore" && Number(spawnedToday?.c ?? 0) < MAX_REVIEW_SPAWNS_PER_DAY);
+  const mayReview = standing || Number(spawnedToday?.c ?? 0) < MAX_REVIEW_SPAWNS_PER_DAY;
   if (mayReview) await spawnReviews(ret!.id, problem.id, laneId, MIN_REVIEWS);
   // A sha named in the recipe should be one of the declared hashes or an uploaded file; a typo there costs a reviewer a rerun (agent feedback, Sep 10).
   // Known (issue #7): declared hashes, this return's files, cited files, anything in the file store (a cited return's file, a pinned version), and the served portfolio's own hashes.

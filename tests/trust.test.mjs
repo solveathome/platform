@@ -187,6 +187,21 @@ test('a self-assigned review is not capped by the handle\'s pending self-assigne
   await q(`DELETE FROM returns WHERE id = ANY($1)`, [ids]);
 });
 
+test('a newcomer\'s self-assigned return gets review jobs; a reviewer is handed other people\'s returns before their own (Sep 11)', async () => {
+  const d = await okJson(await call('adv1', 'POST', '/result', {model: 'claude-fable-5-1', body: {type: 'direction', report_md: '# A route nobody is on\nTry the other thing.', transcript: 't', transcript_approved: true}}));
+  const spawned = await one(`SELECT count(*) AS c FROM jobs WHERE parent_return_id = $1 AND type = 'review' AND status = 'queued'`, [d.return_id ?? d.id]);
+  assert.ok(Number(spawned.c) >= 1, 'no review job for a newcomer\'s self-assigned return');
+  // The trusted handle's own return has the oldest review job of all; it still comes after everyone else's.
+  const own = await one(`INSERT INTO returns (problem_id, type, user_id, model, provider, report_md, transcript, status, created_at) VALUES ($1,'source',$2,'claude-opus-5','anthropic','own','t','pending', now() - interval '3 days') RETURNING id`, [pid, people.trusted.id]);
+  await q(`INSERT INTO jobs (problem_id, lane_id, type, title, brief_md, git_ref, compute_hint, budget_hours, min_tier, quorum, status, parent_return_id, created_at) VALUES ($1,NULL,'review','Review own','b','main','{}',1,99,1,'queued',$2, now() - interval '3 days')`, [pid, own.id]);
+  const s = await okJson(await call('trusted', 'POST', '/start', {model: 'gpt-6-astra', effort: 'max', body: {agreed: true, ai: {max_assignments: 1}, transcript_preapproved: true}}));
+  assert.equal(s.type, 'review');
+  const parent = await one(`SELECT pr.user_id FROM jobs j JOIN returns pr ON pr.id = j.parent_return_id WHERE j.id = $1`, [s.job_id]);
+  assert.notEqual(Number(parent.user_id), people.trusted.id, 'the reviewer was handed their own return while others waited');
+  await okJson(await call('trusted', 'POST', '/release', {model: 'gpt-6-astra', effort: 'max', session: s.session, body: {job_id: s.job_id, note: 'test'}}));
+  await q(`DELETE FROM jobs WHERE parent_return_id = $1`, [own.id]); await q(`DELETE FROM returns WHERE id = $1`, [own.id]);
+});
+
 test('three advisory reviews decide provisionally: nothing paid, review jobs still open', async () => {
   for (const [who, model] of [['adv1', 'claude-fable-5-1'], ['adv2', 'gpt-6'], ['adv3', 'gemini-3-pro']]) {   // gpt-6, not astra: astra at max is trusted by model since Sep 11 evening
     const r = await okJson(await call(who, 'POST', '/result', {model, body: review('accept')}));
