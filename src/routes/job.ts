@@ -82,7 +82,9 @@ async function start(req: any, res: any): Promise<void> {
     return;
   }
   if (!member || !session) {
-    const md = ownerNote + await orientation(req.project, BASE(), member ?? null);
+    const tf0 = tierForEffort(await modelTier(req.model ?? "unknown"), req.effort ?? null);
+    const viewer0 = { model: req.model ?? null, uid: req.user!.id, trusted: await isTrusted(Number(req.project.id), Number(req.user!.id), req.user!.handle), tier: tf0.tier, effort: req.effort ?? null, tier_note: tf0.note };
+    const md = ownerNote + await orientation(req.project, BASE(), member ?? null, false, viewer0);
     if (wantsJson) res.json({ registered: !!member, session: null, orientation_md: md }); else res.type("text/markdown").send(md);
     return;
   }
@@ -199,11 +201,12 @@ async function start(req: any, res: any): Promise<void> {
       const pend = pslug ? await q(`SELECT r.id, r.revision_sha, u.handle, r.created_at FROM returns r JOIN users u ON u.id = r.user_id WHERE r.problem_id = $1 AND lower(r.paper_slug) = lower($2) AND r.type = 'audit' AND r.status = 'pending' AND r.id <> coalesce($3, 0) ORDER BY r.id DESC LIMIT 3`, [req.project.id, pslug, null]) : [];
       if (pend.length) md += `\n\n## Pending revisions of this paper\n\nAnother audit of this paper is under review: ${pend.map((p: any) => `return #${p.id} by @${p.handle} (${BASE()}/projects/${req.project.slug}/return/${p.id}${p.revision_sha ? `, revised text ${BASE()}/files/${p.revision_sha}` : ""})`).join("; ")}. Read it first and build on it: audit the revised text, cite the return, and do not redo what it already fixed.`;
     }
-    if (tf.note) md = md.replace(/\n\n/, `\n\nTier this session: ${tier} (${tf.note}).\n\n`);
-    if (req.justRegistered) md = (await orientation(req.project, BASE(), { ...member, ...settings, session: session.id, session_max_jobs: session.max_jobs }, true)) + "\n\n---\n\n" + md;
+    // Function replacements: the inserted text can carry "$" sequences (LaTeX in an inbox message), which String.replace would read as patterns and splice the brief around them (issue #13).
+    if (tf.note) md = md.replace(/\n\n/, () => `\n\nTier this session: ${tier} (${tf.note}).\n\n`);
+    if (req.justRegistered) md = (await orientation(req.project, BASE(), { ...member, ...settings, session: session.id, session_max_jobs: session.max_jobs }, true, { model: req.model ?? null, uid, trusted, tier, effort: req.effort ?? null, tier_note: tf.note })) + "\n\n---\n\n" + md;
     md = ownerNote + md;
     if (settings.input?.direction && !tangentFirst && row.type !== "direction") md += `\n\n## Your person's direction\n\nThey said: "${String(settings.input.direction).slice(0, 2000)}"\n\nIf this assignment does not serve that, you may set it aside: pursue their idea and submit it as type \`direction\` with their words in the report and their handle in \`cites.handles\`. Their name goes on the lane if it is accepted.\n`;
-    if (inboxMd) md = md.replace(/\n## /, `\n${inboxMd}## `);   // after the title block, before the first section
+    if (inboxMd) md = md.replace(/\n## /, () => `\n${inboxMd}## `);   // after the title block, before the first section
     if (ib.max_message_id > Number(session.inbox_seen_message_id ?? 0)) await q(`UPDATE sessions SET inbox_seen_message_id = $2 WHERE id = $1`, [session.id, ib.max_message_id]);
     if (wantsJson) res.json({ job_id: row.id, type: row.type, session: sess.id, session_jobs: sess.jobs, session_max_jobs: sess.max, inbox: ib, brief_md: md });
     else res.type("text/markdown").send(md);

@@ -19,7 +19,8 @@ export function canonicalModel(raw: unknown): string {
 }
 
 /** Provider from the canonical id. Anything not recognised is "unknown" and still allowed in. */
-export function providerFromModel(m: string): string {
+export function providerFromModel(raw: string): string {
+  const m = String(raw ?? "").toLowerCase().replace(/^.*\//, "").replace(/^(us|eu|apac)\.anthropic\./, "");
   if (/^claude/.test(m)) return "anthropic";
   if (/^(gpt|o\d|chatgpt)|codex|astra/.test(m)) return "openai";
   if (/^gemini|^gemma|^palm/.test(m)) return "google";

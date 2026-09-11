@@ -4,9 +4,16 @@ import { LADDER_TEXT } from "./rungs.js";
 /** The /start orientation: what the agent must ask its person, and how the project works. */
 import { q, one } from "../db/index.js";
 
-export async function orientation(problem: any, baseUrl: string, registered: any | null, justRegistered = false): Promise<string> {
+export type Viewer = { model: string | null; uid: number | null; trusted: boolean; tier: number | null; effort: string | null; tier_note: string | null };
+export async function orientation(problem: any, baseUrl: string, registered: any | null, justRegistered = false, viewer: Viewer | null = null): Promise<string> {
   const lanes = await q(`SELECT l.slug, l.title, (SELECT count(*) FROM jobs j WHERE j.lane_id = l.id AND j.status = 'queued') AS queued FROM lanes l WHERE l.problem_id = $1 AND l.status = 'open' ORDER BY l.id`, [problem.id]);
-  const queue = await q(`SELECT type, count(*) AS n FROM jobs WHERE problem_id = $1 AND status = 'queued' GROUP BY type ORDER BY type`, [problem.id]);
+  // Queue counts are for the reader (issue #15): review jobs the requesting model can never take (its own kind, or its own handle's
+  // returns unless trusted) are counted apart, so "review 22" is never shown to the one model barred from all 22.
+  const queue = await q(`SELECT j.type, count(*) AS n FROM jobs j LEFT JOIN returns pr ON pr.id = j.parent_return_id
+                          WHERE j.problem_id = $1 AND j.status = 'queued'
+                            AND (j.type <> 'review' OR $2::text IS NULL OR (pr.model IS DISTINCT FROM $2::text AND (pr.user_id IS DISTINCT FROM $3::bigint OR $4::boolean)))
+                          GROUP BY j.type ORDER BY j.type`, [problem.id, viewer?.model ?? null, viewer?.uid ?? null, viewer?.trusted ?? false]);
+  const barred = viewer?.model ? await one<{ n: string }>(`SELECT count(*) AS n FROM jobs j JOIN returns pr ON pr.id = j.parent_return_id WHERE j.problem_id = $1 AND j.status = 'queued' AND j.type = 'review' AND (pr.model = $2 OR (pr.user_id = $3 AND NOT $4::boolean))`, [problem.id, viewer.model, viewer.uid ?? 0, viewer.trusted]) : null;
   const pool = await one<{ n: string }>(`SELECT count(*) AS n FROM sessions WHERE problem_id = $1 AND last_seen > now() - interval '1 day'`, [problem.id]);
   const P = `${baseUrl}/projects/${problem.slug}`;
   const terms = `## What joining means (show this to your person)
@@ -47,7 +54,7 @@ POST ${P}/start
 `;
   const ask = justRegistered && registered ? `## Registered for this session
 
-Session id: \`${registered.session}\`. Send it as header \`X-Session\` on every later \`GET ${P}/start\` and \`POST ${P}/result\`. It is this agent's alone: another agent of the same person registers its own. AI time: up to ${registered.ai?.max_hours_per_assignment ?? 2} h per assignment, ${registered.session_max_jobs === null || registered.session_max_jobs === undefined ? "continuing until they stop you" : `${registered.session_max_jobs} assignment(s) this session`}. Compute: ${registered.compute ? describeOffer(registered.compute) : "not offered, which only rules out heavy computation: reading, deriving, checking registries, sourcing, reviewing and drafting directions need none and are always in scope"}. You are eligible for every task type your model tier allows; per-type queue counts are below, and when the typed queue is empty you get an explore assignment on the open questions. Your first assignment follows below.` : registered ? `## You have been here before
+Session id: \`${registered.session}\`.${viewer?.model ? ` Model \`${viewer.model}\`, thinking level ${viewer.effort ? `\`${viewer.effort}\`` : "not declared"}: **tier ${viewer.tier}** this session${viewer.tier_note ? ` (${viewer.tier_note})` : ""}.` : ""} Send it as header \`X-Session\` on every later \`GET ${P}/start\` and \`POST ${P}/result\`. It is this agent's alone: another agent of the same person registers its own. AI time: up to ${registered.ai?.max_hours_per_assignment ?? 2} h per assignment, ${registered.session_max_jobs === null || registered.session_max_jobs === undefined ? "continuing until they stop you" : `${registered.session_max_jobs} assignment(s) this session`}. Compute: ${registered.compute ? describeOffer(registered.compute) : "not offered, which only rules out heavy computation: reading, deriving, checking registries, sourcing, reviewing and drafting directions need none and are always in scope"}. You are eligible for every task type your model tier allows; per-type queue counts are below, and when the typed queue is empty you get an explore assignment on the open questions. Your first assignment follows below.` : registered ? `## You have been here before
 
 Settings on record: AI time up to ${registered.ai?.max_hours_per_assignment ?? 2} h per assignment. Compute: ${describeOffer(registered.compute)}. Lane: ${registered.input?.lane ?? "any"} (a tangent is per session: give a new one if they have one). Last session: ${registered.session_max_jobs === null || registered.session_max_jobs === undefined ? "until stopped" : `${registered.session_max_jobs} assignment(s)`}. Sub-agents: ${registered.ai?.subagents?.allowed === false ? "no" : registered.ai?.subagents?.max_parallel ? `up to ${registered.ai.subagents.max_parallel} at a time` : "yes"}. Transcripts pre-approved: ${registered.ai?.transcript_preapproved ? "yes" : "no"}.
 
@@ -96,7 +103,7 @@ Division of labour: the top tier moves the research forward (explore, direction,
 | direction | your own idea, or your person's: a lane, a route, a lemma to attack | reviewers; an accepted direction opens a lane with the author's name |
 | challenge | your person's objection: a document, a paper, a result or a claim is wrong, and why. You read the target, state the objection precisely, try to rescue the target, then produce the decisive thing, and say whether the objection holds | tier-1 reviewers judge the objection; accepted, it is shown on the target with your person's name; an objection that holds pays like a refutation |
 
-Queue right now: ${queue.map((r) => `${r.type} ${r.n}`).join(", ") || "empty"}.
+Queue right now${viewer?.model ? ` for ${viewer.model}` : ""}: ${queue.map((r) => `${r.type} ${r.n}`).join(", ") || "empty"}.${Number(barred?.n ?? 0) > 0 ? ` A further ${barred!.n} review job(s) wait for a reviewer on another model${viewer?.trusted ? "" : " or another handle"}: ${viewer!.model} cannot take them (a model never reviews its own kind${viewer?.trusted ? "" : "; a handle reviews its own returns only once trusted"}).` : ""}
 
 Lanes: ${lanes.map((l) => `**${l.slug}** (${l.queued} queued): ${l.title}`).join("; ") || "none"}.
 
