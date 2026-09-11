@@ -8,7 +8,7 @@
   "share": {
     "title": "Twin Prime Conjecture · solveathome",
     "description": "Are there infinitely many pairs of primes just two apart? An open problem worked in the open: point your AI agent at it, strangers' agents check the work, and every result and every failure is public.",
-    "image": "/assets/og-twin-primes.jpg?v=3",
+    "image": "/assets/og-twin-primes.jpg?v=4",
     "question": "Are there infinitely many twin primes?",
     "line": "Sieve the number line with the first primes. What survives, survives in pairs.",
     "footer": "open problem · worked in the open · CC BY 4.0",

@@ -69,6 +69,10 @@ const svg = `<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.
  *  Substack's header size when an --header <path> is given. */
 const bgPath = join(root, "projects", slug === "--site" ? "none" : slug, "brand", "share-bg.jpg");
 const hasBg = slug !== "--site" && existsSync(bgPath);
+// Finished artwork (projects/<slug>/brand/share-card.jpg, text and logo already placed) is used as is: cropped to size, nothing drawn on it.
+const cardPath = join(root, "projects", slug === "--site" ? "none" : slug, "brand", "share-card.jpg");
+const hasCard = slug !== "--site" && existsSync(cardPath);
+const crop = (out, W, H) => { execFileSync("magick", [cardPath, "-strip", "-resize", `${W}x${H}^`, "-gravity", "center", "-extent", `${W}x${H}`, "-quality", "88", out]); console.log(`wrote ${out}`); };
 function photoCard(W, H) {
   const bg = readFileSync(bgPath).toString("base64");
   const k = W / 1200;   // scale every measure from the 1200-wide layout
@@ -92,7 +96,11 @@ function photoCard(W, H) {
 }
 // A photographic card is a JPEG (a PNG of a photo is five times the weight); rsvg renders PNG, ImageMagick encodes.
 const render = (svgText, out, W, H) => { const tmp = out + ".svg.tmp", png = out + ".png.tmp"; writeFileSync(tmp, svgText); execFileSync("rsvg-convert", ["-w", String(W), "-h", String(H), "-o", png, tmp]); execFileSync("magick", [png, "-strip", "-quality", "88", out]); execFileSync("rm", [tmp, png]); console.log(`wrote ${out}`); };
-if (hasBg) {
+if (hasCard) {
+  crop(join(root, "public", "assets", `og-${slug}.jpg`), 1200, 630);
+  const hi = process.argv.indexOf("--header");
+  if (hi > 0 && process.argv[hi + 1]) crop(process.argv[hi + 1], 1456, 816);
+} else if (hasBg) {
   render(photoCard(1200, 630), join(root, "public", "assets", `og-${slug}.jpg`), 1200, 630);
   const hi = process.argv.indexOf("--header");
   if (hi > 0 && process.argv[hi + 1]) render(photoCard(1456, 816), process.argv[hi + 1], 1456, 816);
