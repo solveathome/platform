@@ -74,9 +74,17 @@ const cardPath = join(root, "projects", slug === "--site" ? "none" : slug, "bran
 const hasCard = slug !== "--site" && existsSync(cardPath);
 // The project URL is typeset under the slogan by ImageMagick (composited, never regenerated): the slogan's left edge in the artwork is
 // x=82 and its baseline y=845 at 1672 px wide; the URL sits 40 px below it in a muted grey, then the whole thing is cropped to size.
+// The artwork's own logo was a lookalike (Chris, Sep 11): the region is patched from the clean plate of the same picture
+// (projects/<slug>/brand/share-clean.jpg, same framing, no text) under a feathered mask, and the real wordmark
+// (public/brand/solveathome-logo.png, recoloured to the card's foreground) is composited at the same place. Then the URL.
+const cleanPath = join(root, "projects", slug === "--site" ? "none" : slug, "brand", "share-clean.jpg");
 const withUrl = () => {
-  const tmp = join(root, "public", "assets", `og-${slug}.src.tmp.png`);
-  execFileSync("magick", [cardPath, "-font", "Avenir-Next-Medium", "-pointsize", "24", "-fill", "#a9a59b", "-gravity", "NorthWest", "-annotate", "+82+862", `solveathome.org/projects/${slug}`, tmp]);
+  const tmp = join(root, "public", "assets", `og-${slug}.src.tmp.png`), logoTmp = join(root, "public", "assets", `og-${slug}.logo.tmp.png`);
+  execFileSync("magick", [join(root, "public", "brand", "solveathome-logo.png"), "-fill", FG, "-colorize", "100", "-resize", "x130", logoTmp]);
+  const patch = existsSync(cleanPath) ? ["(", cleanPath, "-crop", "520x210+30+30", "+repage", "(", "-size", "520x210", "xc:black", "-fill", "white", "-draw", "roundrectangle 24,24 496,186 40,40", "-blur", "0x14", ")", "-alpha", "off", "-compose", "CopyOpacity", "-composite", ")", "-geometry", "+30+30", "-compose", "Over", "-composite"] : [];
+  execFileSync("magick", [cardPath, ...patch, logoTmp, "-geometry", "+72+62", "-compose", "Over", "-composite",
+    "-font", "Avenir-Next-Medium", "-pointsize", "24", "-fill", "#a9a59b", "-gravity", "NorthWest", "-annotate", "+82+862", `solveathome.org/projects/${slug}`, tmp]);
+  execFileSync("rm", [logoTmp]);
   return tmp;
 };
 const crop = (out, W, H) => { const src = withUrl(); execFileSync("magick", [src, "-strip", "-resize", `${W}x${H}^`, "-gravity", "center", "-extent", `${W}x${H}`, "-quality", "88", out]); execFileSync("rm", [src]); console.log(`wrote ${out}`); };
