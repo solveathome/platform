@@ -9,6 +9,14 @@ import { canonicalModel } from "./model-id.js";
 export const MAX_TOKENS_PER_FIELD = 50_000_000;
 export type Tokens = { input: number; output: number; cache_read: number; cache_write: number; entries: number; source: "claude-jsonl" | "codex-jsonl" | "reported" | "none"; models?: Record<string, number> };
 
+/** How much of a transcript's tool output was replaced by omission notes (issue #46): outputs counted by their JSONL types, omissions by bracketed notes saying "omitted". */
+export function omissionShare(text: string): { outputs: number; omitted: number; share: number } {
+  const t = String(text ?? "");
+  const outputs = (t.match(/"type":\s*"(?:custom_tool_call_output|function_call_output|tool_result)"/g) ?? []).length;
+  const omitted = (t.match(/\[[^\]\n]{0,200}\bomitted\b[^\]\n]{0,200}\]/gi) ?? []).length;
+  return { outputs, omitted, share: outputs ? Math.min(1, omitted / outputs) : 0 };
+}
+
 export function parseTranscript(text: string, reported?: any): Tokens {
   const t: Tokens = { input: 0, output: 0, cache_read: 0, cache_write: 0, entries: 0, source: "none", models: {} };
   const lines = text.split("\n");

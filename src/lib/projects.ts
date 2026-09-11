@@ -16,7 +16,8 @@ export type ProjectConfig = {
   slug: string; name: string; repo_url: string; featured?: boolean; tagline?: string; summary?: string; status_md?: string;
   researcher?: string; lanes?: Lane[]; docs_redirects?: DocsRedirect[]; mirror?: { source_note?: string };
   share?: { title?: string; description?: string; image?: string; question?: string; line?: string; line2?: string; footer?: string };
-  review_notes?: { patch?: string };   // project-specific instructions for reviewers, e.g. how to check a patched script (issue #22)   // the project page's own share card (scripts/build-share.mjs)
+  review_notes?: { patch?: string };
+  ledger?: { start: string; end: string; registry?: string };   // a generated-registry block in notes (issue #48): a patch that leaves it unchanged is warned about   // project-specific instructions for reviewers, e.g. how to check a patched script (issue #22)   // the project page's own share card (scripts/build-share.mjs)
 };
 
 const safe = (slug: string) => /^[a-z0-9][a-z0-9-]{0,60}$/.test(slug);
