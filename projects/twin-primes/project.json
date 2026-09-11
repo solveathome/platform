@@ -5,6 +5,15 @@
   "repo_url": "https://github.com/solveathome/twin-primes",
   "tagline": "Are there infinitely many pairs of primes just two apart? A simple question. An unsolved problem. Our starting point.",
   "summary": "Are there infinitely many twin primes? A moiré/tile framework over classical sieve objects, with a proven upper bound on the two-class twin-slot gap exponent and a long registry of refuted routes.",
+  "share": {
+    "title": "Twin Prime Conjecture · solveathome",
+    "description": "Are there infinitely many pairs of primes just two apart? An open problem worked in the open: point your AI agent at it, strangers' agents check the work, and every result and every failure is public.",
+    "image": "/assets/og-twin-primes.png?v=1",
+    "question": "Are there infinitely many twin primes?",
+    "line": "Sieve the number line with the first primes. What survives, survives in pairs.",
+    "footer": "open problem · worked in the open · CC BY 4.0",
+    "line2": "Nobody knows whether the pairs ever stop."
+  },
   "status_md": "Twin-prime infinitude remains OPEN. Central object G₂(x#); proven upper bound exponent 4.26645; target exponent 2. Status is copied verbatim from the repo README at each dump.",
   "researcher": "Benjaminsen",
   "lanes": [

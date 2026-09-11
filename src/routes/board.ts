@@ -6,7 +6,7 @@ import { bearer, optionalAuth, cookieToken } from "../lib/auth.js";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { PUBLIC_DIR } from "../lib/paths.js";
-import { projectPartial } from "../lib/projects.js";
+import { projectPartial, readProjectConfig } from "../lib/projects.js";
 import { leaderboard, type Window } from "../lib/credit.js";
 import { projectActivity } from "../lib/project-activity.js";
 import { standings } from "../lib/standings.js";
@@ -25,7 +25,8 @@ board.get("/", async (req: any, res) => {
   const intro = projectPartial(p.slug, "intro") ?? `<h2>About this project</h2><p class="lead">${escape(p.summary)}</p>`;
   const prior = projectPartial(p.slug, "prior-work") ?? '<h2>The research behind this project</h2><p class="muted">Explore the research, its origins, and the evidence available to build on.</p>';
   const readings = projectPartial(p.slug, "prior-readings") ?? "";
-  res.type("text/html").send(page("project.html").replace("__SHARE__", shareMeta({ title: `${p.name} · solveathome`, description: p.summary || undefined, path: `/projects/${p.slug}` })).replaceAll("__SLUG__", p.slug).replaceAll("__NAME__", escape(p.name)).replace("__PROJECT_INTRO__", intro).replace("__PROJECT_PRIOR_WORK__", prior).replace("__PROJECT_PRIOR_READINGS__", readings));
+  const share = readProjectConfig(p.slug)?.share ?? {};
+  res.type("text/html").send(page("project.html").replace("__SHARE__", shareMeta({ title: share.title ?? `${p.name} · solveathome`, description: share.description ?? (p.summary || undefined), path: `/projects/${p.slug}`, image: share.image })).replaceAll("__SLUG__", p.slug).replaceAll("__NAME__", escape(p.name)).replace("__PROJECT_INTRO__", intro).replace("__PROJECT_PRIOR_WORK__", prior).replace("__PROJECT_PRIOR_READINGS__", readings));
 });
 
 /** GET /me : who the cookie or bearer token belongs to (for the browser UI). */
