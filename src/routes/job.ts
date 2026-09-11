@@ -53,7 +53,7 @@ async function sweepExpired(problemId: number): Promise<void> {
   await q(`UPDATE jobs SET status = 'expired', last_release_note = 'expired with the session it was made for'
            WHERE problem_id = $1 AND status = 'assigned' AND expires_at < now() AND parent_return_id IS NULL AND (title LIKE 'Explore: open questions%' OR title LIKE 'Challenge: %' OR title LIKE 'Direction: %') AND assigned_session IS NOT NULL`, [problemId]);
   const expired = await q<{ id: number; assigned_to: number; lane_id: number | null; title: string }>(`SELECT id, assigned_to, lane_id, title FROM jobs WHERE problem_id = $1 AND status = 'assigned' AND expires_at < now()`, [problemId]);
-  await q(`UPDATE jobs SET status = 'queued', assigned_to = NULL, assigned_session = NULL, assigned_at = NULL, expires_at = NULL, release_count = release_count + 1, last_release_note = 'expired: the agent did not return or release it'
+  await q(`UPDATE jobs SET status = 'queued', assigned_to = NULL, assigned_session = NULL, assigned_at = NULL, expires_at = NULL, release_count = release_count + 1, last_released_session = assigned_session, last_release_note = 'expired: the agent did not return or release it'
            WHERE problem_id = $1 AND status = 'assigned' AND expires_at < now()`, [problemId]);
   // The trail (agent feedback, Sep 10): a handed-back job says so in its lane channel, under the handle whose assignment lapsed.
   for (const e of expired) {
@@ -149,7 +149,8 @@ async function start(req: any, res: any): Promise<void> {
          AND j.problem_id = $7
          AND j.min_tier >= $1
          AND COALESCE((j.compute_hint->>'cpu_hours')::numeric, 0) <= $2
-         AND COALESCE((j.compute_hint->>'ram_gb')::numeric, 0) <= GREATEST($9::numeric, 8)
+         AND COALESCE((j.compute_hint->>'ram_gb')::numeric, 0) <= CASE WHEN $9::numeric > 0 THEN $9::numeric ELSE 8 END   -- an offered share is the limit; with nothing offered, jobs up to 8 GB and no CPU hours
+         AND j.last_released_session IS DISTINCT FROM $14::text   -- a session never gets back what it just handed back
          AND (COALESCE(j.compute_hint->>'gpu', 'false') IN ('false', '0', '') OR $10::boolean)
          AND ($3::text IS NULL OR l.slug = $3)
          AND ($4::text IS NULL OR j.type = $4)
@@ -172,7 +173,7 @@ async function start(req: any, res: any): Promise<void> {
          CASE WHEN pr.id IS NOT NULL AND pr.provider <> $6 THEN 0 ELSE 1 END,
          j.created_at
        LIMIT 1 FOR UPDATE OF j SKIP LOCKED`,
-      [tier, maxHours, lane, type, uid, req.provider, req.project.id, tier, prefs.ramGb, prefs.hasGpu, req.model ?? null, trusted, preferResearch],
+      [tier, maxHours, lane, type, uid, req.provider, req.project.id, tier, prefs.ramGb, prefs.hasGpu, req.model ?? null, trusted, preferResearch, session.id],
     );
     let row = r.rows[0] as (JobRow & { id: number; budget_hours: string }) | undefined;
     if (!row) {
@@ -262,7 +263,7 @@ async function endSession(sessionId: string, uid: number, problemId: number, mod
   if (!s) return false;
   const held = await q<{ id: number; lane_id: number | null }>(`SELECT id, lane_id FROM jobs WHERE assigned_session = $1 AND status = 'assigned'`, [sessionId]);
   for (const j of held) {
-    await q(`UPDATE jobs SET status = 'queued', assigned_to = NULL, assigned_session = NULL, assigned_at = NULL, expires_at = NULL, release_count = release_count + 1, last_release_note = $2 WHERE id = $1`, [j.id, `session ended: ${note}`.slice(0, 500)]);
+    await q(`UPDATE jobs SET status = 'queued', assigned_to = NULL, assigned_session = NULL, assigned_at = NULL, expires_at = NULL, release_count = release_count + 1, last_released_session = assigned_session, last_release_note = $2 WHERE id = $1`, [j.id, `session ended: ${note}`.slice(0, 500)]);
     const ch = j.lane_id ? await one(`SELECT id FROM channels WHERE lane_id = $1 AND parent_id IS NOT NULL ORDER BY id LIMIT 1`, [j.lane_id]) : await one(`SELECT id FROM channels WHERE problem_id = $1 AND path = ''`, [problemId]);
     if (ch) await q(`INSERT INTO messages (channel_id, user_id, model, kind, body_md, job_id) VALUES ($1,$2,$3,'done',$4,$5)`, [ch.id, uid, model, `Released job #${j.id} back to the queue: session ended (${note}).`, j.id]);
   }
@@ -295,7 +296,7 @@ job.post("/release", bearer, project, async (req: any, res: any) => {
   if (!j) { res.status(404).json({ error: "job not found" }); return; }
   if (Number(j.assigned_to) !== req.user!.id) { res.status(403).json({ error: "not your assignment" }); return; }
   if (j.status !== "assigned") { res.status(409).json({ error: `job is ${j.status}` }); return; }
-  await q(`UPDATE jobs SET status = 'queued', assigned_to = NULL, assigned_session = NULL, assigned_at = NULL, expires_at = NULL, release_count = release_count + 1, last_release_note = $2 WHERE id = $1`, [id, req.body?.note ? String(req.body.note).slice(0, 500) : null]);
+  await q(`UPDATE jobs SET status = 'queued', assigned_to = NULL, assigned_session = NULL, assigned_at = NULL, expires_at = NULL, release_count = release_count + 1, last_released_session = assigned_session, last_release_note = $2 WHERE id = $1`, [id, req.body?.note ? String(req.body.note).slice(0, 500) : null]);
   if (!(await postRateOk(req.user!.id))) { res.json({ ok: true, job_id: id, status: "queued", note: "released; the release note was not posted (" + RATE_MESSAGE + ")" }); return; }
   const ch = j.lane_id ? await one(`SELECT id FROM channels WHERE lane_id = $1 AND parent_id IS NOT NULL ORDER BY id LIMIT 1`, [j.lane_id]) : await one(`SELECT id FROM channels WHERE problem_id = $1 AND path = ''`, [req.project.id]);
   if (ch) await q(`INSERT INTO messages (channel_id, user_id, model, kind, body_md, job_id) VALUES ($1,$2,$3,'done',$4,$5)`,

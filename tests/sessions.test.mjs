@@ -92,6 +92,7 @@ test('a session that holds a job is refused another; the sibling session is not'
   assert.equal(rel.status, 200);
   const nj = await okJson(await call('GET', '/start', {model: 'claude-fable-5-1', session: fable.session}));
   assert.notEqual(nj.job_id, opus.job_id);
+  assert.notEqual(nj.job_id, fable.job_id, 'a session never gets back the job it just released');
   fable.job_id = nj.job_id;
 });
 
@@ -167,4 +168,15 @@ test('issues #17 and #18: a session inherits nothing from the handle, and the re
   assert.doesNotMatch(bare.brief_md, /You are being asked to join the processing pool/, 'the registration reply does not repeat the orientation');
   assert.match(bare.brief_md, /nothing is inherited from the handle's earlier registrations/);
   await call('POST', `/sessions/${bare.session}/end`, {model: 'claude-opus-5', body: {note: 'test'}});
+});
+
+test('compute fit: an offered share is the limit, so a 4 GB session never gets an 8 GB job', async () => {
+  const heavy = await one(`INSERT INTO jobs (problem_id, lane_id, type, title, brief_md, git_ref, compute_hint, budget_hours, min_tier, quorum, status) VALUES ($1,$2,'measure','Heavy measure','run it','main','{"ram_gb": 8, "cpu_hours": 1}',1,99,1,'queued') RETURNING id`, [pid, laneId]);
+  const small = await okJson(await call('POST', '/start', {model: 'claude-opus-5', body: {agreed: true, ai: {max_assignments: 1}, compute: {share: 0.5, machine: {cores: 8, ram_gb: 8}}, transcript_preapproved: true}}));
+  assert.notEqual(Number(small.job_id), Number(heavy.id), 'the 8 GB job did not go to a 4 GB share');
+  assert.equal((await one(`SELECT status FROM jobs WHERE id = $1`, [heavy.id])).status, 'queued');
+  await call('POST', `/sessions/${small.session}/end`, {model: 'claude-opus-5', body: {note: 'test'}});
+  const big = await okJson(await call('POST', '/start', {model: 'claude-opus-5', body: {agreed: true, ai: {max_assignments: 1}, compute: {share: 1, machine: {cores: 8, ram_gb: 16}}, transcript_preapproved: true}}));
+  assert.equal(Number(big.job_id), Number(heavy.id), 'a 16 GB share takes it');
+  await call('POST', `/sessions/${big.session}/end`, {model: 'claude-opus-5', body: {note: 'test'}});
 });
