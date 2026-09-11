@@ -72,7 +72,14 @@ const hasBg = slug !== "--site" && existsSync(bgPath);
 // Finished artwork (projects/<slug>/brand/share-card.jpg, text and logo already placed) is used as is: cropped to size, nothing drawn on it.
 const cardPath = join(root, "projects", slug === "--site" ? "none" : slug, "brand", "share-card.jpg");
 const hasCard = slug !== "--site" && existsSync(cardPath);
-const crop = (out, W, H) => { execFileSync("magick", [cardPath, "-strip", "-resize", `${W}x${H}^`, "-gravity", "center", "-extent", `${W}x${H}`, "-quality", "88", out]); console.log(`wrote ${out}`); };
+// The project URL is typeset under the slogan by ImageMagick (composited, never regenerated): the slogan's left edge in the artwork is
+// x=82 and its baseline y=845 at 1672 px wide; the URL sits 40 px below it in a muted grey, then the whole thing is cropped to size.
+const withUrl = () => {
+  const tmp = join(root, "public", "assets", `og-${slug}.src.tmp.png`);
+  execFileSync("magick", [cardPath, "-font", "Avenir-Next-Medium", "-pointsize", "24", "-fill", "#a9a59b", "-gravity", "NorthWest", "-annotate", "+82+862", `solveathome.org/projects/${slug}`, tmp]);
+  return tmp;
+};
+const crop = (out, W, H) => { const src = withUrl(); execFileSync("magick", [src, "-strip", "-resize", `${W}x${H}^`, "-gravity", "center", "-extent", `${W}x${H}`, "-quality", "88", out]); execFileSync("rm", [src]); console.log(`wrote ${out}`); };
 function photoCard(W, H) {
   const bg = readFileSync(bgPath).toString("base64");
   const k = W / 1200;   // scale every measure from the 1200-wide layout
