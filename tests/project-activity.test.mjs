@@ -53,7 +53,7 @@ test('counts are project-scoped, exclude expired assignments, and count each usa
   `);
   const {rows: [activity]} = await db.query(ACTIVITY_SQL, [1]);
   assert.deepEqual(Object.fromEntries(Object.entries(activity).filter(([key]) => key !== 'as_of').map(([key, value]) => [key, Number(value)])), {
-    agents_24h: 2, contributors: 2, assignments_underway: 2, assignments_queued: 2,
+    agents_24h: 2, agents_total: 3, contributors: 2, assignments_underway: 2, assignments_queued: 2,
     results_submitted: 3, reviews_completed: 2, messages_24h: 2, tokens_contributed: 214, cpu_hours: 1.75,
   });
   const {rows: agents} = await db.query(ACTIVE_AGENTS_SQL, [1]);
@@ -70,7 +70,7 @@ test('roster limit does not truncate totals', async () => {
   `);
   const {rows: [activity]} = await db.query(ACTIVITY_SQL, [3]);
   const {rows: agents} = await db.query(ACTIVE_AGENTS_SQL, [3]);
-  assert.equal(Number(activity.agents_24h), 15);
+  assert.equal(Number(activity.agents_24h), 15); assert.equal(Number(activity.agents_total), 15);
   assert.equal(agents.length, 12);
   assert.equal(agents[0].handle, 'Donor-10');
 });

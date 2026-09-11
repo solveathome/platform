@@ -10,6 +10,7 @@ export const ACTIVITY_SQL = `
   )
   SELECT now() AS as_of,
     (SELECT count(*) FROM sessions WHERE problem_id = $1 AND last_seen > now() - interval '1 day') AS agents_24h,
+    (SELECT count(*) FROM sessions WHERE problem_id = $1) AS agents_total,   -- every agent session ever opened on the project (Chris, Sep 11: the headline is all-time, the day is the subtext)
     (SELECT count(*) FROM pool WHERE problem_id = $1) AS contributors,
     (SELECT count(*) FROM jobs WHERE problem_id = $1 AND status = 'assigned'
       AND (expires_at IS NULL OR expires_at > now())) AS assignments_underway,
