@@ -1,3 +1,4 @@
+import { hitDetailed } from "./ratelimit.js";
 import { canonicalModel, providerFromModel, defaultTier, parseEffort } from "./model-id.js";
 import { wantsHtml } from "./negotiate.js";
 import { featuredProject } from "./projects.js";
@@ -51,6 +52,9 @@ export async function bearer(req: Request, res: Response, next: NextFunction): P
     if (!row.terms_version || !tidy) { res.status(403).json({ error: msg, terms: `${process.env.BASE_URL ?? ""}/terms`, version: TERMS_VERSION }); return; }
     (req as any).termsStale = msg;
   }
+  // Per-handle budget across its sessions (issue #35): the 429 says which sessions used it.
+  { const limit = Number(process.env.RATE_LIMIT_PER_MIN ?? 1200); const r = hitDetailed(`user:${row.id}`, xs || "no X-Session", limit, 60_000);
+    if (r.over) { res.setHeader("Retry-After", String(r.retryAfter)); res.status(429).json({ error: `rate limit: ${limit} requests per 60 s for this handle across all of its sessions; retry after ${r.retryAfter} s. Sessions on this handle in the last 60 s: ${r.top.map(([s, n]) => `${s.slice(0, 8)}: ${n}`).join(", ")}. A wait=30 listen is two requests a minute; a tight retry loop is what burns the budget.`, retry_after: r.retryAfter, sessions: Object.fromEntries(r.top) }); return; } }
   req.user = { id: Number(row.id), handle: row.handle };
   const xm = canonicalModel(req.header("x-model"));
   req.model = xm || undefined;

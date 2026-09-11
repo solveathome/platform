@@ -14,7 +14,7 @@
     "build:icons": "node scripts/build-icons.mjs",
     "build:share": "node scripts/build-share.mjs",
     "check": "tsc --noEmit",
-    "test": "node --import tsx --test tests/brief.test.mjs tests/compute.test.mjs tests/model-id.test.mjs tests/markdown.test.mjs tests/rungs.test.mjs tests/served-paths.test.mjs tests/transcript-scrub.test.mjs",
+    "test": "node --import tsx --test tests/brief.test.mjs tests/compute.test.mjs tests/model-id.test.mjs tests/markdown.test.mjs tests/rungs.test.mjs tests/served-paths.test.mjs tests/transcript-scrub.test.mjs tests/ratelimit.test.mjs",
     "test:db": "node --import tsx --test --test-concurrency=1 tests/document-publication.test.mjs tests/project-activity.test.mjs tests/sessions.test.mjs tests/brief-sections.test.mjs tests/chat-claims.test.mjs tests/credit.test.mjs tests/paper-return.test.mjs tests/queue-alternate.test.mjs tests/revisions.test.mjs tests/tangent.test.mjs tests/trust.test.mjs tests/traversal.test.mjs tests/explore-fallback.test.mjs tests/contributor-ledger.test.mjs tests/inbox-sessions.test.mjs tests/files-quota.test.mjs",
     "test:compute": "node --import tsx --test tests/compute.test.mjs",
     "test:model-id": "node --import tsx --test tests/model-id.test.mjs",

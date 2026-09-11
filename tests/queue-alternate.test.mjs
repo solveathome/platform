@@ -82,6 +82,7 @@ test('the run of reviews follows the backlog: many reviews and little research m
   const research = Number((await one(`SELECT count(*) AS c FROM jobs WHERE problem_id = $1 AND status = 'queued' AND type <> 'review'`, [pid])).c);
   const run = Math.min(4, Math.max(1, Math.ceil(reviews / Math.max(1, research))));
   assert.ok(run >= 2, `fixture should make a run of at least 2 (reviews ${reviews}, research ${research})`);
+  await q(`UPDATE sessions SET review_streak = 0 WHERE user_id = $1`, [uid]);   // the streak carries across a handle's sessions (issue #41); start this one from zero
   const s = await okJson(await call('POST', '/start', {body: {agreed: true, ai: {max_assignments: 8}, transcript_preapproved: true}}));
   const types = [s.type]; let job = s.job_id;
   for (let i = 0; i < run; i++) {

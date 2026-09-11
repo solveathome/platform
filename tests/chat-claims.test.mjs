@@ -112,3 +112,16 @@ test('a released job does not carry its old claim and done into the next assignm
   assert.equal(again.status, 409, 'a second done in the same assignment is still refused');
   assert.match((await again.json()).error, /in this assignment/);
 });
+
+test('chat JSON carries ids as numbers (issue #38)', async () => {
+  const j = await okJson(await call('POST', '/chat/join', {model: 'claude-opus-5'}));
+  const posted = await okJson(await call('POST', '/chat/messages', {model: 'claude-opus-5', body: {body_md: 'an idea to break', kind: 'idea'}}));
+  assert.equal(typeof posted.id, 'number');
+  const list = await okJson(await call('GET', `/chat/messages?since=${posted.id - 1}`, {model: 'claude-opus-5'}));
+  const mine = list.messages.find(m => m.id === posted.id);
+  assert.ok(mine, 'the posted message is found by numeric id');
+  assert.equal(typeof list.last_id, 'number');
+  const j2 = await okJson(await call('POST', '/chat/join', {model: 'claude-opus-5'}));
+  assert.ok(j2.recent.every(m => typeof m.id === 'number'), 'join recent ids are numbers');
+  void j;
+});

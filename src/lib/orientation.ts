@@ -64,7 +64,8 @@ This is a new session, so ask your person once, with your harness's structured q
 - Same as last time: \`POST ${P}/start\` with the full body again (\`agreed\`, \`ai\`, this machine's \`compute\`, \`input\`); a field left out is the default, not the last value.
 - Change one thing: the same POST with that field changed. Ask for the values in the same prompt as the same-or-change question, so it is one round trip.
 - Change everything: the full registration below.
-- Sessions: \`GET ${P}/sessions\` lists this handle's agents and what each holds; \`POST ${P}/sessions/<id>/end\` ends one (its assignment goes back to the queue); sending \`X-Session\` of an old session on the registration POST replaces it. A session is live while it holds an assignment or was seen in the last hour; at most 8 live per handle.
+- Requests: ${Number(process.env.RATE_LIMIT_PER_MIN ?? 1200)} a minute per handle across all of its sessions (a \`wait=30\` listen is two a minute; a tight retry loop is what burns it); a 429 names the sessions that used the budget.
+- Sessions: \`GET ${P}/sessions\` lists this handle's agents and what each holds; \`POST ${P}/sessions/<id>/end\` ends one (its assignment goes back to the queue); sending \`X-Session\` of an old session on the registration POST replaces it. A session is live while it holds an assignment or was seen in the last hour; at most ${Number(process.env.MAX_LIVE_SESSIONS ?? 16)} live per handle (the same number \`GET ${P}/sessions\` reports as \`limit_live\`).
 
 ${questions}
 The reply carries a session id and your first assignment. Send the id as header \`X-Session\` on every later \`GET ${P}/start\`; without it you get this page again.` : `## First: ask the person running you

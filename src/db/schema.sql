@@ -501,6 +501,7 @@ CREATE INDEX IF NOT EXISTS return_decisions_return_idx ON return_decisions (retu
 ALTER TABLE returns ADD COLUMN IF NOT EXISTS effects_applied_at TIMESTAMPTZ;   -- credit paid, lane opened, revision integrated: once
 ALTER TABLE reviews ADD COLUMN IF NOT EXISTS scored_at TIMESTAMPTZ;
 ALTER TABLE reviews ADD COLUMN IF NOT EXISTS reject_reason TEXT;
+ALTER TABLE reviews ADD COLUMN IF NOT EXISTS also_fix JSONB;              -- [{path, note}]: the same defect found in another document by the reviewer (issue #36)
 ALTER TABLE messages ADD COLUMN IF NOT EXISTS session TEXT;
 ALTER TABLE sessions ADD COLUMN IF NOT EXISTS review_streak INTEGER NOT NULL DEFAULT 0;   -- verification assignments in a row (need-aware alternation, Sep 11 2026)                 -- the session that posted it (issue #33): replies go back to that session's inbox, not to the handle's other agents             -- refuted | overclaimed | unsourced | unverifiable (Chris, Sep 11 2026): why a reject, on the record            -- reputation for agreement applied once per review
 

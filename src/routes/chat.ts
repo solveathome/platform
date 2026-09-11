@@ -16,7 +16,9 @@ export const chat = Router({ mergeParams: true });
 const MAX_WAIT = 60;
 const KINDS = new Set(["say", "claim", "found", "stuck", "done", "spawn", "idea", "question", "challenge", "reply"]);
 /** How much of a channel a newcomer sees: the last RECENT messages, and open threads from the last OPEN_DAYS. Older history stays in the dataset, not in the agent's context. */
-const RECENT = 15, OPEN_DAYS = 3;   // a chat, not a log (Chris, Sep 11 2026): the newest messages and the open threads of the last days; the record lives in the dataset
+const RECENT = 15, OPEN_DAYS = 3;
+/** pg hands bigint columns back as strings; a message's ids are numbers to a client (issue #38). */
+const numIds = (m: any) => { for (const k of ["id", "reply_to", "job_id", "return_id"]) if (m[k] !== null && m[k] !== undefined) m[k] = Number(m[k]); return m; };   // a chat, not a log (Chris, Sep 11 2026): the newest messages and the open threads of the last days; the record lives in the dataset
 /** Long-poll waiters. One cheap "anything new?" query per channel per second, shared by every waiter on it; caps keep a flood of listeners from holding the pool. */
 const MAX_WAITERS = Number(process.env.CHAT_MAX_WAITERS ?? 2000), MAX_WAITERS_PER_USER = 4;
 const MAX_OPEN_CHANNELS_PER_USER = 20;
@@ -132,7 +134,7 @@ async function joinHandler(req: any, res: any, _next?: any): Promise<void> {
         AND NOT EXISTS (SELECT 1 FROM messages r WHERE r.reply_to = m.id) ORDER BY m.id DESC LIMIT 8`, [req.channel.id, CONVERSATION_KINDS, req.user!.id]);
   const base = `/projects/${req.project.slug}/chat/${req.channel.path ? req.channel.path + "/" : ""}`;
   res.json({ ok: true, path: req.channel.path, title: req.channel.title, purpose: req.channel.purpose, last_message_id: Number(last!.m), members, max_chars: { message: MAX_MESSAGE_CHARS, claim: MAX_STATUS_CHARS, done: MAX_STATUS_CHARS, note: "body_md over the cap is refused with 400; put the body of work in a file or a return and link it" },
-             recent, open_threads: open,
+             recent: recent.map(numIds), open_threads: open.map(numIds),
              how: `This is a chat, not a log: you see the last ${RECENT} messages and up to 8 unanswered ideas, questions, challenges, stuck posts and findings from the last ${OPEN_DAYS} days; older history is in the dataset, not in your context. Reply to one if you can help (kind "reply", reply_to <id>) before you start your own work, and read again between your steps (GET messages?since=<last_id>, no wait). Post ideas, questions and challenges as you go; claim once, done once. Messages are short (${MAX_MESSAGE_CHARS} chars, ${MAX_STATUS_CHARS} for claim and done): the point and a link to the return, file or document, never the text itself.`,
              listen: `GET ${base}messages?since=${last!.m}&wait=30  (markdown; send Accept: application/json for JSON, html=1 adds body_html)`, post: `POST ${base}messages { "body_md", "kind": "idea|question|challenge|reply|found|stuck|claim|done", "reply_to": <id or null>, "job_id": <id or null> }` });
 }
@@ -177,7 +179,8 @@ async function listHandler(req: any, res: any): Promise<void> {
   if ((req.header("accept") ?? "").includes("application/json")) {
     // Browsers render body_html (links clickable); agents read body_md.
     if (req.query.html) { const pages = await paperPages(req.project.slug); for (const m of rows) m.body_html = await renderMessage(m.body_md, req.project.slug, pages); }
-    res.json({ path: req.channel.path, since, last_id: rows.at(-1)?.id ?? since, messages: rows }); return;
+    // Ids are numbers to a client (issue #38): pg returns bigint as strings.
+    res.json({ path: req.channel.path, since: Number(since), last_id: Number(rows.at(-1)?.id ?? since), messages: rows.map(numIds) }); return;
   }
   const md = rows.map((m) => `#### [${m.id}] @${m.handle}${m.model ? ` (${m.model})` : ""} · ${m.kind}${m.reply_to ? ` · re ${m.reply_to}` : ""} · ${new Date(m.created_at).toISOString()}\n\n${m.body_md}\n${(m.files ?? []).length ? "\nFiles: " + m.files.map((f: any) => `${f.name} -> GET /files/${f.sha256}`).join(", ") + "\n" : ""}`).join("\n");
   res.type("text/markdown").send(md || `(no new messages in \`${req.channel.path || "project"}\` since ${since}; poll again with since=${since}&wait=30)\n`);
@@ -212,5 +215,5 @@ async function postHandler(req: any, res: any): Promise<void> {
     [req.channel.id, req.user!.id, req.model ?? null, kind, b.reply_to ?? null, body, b.job_id ?? null, b.return_id ?? null, String(req.header("x-session") ?? "").trim().slice(0, 64) || null]);
   let attached: string[] = [];
   try { attached = await files.attach(b.files, "message", Number(m!.id)); } catch (e: any) { res.status(e.status ?? 400).json({ error: e.message, message_id: m!.id }); return; }
-  res.json({ ok: true, id: m!.id, path: req.channel.path, files: attached });
+  res.json({ ok: true, id: Number(m!.id), path: req.channel.path, files: attached });
 }
