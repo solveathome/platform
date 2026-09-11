@@ -22,9 +22,11 @@ export function parseTranscript(text: string, reported?: any): Tokens {
   const lines = text.split("\n");
   // Claude Code writes one JSONL line per content block of an assistant message, each repeating the same message.usage: count a message id once.
   const seen = new Set<string>(); lastCodex = "";
-  // Codex logs carry a cumulative counter (total_token_usage / thread_token_usage). When present, its largest record is the
-  // truth for the whole log and beats any per-turn summation, which double counts turns logged in several shapes.
+  // Codex logs carry a cumulative counter (total_token_usage / thread_token_usage) that runs since the thread started, not since the
+  // assignment: crediting it charged a second return in the same thread with the whole thread again (issue #49). It is now only a ceiling.
+  // The same turn is logged in two shapes (token_count.last_token_usage and token_usage_record.usage): count one shape, the finer one when present.
   let cumulative: any = null;
+  const hasRecords = /"type":\s*"token_usage_record"/.test(text);
   const consider = (u: any) => { if (u && typeof u === "object" && u.total_tokens !== undefined && Number(u.total_tokens) > Number(cumulative?.total_tokens ?? -1)) cumulative = u; };
   for (const line of lines) {
     const s = line.trim(); if (!s.startsWith("{")) continue;
@@ -41,12 +43,14 @@ export function parseTranscript(text: string, reported?: any): Tokens {
     }
     consider(d?.payload?.info?.total_token_usage); consider(d?.info?.total_token_usage); consider(d?.values?.info?.total_token_usage);
     consider(d?.values?.thread_token_usage); consider(d?.thread_token_usage);
+    if (hasRecords && d?.type !== "token_usage_record" && (d?.payload?.info?.last_token_usage || d?.info?.last_token_usage || d?.values?.info?.last_token_usage)) continue;   // the same turn is in a token_usage_record line
     const c = codexUsage(d);
     if (c) { t.input += c.input; t.output += c.output; t.cache_read += c.cache_read; t.cache_write += c.cache_write; t.entries++; t.source = "codex-jsonl"; const m = canonicalModel(d?.payload?.model ?? d?.model ?? d?.values?.model) || "codex"; t.models![m] = (t.models![m] ?? 0) + c.output; }
   }
   if (cumulative && t.source === "codex-jsonl") {
+    // A ceiling only: the per-turn sum of the assignment's window can never exceed the thread's running total.
     const cached = Number(cumulative.cached_input_tokens ?? 0);
-    t.input = Math.max(0, Number(cumulative.input_tokens ?? 0) - cached); t.cache_read = cached; t.output = Number(cumulative.output_tokens ?? 0); t.cache_write = Number(cumulative.cache_write_input_tokens ?? 0);
+    t.input = Math.min(t.input, Math.max(0, Number(cumulative.input_tokens ?? 0) - cached)); t.cache_read = Math.min(t.cache_read, cached); t.output = Math.min(t.output, Number(cumulative.output_tokens ?? 0)); t.cache_write = Math.min(t.cache_write, Number(cumulative.cache_write_input_tokens ?? 0));
     const keys = Object.keys(t.models ?? {}); if (keys.length === 1) t.models![keys[0]] = t.output;
   }
   if (t.entries === 0 && reported && typeof reported === "object") {
