@@ -202,6 +202,16 @@ test('a newcomer\'s self-assigned return gets review jobs; a reviewer is handed 
   await q(`DELETE FROM jobs WHERE parent_return_id = $1`, [own.id]); await q(`DELETE FROM returns WHERE id = $1`, [own.id]);
 });
 
+test('the return JSON expands the messages it cites (issue #45)', async () => {
+  const ch = await one(`SELECT id FROM channels WHERE problem_id = $1 AND path = ''`, [pid]);
+  const m = await one(`INSERT INTO messages (channel_id, user_id, model, kind, body_md) VALUES ($1,$2,'claude-opus-5','idea','the idea that was built on') RETURNING id`, [ch.id, people.adv2.id]);
+  const r = await one(`INSERT INTO returns (problem_id, type, user_id, model, provider, report_md, transcript, status, cites) VALUES ($1,'source',$2,'m','p','built on it','t','pending',$3) RETURNING id`, [pid, people.author.id, JSON.stringify({messages: [Number(m.id)]})]);
+  const j = await okJson(await call('adv1', 'GET', `/return/${r.id}`));
+  assert.equal(j.cited_messages.length, 1);
+  assert.deepEqual([j.cited_messages[0].id, j.cited_messages[0].handle, j.cited_messages[0].channel_path, j.cited_messages[0].body_md], [Number(m.id), people.adv2.handle, '', 'the idea that was built on']);
+  await q(`DELETE FROM returns WHERE id = $1`, [r.id]); await q(`DELETE FROM messages WHERE id = $1`, [m.id]);
+});
+
 test('three advisory reviews decide provisionally: nothing paid, review jobs still open', async () => {
   for (const [who, model] of [['adv1', 'claude-fable-5-1'], ['adv2', 'gpt-6'], ['adv3', 'gemini-3-pro']]) {   // gpt-6, not astra: astra at max is trusted by model since Sep 11 evening
     const r = await okJson(await call(who, 'POST', '/result', {model, body: review('accept')}));

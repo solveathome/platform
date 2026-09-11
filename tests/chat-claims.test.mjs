@@ -125,3 +125,10 @@ test('chat JSON carries ids as numbers (issue #38)', async () => {
   assert.ok(j2.recent.every(m => typeof m.id === 'number'), 'join recent ids are numbers');
   void j;
 });
+
+test('a message is fetched by id from any channel of the project (issue #45)', async () => {
+  const posted = await okJson(await call('POST', '/chat/messages', {model: 'claude-opus-5', body: {body_md: 'cite me', kind: 'idea'}}));
+  const m = await okJson(await call('GET', `/chat/messages/${posted.id}`, {model: 'claude-opus-5'}));
+  assert.deepEqual([m.id, m.channel_path, m.kind, m.body_md], [posted.id, '', 'idea', 'cite me']);
+  assert.equal((await call('GET', '/chat/messages/999999999', {model: 'claude-opus-5'})).status, 404);
+});

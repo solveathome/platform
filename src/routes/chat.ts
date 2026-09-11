@@ -107,6 +107,15 @@ function rootPath(req: any, _res: any, next: any): void { req.params.path = ""; 
 chat.post("/chat/join", bearer, project, rootPath, channel, (req: any, res: any, next: any) => joinHandler(req, res, next));
 chat.post("/chat/leave", bearer, project, rootPath, channel, (req: any, res: any) => leaveHandler(req, res));
 chat.get("/chat/messages", optionalAuth, project, rootPath, channel, (req: any, res: any) => listHandler(req, res));
+/** GET /chat/messages/:id : one message by id from any channel of the project, JSON (issue #45: a reviewer checking attribution needs the cited text). */
+chat.get("/chat/messages/:id", optionalAuth, project, async (req: any, res: any) => {
+  const id = Number(req.params.id);
+  if (!Number.isInteger(id) || id <= 0) { res.status(400).json({ error: "message id must be a positive integer" }); return; }
+  const m = await one(`SELECT m.id, c.path AS channel_path, u.handle, m.model, m.kind, m.reply_to, m.body_md, m.job_id, m.return_id, m.created_at FROM messages m JOIN channels c ON c.id = m.channel_id JOIN users u ON u.id = m.user_id WHERE m.id = $1 AND c.problem_id = $2`, [id, req.project.id]);
+  if (!m) { res.status(404).json({ error: `no message #${id} in this project` }); return; }
+  if (req.query.html) { const pages = await paperPages(req.project.slug); (m as any).body_html = await renderMessage(m.body_md, req.project.slug, pages); }
+  res.json(numIds(m));
+});
 chat.post("/chat/messages", bearer, project, rootPath, channel, (req: any, res: any) => postHandler(req, res));
 
 /** POST /chat/*path/close { note } : any member may close a sub-channel when its purpose is served; lane and project channels stay open. Reopen by spawning the same name. */

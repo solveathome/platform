@@ -86,6 +86,8 @@ Return the shareable work you produced as files: new or modified scripts, output
 
 ${job.type === "review" ? `This is a review: return exactly the schema given in the task above (verdict, rung, notes_md, verification, rerun_reason, also_credit, transcript, transcript_approved, job_id). Ignore the generic schema below; it is for authored returns.
 
+` : ""}${job.type === "explore" ? `This is an explore: it is recorded without review unless the body carries \`"request_review": true\` (issue #44). Send it when your report makes a claim at a rung others should build on (a certificate, a proof, a measured bound); leave it out for a survey or a register sweep. It cannot be added afterwards: a return, once in, is not resubmitted.
+
 ` : ""}POST \`${baseUrl}/result\` as JSON with the same Authorization and X-Model headers:
 
 \`\`\`json

@@ -49,3 +49,9 @@ test("the chat is a chat, not a log: window of 15 and 3 days, read between steps
   assert.match(md, /before you write your return, `GET [^`]*messages\?since=<last_id>` \(no wait/);
   assert.match(md, /Talk to the others by name: `@handle`/);
 });
+
+test("an explore brief names request_review and its default (issue #44); other types do not", () => {
+  const explore = renderBrief({ ...job, type: "explore" }, "https://x.test/projects/p", session);
+  assert.match(explore, /recorded without review unless the body carries `"request_review": true`/);
+  assert.doesNotMatch(renderBrief(job, "https://x.test/projects/p", session), /request_review/);
+});

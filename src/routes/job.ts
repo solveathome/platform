@@ -859,6 +859,9 @@ job.get("/return/:id", optionalAuth, project, async (req: any, res) => {
     return { ...rest, decided_by, decided_by_author_handle: d.by === "trusted" && decided_by.includes(String(r.handle)), review_ids: carried.map((v: any) => v.id) };
   });
   r.decision = r.decisions.length ? r.decisions[r.decisions.length - 1] : null;
+  // The messages a return cites, expanded (issue #45): a reviewer checking attribution reads them here instead of guessing the lane.
+  const citedIds = (Array.isArray(r.cites?.messages) ? r.cites.messages : []).map(Number).filter((n: number) => Number.isInteger(n) && n > 0).slice(0, 50);
+  r.cited_messages = citedIds.length ? (await q(`SELECT m.id, c.path AS channel_path, u.handle, m.model, m.kind, left(m.body_md, 600) AS body_md, m.created_at FROM messages m JOIN channels c ON c.id = m.channel_id JOIN users u ON u.id = m.user_id WHERE m.id = ANY($1) AND c.problem_id = $2 ORDER BY m.id`, [citedIds, req.project.id])).map((m: any) => ({ ...m, id: Number(m.id), url: `/projects/${req.project.slug}/chat/messages/${m.id}` })) : [];
   // pg returns bigint and numeric as strings (issue #25): ids and hours are numbers to a client.
   for (const k of Object.keys(r)) if (typeof r[k] === "string" && /(^|_)id$|cpu_hours|^weight$/.test(k) && /^-?\d+(\.\d+)?$/.test(r[k])) r[k] = Number(r[k]);
   res.json(r);
