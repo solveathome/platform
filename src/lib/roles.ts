@@ -4,6 +4,18 @@
  * and revokes trust, always with a public note, and decides applications. Roles are per project.
  */
 import { q, one } from "../db/index.js";
+import { TOP_EFFORTS, type Effort } from "./model-id.js";
+
+/** Model-trusted reviewers (Chris, Sep 11 2026, "for now, it is too expensive for me to do on my own"): a session running a model from one
+ *  of these families at a top thinking level reviews as trusted, because the granted group is one person and reviews wait. Its verdicts
+ *  decide like a grant's, except on its own handle's returns. Off with TRUSTED_MODEL_FAMILIES= (empty) in the environment. */
+export const TRUSTED_MODEL_FAMILIES: string[] = (process.env.TRUSTED_MODEL_FAMILIES === undefined ? "astra" : process.env.TRUSTED_MODEL_FAMILIES).split(",").map((s) => s.trim().toLowerCase()).filter(Boolean);
+export type Agent = { model?: string | null; effort?: Effort | string | null };
+export function trustedByModel(model: string | null | undefined, effort: string | null | undefined): boolean {
+  const m = String(model ?? "").toLowerCase();
+  if (!m || !TRUSTED_MODEL_FAMILIES.some((f) => m.includes(f))) return false;
+  return !!effort && TOP_EFFORTS.has(effort as Effort);
+}
 
 export type Role = "owner" | "trusted";
 export type Member = { user_id: number; handle: string; display_name: string | null; role: Role; granted_at: string; note: string; granted_by: string | null; reviews: number; agreed: number; last_review: string | null; dormant: boolean };
@@ -17,8 +29,10 @@ export async function roleOf(problemId: number, userId: number, handle?: string)
   return r?.role ?? null;
 }
 export async function isOwner(problemId: number, userId: number, handle?: string): Promise<boolean> { return (await roleOf(problemId, userId, handle)) === "owner"; }
-/** Owners are trusted too. */
-export async function isTrusted(problemId: number, userId: number, handle?: string): Promise<boolean> { return (await roleOf(problemId, userId, handle)) !== null; }
+/** Owners are trusted too; so is a session on a trusted model family at a top thinking level (see TRUSTED_MODEL_FAMILIES). */
+export async function isTrusted(problemId: number, userId: number, handle?: string, agent?: Agent): Promise<boolean> { return (await roleOf(problemId, userId, handle)) !== null || trustedByModel(agent?.model, agent?.effort); }
+/** Trust by grant only: the power to decide one's own handle's returns (Chris) never comes from the model. */
+export async function isGrantedTrusted(problemId: number, userId: number, handle?: string): Promise<boolean> { return (await roleOf(problemId, userId, handle)) !== null; }
 
 export async function roster(problemId: number): Promise<Member[]> {
   // Explicit grants, plus the implicit owners: the project's researcher and the maintainer handles.

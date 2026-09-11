@@ -16,6 +16,7 @@ const {trust} = await import('../src/routes/trust.ts');
 const roles = await import('../src/lib/roles.ts');
 const {decide} = await import('../src/lib/consensus.ts');
 const reputation = await import('../src/lib/reputation.ts');
+const {trustedByModel} = await import('../src/lib/roles.ts');
 
 const tag = `trust-test-${Date.now().toString(36)}`;
 const slug = tag;
@@ -152,8 +153,31 @@ test('a rejection carries its reason class on the record, and costs a tenth of r
   assert.ok(Math.abs(await reputation.score(people.adv3.id) - before * 0.9) < 1e-9, 'a rejection multiplies reputation by 0.9');
 });
 
+test('trust by model (Chris, Sep 11): an Astra session at a top thinking level reviews as trusted, gets review jobs, decides outright, but never its own return', async () => {
+  assert.deepEqual([trustedByModel('gpt-6-astra', 'max'), trustedByModel('gpt-6-astra-pro', 'high'), trustedByModel('gpt-6-astra', 'low'), trustedByModel('gpt-6-astra', null), trustedByModel('claude-fable-5-1', 'max'), trustedByModel('gpt-6', 'max')], [true, true, false, false, false, false]);
+  // Handed a review job like a granted reviewer; handed back so the shared fixture's jobs stay queued for the later tests.
+  const s = await okJson(await call('adv3', 'POST', '/start', {model: 'gpt-6-astra', effort: 'max', body: {agreed: true, ai: {max_assignments: 1}, transcript_preapproved: true}}));
+  assert.equal(s.type, 'review', 'an Astra session at max was not handed a review job');
+  await okJson(await call('adv3', 'POST', '/release', {model: 'gpt-6-astra', effort: 'max', session: s.session, body: {job_id: s.job_id, note: 'test'}}));
+  const r = await one(`INSERT INTO returns (problem_id, type, user_id, model, provider, report_md, transcript, status) VALUES ($1,'source',$2,'claude-opus-5','anthropic','page 4 says so','t','pending') RETURNING id`, [pid, people.author.id]);
+  const id = Number(r.id);
+  const v = await okJson(await call('adv3', 'POST', '/result', {model: 'gpt-6-astra', effort: 'max', body: {type: 'review', return_id: id, verdict: 'accept', rung: 'measured', notes_md: 'checked page 4', transcript: 't', transcript_approved: true}}));
+  assert.deepEqual([v.advisory, v.trusted_by, v.outcome], [false, 'model', 'accepted']);
+  const row = await one(`SELECT status, provisional FROM returns WHERE id = $1`, [id]);
+  assert.deepEqual([row.status, row.provisional], ['accepted', false]);
+  // Its own handle's return: no.
+  const own = await one(`INSERT INTO returns (problem_id, type, user_id, model, provider, report_md, transcript, status) VALUES ($1,'source',$2,'claude-opus-5','anthropic','own','t','pending') RETURNING id`, [pid, people.adv3.id]);
+  const refused = await call('adv3', 'POST', '/result', {model: 'gpt-6-astra', effort: 'max', body: {type: 'review', return_id: Number(own.id), verdict: 'accept', rung: 'measured', notes_md: 'x', transcript: 't', transcript_approved: true}});
+  assert.equal(refused.status, 403);
+  // At a low thinking level the same model is advisory again.
+  const r2 = await one(`INSERT INTO returns (problem_id, type, user_id, model, provider, report_md, transcript, status) VALUES ($1,'source',$2,'claude-opus-5','anthropic','page 5 says so','t','pending') RETURNING id`, [pid, people.author.id]);
+  const low = await okJson(await call('adv3', 'POST', '/result', {model: 'gpt-6-astra', effort: 'low', body: {type: 'review', return_id: Number(r2.id), verdict: 'accept', rung: 'measured', notes_md: 'x', transcript: 't', transcript_approved: true}}));
+  assert.deepEqual([low.advisory, low.trusted_by], [true, null]);
+  assert.equal((await one(`SELECT status FROM returns WHERE id = $1`, [r2.id])).status, 'pending');
+});
+
 test('three advisory reviews decide provisionally: nothing paid, review jobs still open', async () => {
-  for (const [who, model] of [['adv1', 'claude-fable-5-1'], ['adv2', 'gpt-6-astra'], ['adv3', 'gemini-3-pro']]) {
+  for (const [who, model] of [['adv1', 'claude-fable-5-1'], ['adv2', 'gpt-6'], ['adv3', 'gemini-3-pro']]) {   // gpt-6, not astra: astra at max is trusted by model since Sep 11 evening
     const r = await okJson(await call(who, 'POST', '/result', {model, body: review('accept')}));
     assert.equal(r.advisory, true);
   }

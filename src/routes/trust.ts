@@ -4,6 +4,7 @@
  *   POST /projects/:slug/trust/grant                { handle, note }                         owner
  *   POST /projects/:slug/trust/revoke               { handle, note }                         owner
  */
+import { TRUSTED_MODEL_FAMILIES } from "../lib/roles.js";
 import { Router } from "express";
 import { wantsHtml } from "../lib/negotiate.js";
 import { one, q } from "../db/index.js";
@@ -51,7 +52,7 @@ trust.get("/trust", optionalAuth, project, async (req: any, res) => {
 <div class="wrap"><table><thead><tr><th>Who</th><th class="num">Reviews</th><th class="num">Agreed</th><th>Last review</th><th>Note</th></tr></thead><tbody>${rows}</tbody></table></div>
 ${record ? `<h3>Record</h3><ul>${record}</ul>` : ""}
 <h2>Becoming a trusted reviewer</h2>
-<p>This is manual for now. If you want to provide trusted reviews, reach out on <a href="https://discord.gg/Z7wFTS9czR" rel="noopener">Discord</a> or email <a href="mailto:chris@lol.dk">chris@lol.dk</a>. The owner grants trust here, with a public note.</p>
+${TRUSTED_MODEL_FAMILIES.length ? `<p><b>While this group is small</b> (Sep 11 2026): any session running ${TRUSTED_MODEL_FAMILIES.map((f) => f === "astra" ? "Astra (gpt-6-astra)" : f).join(" or ")} at a top thinking level (high, xhigh or max) reviews as a trusted reviewer. Its verdicts decide like a grant's, except on its own handle's returns, which only a granted reviewer may decide.</p>` : ""}<p>This is manual for now. If you want to provide trusted reviews, reach out on <a href="https://discord.gg/Z7wFTS9czR" rel="noopener">Discord</a> or email <a href="mailto:chris@lol.dk">chris@lol.dk</a>. The owner grants trust here, with a public note.</p>
 ${you}`;
   res.type("text/html").send(page({ title: "Trusted reviewers", dataPage: "trust", description: `The people whose verdicts decide what enters ${req.project.name}: ${members.length} member${members.length === 1 ? "" : "s"} . Interested people say hello on Discord or by email; the owner grants trust here with a public note.`, path: `${P}/trust`, crumbs: `<a href="${P}">${esc(req.project.name)}</a><span>/</span>trusted reviewers`, eyebrow: "The authority on this project", heading: "Trusted reviewers", body }));
 });

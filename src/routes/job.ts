@@ -25,7 +25,7 @@ import { unservedNote } from "../lib/served-paths.js";
 import { parseTranscript } from "../lib/tokens.js";
 import { needsSourceReview, SOURCE_REVIEW_MESSAGE, sourceReviewHit, readPublication } from "../lib/document-publication.js";
 import { randomBytes } from "node:crypto";
-import { isTrusted } from "../lib/roles.js";
+import { isTrusted, isGrantedTrusted, TRUSTED_MODEL_FAMILIES } from "../lib/roles.js";
 import { tierForEffort } from "../lib/model-id.js";
 import { parseRung, RUNG_ERROR, LADDER } from "../lib/rungs.js";
 import { postRateOk, RATE_MESSAGE } from "../lib/messages.js";
@@ -87,7 +87,7 @@ async function start(req: any, res: any): Promise<void> {
   }
   if (!member || !session) {
     const tf0 = tierForEffort(await modelTier(req.model ?? "unknown"), req.effort ?? null);
-    const viewer0 = { model: req.model ?? null, uid: req.user!.id, trusted: await isTrusted(Number(req.project.id), Number(req.user!.id), req.user!.handle), tier: tf0.tier, effort: req.effort ?? null, tier_note: tf0.note };
+    const viewer0 = { model: req.model ?? null, uid: req.user!.id, trusted: await isTrusted(Number(req.project.id), Number(req.user!.id), req.user!.handle, { model: req.model, effort: req.effort }), tier: tf0.tier, effort: req.effort ?? null, tier_note: tf0.note };
     const md = ownerNote + await orientation(req.project, BASE(), member ?? null, false, viewer0);
     if (wantsJson) res.json({ registered: !!member, session: null, orientation_md: md }); else res.type("text/markdown").send(md);
     return;
@@ -129,7 +129,8 @@ async function start(req: any, res: any): Promise<void> {
   const tf = tierForEffort(await modelTier(req.model ?? "unknown"), req.effort ?? null);
   const tier = tf.tier;
   // Review assignments go to trusted reviewers (Sep 10); everyone else reviews advisorily, self-assigned. Trusted reviewers may review their own returns.
-  const trusted = await isTrusted(Number(req.project.id), Number(req.user!.id), req.user!.handle);
+  const trusted = await isTrusted(Number(req.project.id), Number(req.user!.id), req.user!.handle, { model: req.model, effort: req.effort });
+  const granted = await isGrantedTrusted(Number(req.project.id), Number(req.user!.id), req.user!.handle);   // only a grant reviews its own handle's returns
   const maxHours = req.query.max_hours !== undefined ? Number(req.query.max_hours) : prefs.maxHours;
   const lane = req.query.lane ? String(req.query.lane) : (req.query.any_lane ? null : prefs.lane);
   const type = req.query.type ? String(req.query.type) : null;
@@ -158,7 +159,7 @@ async function start(req: any, res: any): Promise<void> {
          AND (COALESCE(j.compute_hint->>'gpu', 'false') IN ('false', '0', '') OR $10::boolean)
          AND ($3::text IS NULL OR l.slug = $3)
          AND ($4::text IS NULL OR j.type = $4)
-         AND (pr.id IS NULL OR pr.user_id <> $5 OR $12::boolean)
+         AND (pr.id IS NULL OR pr.user_id <> $5 OR $15::boolean)
          AND (pr.id IS NULL OR $12::boolean)
          AND NOT EXISTS (SELECT 1 FROM reviews rv WHERE rv.return_id = j.parent_return_id AND rv.user_id = $5)
          -- One review per person per return: the handle's other agent may already hold a review job for it.
@@ -177,7 +178,7 @@ async function start(req: any, res: any): Promise<void> {
          CASE WHEN pr.id IS NOT NULL AND pr.provider <> $6 THEN 0 ELSE 1 END,
          j.created_at
        LIMIT 1 FOR UPDATE OF j SKIP LOCKED`,
-      [tier, maxHours, lane, type, uid, req.provider, req.project.id, tier, prefs.ramGb, prefs.hasGpu, req.model ?? null, trusted, preferResearch, session.id],
+      [tier, maxHours, lane, type, uid, req.provider, req.project.id, tier, prefs.ramGb, prefs.hasGpu, req.model ?? null, trusted, preferResearch, session.id, granted],
     );
     let row = r.rows[0] as (JobRow & { id: number; budget_hours: string }) | undefined;
     if (!row) {
@@ -472,13 +473,14 @@ job.post("/result", bearer, project, async (req: any, res) => {
   if (jobRow?.type === "review" || (!jobRow && b.type === "review")) {
     if (!["accept", "reject"].includes(b.verdict)) { res.status(400).json({ error: "verdict must be accept|reject" }); return; }
     // Trusted reviewers decide; anyone else's review is advisory (Sep 10). A self-assigned review names the return it reviews.
-    const reviewerTrusted = await isTrusted(Number(req.project.id), uid, req.user!.handle);
+    const reviewerTrusted = await isTrusted(Number(req.project.id), uid, req.user!.handle, { model: req.model, effort: req.effort });
+    const reviewerGranted = await isGrantedTrusted(Number(req.project.id), uid, req.user!.handle);
     let reviewOf = jobRow ? Number(jobRow.parent_return_id) : Number(b.return_id);
     let priorScoredAt: string | null = null;
     if (!jobRow) {
       const target = await one<{ id: number; user_id: number; status: string; problem_id: number; lane_id: number | null }>(`SELECT id, user_id, status, problem_id, lane_id FROM returns WHERE id = $1 AND problem_id = $2`, [reviewOf || 0, req.project.id]);
       if (!target) { res.status(400).json({ error: "a self-assigned review needs return_id: the return you reviewed, in this project" }); return; }
-      if (Number(target.user_id) === uid && !reviewerTrusted) { res.status(403).json({ error: "you do not review your own return (a trusted reviewer may)" }); return; }
+      if (Number(target.user_id) === uid && !reviewerGranted) { res.status(403).json({ error: "you do not review your own return (a reviewer trusted by grant on the trust page may; a session trusted by its model may not)" }); return; }
       if (!["pending", "accepted", "rejected", "contested", "recorded"].includes(target.status)) { res.status(409).json({ error: `return #${target.id} is ${target.status}` }); return; }
       const prior = await one<{ id: number; scored_at: string | null }>(`SELECT id, scored_at FROM reviews WHERE return_id = $1 AND user_id = $2`, [target.id, uid]);
       if (prior && !(reviewerTrusted && target.status === "pending")) { res.status(409).json({ error: `you already reviewed return #${target.id}` }); return; }
@@ -507,7 +509,7 @@ job.post("/result", bearer, project, async (req: any, res) => {
     await q(`INSERT INTO credits (user_id, model, provider, problem_id, lane_id, kind, points, source_type, source_id, note) SELECT $1,$2,$3,$4,$5,'tokens',0,'review',$6,$7 WHERE $8::numeric > 0`,
       [uid, req.model ?? null, req.provider ?? null, parentRow.problem_id, parentRow.lane_id, String(jobRow?.id ?? `r${reviewOf}`) /* no job: 'r<return id>'; the profile ledger reads both forms */, `${(tokens.input + tokens.output + tokens.cache_read + tokens.cache_write).toLocaleString("en-US")} tokens (${tokens.output.toLocaleString("en-US")} output), ${tokens.source}, review of return #${reviewOf}`, tokens.input + tokens.output + tokens.cache_read + tokens.cache_write]);
     const outcome = await resolveReturn(reviewOf);
-    res.json({ ok: true, review_of: reviewOf, outcome, advisory: !reviewerTrusted, tokens });
+    res.json({ ok: true, review_of: reviewOf, outcome, advisory: !reviewerTrusted, trusted_by: reviewerGranted ? "grant" : reviewerTrusted ? "model" : null, tokens });
     return;
   }
 
@@ -619,7 +621,7 @@ job.post("/result", bearer, project, async (req: any, res) => {
   }
   // Review jobs cost trusted reviewers' time. A handle without an accepted return here gets them for assigned work only, ten times a day; its
   // self-assigned and explore returns wait as pending for a trusted reviewer to pick up (GET /return/:id, POST /result type review).
-  const standing = (await isTrusted(Number(problem.id), uid, req.user!.handle)) || !!(await one(`SELECT 1 FROM returns WHERE user_id = $1 AND problem_id = $2 AND status = 'accepted' AND NOT provisional AND id <> $3`, [uid, problem.id, ret!.id]));
+  const standing = (await isTrusted(Number(problem.id), uid, req.user!.handle, { model: req.model, effort: req.effort })) || !!(await one(`SELECT 1 FROM returns WHERE user_id = $1 AND problem_id = $2 AND status = 'accepted' AND NOT provisional AND id <> $3`, [uid, problem.id, ret!.id]));
   const spawnedToday = await one<{ c: string }>(`SELECT count(DISTINCT j.parent_return_id) AS c FROM jobs j JOIN returns r ON r.id = j.parent_return_id WHERE r.user_id = $1 AND r.created_at > now() - interval '1 day'`, [uid]);
   const mayReview = standing || (!!jobRow && jobRow.type !== "explore" && Number(spawnedToday?.c ?? 0) < MAX_REVIEW_SPAWNS_PER_DAY);
   if (mayReview) await spawnReviews(ret!.id, problem.id, laneId, MIN_REVIEWS);
@@ -856,7 +858,7 @@ async function returnPage(req: any, res: any): Promise<void> {
 }
 /** POST /return/:id/reopen { note } : a trusted reviewer puts a decided return back before the group, with a public note. */
 job.post("/return/:id/reopen", bearer, project, async (req: any, res) => {
-  if (!(await isTrusted(Number(req.project.id), Number(req.user!.id), req.user!.handle))) { res.status(403).json({ error: "trusted reviewers reopen decisions; anyone else submits a challenge" }); return; }
+  if (!(await isTrusted(Number(req.project.id), Number(req.user!.id), req.user!.handle, { model: req.model, effort: req.effort }))) { res.status(403).json({ error: "trusted reviewers reopen decisions; anyone else submits a challenge" }); return; }
   const note = String(req.body?.note ?? "").trim().slice(0, 1000);
   if (!note) { res.status(400).json({ error: "a reopening needs a public note: what should be looked at again" }); return; }
   const ret = await one(`SELECT * FROM returns WHERE id = $1 AND problem_id = $2`, [req.params.id, req.project.id]);
