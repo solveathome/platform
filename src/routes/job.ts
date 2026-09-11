@@ -232,7 +232,15 @@ async function synthesizeTangent(req: any, session: any, t: Tangent): Promise<an
   return { ...j, lane_slug: laneSlug, repo_url: req.project.repo_url };
 }
 
-/** When nothing typed is assignable: an explore job, made on the spot, in the registered lane or the lane with the fewest agents at work, pointing at the programme's open questions. */
+/** Explore assignments made on the spot are named by what they point at (`Explore: Q-id`, `Leads: kind`), so the next session is handed something else. */
+const SERVED_WINDOW = "14 days";
+/** The lead hunts, in rotation, once every open question has been handed out inside the window. Each needs no compute. */
+const LEAD_KINDS = ["prior-art", "break", "registry", "synthesis", "route", "statistic"] as const;
+
+/** When nothing typed is assignable: an explore job, made on the spot, in the registered lane or the lane with the fewest agents at work.
+ *  One open question per job, the one no session was handed inside the window (Chris, Sep 11: the same five questions went to every
+ *  session and came back "already scored"); when every open question is in hand, a lead hunt from a rotating menu, so an agent with
+ *  nothing typed to do goes looking for new leads instead of re-treading the list. */
 async function synthesizeExplore(req: any, session: any, laneSlug: string | null, _maxHours: number): Promise<any> {
   const hours = Math.max(0.5, Math.min(24, Number(session.ai?.max_hours_per_assignment ?? 2)));
   const lane = laneSlug
@@ -240,20 +248,46 @@ async function synthesizeExplore(req: any, session: any, laneSlug: string | null
     : await one(`SELECT l.id, l.slug, l.title FROM lanes l LEFT JOIN channels c ON c.lane_id = l.id AND c.parent_id IS NOT NULL
                  WHERE l.problem_id = $1 AND l.status = 'open'
                  ORDER BY (SELECT count(*) FROM jobs j WHERE j.lane_id = l.id AND j.status = 'assigned') ASC, (SELECT count(*) FROM channel_members m WHERE m.channel_id = c.id) ASC, l.id LIMIT 1`, [req.project.id]);
-  const qs = openQuestions(req.project.slug, 5);
   const P = `${BASE()}/projects/${req.project.slug}`;
-  const qlist = qs.length ? qs.map((q) => `- \`${q.id}\` (${q.status}): ${q.text}${q.verdict ? `\n  Record so far: ${q.verdict}` : ""}`).join("\n") : "- (no open question is listed; take the first gap you find in the lane's router document and say why it is a gap)";
-  const brief = `Nothing typed is queued for your tier, lane and budget right now, so this is your assignment. It needs no compute: reading, deriving, checking the registries and drafting a direction are always in scope.
+  const served = new Set((await q<{ qid: string }>(`SELECT DISTINCT substring(title from 'Explore: (Q-[A-Za-z0-9_-]+)') AS qid FROM jobs WHERE problem_id = $1 AND type = 'explore' AND title LIKE 'Explore: Q-%' AND assigned_at > now() - interval '${SERVED_WINDOW}'`, [req.project.id])).map((r) => r.qid));
+  const pick = openQuestions(req.project.slug, 1000).find((x) => !served.has(x.id)) ?? null;
+  const tail = `\n\n**Return** as this job (type explore): a report with what you did, the rung of each claim, and the gap that remains, plus any files. If your work amounts to a new route, submit a second return of type \`direction\` with the route in your person's words or yours; if it finds a served document wrong, an \`audit\` return with the revised file. Then call \`GET ${P}/start\` once. Do not poll.`;
+  let title: string; let brief: string;
+  if (pick) {
+    title = `Explore: ${pick.id} in ${lane?.slug ?? "the project"}`;
+    brief = `Nothing typed is queued for your tier, lane and budget right now, so this is your assignment. It needs no compute: reading, deriving, checking the registries and drafting a direction are always in scope.
 
-**Do this, in order.** Read \`research/README.md\` (the router) and \`research/QUESTIONS.md\` (what has been asked, what it got, where the record is). Then take the highest question below you can move, in lane **${lane?.slug ?? "any"}**, and work it for up to ${hours} h: read the records it names, check the claims at their stated calibration, try to break the standing verdict, and write down what you established, at which rung, and what would falsify it.
+**Your question**, one of ${openQuestions(req.project.slug, 1000).length} open or partial in \`research/QUESTIONS.md\` (full list: \`GET ${P}/questions\`; each session is handed a different one):
 
-Open questions, best first (full list: \`GET ${P}/questions\`):
-${qlist}
+- \`${pick.id}\` (${pick.status}): ${pick.text}${pick.verdict ? `\n  Record so far: ${pick.verdict}` : ""}
 
-**Return** as this job (type explore): a report with the question id, what you did, the rung of each claim, and the gap that remains, plus any files. If your work amounts to a new route, submit a second return of type \`direction\` with the route in your person's words or yours. Then call \`GET ${P}/start\` once. Do not poll.`;
+**Do this, in order.** Read \`research/README.md\` (the router) and the rows of \`research/QUESTIONS.md\` and \`research/OUTCOMES.md\` that name this question. Then work it in lane **${lane?.slug ?? "any"}** for up to ${hours} h: read the records it names, check the claims at their stated calibration, try to break the standing verdict, and write down what you established, at which rung, and what would falsify it. If the record already answers the question and the registry row is stale, say so in one paragraph, return, and add an \`audit\` return on \`research/QUESTIONS.md\` with the corrected row; do not re-derive an answer that is on the record.` + tail;
+  } else {
+    const n = Number((await one<{ c: string }>(`SELECT count(*) AS c FROM jobs WHERE problem_id = $1 AND type = 'explore' AND title LIKE 'Leads: %' AND assigned_at > now() - interval '${SERVED_WINDOW}'`, [req.project.id]))?.c ?? 0);
+    const kind = LEAD_KINDS[n % LEAD_KINDS.length];
+    const recent = await q<{ id: number; type: string; handle: string; final_rung: string | null; head: string }>(`SELECT r.id, r.type, u.handle, r.final_rung, left(regexp_replace(r.report_md, E'\\n[\\\\s\\\\S]*$', ''), 140) AS head FROM returns r JOIN users u ON u.id = r.user_id WHERE r.problem_id = $1 AND r.status = 'accepted' AND r.type <> 'explore' AND r.user_id <> $2 ORDER BY r.id DESC LIMIT 12`, [req.project.id, req.user!.id]);
+    const target = recent.length ? recent[(Math.floor(n / LEAD_KINDS.length)) % recent.length] : null;
+    const tline = target ? `return #${target.id} (${target.type}${target.final_rung ? `, ${target.final_rung}` : ""}, by @${target.handle}): "${target.head}", at \`GET ${P}/return/${target.id}\`` : "the document the router names as the current bound (\`research/README.md\`, section Status)";
+    const list = recent.slice(0, 8).map((r) => `- #${r.id} (${r.type}${r.final_rung ? `, ${r.final_rung}` : ""}, @${r.handle}): ${r.head}`).join("\n") || "- (no accepted returns yet; start from the router)";
+    const hunts: Record<typeof LEAD_KINDS[number], [string, string]> = {
+      "prior-art": [`prior art for ${target ? `return #${target.id}` : "the current bound"}`, `**Prior-art hunt.** Take the central object of ${tline}. Search the literature for it (per \`research/SEARCH-CONVENTIONS.md\`: name the convention it belongs to, then look for the verbatim statement). Report one of: novel, novel to us (the record already names an owner), or owned (author, venue, year, theorem or equation number, page), with the source link and how far the published statement covers what the return claims. A finding of "owned" is a lead for \`research/IMPORT-MAP.md\`: add an \`audit\` return with the row.`],
+      "break": [`break ${target ? `return #${target.id}` : "the current bound"}`, `**Adversarial re-check.** Take ${tline}. Try to break it at its stated rung: a hypothesis it does not satisfy, a step that does not follow, a computation that does not reproduce from the recipe, a constant mis-transcribed. Read first; rerun only what the reading makes suspect and say why. If the objection holds, send \`"request_review": true\` on your return and post the return link in the lane channel so a trusted reviewer can reopen the target; if it stands, say what you tried and what would have broken it.`],
+      "registry": [`registry sweep`, `**Registry sweep.** Take ${Math.min(15, openQuestions(req.project.slug, 1000).length)} rows of \`research/QUESTIONS.md\` starting at row ${(Math.floor(n / LEAD_KINDS.length) * 15) % Math.max(1, openQuestions(req.project.slug, 1000).length) + 1} of the open and partial ones (\`GET ${P}/questions\`). For each, find where the record answers it (\`research/OUTCOMES.md\`, the returns at \`GET ${P}/board\`, the lane channels) and say whether the row's status and verdict are current. Return the table of what is stale, and an \`audit\` return on \`research/QUESTIONS.md\` with the corrected rows.`],
+      "synthesis": [`cross-lane synthesis`, `**Cross-lane synthesis.** Read the latest accepted returns across lanes:\n${list}\nFind two results that bear on one another: one that sharpens, bounds, contradicts or makes redundant another, or two that together imply something neither states. Write the connection with each claim at its rung and what a reviewer would need to check. A connection that is a new route is a \`direction\` return.`],
+      "route": [`new route`, `**New route.** Read the closed-routes register (\`research/OUTCOMES.md\`, section "Closed routes") and the open questions (\`GET ${P}/questions\`). Draft one route to the target exponent or to the infinitude statement that is not on the record and not a closed route restated: the object, the step that would have to hold, the first check that could refute it cheaply, and what it would cost to run. Return it as \`direction\` (your words, or your person's verbatim if they gave it) with this job's explore report as the reasoning.`],
+      "statistic": [`new statistic`, `**New statistic with a falsifier.** Design one finite statistic a run could actually decide something about, where the retained censuses could not: the decision it informs, a pre-registered falsifier written before any run, a matched control (random-sign, permutation or independent thinning, as the repo uses), and the scale at which the effect would be visible if present. If the run fits the compute your person offered, run it in the house format (question in comments, then code) and report; otherwise return the design with the cost, so a session with the compute can run it.`],
+    };
+    const [what, body] = hunts[kind];
+    title = `Leads: ${what}`;
+    brief = `Nothing typed is queued for your tier, lane and budget, and every open question in \`research/QUESTIONS.md\` has been handed to a session in the last two weeks. This is a lead hunt, in lane **${lane?.slug ?? "any"}**, for up to ${hours} h: the swarm needs new leads more than another pass over the list. It needs no compute unless you choose to run something that fits your offer.
+
+${body}
+
+Read \`research/README.md\` (the router) first if this is your first assignment here; cite every message, return, file and person you build on.` + tail;
+  }
   const j = await one(`INSERT INTO jobs (problem_id, lane_id, type, title, brief_md, git_ref, compute_hint, budget_hours, min_tier, quorum, status, assigned_to, assigned_session, assigned_at, expires_at)
                        VALUES ($1,$2,'explore',$3,$4,'main','{}',$5,99,1,'assigned',$6,$7,now(),now() + ($5::numeric * interval '1 hour') * 2) RETURNING *`,
-    [req.project.id, lane?.id ?? null, `Explore: open questions in ${lane?.slug ?? "the project"}`, brief, hours, req.user!.id, session.id]);
+    [req.project.id, lane?.id ?? null, title.slice(0, 200), brief, hours, req.user!.id, session.id]);
   return { ...j, lane_slug: lane?.slug ?? null, repo_url: req.project.repo_url };
 }
 
