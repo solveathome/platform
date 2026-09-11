@@ -145,7 +145,9 @@ root.get("/@:handle", async (req, res) => {
   const recent = await q(`SELECT r.id, p.slug AS project, r.type, r.status, r.final_rung, r.created_at FROM returns r JOIN problems p ON p.id = r.problem_id WHERE r.user_id = $1 ORDER BY r.id DESC LIMIT 50`, [u.id]);
   const lanes = await q(`SELECT p.slug AS project, l.slug, l.title FROM lanes l JOIN problems p ON p.id = l.problem_id WHERE l.origin_user_id = $1 ORDER BY l.id`, [u.id]);
   const ledger = await q(`SELECT c.kind, c.points, c.model, c.source_type, c.source_id, c.note, c.created_at, p.slug AS project,
-      CASE WHEN c.source_type = 'review' THEN (SELECT j.parent_return_id FROM jobs j WHERE j.id = c.source_id::bigint) END AS review_of
+      -- A review credit's source is the review job's id, or 'r<return id>' when the review was self-assigned (no job): never cast blind (a 500 on every profile with one such row, Sep 11).
+      CASE WHEN c.source_type = 'review' AND c.source_id ~ '^[0-9]+$' THEN (SELECT j.parent_return_id FROM jobs j WHERE j.id = c.source_id::bigint)
+           WHEN c.source_type = 'review' AND c.source_id ~ '^r[0-9]+$' THEN substring(c.source_id from 2)::bigint END AS review_of
     FROM credits c LEFT JOIN problems p ON p.id = c.problem_id WHERE c.user_id = $1 ORDER BY c.id DESC LIMIT 100`, [u.id]);
   const provenance = await q(`SELECT p.slug AS project, max(c.origin_role) AS role, max(c.origin_model) AS model, max(c.origin_model_role) AS model_role, count(*) AS claims, count(*) FILTER (WHERE c.kind = 'note') AS notes, count(*) FILTER (WHERE c.kind = 'script') AS scripts, count(*) FILTER (WHERE c.corpus) AS corpus_claims, min(c.first_commit) AS first, max(c.last_commit) AS last, sum(c.commits) AS commits
     FROM claims c JOIN problems p ON p.id = c.problem_id WHERE lower(c.origin_handle) = lower($1) GROUP BY p.slug`, [u.handle]);
