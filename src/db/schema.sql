@@ -312,12 +312,7 @@ CREATE TABLE IF NOT EXISTS pool (
 );
 -- Consent is per agent session, not per registration (scope Q51). POST /start with agreed:true mints a session id;
 -- GET /start hands out assignments only with that id (X-Session header) and only up to the cap the person set.
-ALTER TABLE pool ADD COLUMN IF NOT EXISTS session TEXT;
-ALTER TABLE pool ADD COLUMN IF NOT EXISTS session_started TIMESTAMPTZ;
-ALTER TABLE pool ADD COLUMN IF NOT EXISTS session_max_jobs INT;          -- NULL: keep going until the person stops the agent (the default)
-ALTER TABLE pool ALTER COLUMN session_max_jobs DROP NOT NULL;
-ALTER TABLE pool ALTER COLUMN session_max_jobs DROP DEFAULT;
-ALTER TABLE pool ADD COLUMN IF NOT EXISTS session_jobs INT NOT NULL DEFAULT 0;
+-- (The per-registration session columns that once lived here moved to the sessions table on Sep 10; they are dropped below.)
 ALTER TABLE pool ADD COLUMN IF NOT EXISTS agreed_at TIMESTAMPTZ;
 
 -- Each project has a researcher: the person who set its direction and brought the prior work (scope Q45).
@@ -385,8 +380,7 @@ CREATE TABLE IF NOT EXISTS asks (
 CREATE INDEX IF NOT EXISTS asks_open_idx ON asks (problem_id, status, to_user_id);
 -- What a handle holds, declared at POST /start: {"sources": [...], "tools": [...], "human": {"expertise": "...", "latency": "hours|days"} | null}.
 ALTER TABLE pool ADD COLUMN IF NOT EXISTS holds JSONB NOT NULL DEFAULT '{}';
--- Inbox watermark: replies, answers and challenges with a message id above this are new at the next /start.
-ALTER TABLE pool ADD COLUMN IF NOT EXISTS inbox_seen_message_id BIGINT NOT NULL DEFAULT 0;
+-- (The inbox watermark is per session now: sessions.inbox_seen_message_id.)
 
 -- Provenance-aware review and verification depth (Chris, Sep 10; Q68–Q69). Every return and document version records the
 -- model that made it and the models that verified it; a model never reviews its own kind, and judgment reviews go to a model at
@@ -435,6 +429,21 @@ ALTER TABLE pool DROP COLUMN IF EXISTS session_started;
 ALTER TABLE pool DROP COLUMN IF EXISTS session_max_jobs;
 ALTER TABLE pool DROP COLUMN IF EXISTS session_jobs;
 ALTER TABLE pool DROP COLUMN IF EXISTS inbox_seen_message_id;
+-- Dropped columns still count toward Postgres's limit of 1600 per table, and until Sep 11 2026 this file added and dropped five
+-- of them on every boot (the dev database hit the limit; production had 155). Rebuild the table once when it carries any.
+-- Every migration must be idempotent: this one is a no-op on a clean table.
+DO $$
+BEGIN
+  IF (SELECT count(*) FROM pg_attribute WHERE attrelid = 'pool'::regclass AND attisdropped) > 0 THEN
+    CREATE TABLE pool_rebuilt (LIKE pool INCLUDING ALL);
+    INSERT INTO pool_rebuilt SELECT * FROM pool;
+    DROP TABLE pool;
+    ALTER TABLE pool_rebuilt RENAME TO pool;
+    ALTER INDEX pool_rebuilt_pkey RENAME TO pool_pkey;
+    ALTER TABLE pool ADD CONSTRAINT pool_problem_id_fkey FOREIGN KEY (problem_id) REFERENCES problems(id);
+    ALTER TABLE pool ADD CONSTRAINT pool_user_id_fkey FOREIGN KEY (user_id) REFERENCES users(id);
+  END IF;
+END $$;
 
 -- Tangents (Sep 10): a person's own objection or route is their agent's first assignment. A challenge return names what it
 -- challenges and whether the objection held; human_md carries the person's words verbatim on challenge and direction returns.
