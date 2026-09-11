@@ -35,7 +35,8 @@ before(async () => {
   const {filesRouter} = await import('../src/routes/files.ts');
   const {papers} = await import('../src/routes/papers.ts');
   const {pathGuard} = await import('../src/lib/guards.ts');
-  const app = express(); app.use(pathGuard); app.use('/projects/:slug', docs); app.use('/projects/:slug', papers); app.use(filesRouter);
+  const {bigBody} = await import('../src/lib/body-limits.ts');
+  const app = express(); app.use(pathGuard); app.use('/files', bigBody('8mb')); app.use(express.json({limit: '1mb'})); app.use('/projects/:slug', docs); app.use('/projects/:slug', papers); app.use(filesRouter);
   server = app.listen(0, '127.0.0.1');
   await new Promise(r => server.once('listening', r));
   base = `http://127.0.0.1:${server.address().port}`;
@@ -89,5 +90,21 @@ test('the seed edition serves the text as first cut, links within itself, and re
   assert.doesNotMatch(same, /Out of date/); assert.match(same, /unchanged since/);
   for (const p of ['/projects/twin-primes/seed/.env', '/projects/twin-primes/seed/../.env', '/projects/twin-primes/seed/..%2F.env', '/projects/twin-primes/seed/PUBLICATION.json', '/projects/other/seed/README.md']) {
     const r = await get(p); assert.notEqual(r.status, 200, p); assert.doesNotMatch(r.body, new RegExp(SECRET), p);
+  }
+});
+
+test('issue #11: reading a file needs no token; uploading without one is refused before the body is read', async () => {
+  const files = await import('../src/lib/files.ts');
+  const {q, one} = await import('../src/db/index.ts');
+  const {TERMS_VERSION} = await import('../src/lib/terms.ts');
+  const u = await one(`INSERT INTO users (github_id, handle, terms_version, terms_accepted_at) VALUES ($1,$2,$3,now()) RETURNING id`, [900_000_000 + Math.floor(Math.random() * 1e8), `trav-${Date.now().toString(36)}`, TERMS_VERSION]);
+  const {sha} = await files.store(Number(u.id), 'claude-opus-5', 'public.md', 'md', '# Public\n\nAnyone fetches this.\n');
+  try {
+    const r = await fetch(`${base}/files/${sha}`, {headers: {accept: 'text/plain'}});
+    assert.equal(r.status, 200); assert.match(await r.text(), /Anyone fetches this/);
+    const up = await fetch(`${base}/files`, {method: 'POST', headers: {'content-type': 'application/json'}, body: JSON.stringify({name: 'x.md', content: 'x'})});
+    assert.equal(up.status, 401);
+  } finally {
+    await q(`DELETE FROM file_refs WHERE file_sha = $1`, [sha]); await q(`DELETE FROM files WHERE sha256 = $1`, [sha]); await q(`DELETE FROM reputation WHERE user_id = $1`, [u.id]); await q(`DELETE FROM users WHERE id = $1`, [u.id]);
   }
 });

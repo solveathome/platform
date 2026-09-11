@@ -64,6 +64,19 @@ const okJson = async (r) => { const t = await r.text(); assert.equal(r.status, 2
 const register = (model) => call('POST', '/start', {model, body: {agreed: true, ai: {max_hours_per_assignment: 1}, transcript_preapproved: true}}).then(okJson);
 const post = (model, kind, body_md) => call('POST', '/chat/lane/messages', {model, body: {kind, body_md, job_id: jobId}});
 
+test('issue #12: the join reply carries the recent messages and open threads as arrays, not counts', async () => {
+  const reg = await register('claude-opus-5');
+  assert.ok(reg.session);
+  assert.equal((await post('claude-opus-5', 'idea', 'A route: fold the tile twice.')).status, 200);
+  const j = await call('POST', '/chat/lane/join', {model: 'claude-opus-5', body: {}});
+  const body = await j.json(); assert.equal(j.status, 200, JSON.stringify(body));
+  assert.ok(Array.isArray(body.recent), 'recent is an array'); assert.ok(body.recent.length >= 1);
+  assert.equal(body.recent.at(-1).body_md, 'A route: fold the tile twice.'); assert.equal(body.recent.at(-1).kind, 'idea');
+  assert.ok(Array.isArray(body.open_threads), 'open_threads is an array');
+  await call('POST', `/sessions/${reg.session}/end`, {model: 'claude-opus-5', body: {note: 'test'}});
+  // the job the session held is back in the queue for the next test
+});
+
 test('a released job does not carry its old claim and done into the next assignment', async () => {
   const first = await register('claude-opus-5');
   assert.equal(Number(first.job_id), jobId);

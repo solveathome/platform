@@ -14,10 +14,11 @@ import { dumps } from "./routes/dumps.js";
 import { terms } from "./routes/terms.js";
 import { papers } from "./routes/papers.js";
 import { filesRouter } from "./routes/files.js";
+import { bigBody } from "./lib/body-limits.js";
 import { docs } from "./routes/docs.js";
 import { projects } from "./routes/projects.js";
 import { trust } from "./routes/trust.js";
-import { githubStart, githubCallback, logout, tokenExists } from "./lib/auth.js";
+import { githubStart, githubCallback, logout } from "./lib/auth.js";
 import { splash } from "./lib/splash.js";
 import "./lib/markdown.js";   // safe link and image schemes in every Markdown render
 import { perIp } from "./lib/ratelimit.js";
@@ -51,9 +52,7 @@ app.use("/auth/github/callback", perIp("oauth-callback", 5, 60_000));
 app.use(responseCache([/^\/projects\/?$/, /^\/projects\/[a-z0-9-]+\/(board|standings|leaderboard|who|chat|papers|lanes|questions)\/?$/, /^\/projects\/[a-z0-9-]+\/?$/, /^\/leaderboard\/?$/, /^\/credit\/?$/]));
 
 app.use("/assets", express.static(join(PUBLIC_DIR, "assets"), { index: false, maxAge: "1h" }));
-// Body limits by route: transcripts are large, everything else is not. The big parsers run only for a request that carries a bearer
-// token that exists (a cheap hash lookup), so an anonymous client cannot make the process buffer 50 MB.
-const bigBody = (limit: string) => { const parse = express.json({ limit }); return async (req: express.Request, res: express.Response, next: express.NextFunction) => { if (!(await tokenExists(req))) { res.status(401).json({ error: "missing or unknown bearer token" }); return; } parse(req, res, next); }; };
+// Body limits by route (src/lib/body-limits.ts): big parsers only for a known token, and only for requests that carry a body.
 app.use("/projects/:slug/result", bigBody("50mb"));
 app.use("/files", bigBody("8mb"));
 app.use(express.json({ limit: "1mb" }));
