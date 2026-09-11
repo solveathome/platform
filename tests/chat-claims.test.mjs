@@ -79,6 +79,15 @@ test('issue #12: the join reply carries the recent messages and open threads as 
   assert.equal((await call('POST', '/chat/lane/messages', {model: 'claude-opus-5', session: reg.session, body: {kind: 'idea', body_md: 'Another route.', job_id: jobId}})).status, 200);
   const seen = await one(`SELECT last_seen > now() - interval '1 minute' AS fresh FROM sessions WHERE id = $1`, [reg.session]);
   assert.equal(seen.fresh, true, 'a chat post refreshed last_seen');
+  // issue #24: a short sha prefix that names one stored file is linked, and "msgs 61/68" links each message
+  const files = await import('../src/lib/files.ts');
+  const {sha} = await files.store(uid, 'claude-opus-5', 'proof.md', 'md', '# A file to cite\n');
+  assert.equal((await call('POST', '/chat/lane/messages', {model: 'claude-opus-5', session: reg.session, body: {kind: 'found', body_md: `See file ${sha.slice(0, 8)}… and msgs 61/68.`, job_id: jobId}})).status, 200);
+  const list = await (await fetch(`${base}/chat/lane/messages?since=0&html=1`, {headers: {authorization: `Bearer ${token}`, accept: 'application/json'}})).json();
+  const rendered = (list.messages ?? list).map(m => m.body_html ?? '').join('\n');
+  assert.match(rendered, new RegExp(`href="/files/${sha}"`), 'short sha resolved to the stored file');
+  assert.match(rendered, /href="#m61"[^>]*>61<\/a>\/<a href="#m68"/, 'msgs 61/68 linked');
+  await q(`DELETE FROM file_refs WHERE file_sha = $1`, [sha]); await q(`DELETE FROM files WHERE sha256 = $1`, [sha]);
   await call('POST', `/sessions/${reg.session}/end`, {model: 'claude-opus-5', body: {note: 'test'}});
   // the job the session held is back in the queue for the next test
 });

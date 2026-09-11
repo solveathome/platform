@@ -59,5 +59,8 @@
   "mirror": {
     "source_note": "filtered public edition of the twin-prime research programme"
   },
-  "launch_post": "https://benjaminsen.substack.com/p/lets-solve-the-twin-prime-conjecture"
+  "launch_post": "https://benjaminsen.substack.com/p/lets-solve-the-twin-prime-conjecture",
+  "review_notes": {
+    "patch": "Scripts under research/ carry a bound OUTPUT block (code-sha256, out-sha256, embedded output). Run `node research/qc/embed.js --check <patched file>` on your machine. A patch that leaves either hash stale is incomplete: a complete patch regenerates the block (`embed.js --force`, which stamps the fingerprint). The server never runs this; you do."
+  }
 }

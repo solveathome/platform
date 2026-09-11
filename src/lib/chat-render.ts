@@ -6,6 +6,7 @@ import { marked } from "marked";
 import { protectMath } from "./math.js";
 import { linkPeople } from "./people.js";
 import { linkPaths } from "./paths-link.js";
+import { q } from "../db/index.js";
 
 /** Link references in already-rendered HTML, outside tags and existing anchors: "return #12", "ask #3", a sha256, "/files/<sha>", "job #7". */
 export function linkRefs(html: string, slug: string): string {
@@ -22,14 +23,26 @@ export function linkRefs(html: string, slug: string): string {
       .replace(/\bask #(\d+)/gi, (_m, n) => `<a href="/projects/${slug}/asks/${n}">ask #${n}</a>`)
       .replace(/\bjob #(\d+)/gi, (_m, n) => `<a href="/projects/${slug}/job/${n}">job #${n}</a>`)
       .replace(/\bmessage #?(\d{1,9})\b/gi, (_m, n) => `<a href="#m${n}">message ${n}</a>`)
+      .replace(/\bmsgs? #?(\d{1,9}(?:\s*[\/,]\s*#?\d{1,9})*)\b/gi, (m, list) => m.replace(/\d{1,9}/g, (n) => `<a href="#m${n}">${n}</a>`))
       .replace(/(?:\/files\/)?\b([a-f0-9]{64})\b/g, (_m, sha) => `<a href="/files/${sha}">${sha.slice(0, 12)}…</a>`));
   }
   return out.join("");
 }
 
 /** Markdown -> HTML for one message: math protected, raw HTML escaped, GFM autolinks, then paths, people and references linked. */
+/** A sha prefix of 8 to 63 hex characters (often written with an ellipsis, "97e90a28…") resolves like a short git hash: linked when it names exactly one stored file (issue #24). */
+export async function expandShortShas(body_md: string): Promise<string> {
+  const seen = new Map<string, string | null>();
+  for (const m of body_md.matchAll(/\b([a-f0-9]{8,63})\b(?:…|\.\.\.)?/g)) {
+    const p = m[1]; if (seen.has(p) || /^\d+$/.test(p)) continue;
+    const rows = await q<{ sha256: string }>(`SELECT sha256 FROM files WHERE sha256 LIKE $1 || '%' AND deleted_at IS NULL LIMIT 2`, [p]);
+    seen.set(p, rows.length === 1 ? rows[0].sha256 : null);
+    if (seen.size >= 20) break;
+  }
+  return body_md.replace(/\b([a-f0-9]{8,63})\b(…|\.\.\.)?/g, (whole, p) => seen.get(p) ? `[${p}…](/files/${seen.get(p)})` : whole);
+}
 export async function renderMessage(body_md: string, slug: string, pages: Map<string, string> = new Map()): Promise<string> {
-  const m = protectMath(String(body_md ?? "").replace(/<!--[\s\S]*?-->/g, ""));
+  const m = protectMath((await expandShortShas(String(body_md ?? ""))).replace(/<!--[\s\S]*?-->/g, ""));
   const html = m.restore(marked.parse(m.text.replace(/</g, "&lt;").replace(/>/g, "&gt;"), { gfm: true, breaks: true }) as string);
   return linkRefs(linkPaths(await linkPeople(html), slug, "", pages), slug);
 }
