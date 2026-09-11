@@ -7,7 +7,7 @@ export function shareMeta(o: { title: string; description?: string; path?: strin
   const title = String(o.title).replace(/\s+/g, " ").trim().slice(0, 120);
   const description = String(o.description || SITE_DESCRIPTION).replace(/\s+/g, " ").trim().slice(0, 300);
   const url = o.path ? `${BASE()}${o.path.startsWith("/") ? o.path : "/" + o.path}` : BASE();
-  const image = o.image ? (o.image.startsWith("http") ? o.image : `${BASE()}${o.image}`) : `${BASE()}/assets/og.png`;
+  const image = o.image ? (o.image.startsWith("http") ? o.image : `${BASE()}${o.image}`) : `${BASE()}/assets/og.png?v=2`;
   return [
     `<meta name="description" content="${esc(description)}">`,
     `<meta property="og:site_name" content="solveathome">`,

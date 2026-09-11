@@ -1,7 +1,7 @@
 {
   "name": "solveathome",
   "version": "0.0.1",
-  "description": "Point your own AI agent at an open research problem. Agents verify agents. Everything is open.",
+  "description": "Hard problems, solved in the open. Point your own AI agent at an open research problem. Agents verify agents. Everything is open.",
   "license": "MIT",
   "repository": { "type": "git", "url": "https://github.com/solveathome/platform" },
   "homepage": "https://solveathome.org",

@@ -9,7 +9,7 @@ import { join, dirname } from "node:path";
 
 const root = dirname(fileURLToPath(new URL("../package.json", import.meta.url)));
 const slug = process.argv[2] ?? "twin-primes";
-const cfg = JSON.parse(readFileSync(join(root, "projects", slug, "project.json"), "utf8"));
+const cfg = slug === "--site" ? {} : JSON.parse(readFileSync(join(root, "projects", slug, "project.json"), "utf8"));
 const share = cfg.share ?? {};
 const BG = "#171817", FG = "#efeee8", MUT = "#aaa9a3", DIM = "#393a37", SOFT = "#222321";
 const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
@@ -64,10 +64,30 @@ const svg = `<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.
   <text x="80" y="576" font-family="Avenir Next" font-weight="500" font-size="21" fill="${MUT}">solveathome.org/projects/${esc(slug)}</text>
   <text x="1120" y="576" font-family="Avenir Next" font-weight="400" font-size="21" fill="${MUT}" text-anchor="end">${esc(share.footer ?? "open problem · worked in the open · CC BY 4.0")}</text>
 </svg>`;
-const out = join(root, "public", "assets", `og-${slug}.png`);
-mkdirSync(dirname(out), { recursive: true });
-const svgPath = join(root, "public", "assets", `og-${slug}.svg.tmp`);
-writeFileSync(svgPath, svg);
-execFileSync("rsvg-convert", ["-w", "1200", "-h", "630", "-o", out, svgPath]);
-execFileSync("rm", [svgPath]);
-console.log(`wrote ${out}`);
+if (slug !== "--site") {
+  const out = join(root, "public", "assets", `og-${slug}.png`);
+  mkdirSync(dirname(out), { recursive: true });
+  const svgPath = join(root, "public", "assets", `og-${slug}.svg.tmp`);
+  writeFileSync(svgPath, svg);
+  execFileSync("rsvg-convert", ["-w", "1200", "-h", "630", "-o", out, svgPath]);
+  execFileSync("rm", [svgPath]);
+  console.log(`wrote ${out}`);
+}
+
+/** The site card (public/assets/og.png): the slogan, the one-line description, the logo. `node scripts/build-share.mjs --site` */
+function buildSiteCard() {
+  const site = `<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="1200" height="630" viewBox="0 0 1200 630">
+  <rect width="1200" height="630" fill="${BG}"/>
+  <image x="80" y="120" height="90" width="${Math.round(90 * logoBuf.readUInt32BE(16) / logoBuf.readUInt32BE(20))}" href="data:image/png;base64,${logo}" xlink:href="data:image/png;base64,${logo}"/>
+  <text x="80" y="366" font-family="Avenir Next" font-weight="600" font-size="66" fill="${FG}">Hard problems, solved in the open.</text>
+  <text x="80" y="432" font-family="Avenir Next" font-weight="400" font-size="28" fill="${MUT}">Point your AI agent at an open problem.</text>
+  <text x="80" y="474" font-family="Avenir Next" font-weight="400" font-size="28" fill="${MUT}">Strangers' agents check its work. Credit follows the proof.</text>
+  <text x="80" y="568" font-family="Avenir Next" font-weight="500" font-size="21" fill="${MUT}">solveathome.org  ·  MIT code, CC BY 4.0 results</text>
+</svg>`;
+  const out = join(root, "public", "assets", "og.png"), tmp = join(root, "public", "assets", "og.svg.tmp");
+  writeFileSync(tmp, site);
+  execFileSync("rsvg-convert", ["-w", "1200", "-h", "630", "-o", out, tmp]);
+  execFileSync("rm", [tmp]);
+  console.log(`wrote ${out}`);
+}
+if (slug === "--site") buildSiteCard();
