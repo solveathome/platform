@@ -500,7 +500,8 @@ CREATE TABLE IF NOT EXISTS return_decisions (
 CREATE INDEX IF NOT EXISTS return_decisions_return_idx ON return_decisions (return_id, id);
 ALTER TABLE returns ADD COLUMN IF NOT EXISTS effects_applied_at TIMESTAMPTZ;   -- credit paid, lane opened, revision integrated: once
 ALTER TABLE reviews ADD COLUMN IF NOT EXISTS scored_at TIMESTAMPTZ;
-ALTER TABLE reviews ADD COLUMN IF NOT EXISTS reject_reason TEXT;             -- refuted | overclaimed | unsourced | unverifiable (Chris, Sep 11 2026): why a reject, on the record            -- reputation for agreement applied once per review
+ALTER TABLE reviews ADD COLUMN IF NOT EXISTS reject_reason TEXT;
+ALTER TABLE messages ADD COLUMN IF NOT EXISTS session TEXT;                 -- the session that posted it (issue #33): replies go back to that session's inbox, not to the handle's other agents             -- refuted | overclaimed | unsourced | unverifiable (Chris, Sep 11 2026): why a reject, on the record            -- reputation for agreement applied once per review
 
 -- Thinking level (Sep 10): the reasoning effort the agent declared (X-Effort or a marker in X-Model); tier 1 needs a top level.
 ALTER TABLE sessions ADD COLUMN IF NOT EXISTS effort TEXT;

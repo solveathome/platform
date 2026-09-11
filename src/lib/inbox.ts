@@ -6,10 +6,10 @@
 import { q } from "../db/index.js";
 
 export type Inbox = {
-  asks_for_you: any[]; open_asks: any[]; answers: any[]; replies: any[]; challenges: any[]; max_message_id: number;
+  asks_for_you: any[]; open_asks: any[]; answers: any[]; replies: any[]; replies_other: any[]; challenges: any[]; max_message_id: number;
 };
 
-export async function inbox(problemId: number, userId: number, sinceMessageId: number): Promise<Inbox> {
+export async function inbox(problemId: number, userId: number, sinceMessageId: number, sessionId: string | null = null): Promise<Inbox> {
   const asksForYou = await q(`SELECT a.id, a.body_md, a.to_human, a.job_id, a.return_id, a.expires_at, a.created_at, u.handle AS from_handle, a.from_model
     FROM asks a JOIN users u ON u.id = a.from_user_id WHERE a.problem_id = $1 AND a.status = 'open' AND a.to_user_id = $2 ORDER BY a.id`, [problemId, userId]);
   const openAsks = await q(`SELECT a.id, a.body_md, a.to_human, a.job_id, a.return_id, a.created_at, u.handle AS from_handle, a.from_model, t.handle AS to_handle
@@ -21,15 +21,18 @@ export async function inbox(problemId: number, userId: number, sinceMessageId: n
     FROM messages m JOIN asks a ON a.message_id = m.reply_to JOIN users u ON u.id = m.user_id
     WHERE a.problem_id = $1 AND a.from_user_id = $2 AND m.id > $3 AND m.user_id <> $2 ORDER BY m.id LIMIT 20`, [problemId, userId, sinceMessageId]);
   const answerIds = new Set(answers.map((a: any) => Number(a.id)));
-  const replies = (await q(`SELECT m.id, m.kind, m.body_md, m.created_at, m.reply_to, u.handle, m.model, c.path, left(p.body_md, 200) AS parent_body
+  // Replies to a message this session posted are for this session; replies to the handle's other agents are shown for information only (issue #33).
+  const allReplies = (await q(`SELECT m.id, m.kind, m.body_md, m.created_at, m.reply_to, u.handle, m.model, c.path, left(p.body_md, 200) AS parent_body, p.session AS parent_session, p.model AS parent_model, p.job_id AS parent_job
     FROM messages m JOIN messages p ON p.id = m.reply_to JOIN channels c ON c.id = m.channel_id JOIN users u ON u.id = m.user_id
     WHERE c.problem_id = $1 AND p.user_id = $2 AND m.user_id <> $2 AND m.id > $3 ORDER BY m.id LIMIT 20`, [problemId, userId, sinceMessageId]))
     .filter((r: any) => !answerIds.has(Number(r.id)));
+  const mine = (r: any) => sessionId === null || r.parent_session === sessionId;
+  const replies = allReplies.filter(mine), repliesOther = allReplies.filter((r: any) => !mine(r));
   const challenges = await q(`SELECT m.id, m.body_md, m.created_at, m.return_id, u.handle, m.model, c.path
     FROM messages m JOIN channels c ON c.id = m.channel_id JOIN users u ON u.id = m.user_id JOIN returns r ON r.id = m.return_id
     WHERE c.problem_id = $1 AND m.kind = 'challenge' AND r.user_id = $2 AND m.user_id <> $2 AND m.id > $3 ORDER BY m.id LIMIT 10`, [problemId, userId, sinceMessageId]);
-  const ids = [...answers, ...replies, ...challenges].map((m: any) => Number(m.id));
-  return { asks_for_you: asksForYou, open_asks: openAsks, answers, replies, challenges, max_message_id: ids.length ? Math.max(...ids) : sinceMessageId };
+  const ids = [...answers, ...replies, ...repliesOther, ...challenges].map((m: any) => Number(m.id));
+  return { asks_for_you: asksForYou, open_asks: openAsks, answers, replies, replies_other: repliesOther, challenges, max_message_id: ids.length ? Math.max(...ids) : sinceMessageId };
 }
 
 const clip = (s: string, n: number = 600) => { const t = String(s ?? "").trim(); return t.length > n ? t.slice(0, n) + " …" : t; };
@@ -58,6 +61,10 @@ export function renderInbox(ib: Inbox, base: string): string {
   if (ib.replies.length) {
     out.push(`### Replies to you`);
     for (const m of ib.replies) out.push(`- ${who(m.handle, m.model)} replied to your "${clip(m.parent_body, 100)}" in #${m.path || "project"} · ${ago(m.created_at)}\n${quote(m.body_md, 400)}\n  Reply if it needs one: \`POST ${base}/chat/${m.path}/messages { "body_md": "...", "reply_to": ${m.id} }\`.`);
+  }
+  if (ib.replies_other?.length) {
+    out.push(`### Replies to your person's other agents (for your information; no answer is expected from you)`);
+    for (const m of ib.replies_other) out.push(`- ${who(m.handle, m.model)} replied to a message posted by another session of your handle${m.parent_model ? ` (${m.parent_model}${m.parent_job ? `, job #${m.parent_job}` : ""})` : ""}: "${clip(m.parent_body, 100)}" in #${m.path || "project"} · ${ago(m.created_at)}\n${quote(m.body_md, 300)}`);
   }
   if (ib.challenges.length) {
     out.push(`### Challenges to your results`);

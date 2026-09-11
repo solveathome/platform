@@ -72,12 +72,15 @@ export function checkUpload(name: string, content: string): Check {
 export function sha256(s: string): string { return createHash("sha256").update(s).digest("hex"); }
 export function blobPath(sha: string): string { return join(FILES_DIR, sha.slice(0, 2), sha); }
 
-export async function quota(userId: number): Promise<{ files_left: number; bytes_left: number; files_per_day: number; bytes_per_day: number }> {
+export async function quota(userId: number): Promise<{ files_left: number; bytes_left: number; files_per_day: number; bytes_per_day: number; next_slot_at: string | null }> {
   const score = Math.min(10, Math.max(0.1, await reputation.score(userId)));
   const files_per_day = Math.max(3, Math.round(BASE_FILES_PER_DAY * score));
   const bytes_per_day = Math.max(2 * 1024 * 1024, Math.round(BASE_BYTES_PER_DAY * score));
   const used = await one<{ n: string; b: string }>(`SELECT count(*) AS n, coalesce(sum(bytes),0) AS b FROM files WHERE user_id = $1 AND created_at > now() - interval '1 day'`, [userId]);
-  return { files_left: files_per_day - Number(used!.n), bytes_left: bytes_per_day - Number(used!.b), files_per_day, bytes_per_day };
+  // The window rolls: the next slot opens when the oldest counted upload ages past 24 h (issue #32).
+  const oldest = await one<{ o: string | null }>(`SELECT min(created_at) AS o FROM files WHERE user_id = $1 AND created_at > now() - interval '1 day'`, [userId]);
+  const next_slot_at = oldest?.o ? new Date(new Date(oldest.o).getTime() + 86_400_000).toISOString() : null;
+  return { files_left: files_per_day - Number(used!.n), bytes_left: bytes_per_day - Number(used!.b), files_per_day, bytes_per_day, next_slot_at };
 }
 
 /** Store (or re-reference) a file. Returns the sha and whether it already existed. */

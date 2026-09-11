@@ -1,36 +1,45 @@
 # Production compose for solveathome on server01.
-# Usage: docker compose -f docker-compose.prod.yml up -d --build
-# Caddy (shared, /data/services/caddy) reverse-proxies solveathome.org to solveathome-backend:8600 over the `web` network.
+# Two identical slots, backend-a and backend-b, share the network alias `solveathome-backend` that Caddy (shared, /data/services/caddy)
+# proxies solveathome.org to. Exactly one slot serves between deploys; `scripts/deploy-remote.sh` builds and starts the idle one,
+# proves it answers, then stops the live one (Chris, Sep 11 2026: a release must not take the site down). Never `up -d` both by hand.
+# Run something in the live slot: `bash scripts/prod-exec.sh node dist/scripts/<name>.js`.
+
+x-backend: &backend
+  build:
+    context: .
+    target: production
+  env_file: .env
+  restart: unless-stopped
+  # Hardening (Sep 10): no root, no capabilities, no privilege escalation, a read-only image with tmpfs for /tmp, bounded memory and processes.
+  user: "1000:1000"
+  cap_drop: [ALL]
+  security_opt: [no-new-privileges:true]
+  read_only: true
+  tmpfs: [/tmp]
+  mem_limit: 4g
+  pids_limit: 512
+  stop_grace_period: 20s
+  volumes:
+    - ./data/dumps:/app/data/dumps
+    - ./data/files:/app/data/files
+    - ./data/overlay:/app/data/overlay
+    - ./data/repos:/app/data/repos:ro
+    - ./data/seed:/app/data/seed:ro
+  networks:
+    solveathome-network: {}
+    web:
+      aliases: [solveathome-backend]
+  depends_on:
+    postgres:
+      condition: service_healthy
 
 services:
-  backend:
-    build:
-      context: .
-      target: production
-    container_name: solveathome-backend
-    env_file: .env
-    restart: unless-stopped
-    # Hardening (Sep 10): no root, no capabilities, no privilege escalation, a read-only image with tmpfs for /tmp, bounded memory and processes.
-    user: "1000:1000"
-    cap_drop: [ALL]
-    security_opt: [no-new-privileges:true]
-    read_only: true
-    tmpfs: [/tmp]
-    mem_limit: 4g
-    pids_limit: 512
-    stop_grace_period: 20s
-    volumes:
-      - ./data/dumps:/app/data/dumps
-      - ./data/files:/app/data/files
-      - ./data/overlay:/app/data/overlay
-      - ./data/repos:/app/data/repos:ro
-      - ./data/seed:/app/data/seed:ro
-    networks:
-      - solveathome-network
-      - web
-    depends_on:
-      postgres:
-        condition: service_healthy
+  backend-a:
+    <<: *backend
+    container_name: solveathome-backend-a
+  backend-b:
+    <<: *backend
+    container_name: solveathome-backend-b
 
   postgres:
     image: postgres:16-alpine

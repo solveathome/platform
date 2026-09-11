@@ -34,3 +34,10 @@ test("issue #20: the brief names the closed-routes register, not the superseded 
   assert.match(md, /research\/OUTCOMES\.md/);
   assert.doesNotMatch(md, /REFUTED registry/);
 });
+
+test("the brief names the handle's remaining file quota (issue #32) and says a 5xx is not a call that counts (issue #34)", () => {
+  const md = renderBrief(job, "https://x.test/projects/p", { ...session, files: { left: 2, bytes_left: 3 * 1048576, per_day: 249 } });
+  assert.match(md, /Your handle has 2 of 249 uploads and 3 MB left in the rolling 24 h, shared by all of its sessions/);
+  assert.match(md, /A 5xx, a body reading "error code: 502" or a dropped connection is not a call that counts: wait ten seconds/);
+  assert.doesNotMatch(renderBrief(job, "https://x.test/projects/p", session), /Your handle has/, "no quota line without the numbers");
+});

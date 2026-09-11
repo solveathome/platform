@@ -46,9 +46,9 @@ DOCS_DEST="${DOCS_DEST:-/data/services/solveathome/data/repos/$SLUG}"
 rsync -a --delete --exclude '.git' "$PORTFOLIO/" "$SERVER:$DOCS_DEST/" && echo "docs synced to $SERVER:$DOCS_DEST"
 # The seed edition: the first cut is copied once and never touched again (Prior Work on the project page links into it).
 ssh "$SERVER" "cd /data/services/solveathome && if [ ! -d data/seed/$SLUG ]; then mkdir -p data/seed && cp -a data/repos/$SLUG data/seed/$SLUG && printf '{\"date\":\"%s\",\"note\":\"seed: private %s\"}\n' \"\$(date -u +%Y-%m-%d)\" '$SRC_SHA' > data/seed/$SLUG.json && echo 'seed edition taken'; fi"
-ssh "$SERVER" "cd /data/services/solveathome && docker compose -f docker-compose.prod.yml exec -T backend node dist/scripts/import-papers.js" || echo "paper registry refresh failed (run import-papers on the server)"
+ssh "$SERVER" "cd /data/services/solveathome && bash scripts/prod-exec.sh node dist/scripts/import-papers.js" || echo "paper registry refresh failed (run import-papers on the server)"
 # Documents the swarm has history on: a cut that caught up drops the overlay; a cut that changed one is recorded as its next version.
-ssh "$SERVER" "cd /data/services/solveathome && docker compose -f docker-compose.prod.yml exec -T backend node dist/scripts/reconcile-mirror.js $SLUG 'private $SRC_SHA'" || echo "mirror reconciliation failed (run reconcile-mirror on the server)"
+ssh "$SERVER" "cd /data/services/solveathome && bash scripts/prod-exec.sh node dist/scripts/reconcile-mirror.js $SLUG 'private $SRC_SHA'" || echo "mirror reconciliation failed (run reconcile-mirror on the server)"
 
 cd "$PORTFOLIO"
 git init -q -b main

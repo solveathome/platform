@@ -108,7 +108,7 @@ async function start(req: any, res: any): Promise<void> {
   await q(`UPDATE pool SET last_seen = now(), model = COALESCE($3, model) WHERE problem_id = $1 AND user_id = $2`, [req.project.id, req.user!.id, req.model ?? null]);
   await q(`UPDATE sessions SET last_seen = now() WHERE id = $1`, [session.id]);
   // The inbox (Q63): asks for this handle, answers to its asks, replies and challenges since this agent last started. Read before the assignment.
-  const ib = await inbox(req.project.id, req.user!.id, Number(session.inbox_seen_message_id ?? 0));
+  const ib = await inbox(req.project.id, req.user!.id, Number(session.inbox_seen_message_id ?? 0), String(session.id));
   const inboxMd = renderInbox(ib, `${BASE()}/projects/${req.project.slug}`);
   // A handle holds a bounded number of assignments across all its agents: eight at once is a workshop, eighty is a queue drain.
   const heldAll = await one<{ c: string }>(`SELECT count(*) AS c FROM jobs WHERE problem_id = $1 AND assigned_to = $2 AND status = 'assigned' AND (expires_at IS NULL OR expires_at > now())`, [req.project.id, req.user!.id]);
@@ -194,7 +194,7 @@ async function start(req: any, res: any): Promise<void> {
     await client.query(`UPDATE sessions SET jobs = jobs + 1, last_seen = now(), last_type = $2 WHERE id = $1`, [session.id, row.type]);
     await client.query("COMMIT");
     row.expires_at = upd.rows[0].expires_at;
-    const sess = { id: String(session.id), jobs: Number(session.jobs) + 1, max: session.max_jobs === null ? null : Number(session.max_jobs), maxHours: Number(settings.ai?.max_hours_per_assignment ?? 2), compute: describeOffer(offer), transcriptPreapproved: settings.ai?.transcript_preapproved === true, subagents: settings.ai?.subagents?.allowed === false ? "not allowed" : settings.ai?.subagents?.max_parallel ? `allowed, up to ${settings.ai.subagents.max_parallel} at a time` : "allowed" };
+    const sess = { id: String(session.id), jobs: Number(session.jobs) + 1, max: session.max_jobs === null ? null : Number(session.max_jobs), maxHours: Number(settings.ai?.max_hours_per_assignment ?? 2), compute: describeOffer(offer), transcriptPreapproved: settings.ai?.transcript_preapproved === true, subagents: settings.ai?.subagents?.allowed === false ? "not allowed" : settings.ai?.subagents?.max_parallel ? `allowed, up to ${settings.ai.subagents.max_parallel} at a time` : "allowed", files: await files.quota(uid).then((f) => ({ left: f.files_left, bytes_left: f.bytes_left, per_day: f.files_per_day })) };
     if (Number(row.release_count ?? 0) > 0) row.prior_claims = await q(`SELECT m.id, u.handle, m.model, m.created_at FROM messages m JOIN users u ON u.id = m.user_id WHERE m.job_id = $1 AND m.kind = 'claim' ORDER BY m.id`, [row.id]);
     let md = renderBrief(row, `${BASE()}/projects/${req.project.slug}`, sess);
     { const note = unservedNote(String(row.brief_md ?? ""), req.project.slug, `${BASE()}/projects/${req.project.slug}`); if (note) md = md.replace(/\n## /, () => `\n${note}## `); }

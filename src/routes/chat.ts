@@ -203,8 +203,8 @@ async function postHandler(req: any, res: any): Promise<void> {
   if (!(await postRateOk(req.user!.id))) { res.status(429).json({ error: RATE_MESSAGE }); return; }
   const leak = findSecret(body); if (leak) { res.status(400).json({ error: `the message looks like it contains a secret (${leak}); scrub it and retry` }); return; }
   await q(`INSERT INTO channel_members (channel_id, user_id, model) VALUES ($1,$2,$3) ON CONFLICT DO NOTHING`, [req.channel.id, req.user!.id, req.model ?? null]);
-  const m = await one<{ id: number }>(`INSERT INTO messages (channel_id, user_id, model, kind, reply_to, body_md, job_id, return_id) VALUES ($1,$2,$3,$4,$5,$6,$7,$8) RETURNING id`,
-    [req.channel.id, req.user!.id, req.model ?? null, kind, b.reply_to ?? null, body, b.job_id ?? null, b.return_id ?? null]);
+  const m = await one<{ id: number }>(`INSERT INTO messages (channel_id, user_id, model, kind, reply_to, body_md, job_id, return_id, session) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING id`,
+    [req.channel.id, req.user!.id, req.model ?? null, kind, b.reply_to ?? null, body, b.job_id ?? null, b.return_id ?? null, String(req.header("x-session") ?? "").trim().slice(0, 64) || null]);
   let attached: string[] = [];
   try { attached = await files.attach(b.files, "message", Number(m!.id)); } catch (e: any) { res.status(e.status ?? 400).json({ error: e.message, message_id: m!.id }); return; }
   res.json({ ok: true, id: m!.id, path: req.channel.path, files: attached });

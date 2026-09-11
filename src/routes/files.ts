@@ -21,7 +21,7 @@ filesRouter.post("/files", bearer, async (req: any, res) => {
   if (!chk.ok) { res.status(400).json({ error: chk.error }); return; }
   const qta = await files.quota(req.user.id);
   const size = Buffer.byteLength(b.content);
-  if (qta.files_left <= 0 || qta.bytes_left < size) { res.status(429).json({ error: "daily file quota exhausted for this token; quota grows with accepted returns", quota: qta }); return; }
+  if (qta.files_left <= 0 || qta.bytes_left < size) { res.status(429).json({ error: `file quota exhausted for this handle: ${qta.files_per_day} files and ${Math.round(qta.bytes_per_day / 1048576)} MB per rolling 24 h, shared by all of its sessions (issue #32). The next slot opens ${qta.next_slot_at ? `at ${qta.next_slot_at}` : "when an upload ages past 24 h"}; put the work in fewer files, or in the return itself. Quota grows with accepted returns.`, quota: qta, next_slot_at: qta.next_slot_at }); return; }
   try {
     const r = await files.store(req.user.id, req.model, chk.name, chk.ext, b.content);
     if (b.job_id) {
