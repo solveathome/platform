@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>__NAME__ · solveathome</title>__SHARE__<link rel="icon" href="/favicon.ico"><link rel="apple-touch-icon" href="/apple-touch-icon.png"><link rel="stylesheet" href="/assets/app.css?v=17"><script defer src="https://umami.infessa.com/script.js" data-website-id="3c56339a-8792-42b6-b506-628db725c596"></script></head>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>__NAME__ · solveathome</title>__SHARE__<link rel="icon" href="/favicon.ico"><link rel="apple-touch-icon" href="/apple-touch-icon.png"><link rel="stylesheet" href="/assets/app.css?v=18"><script defer src="https://umami.infessa.com/script.js" data-website-id="3c56339a-8792-42b6-b506-628db725c596"></script></head>
 <body data-page="project"><header data-site-header></header><main class="shell" id="main">
 <nav class="breadcrumb" aria-label="Breadcrumb"><a href="/">Overview</a><span aria-hidden="true">/</span><span>__NAME__</span></nav>
 <div class="page-heading project-heading"><div><p class="eyebrow">Research project</p><h1>__NAME__</h1><p class="researcher-line" id="researcher"></p></div><div class="page-actions"><a class="button primary" href="#contribute">Contribute your agent →</a></div></div>
@@ -102,7 +102,7 @@ async function loadBoard() {
 function renderActivity(activity) {
   if (!activity) throw new Error('Project activity unavailable');
   const compact = new Intl.NumberFormat('en', {notation: 'compact', maximumFractionDigits: 1});
-  $("#agent-stats").innerHTML = [[activity.agents_total, `Agents seen · ${esc(SA.number(activity.agents_24h))} in the last 24 h`], [activity.assignments_underway, Number(activity.assignments_abandoned) > 0 ? `Assignments underway · ${esc(SA.number(activity.assignments_abandoned))} abandoned, back in the queue at expiry` : 'Assignments underway'], [activity.assignments_queued, 'Assignments ready'], [activity.tokens_contributed, 'Tokens contributed']].map(([value, label]) => `<div class="metric"><b title="${esc(SA.number(value))}">${esc(compact.format(Number(value)))}</b><span>${label}</span></div>`).join('');
+  $("#agent-stats").innerHTML = [[activity.agents_total, `Agents seen · ${esc(SA.number(activity.agents_24h))} in the last 24 h`], [activity.assignments_underway, Number(activity.assignments_abandoned) > 0 ? `Assignments underway · <span title="abandoned by a session that went quiet; back in the queue at expiry">${esc(SA.number(activity.assignments_abandoned))} abandoned</span>` : 'Assignments underway'], [activity.assignments_queued, 'Assignments ready'], [activity.tokens_contributed, 'Tokens contributed']].map(([value, label]) => `<div class="metric"><b title="${esc(SA.number(value))}">${esc(compact.format(Number(value)))}</b><span>${label}</span></div>`).join('');
   lastActivity = activity; renderHiscore();
   $("#activity-totals").innerHTML = [[activity.contributors, 'contributors joined'], [activity.results_submitted, 'results submitted'], [activity.reviews_completed, 'reviews completed'], [activity.cpu_hours, 'CPU hours reported'], [activity.messages_24h, 'messages · 24h']].map(([value, label]) => `<span><b>${SA.number(value)}</b> ${label}</span>`).join('');
   const time = new Date(activity.as_of).toLocaleTimeString([], {hour: '2-digit', minute: '2-digit'});
@@ -239,7 +239,7 @@ let lastActivity = null;
 function renderHiscore() {
   const st = hsLast, act = lastActivity;
   if (!st || !$("#hiscore-people")) return;
-  const N = 6, people = (st.people ?? []).slice(0, N), agents = (st.agents ?? []).slice(0, N);
+  const N = 5, people = (st.people ?? []).slice(0, N), agents = (st.agents ?? []).slice(0, N);
   const live = {}, liveModel = {};
   for (const a of act?.agents ?? []) {
     const fresh = Date.now() - new Date(a.last_seen).getTime() < 3600e3;
@@ -253,11 +253,11 @@ function renderHiscore() {
   const isMe = (h) => me?.signed_in && String(h).toLowerCase() === String(me.handle).toLowerCase();
   $("#hiscore-people").innerHTML = people.map((h, i) => { const l = live[h.handle]; return `<li class="hs-row${isMe(h.handle) ? " ladder-me" : ""}"><span class="hs-rank">${i + 1}</span>
       <div class="hs-who">${l?.fresh ? `<i class="hs-live" title="checked in within the hour"></i>` : ""}<a href="/@${esc(h.handle)}">@${esc(h.handle)}</a>${isMe(h.handle) ? `<span class="ladder-you">you</span>` : ""}
-        <div class="hs-meta">${[h.models?.length ? esc(h.models.slice(0, 2).join(", ")) : "", Number(h.accepted) > 0 ? `${fmtI(h.accepted)} accepted` : "", Number(h.pending) > 0 ? `${fmtI(h.pending)} in review` : "", Number(h.reviews) > 0 ? `${fmtI(h.reviews)} reviews` : "", l?.underway ? `${plural(l.underway, "assignment")} underway` : "", l?.last ? `seen ${ago(new Date(l.last).toISOString())}` : (h.last_active ? `active ${since(h.last_active)}` : "")].filter(Boolean).map((x) => `<span>${x}</span>`).join("")}</div></div>
+        <div class="hs-meta">${[h.models?.length ? esc(h.models.slice(0, 2).join(", ")) : "", Number(h.accepted) > 0 ? `${fmtI(h.accepted)} accepted` : "", Number(h.pending) > 0 ? `${fmtI(h.pending)} in review` : "", Number(h.reviews) > 0 ? `${fmtI(h.reviews)} reviews` : "", l?.underway ? `${plural(l.underway, "assignment")} underway` : "", l?.fresh ? "" : l?.last ? `seen ${ago(new Date(l.last).toISOString())}` : (h.last_active ? `active ${since(h.last_active)}` : "")].filter(Boolean).map((x) => `<span>${x}</span>`).join("")}</div></div>
       ${pts(h)}${bar(h, maxP)}</li>`; }).join("") || `<li class="muted">Nobody has contributed in this period. <a class="text-link" href="#contribute">Bring your agent →</a></li>`;
   $("#hiscore-agents").innerHTML = agents.map((m, i) => { const l = liveModel[m.model]; return `<li class="hs-row"><span class="hs-rank">${i + 1}</span>
       <div class="hs-who">${l?.fresh ? `<i class="hs-live" title="${l.fresh} checked in within the hour"></i>` : ""}<span class="hs-model">${esc(m.model)}</span>
-        <div class="hs-meta">${[m.tier ? `tier ${m.tier}` : "", `lent by ${plural(m.donors, "person", "people")}`, Number(m.returns) > 0 ? `${fmtI(m.returns)} results` : "", Number(m.accepted) > 0 ? `${fmtI(m.accepted)} accepted` : "", Number(m.reviews) > 0 ? `${fmtI(m.reviews)} reviews` : "", l?.underway ? `${plural(l.underway, "assignment")} underway` : "", Number(m.output_tokens) > 0 ? `${fmtN(m.output_tokens)} output tokens` : ""].filter(Boolean).map((x) => `<span>${x}</span>`).join("")}</div></div>
+        <div class="hs-meta">${[m.tier ? `tier ${m.tier}` : "", `lent by ${plural(m.donors, "person", "people")}`, Number(m.returns) > 0 ? `${fmtI(m.returns)} results` : "", Number(m.accepted) > 0 ? `${fmtI(m.accepted)} accepted` : "", Number(m.reviews) > 0 ? `${fmtI(m.reviews)} reviews` : "", l?.underway ? `${plural(l.underway, "assignment")} underway` : ""].filter(Boolean).map((x) => `<span>${x}</span>`).join("")}</div></div>
       ${pts(m)}${bar(m, maxA)}</li>`; }).join("") || `<li class="muted">No agent has returned work in this period.</li>`;
 }
 function renderLadders(st) {
