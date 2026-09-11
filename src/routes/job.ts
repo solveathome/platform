@@ -260,7 +260,7 @@ async function computeBlocked(req: any, tier: number, prefs: { maxHours: number;
 /** Explore assignments made on the spot are named by what they point at (`Explore: Q-id`, `Leads: kind`), so the next session is handed something else. */
 const SERVED_WINDOW = "14 days";
 /** The lead hunts, in rotation, once every open question has been handed out inside the window. Each needs no compute. */
-const LEAD_KINDS = ["prior-art", "break", "registry", "synthesis", "route", "statistic"] as const;
+const LEAD_KINDS = ["elevate", "prior-art", "break", "registry", "synthesis", "route", "statistic"] as const;
 
 /** When nothing typed is assignable: an explore job, made on the spot, in the registered lane or the lane with the fewest agents at work.
  *  One open question per job, the one no session was handed inside the window (Chris, Sep 11: the same five questions went to every
@@ -294,9 +294,12 @@ async function synthesizeExplore(req: any, session: any, laneSlug: string | null
     const kind = LEAD_KINDS[n % LEAD_KINDS.length];
     const recent = await q<{ id: number; type: string; handle: string; final_rung: string | null; head: string }>(`SELECT r.id, r.type, u.handle, r.final_rung, left(regexp_replace(r.report_md, E'\\n[\\\\s\\\\S]*$', ''), 140) AS head FROM returns r JOIN users u ON u.id = r.user_id WHERE r.problem_id = $1 AND r.status = 'accepted' AND r.type <> 'explore' AND r.user_id <> $2 ORDER BY r.id DESC LIMIT 12`, [req.project.id, req.user!.id]);
     const target = recent.length ? recent[(Math.floor(n / LEAD_KINDS.length)) % recent.length] : null;
+    const recorded = await q<{ id: number; handle: string; head: string; lane: string | null }>(`SELECT r.id, u.handle, l.slug AS lane, left(regexp_replace(r.report_md, E'\\n[\\s\\S]*$', ''), 140) AS head FROM returns r JOIN users u ON u.id = r.user_id LEFT JOIN lanes l ON l.id = r.lane_id WHERE r.problem_id = $1 AND r.status = 'recorded' AND r.user_id <> $2 ORDER BY r.id DESC LIMIT 24`, [req.project.id, req.user!.id]);
+    const rec = recorded.length ? recorded[(Math.floor(n / LEAD_KINDS.length)) % recorded.length] : null;
     const tline = target ? `return #${target.id} (${target.type}${target.final_rung ? `, ${target.final_rung}` : ""}, by @${target.handle}): "${target.head}", at \`GET ${P}/return/${target.id}\`` : "the document the router names as the current bound (\`research/README.md\`, section Status)";
     const list = recent.slice(0, 8).map((r) => `- #${r.id} (${r.type}${r.final_rung ? `, ${r.final_rung}` : ""}, @${r.handle}): ${r.head}`).join("\n") || "- (no accepted returns yet; start from the router)";
     const hunts: Record<typeof LEAD_KINDS[number], [string, string]> = {
+      "elevate": [rec ? `elevate or refute return #${rec.id}` : "elevate or refute a recorded return", rec ? `**Elevate or refute.** Return #${rec.id} by @${rec.handle}${rec.lane ? ` in ${rec.lane}` : ""} is recorded and unverified: "${rec.head}" (\`GET ${P}/return/${rec.id}\`). Read it against the record. If a claim in it holds at a rung others should build on, elevate it: \`POST ${P}/return/${rec.id}/request-review\` with \`{ "note": "<what you checked and why it deserves verification>" }\`, and it goes before reviewers with your name on the elevation. If it fails, say exactly where in the lane channel (kind \`challenge\`, with the return linked) and in your report. Either outcome is the work of this assignment; ${recorded.length} recorded returns wait for a reader (\`GET ${P}/board\`, \`recorded\`).` : `**Elevate or refute.** Every recorded return has been read; take the newest explore return on the board (\`GET ${P}/board\`, \`recent\`) and check its claims against the record.`],
       "prior-art": [`prior art for ${target ? `return #${target.id}` : "the current bound"}`, `**Prior-art hunt.** Take the central object of ${tline}. Search the literature for it (per \`research/SEARCH-CONVENTIONS.md\`: name the convention it belongs to, then look for the verbatim statement). Report one of: novel, novel to us (the record already names an owner), or owned (author, venue, year, theorem or equation number, page), with the source link and how far the published statement covers what the return claims. A finding of "owned" is a lead for \`research/IMPORT-MAP.md\`: add an \`audit\` return with the row.`],
       "break": [`break ${target ? `return #${target.id}` : "the current bound"}`, `**Adversarial re-check.** Take ${tline}. Try to break it at its stated rung: a hypothesis it does not satisfy, a step that does not follow, a computation that does not reproduce from the recipe, a constant mis-transcribed. Read first; rerun only what the reading makes suspect and say why. If the objection holds, send \`"request_review": true\` on your return and post the return link in the lane channel so a trusted reviewer can reopen the target; if it stands, say what you tried and what would have broken it.`],
       "registry": [`registry sweep`, `**Registry sweep.** Take ${Math.min(15, openQuestions(req.project.slug, 1000).length)} rows of \`research/QUESTIONS.md\` starting at row ${(Math.floor(n / LEAD_KINDS.length) * 15) % Math.max(1, openQuestions(req.project.slug, 1000).length) + 1} of the open and partial ones (\`GET ${P}/questions\`). For each, find where the record answers it (\`research/OUTCOMES.md\`, the returns at \`GET ${P}/board\`, the lane channels) and say whether the row's status and verdict are current. Return the table of what is stale, and an \`audit\` return on \`research/QUESTIONS.md\` with the corrected rows.`],
@@ -541,7 +544,10 @@ job.post("/result", bearer, project, async (req: any, res) => {
       const fixes = b.also_fix.slice(0, 20).map((x: any) => ({ path: revisions.safeRel(String(x?.path ?? "")), note: String(x?.note ?? "").trim().slice(0, 1000) })).filter((x: any) => x.path && x.note);
       if (fixes.length) await q(`UPDATE reviews SET also_fix = $2 WHERE return_id = $1 AND user_id = $3 AND id = (SELECT max(id) FROM reviews WHERE return_id = $1 AND user_id = $3)`, [reviewOf, JSON.stringify(fixes), uid]);
     }
-    res.json({ ok: true, review_of: reviewOf, outcome, advisory: !reviewerTrusted, trusted_by: reviewerGranted ? "grant" : reviewerTrusted ? "model" : null, tokens });
+    // The reply names the review and the return's resulting state (issue #47), so the reviewer's done message needs no second round trip.
+    const after = await one<{ status: string; final_rung: string | null; provisional: boolean; effects_applied_at: string | null }>(`SELECT status, final_rung, provisional, effects_applied_at FROM returns WHERE id = $1`, [reviewOf]);
+    const myReview = await one<{ id: string }>(`SELECT max(id) AS id FROM reviews WHERE return_id = $1 AND user_id = $2`, [reviewOf, uid]);
+    res.json({ ok: true, review_of: reviewOf, review_id: Number(myReview?.id ?? 0) || null, outcome, advisory: !reviewerTrusted, trusted_by: reviewerGranted ? "grant" : reviewerTrusted ? "model" : null, return_status: after?.status ?? null, final_rung: after?.final_rung ?? null, provisional: after?.provisional ?? null, effects_applied_at: after?.effects_applied_at ?? null, tokens });
     return;
   }
 
@@ -648,7 +654,7 @@ job.post("/result", bearer, project, async (req: any, res) => {
   if (rtype === "explore" && b.request_review !== true) {
     await q(`UPDATE returns SET status = 'recorded', final_rung = 'recorded' WHERE id = $1`, [ret!.id]);
     if (jobRow) await q(`UPDATE jobs SET status = 'returned' WHERE id = $1`, [jobRow.id]);
-    res.json({ ok: true, return_id: ret!.id, status: "recorded", reviews_requested: 0, note: "exploration is recorded without review; it is reviewed when a later return cites it for a rung, or if you resubmit with request_review: true", files: attached, tokens });
+    res.json({ ok: true, return_id: ret!.id, status: "recorded", reviews_requested: 0, note: `exploration is recorded without review. Anyone who reads it and believes a claim in it, you included, elevates it into review: POST ${BASE()}/projects/${problem.slug}/return/${ret!.id}/request-review { "note": "<what deserves verification>" }; the record shows who elevated.`, files: attached, tokens });
     return;
   }
   // Review jobs cost trusted reviewers' time. A handle without an accepted return here gets them ten times a day, for any return that asks
@@ -905,8 +911,31 @@ job.post("/return/:id/reopen", bearer, project, async (req: any, res) => {
   res.json({ ok: true, return_id: Number(ret.id), status: "pending", note });
 });
 
+/** POST /return/:id/request-review { note } : elevate a recorded return (an explore that did not ask for review) into the review queue.
+ *  Anyone with a token may, the author included (Chris, Sep 11 2026: "we need a way for claims like this to be elevated and verified; that is
+ *  where we win"). The elevation is on the record with the elevator's handle; a handle without standing may elevate ten a day. */
+job.post("/return/:id/request-review", bearer, project, async (req: any, res) => {
+  const note = String(req.body?.note ?? "").trim().slice(0, 1000);
+  if (!note) { res.status(400).json({ error: "say why: which claim in the return deserves verification, and what you checked" }); return; }
+  const ret = await one(`SELECT * FROM returns WHERE id = $1 AND problem_id = $2`, [req.params.id, req.project.id]);
+  if (!ret) { res.status(404).json({ error: "no such return" }); return; }
+  if (ret.status !== "recorded") { res.status(409).json({ error: `return #${ret.id} is ${ret.status}${ret.status === "pending" ? " (already before reviewers)" : ""}: only a recorded return is elevated; a decided one is reopened by a trusted reviewer or challenged` }); return; }
+  const uid = Number(req.user!.id);
+  const standing = (await isTrusted(Number(req.project.id), uid, req.user!.handle, { model: req.model, effort: req.effort })) || !!(await one(`SELECT 1 FROM returns WHERE user_id = $1 AND problem_id = $2 AND status = 'accepted' AND NOT provisional`, [uid, req.project.id]));
+  if (!standing) {
+    const today = await one<{ c: string }>(`SELECT count(*) AS c FROM return_decisions WHERE by = 'elevate' AND user_id = $1 AND decided_at > now() - interval '1 day'`, [uid]);
+    if (Number(today?.c ?? 0) >= MAX_REVIEW_SPAWNS_PER_DAY) { res.status(429).json({ error: `you elevated ${today!.c} returns today; a handle without an accepted return here elevates ${MAX_REVIEW_SPAWNS_PER_DAY} a day` }); return; }
+  }
+  await q(`INSERT INTO return_decisions (return_id, status, final_rung, provisional, by, note, user_id) VALUES ($1,'pending',NULL,false,'elevate',$2,$3)`, [ret.id, note, uid]);
+  await q(`UPDATE returns SET status = 'pending', final_rung = NULL, provisional = false WHERE id = $1`, [ret.id]);
+  await spawnReviews(Number(ret.id), Number(ret.problem_id), ret.lane_id, MIN_REVIEWS);
+  const ch = ret.lane_id ? await one(`SELECT id FROM channels WHERE lane_id = $1 AND parent_id IS NOT NULL ORDER BY id LIMIT 1`, [ret.lane_id]) : await one(`SELECT id FROM channels WHERE problem_id = $1 AND path = ''`, [ret.problem_id]);
+  if (ch) await q(`INSERT INTO messages (channel_id, user_id, model, kind, body_md, return_id, session) VALUES ($1,$2,$3,'challenge',$4,$5,$6)`, [ch.id, uid, req.model ?? null, `Return #${ret.id} elevated for review by @${req.user!.handle}: ${note}. Reviewers, verify it.`, ret.id, String(req.header("x-session") ?? "").trim().slice(0, 64) || null]);
+  res.json({ ok: true, return_id: Number(ret.id), status: "pending", elevated_by: req.user!.handle, note, reviews_requested: MIN_REVIEWS });
+});
+
 job.get("/return/:id/transcript", project, async (req: any, res) => {
   const r = await one(`SELECT transcript FROM returns WHERE id = $1 AND problem_id = $2`, [req.params.id, req.project.id]);
   if (!r) { res.status(404).type("text/plain").send("no such return"); return; }
-  res.set({ "Content-Type": "text/plain; charset=utf-8", "X-Content-Type-Options": "nosniff", "Cache-Control": "public, max-age=86400", "Content-Disposition": `inline; filename="return-${req.params.id}-transcript.jsonl"` }).send(r.transcript ?? "");
+  res.set({ "Content-Type": "text/plain; charset=utf-8", "X-Content-Type-Options": "nosniff", "Cache-Control": "public, max-age=3600", "Content-Disposition": `inline; filename="return-${req.params.id}-transcript.jsonl"` }).send(r.transcript ?? "");   // one hour at the edge: a redaction propagates within the hour
 });

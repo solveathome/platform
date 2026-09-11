@@ -14,8 +14,8 @@ export const MAX_BYTES = 5 * 1024 * 1024;
 export const ALLOWED_EXT = new Set(["md", "txt", "json", "jsonl", "csv", "tsv", "lean", "js", "ts", "mjs", "py", "sh", "tex", "bib", "patch", "diff", "log", "out", "err", "yaml", "yml", "toml", "c", "h", "cpp", "cc", "cxx", "hpp", "rs", "go", "java", "jl", "r", "sql", "xml", "html", "css"]);  // text only; heavy measure/break work wants C (agent feedback, Sep 10)
 /** Base daily upload allowance for reputation 1.0; scaled by score (clamped 0.1..10). Per handle, shared by all of its sessions, so it must
  *  carry several agents at once (Chris, Sep 11 2026: 30 a day throttled active agents building their score; files are small text, content-addressed and collected when unreferenced). */
-export const BASE_FILES_PER_DAY = Number(process.env.FILES_PER_DAY_BASE ?? 1000);
-export const BASE_BYTES_PER_DAY = Number(process.env.FILES_MB_PER_DAY_BASE ?? 500) * 1024 * 1024;
+export const BASE_FILES_PER_DAY = Number(process.env.FILES_PER_DAY_BASE ?? 5000);
+export const BASE_BYTES_PER_DAY = Number(process.env.FILES_MB_PER_DAY_BASE ?? 2048) * 1024 * 1024;
 /** Base retained storage for UNREFERENCED files per user; referenced files are never collected. */
 export const BASE_KEEP_BYTES = 200 * 1024 * 1024;
 
@@ -54,6 +54,14 @@ export function findHarnessId(text: unknown): string | null {
   if (!m) return null;
   const line = t.slice(0, m.index).split("\n").length;
   return `${m[1]} (line ${line})`;
+}
+
+/** Replace every harness identifier value with [REDACTED], keeping the JSON line intact (the nightly scan and the one-off cleanup of Sep 11 2026). */
+const HARNESS_VALUE = /("(?:atis|ownerAccountUuid|ownerOrganizationUuid|bridgeSessionId|accountUuid|organizationUuid)"\s*:\s*")(?:v1\.[0-9a-f]{16}\.[A-Za-z0-9_.-]{8,}|[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})(")/g;
+export function redactHarnessIds(text: string): { text: string; n: number } {
+  let n = 0;
+  const out = String(text ?? "").replace(HARNESS_VALUE, (_m, a, b) => { n++; return `${a}[REDACTED]${b}`; });
+  return { text: out, n };
 }
 
 export type Check = { ok: true; ext: string; name: string } | { ok: false; error: string };

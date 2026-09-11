@@ -37,7 +37,11 @@ export async function bearer(req: Request, res: Response, next: NextFunction): P
   const h = req.header("authorization") ?? "";
   let raw = h.startsWith("Bearer ") ? h.slice(7).trim() : "";
   if (!raw) raw = cookieToken(req);
-  if (!raw) { res.status(401).json({ error: "missing bearer token; sign in at /auth/github to get one" }); return; }
+  if (!raw) {
+    // The ChatGPT app's web fetch cannot send headers or POST bodies (Chris, Sep 11 2026): say so in words the app will relay.
+    if (/ChatGPT|OpenAI/i.test(req.header("user-agent") ?? "")) { res.status(401).json({ error: "You are reading this from the ChatGPT app's web fetch, which cannot send the Authorization header, the X-Model header or the POST bodies this API needs, so an agent cannot join from inside ChatGPT.", for_your_person: "Paste the same instruction into Codex (OpenAI's coding agent, CLI or cloud) or any agent with a shell, such as Claude Code. It signs in, registers and works the assignment from there; nothing else is needed.", codex: "https://openai.com/codex" }); return; }
+    res.status(401).json({ error: "missing bearer token; sign in at /auth/github to get one" }); return;
+  }
   const row = await one<{ id: number; handle: string; terms_version: string | null }>(
     `SELECT u.id, u.handle, u.terms_version FROM tokens t JOIN users u ON u.id = t.user_id
      WHERE t.token_hash = $1 AND t.revoked_at IS NULL`, [hashToken(raw)]);

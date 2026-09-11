@@ -73,7 +73,10 @@ board.get("/board", async (req, res) => {
     FROM returns r JOIN users u ON u.id = r.user_id WHERE r.problem_id = $1 GROUP BY u.handle ORDER BY accepted DESC, cpu_hours DESC LIMIT 200`, [pid]);
   const activity = await projectActivity(Number(pid));
   const { id: _omit, ...pub } = problem;
-  res.json({ project: pub, activity, rungs, lanes, queue, health, recent, contributors });
+  // Recorded returns are unverified until someone elevates them (Sep 11 2026): listed so they are found.
+  const recorded = (await q(`SELECT r.id, u.handle, r.model, r.type, r.created_at, l.slug AS lane, left(regexp_replace(r.report_md, E'\\n[\\s\\S]*$', ''), 160) AS head FROM returns r JOIN users u ON u.id = r.user_id LEFT JOIN lanes l ON l.id = r.lane_id WHERE r.problem_id = $1 AND r.status = 'recorded' ORDER BY r.id DESC LIMIT 20`, [problem.id])).map((r: any) => ({ ...r, id: Number(r.id), url: `/projects/${(req.params as any).slug}/return/${r.id}`, elevate: `POST /projects/${(req.params as any).slug}/return/${r.id}/request-review { note }` }));
+  const recordedTotal = Number((await one<{ c: string }>(`SELECT count(*) AS c FROM returns WHERE problem_id = $1 AND status = 'recorded'`, [problem.id]))?.c ?? 0);
+  res.json({ project: pub, activity, rungs, lanes, queue, health, recent, contributors, recorded, recorded_total: recordedTotal });
 });
 
 /** GET /projects/:slug/activity : current assignments, with the agents and people doing them. */

@@ -212,6 +212,23 @@ test('the return JSON expands the messages it cites (issue #45)', async () => {
   await q(`DELETE FROM returns WHERE id = $1`, [r.id]); await q(`DELETE FROM messages WHERE id = $1`, [m.id]);
 });
 
+test('anyone elevates a recorded return into review with a note, on the record; the review reply names the review and the resulting state (issue #47); the ChatGPT app is told to use Codex', async () => {
+  const r = await one(`INSERT INTO returns (problem_id, type, user_id, model, provider, report_md, transcript, status, final_rung) VALUES ($1,'explore',$2,'claude-opus-5','anthropic','# A proof, elementary\nIt holds.','t','recorded','recorded') RETURNING id`, [pid, people.author.id]);
+  const id = Number(r.id);
+  assert.equal((await call('adv1', 'POST', `/return/${id}/request-review`, {model: 'claude-fable-5-1', body: {}})).status, 400, 'an elevation needs a note');
+  const e = await okJson(await call('adv1', 'POST', `/return/${id}/request-review`, {model: 'claude-fable-5-1', body: {note: 'the proof in section 2 checks out on the record'}}));
+  assert.deepEqual([e.status, e.elevated_by], ['pending', people.adv1.handle]);
+  const row = await one(`SELECT status FROM returns WHERE id = $1`, [id]); assert.equal(row.status, 'pending');
+  assert.ok(Number((await one(`SELECT count(*) AS c FROM jobs WHERE parent_return_id = $1 AND status = 'queued'`, [id])).c) >= 1, 'no review jobs after elevation');
+  const j = await okJson(await call('adv2', 'GET', `/return/${id}`));
+  assert.deepEqual([j.decision.by, j.decision.decided_by, j.decision.note], ['elevate', [people.adv1.handle], 'the proof in section 2 checks out on the record']);
+  assert.equal((await call('adv2', 'POST', `/return/${id}/request-review`, {model: 'claude-fable-5-1', body: {note: 'again'}})).status, 409, 'a pending return is not elevated twice');
+  const v = await okJson(await call('trusted', 'POST', '/result', {model: 'gpt-6-astra', body: {type: 'review', return_id: id, verdict: 'accept', rung: 'measured', notes_md: 'checked', transcript: 't', transcript_approved: true}}));
+  assert.deepEqual([typeof v.review_id, v.return_status, v.final_rung, v.provisional, typeof v.effects_applied_at], ['number', 'accepted', 'measured', false, 'string']);
+  const gpt = await fetch(base + '/start', {headers: {'user-agent': 'Mozilla/5.0 ChatGPT-User/1.0', accept: 'application/json'}});
+  assert.equal(gpt.status, 401); assert.match((await gpt.json()).for_your_person, /Codex/);
+});
+
 test('three advisory reviews decide provisionally: nothing paid, review jobs still open', async () => {
   for (const [who, model] of [['adv1', 'claude-fable-5-1'], ['adv2', 'gpt-6'], ['adv3', 'gemini-3-pro']]) {   // gpt-6, not astra: astra at max is trusted by model since Sep 11 evening
     const r = await okJson(await call(who, 'POST', '/result', {model, body: review('accept')}));

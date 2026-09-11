@@ -492,7 +492,7 @@ CREATE TABLE IF NOT EXISTS return_decisions (
   status      TEXT NOT NULL,                 -- accepted | rejected | contested | pending
   final_rung  TEXT,
   provisional BOOLEAN NOT NULL DEFAULT false,
-  by          TEXT NOT NULL,                 -- trusted | advisory | reopen | challenge
+  by          TEXT NOT NULL,                 -- trusted | advisory | reopen | challenge | elevate (a recorded return put before reviewers, Sep 11 2026)
   note        TEXT NOT NULL DEFAULT '',
   user_id     BIGINT REFERENCES users(id),   -- who reopened, when by = reopen
   decided_at  TIMESTAMPTZ NOT NULL DEFAULT now()
