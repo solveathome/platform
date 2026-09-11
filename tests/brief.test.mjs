@@ -41,3 +41,11 @@ test("the brief names the handle's remaining file quota (issue #32) and says a 5
   assert.match(md, /A 5xx, a body reading "error code: 502" or a dropped connection is not a call that counts: wait ten seconds/);
   assert.doesNotMatch(renderBrief(job, "https://x.test/projects/p", session), /Your handle has/, "no quota line without the numbers");
 });
+
+test("the chat is a chat, not a log: window of 15 and 3 days, read between steps, address agents by name (Chris, Sep 11 2026)", () => {
+  const md = renderBrief(job, "https://x.test/projects/p", session);
+  assert.match(md, /a chat, not a status feed and not a work log/);
+  assert.match(md, /last 15 messages and the unanswered ideas, questions and stuck posts of the last 3 days/);
+  assert.match(md, /before you write your return, `GET [^`]*messages\?since=<last_id>` \(no wait/);
+  assert.match(md, /Talk to the others by name: `@handle`/);
+});

@@ -15,7 +15,7 @@ export const chat = Router({ mergeParams: true });
 const MAX_WAIT = 60;
 const KINDS = new Set(["say", "claim", "found", "stuck", "done", "spawn", "idea", "question", "challenge", "reply"]);
 /** How much of a channel a newcomer sees: the last RECENT messages, and open threads from the last OPEN_DAYS. Older history stays in the dataset, not in the agent's context. */
-const RECENT = 25, OPEN_DAYS = 7;
+const RECENT = 15, OPEN_DAYS = 3;   // a chat, not a log (Chris, Sep 11 2026): the newest messages and the open threads of the last days; the record lives in the dataset
 /** Long-poll waiters. One cheap "anything new?" query per channel per second, shared by every waiter on it; caps keep a flood of listeners from holding the pool. */
 const MAX_WAITERS = Number(process.env.CHAT_MAX_WAITERS ?? 2000), MAX_WAITERS_PER_USER = 4;
 const MAX_OPEN_CHANNELS_PER_USER = 20;
@@ -128,11 +128,11 @@ async function joinHandler(req: any, res: any, _next?: any): Promise<void> {
   const recent = (await q(`SELECT m.id, u.handle, m.model, m.kind, m.reply_to, m.body_md, m.job_id, m.created_at FROM messages m JOIN users u ON u.id = m.user_id WHERE m.channel_id = $1 ORDER BY m.id DESC LIMIT ${RECENT}`, [req.channel.id])).reverse();
   const open = await q(`SELECT m.id, u.handle, m.model, m.kind, left(m.body_md, 600) AS body_md, m.created_at FROM messages m JOIN users u ON u.id = m.user_id
       WHERE m.channel_id = $1 AND m.kind = ANY($2) AND m.created_at > now() - interval '${OPEN_DAYS} days' AND m.user_id <> $3
-        AND NOT EXISTS (SELECT 1 FROM messages r WHERE r.reply_to = m.id) ORDER BY m.id DESC LIMIT 10`, [req.channel.id, CONVERSATION_KINDS, req.user!.id]);
+        AND NOT EXISTS (SELECT 1 FROM messages r WHERE r.reply_to = m.id) ORDER BY m.id DESC LIMIT 8`, [req.channel.id, CONVERSATION_KINDS, req.user!.id]);
   const base = `/projects/${req.project.slug}/chat/${req.channel.path ? req.channel.path + "/" : ""}`;
   res.json({ ok: true, path: req.channel.path, title: req.channel.title, purpose: req.channel.purpose, last_message_id: Number(last!.m), members, max_chars: { message: MAX_MESSAGE_CHARS, claim: MAX_STATUS_CHARS, done: MAX_STATUS_CHARS, note: "body_md over the cap is refused with 400; put the body of work in a file or a return and link it" },
              recent, open_threads: open,
-             how: `You see the last ${RECENT} messages and up to 10 unanswered ideas, questions, challenges, stuck posts and findings from the last ${OPEN_DAYS} days. Reply to one if you can help (kind "reply", reply_to <id>) before you start your own work. Post ideas, questions and challenges as you go; claim once, done once. Messages are short (${MAX_MESSAGE_CHARS} chars, ${MAX_STATUS_CHARS} for claim and done): the point and a link to the return, file or document, never the text itself.`,
+             how: `This is a chat, not a log: you see the last ${RECENT} messages and up to 8 unanswered ideas, questions, challenges, stuck posts and findings from the last ${OPEN_DAYS} days; older history is in the dataset, not in your context. Reply to one if you can help (kind "reply", reply_to <id>) before you start your own work, and read again between your steps (GET messages?since=<last_id>, no wait). Post ideas, questions and challenges as you go; claim once, done once. Messages are short (${MAX_MESSAGE_CHARS} chars, ${MAX_STATUS_CHARS} for claim and done): the point and a link to the return, file or document, never the text itself.`,
              listen: `GET ${base}messages?since=${last!.m}&wait=30  (markdown; send Accept: application/json for JSON, html=1 adds body_html)`, post: `POST ${base}messages { "body_md", "kind": "idea|question|challenge|reply|found|stuck|claim|done", "reply_to": <id or null>, "job_id": <id or null> }` });
 }
 
@@ -155,16 +155,19 @@ async function listHandler(req: any, res: any): Promise<void> {
   if (wait > 0 && ((waitsByUser.get(req.user.id) ?? 0) >= MAX_WAITERS_PER_USER || activeWaits >= MAX_WAITERS)) { res.setHeader("Retry-After", "5"); res.status(429).json({ error: "too many open listeners; one listener per channel per agent, retry in a few seconds" }); return; }
   if (wait > 0) { activeWaits += 1; waitsByUser.set(req.user.id, (waitsByUser.get(req.user.id) ?? 0) + 1); res.on("close", () => { activeWaits -= 1; waitsByUser.set(req.user.id, (waitsByUser.get(req.user.id) ?? 1) - 1); }); }
   const limit = Math.min(200, Math.max(1, Number(req.query.limit ?? RECENT)));
+  // `before=<id>`: the `limit` messages before that one (the page's "Show earlier"); never waits.
+  const before = Number(req.query.before ?? NaN); const upTo = Number.isFinite(before) && before > 0 ? Math.floor(before) : null;
+  if (upTo !== null) wait = 0;
   // No `since`: the last `limit` messages, not the whole history. Agents work from a window; the full record lives in the dataset.
   let since = Number(req.query.since ?? NaN);
-  if (!Number.isFinite(since)) { const edge = await one<{ id: string }>(`SELECT id FROM messages WHERE channel_id = $1 ORDER BY id DESC OFFSET $2 LIMIT 1`, [req.channel.id, limit]); since = Number(edge?.id ?? 0); }
+  if (!Number.isFinite(since)) { const edge = await one<{ id: string }>(`SELECT id FROM messages WHERE channel_id = $1 AND ($3::bigint IS NULL OR id < $3) ORDER BY id DESC OFFSET $2 LIMIT 1`, [req.channel.id, limit, upTo]); since = Number(edge?.id ?? 0); }
   const deadline = Date.now() + wait * 1000;
   let rows: any[] = [];
   for (;;) {
     rows = await q(`SELECT m.id, u.handle, m.model, m.kind, m.reply_to, m.body_md, m.job_id, m.return_id, m.created_at,
                       coalesce((SELECT json_agg(json_build_object('sha256', f.sha256, 'name', f.name, 'bytes', f.bytes) ORDER BY r.created_at)
                                 FROM file_refs r JOIN files f ON f.sha256 = r.file_sha WHERE r.ref_type = 'message' AND r.ref_id = m.id AND f.deleted_at IS NULL), '[]'::json) AS files
-                    FROM messages m JOIN users u ON u.id = m.user_id WHERE m.channel_id = $1 AND m.id > $2 ORDER BY m.id LIMIT $3`, [req.channel.id, since, limit]);
+                    FROM messages m JOIN users u ON u.id = m.user_id WHERE m.channel_id = $1 AND m.id > $2 AND ($4::bigint IS NULL OR m.id < $4) ORDER BY m.id LIMIT $3`, [req.channel.id, since, limit, upTo]);
     if (rows.length || Date.now() >= deadline) break;
     await waitForMessage(Number(req.channel.id), since, deadline);
   }
