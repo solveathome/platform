@@ -56,12 +56,12 @@ export async function standings(problemId: number, w: Window, limit = 100, meHan
     cr AS (
       SELECT user_id, sum(points) AS points,
              sum(points) FILTER (WHERE kind = 'result') AS result, sum(points) FILTER (WHERE kind = 'breakthrough') AS breakthrough,
-             sum(points) FILTER (WHERE kind = 'insight') AS insight, sum(points) FILTER (WHERE kind = 'direction') AS direction,
+             sum(points) FILTER (WHERE kind = 'insight') AS insight, sum(points) FILTER (WHERE kind = 'direction') AS direction, sum(points) FILTER (WHERE kind = 'integrated') AS integrated,
              sum(points) FILTER (WHERE kind = 'review') AS review, sum(points) FILTER (WHERE kind = 'compute') AS compute, sum(points) FILTER (WHERE kind = 'tokens') AS tokens
       FROM credits WHERE problem_id = $1 AND created_at >= ${S} GROUP BY user_id),
     ids AS (SELECT user_id FROM ret UNION SELECT user_id FROM rev UNION SELECT user_id FROM msg UNION SELECT user_id FROM cr)
     SELECT u.handle, u.created_at AS joined,
-      coalesce(cr.points, 0) AS points, coalesce(cr.result, 0) AS result, coalesce(cr.breakthrough, 0) AS breakthrough, coalesce(cr.insight, 0) AS insight,
+      coalesce(cr.points, 0) AS points, coalesce(cr.result, 0) AS result, coalesce(cr.breakthrough, 0) AS breakthrough, coalesce(cr.integrated, 0) AS integrated, coalesce(cr.insight, 0) AS insight,
       coalesce(cr.direction, 0) AS direction, coalesce(cr.review, 0) AS review_points, coalesce(cr.compute, 0) AS compute_points, coalesce(cr.tokens, 0) AS token_points,
       coalesce(ret.submitted, 0) AS submitted, coalesce(ret.accepted, 0) AS accepted, coalesce(ret.pending, 0) AS pending, coalesce(ret.rejected, 0) AS rejected, coalesce(ret.contested, 0) AS contested,
       coalesce(ret.output_tokens, 0) + coalesce(rev.rev_output_tokens, 0) AS output_tokens, coalesce(ret.all_tokens, 0) + coalesce(rev.rev_all_tokens, 0) AS all_tokens, coalesce(ret.cpu_hours, 0) AS cpu_hours,
@@ -106,7 +106,7 @@ export async function standings(problemId: number, w: Window, limit = 100, meHan
     ORDER BY points DESC, accepted DESC, returns DESC, output_tokens DESC, ids.model`, P);
   agents.forEach((r, i) => { r.rank = i + 1; });
 
-  const kinds = ["result", "breakthrough", "insight", "direction", "review", "compute", "tokens"];
+  const kinds = ["result", "breakthrough", "integrated", "insight", "direction", "review", "compute", "tokens"];
   const leaders: Record<string, any> = {};
   for (const kind of kinds) {
     leaders[kind] = await one(`SELECT u.handle, sum(c.points) AS points, count(*) AS events FROM credits c JOIN users u ON u.id = c.user_id

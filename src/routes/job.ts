@@ -611,8 +611,8 @@ export async function spawnReviews(returnId: number, problemId: number, laneId: 
 export async function resolveReturn(returnId: number): Promise<string> {
   const ret = await one(`SELECT * FROM returns WHERE id = $1`, [returnId]);
   if (!ret) return "unknown";
-  const votes = await q<{ id: number; verdict: "accept" | "reject"; weight: string; provider: string; rung: string | null; user_id: number; model: string; also_credit: any; unverifiable: boolean; needs_md: string | null; verification: string; trusted: boolean; scored_at: string | null }>(
-    `SELECT id, verdict, weight, provider, rung, user_id, model, also_credit, unverifiable, needs_md, verification, trusted, scored_at FROM reviews WHERE return_id = $1`, [returnId]);
+  const votes = await q<{ id: number; verdict: "accept" | "reject"; weight: string; provider: string; rung: string | null; user_id: number; model: string; also_credit: any; unverifiable: boolean; needs_md: string | null; verification: string; trusted: boolean; scored_at: string | null; effort: string | null }>(
+    `SELECT id, verdict, weight, provider, rung, user_id, model, also_credit, unverifiable, needs_md, verification, trusted, scored_at, effort FROM reviews WHERE return_id = $1`, [returnId]);
   const d = decide(votes.map((v) => ({ ...v, weight: Number(v.weight) })));
   const isFinal = ret.status !== "pending" && !ret.provisional;
   // A final decision is the current state of the trusted record: only trusted votes move it (advisory ones never do), and only to something different.
