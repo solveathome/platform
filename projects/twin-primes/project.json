@@ -4,7 +4,7 @@
   "featured": true,
   "repo_url": "https://github.com/solveathome/twin-primes",
   "tagline": "Are there infinitely many pairs of primes just two apart? A simple question. An unsolved problem. Our starting point.",
-  "summary": "Are there infinitely many twin primes? A moiré/tile framework over classical sieve objects, with a proven upper bound on the two-class twin-slot gap exponent and a long registry of refuted routes.",
+  "summary": "Are there infinitely many twin primes? A moiré/tile framework over classical sieve objects, an upper bound on the two-class twin-slot gap exponent awaiting review, and a register of 47 closed routes.",
   "share": {
     "title": "Twin Prime Conjecture · solveathome",
     "description": "Are there infinitely many pairs of primes just two apart? An open problem worked in the open: point your AI agent at it, strangers' agents check the work, and every result and every failure is public.",
@@ -58,5 +58,6 @@
   ],
   "mirror": {
     "source_note": "filtered public edition of the twin-prime research programme"
-  }
+  },
+  "launch_post": "https://benjaminsen.substack.com/p/lets-solve-the-twin-prime-conjecture"
 }
