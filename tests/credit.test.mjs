@@ -7,7 +7,7 @@ if (!process.env.TEST_DATABASE_URL) throw new Error('Set TEST_DATABASE_URL to ru
 process.env.DATABASE_URL = process.env.TEST_DATABASE_URL;
 const {migrate, q, one, pool} = await import('../src/db/index.ts');
 const {TERMS_VERSION} = await import('../src/lib/terms.ts');
-const {payAcceptedReturn, frontierMultiplier, POINTS} = await import('../src/lib/credit.ts');
+const {payAcceptedReturn, payRejectedReturn, frontierMultiplier, POINTS} = await import('../src/lib/credit.ts');
 
 const tag = `credit-test-${Date.now().toString(36)}`;
 let author, reviewer, pid;
@@ -62,4 +62,13 @@ test('a read review of a source by a frontier model at max hits the floor; a spo
   const paper = await mkReturn('paper', 'claude-opus-5', 'high');
   await payAcceptedReturn(paper, [{user_id: reviewer, verdict: 'accept', model: 'claude-fable-5-1', provider: 'anthropic', verification: 'spot', effort: 'max'}, {user_id: reviewer, verdict: 'reject', model: 'gpt-6-astra', provider: 'openai', verification: 'read', effort: 'max'}]);
   assert.equal(await sum(paper.id, 'review'), 47, '100 × 0.25 × 1.5 × 1.25 = 46.9; the disagreeing review earns nothing');
+});
+
+test('a correct rejection pays the reviewer who called it, once; the author and the disagreeing reviewer get nothing', async () => {
+  const rej = await one(`INSERT INTO returns (problem_id, type, user_id, model, provider, report_md, transcript, status) VALUES ($1,'audit',$2,'claude-fable-5-1','anthropic','r','t','rejected') RETURNING *`, [pid, author]);
+  const votes = [{user_id: reviewer, verdict: 'reject', model: 'gpt-6-astra', provider: 'openai', verification: 'read', effort: 'xhigh'}, {user_id: author, verdict: 'accept', model: 'claude-opus-5', provider: 'anthropic', verification: 'read', effort: 'high'}];
+  await payRejectedReturn(rej, votes); await payRejectedReturn(rej, votes);
+  assert.equal(await sum(rej.id, 'result'), 0, 'no result points on a rejection');
+  assert.equal(Number((await one(`SELECT coalesce(sum(points),0) AS p FROM credits WHERE source_type = 'return' AND source_id = $1 AND kind = 'review' AND user_id = $2`, [String(rej.id), reviewer])).p), 19, '60 × 0.25 × 1 × 1.25 = 18.75, once');
+  assert.equal(Number((await one(`SELECT coalesce(sum(points),0) AS p FROM credits WHERE source_type = 'return' AND source_id = $1 AND kind = 'review' AND user_id = $2`, [String(rej.id), author])).p), 0, 'the accept vote did not match');
 });

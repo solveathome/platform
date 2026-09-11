@@ -78,14 +78,7 @@ export async function payAcceptedReturn(ret: any, reviews: Array<{ user_id: numb
   // The author's cites cannot pay the author; a reviewer's also_credit cannot pay that reviewer (or the author).
   const cites: Array<{ c: Cites; exclude: number[] }> = [{ c: ret.cites ?? {}, exclude: [Number(ret.user_id)] }, ...reviews.filter((r) => r.verdict === "accept" && r.also_credit).map((r) => ({ c: r.also_credit as Cites, exclude: [Number(ret.user_id), Number(r.user_id)] }))];
   await payCites(cites, pid, lid, rid);
-  for (const r of reviews) {
-    if (r.verdict === (ret.status === "accepted" ? "accept" : "reject")) {
-      const depth = r.verification && POINTS.review_depth[r.verification] ? r.verification : "read";
-      const share = base * POINTS.review_share * POINTS.review_depth[depth] * (await frontierMultiplier(r.model, r.effort));
-      await pay(r.user_id, r.model, r.provider, pid, lid, "review", Math.max(POINTS.review_min, Math.round(share)), "return", rid, `review agreed with outcome (${depth === "read" ? "read" : depth === "spot" ? "spot check" : "full rerun"} of a ${ret.type})`);
-    }
-    if (r.verdict === "accept" && r.also_credit && Object.values(r.also_credit).some((v) => Array.isArray(v) && v.length)) await pay(r.user_id, r.model, r.provider, pid, lid, "review", POINTS.review_also_credit_bonus, "return", rid, "restored missing attribution");
-  }
+  await payReviewers(ret, reviews);
 }
 
 async function payCites(list: Array<{ c: Cites; exclude: number[] }>, pid: number, lid: number | null, rid: number): Promise<void> {
@@ -141,4 +134,24 @@ export async function leaderboard(problemId: number | null, w: Window, limit = 5
     byKind[kind] = await q(`SELECT u.handle, sum(c.points) AS points, count(*) AS events FROM credits c JOIN users u ON u.id = c.user_id WHERE c.kind = '${kind}' AND ${where} GROUP BY u.handle ORDER BY points DESC LIMIT 10`, params);
   }
   return { window: w, humans, models, tokens, tokens_by_model: tokensByModel, by_kind: byKind, points: POINTS };
+}
+
+/** Reviewers whose verdict matched the outcome are paid a share of what they judged, on acceptance and on rejection alike (the
+ *  credit table says so; before Sep 11 2026 only acceptances paid, so a correct rejection earned nothing). Once per reviewer per return. */
+export async function payReviewers(ret: any, reviews: Array<{ user_id: number; verdict: string; model: string; provider: string; also_credit?: Cites | null; verification?: string | null; effort?: string | null }>): Promise<void> {
+  const pid = ret.problem_id, lid = ret.lane_id, rid = ret.id;
+  const base = POINTS.result[ret.type] ?? 20;
+  for (const r of reviews) {
+    if (await one(`SELECT 1 FROM credits WHERE source_type = 'return' AND source_id = $1 AND kind = 'review' AND user_id = $2 AND note LIKE 'review agreed%'`, [String(rid), r.user_id])) continue;
+    if (r.verdict === (ret.status === "accepted" ? "accept" : "reject")) {
+      const depth = r.verification && POINTS.review_depth[r.verification] ? r.verification : "read";
+      const share = base * POINTS.review_share * POINTS.review_depth[depth] * (await frontierMultiplier(r.model, r.effort));
+      await pay(r.user_id, r.model, r.provider, pid, lid, "review", Math.max(POINTS.review_min, Math.round(share)), "return", rid, `review agreed with outcome (${depth === "read" ? "read" : depth === "spot" ? "spot check" : "full rerun"} of a ${ret.type}, ${ret.status})`);
+    }
+    if (ret.status === "accepted" && r.verdict === "accept" && r.also_credit && Object.values(r.also_credit).some((v) => Array.isArray(v) && v.length)) await pay(r.user_id, r.model, r.provider, pid, lid, "review", POINTS.review_also_credit_bonus, "return", rid, "restored missing attribution");
+  }
+}
+/** A final rejection pays the reviewers who called it; the author gets nothing. */
+export async function payRejectedReturn(ret: any, reviews: Parameters<typeof payReviewers>[1]): Promise<void> {
+  await payReviewers({ ...ret, status: "rejected" }, reviews);
 }

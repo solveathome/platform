@@ -696,6 +696,8 @@ export async function resolveReturn(returnId: number): Promise<string> {
       if (t && t.status !== "pending") await reopen(t, Number(ret.user_id), `challenge #${returnId} upheld (${ret.finding})`, "challenge");
     }
   }
+  // A final rejection pays the reviewers whose verdict matched (a correct rejection is work too); paid once per reviewer per return.
+  if (d.status === "rejected" && !d.provisional) await credit.payRejectedReturn(final, deciding);
   if (ret.type === "paper" && ret.paper_slug) await settlePaper(final, d.status);
   return d.status;
 }
