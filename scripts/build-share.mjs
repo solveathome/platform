@@ -77,14 +77,15 @@ function photoCard(W, H) {
   <defs>
     <linearGradient id="top" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="${BG}" stop-opacity=".92"/><stop offset="1" stop-color="${BG}" stop-opacity="0"/></linearGradient>
     <linearGradient id="bottom" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="${BG}" stop-opacity="0"/><stop offset="1" stop-color="${BG}" stop-opacity=".9"/></linearGradient>
+    <filter id="glow" x="-10%" y="-40%" width="120%" height="180%"><feGaussianBlur in="SourceAlpha" stdDeviation="${f(6)}" result="b"/><feFlood flood-color="#000" flood-opacity=".95"/><feComposite in2="b" operator="in" result="s"/><feMerge><feMergeNode in="s"/><feMergeNode in="s"/><feMergeNode in="SourceGraphic"/></feMerge></filter>
   </defs>
   <rect width="${W}" height="${H}" fill="${BG}"/>
   <image x="0" y="0" width="${W}" height="${H}" preserveAspectRatio="xMidYMid slice" href="data:image/jpeg;base64,${bg}" xlink:href="data:image/jpeg;base64,${bg}"/>
-  <rect x="0" y="0" width="${W}" height="${f(250)}" fill="url(#top)"/>
+  <rect x="0" y="0" width="${W}" height="${f(270)}" fill="url(#top)"/>
   <rect x="0" y="${H - 170 * k}" width="${W}" height="${f(170)}" fill="url(#bottom)"/>
-  <image x="${f(72)}" y="${f(56)}" height="${f(40)}" width="${(40 * k * logoBuf.readUInt32BE(16) / logoBuf.readUInt32BE(20)).toFixed(1)}" href="data:image/png;base64,${logo}" xlink:href="data:image/png;base64,${logo}"/>
-  <text x="${f(72)}" y="${f(168)}" font-family="Avenir Next" font-weight="600" font-size="${f(54)}" fill="${FG}">${esc(question)}</text>
-  <text x="${f(72)}" y="${f(212)}" font-family="Avenir Next" font-weight="400" font-size="${f(24)}" fill="${MUT}">${esc(line2)}</text>
+  <image x="${f(72)}" y="${f(48)}" height="${f(64)}" width="${(64 * k * logoBuf.readUInt32BE(16) / logoBuf.readUInt32BE(20)).toFixed(1)}" href="data:image/png;base64,${logo}" xlink:href="data:image/png;base64,${logo}"/>
+  <text x="${f(72)}" y="${f(188)}" font-family="Avenir Next" font-weight="600" font-size="${f(54)}" fill="${FG}" filter="url(#glow)">${esc(question)}</text>
+  <text x="${f(72)}" y="${f(232)}" font-family="Avenir Next" font-weight="400" font-size="${f(24)}" fill="${FG}" opacity=".85" filter="url(#glow)">${esc(line2)}</text>
   <text x="${f(72)}" y="${H - 56 * k}" font-family="Avenir Next" font-weight="500" font-size="${f(21)}" fill="${MUT}">solveathome.org/projects/${esc(slug)}</text>
   <text x="${W - 72 * k}" y="${H - 56 * k}" font-family="Avenir Next" font-weight="400" font-size="${f(21)}" fill="${MUT}" text-anchor="end">${esc(share.footer ?? "open problem · worked in the open · CC BY 4.0")}</text>
 </svg>`;
