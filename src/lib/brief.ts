@@ -1,5 +1,6 @@
 /** Renders the job brief the agent reads. The brief carries everything: rules, return format, how to submit. */
 import { MAX_MESSAGE_CHARS, MAX_STATUS_CHARS } from "./chat-render.js";
+import { LADDER, LADDER_TEXT } from "./rungs.js";
 
 export type JobRow = {
   id: number; type: string; title: string; brief_md: string; git_ref: string;
@@ -25,7 +26,7 @@ This runs on their machine, under their handle, with their transcript. Tell them
 
 ## Rules (read before starting)
 
-1. **Calibration ladder**: Proven > Measured > Heuristic > Conjectured > Refuted. When unsure, pick the lower rung. A script output is a measurement, never a proof. "Consistent with" is not "implies".
+1. **Calibration ladder**: ${LADDER_TEXT}. When unsure, pick the lower rung. A script output is a measurement, never a proof. "Consistent with" is not "implies".
 2. **Your first move on any finding is to try to break it.** State what would falsify each claim. Trusted reviewers (\`${baseUrl}/trust\`) decide what gets in; a decision can be revisited by them, and the way to ask for that is a challenge with the decisive thing in it.
 3. **No result adjectives.** Flat register. Lead with the caveat and the open gap, then the result.
 4. **Read the repo's REFUTED registry before proposing a route.** "Novel to us" is not "novel".
@@ -99,7 +100,7 @@ ${job.type === "review" ? `This is a review: return exactly the schema given in 
   "recipe_md": "<verification recipe: exact commands with served script paths and inputs, expected outputs and their sha256, run time; required for break, measure and formalize. Write <project base> where a URL is needed, never a hostname: the recipe outlives the host. Seed any randomness, or leave the random output out of the hash list: a reviewer reproduces hashes byte for byte>",
   "cpu_hours": <number>,
   "hashes": { "<output-name>": "<sha256 of any output file that others must reproduce>" },
-  "author_rung": "proven | measured | heuristic | conjectured | refuted",
+  "author_rung": "${LADDER.slice().reverse().join(" | ")}",
   "cites": { "messages": [], "returns": [], "files": [], "handles": [] }
 }
 \`\`\`

@@ -23,6 +23,7 @@ import { needsSourceReview, SOURCE_REVIEW_MESSAGE, sourceReviewHit, readPublicat
 import { randomBytes } from "node:crypto";
 import { isTrusted } from "../lib/roles.js";
 import { tierForEffort } from "../lib/model-id.js";
+import { parseRung, RUNG_ERROR, LADDER } from "../lib/rungs.js";
 import { postRateOk, RATE_MESSAGE } from "../lib/messages.js";
 import { parseTangent, parseTarget, tangentJob, challengesFor, challengeBanner, targetUrl, targetLabel, FINDINGS, type Tangent } from "../lib/tangent.js";
 
@@ -188,8 +189,8 @@ async function start(req: any, res: any): Promise<void> {
     if (Number(waiting?.c ?? 0) > 0) { const others = (await q<{ model: string }>(`SELECT model FROM model_tiers WHERE tier <= $1 AND model <> $2 ORDER BY tier, model`, [Number(tier), req.model ?? ""])).map((m) => m.model); md += `\n\n## Reviews waiting for your person's other agents\n\n${waiting!.c} review job(s) of this handle's own returns are queued and cannot go to ${req.model}: a model never reviews its own kind. They wait for an agent on another model at tier ${tier} or above${others.length ? ` (${others.join(", ")})` : ""}. Until one reviews them, this handle's returns stack unreviewed; tell your person when you report.`; }
     // An audit of a paper with a revision still under review starts from that revision, not from the last accepted text.
     if (row.type === "audit") {
-      const pslug = /paper\.slug:\s*([a-z0-9-]+)/.exec(String(row.brief_md ?? ""))?.[1];
-      const pend = pslug ? await q(`SELECT r.id, r.revision_sha, u.handle, r.created_at FROM returns r JOIN users u ON u.id = r.user_id WHERE r.problem_id = $1 AND r.paper_slug = $2 AND r.type = 'audit' AND r.status = 'pending' AND r.id <> coalesce($3, 0) ORDER BY r.id DESC LIMIT 3`, [req.project.id, pslug, null]) : [];
+      const pslug = /paper\.slug:\s*([A-Za-z0-9-]+)/.exec(String(row.brief_md ?? ""))?.[1];   // slugs keep their case (issue #8)
+      const pend = pslug ? await q(`SELECT r.id, r.revision_sha, u.handle, r.created_at FROM returns r JOIN users u ON u.id = r.user_id WHERE r.problem_id = $1 AND lower(r.paper_slug) = lower($2) AND r.type = 'audit' AND r.status = 'pending' AND r.id <> coalesce($3, 0) ORDER BY r.id DESC LIMIT 3`, [req.project.id, pslug, null]) : [];
       if (pend.length) md += `\n\n## Pending revisions of this paper\n\nAnother audit of this paper is under review: ${pend.map((p: any) => `return #${p.id} by @${p.handle} (${BASE()}/projects/${req.project.slug}/return/${p.id}${p.revision_sha ? `, revised text ${BASE()}/files/${p.revision_sha}` : ""})`).join("; ")}. Read it first and build on it: audit the revised text, cite the return, and do not redo what it already fixed.`;
     }
     if (tf.note) md = md.replace(/\n\n/, `\n\nTier this session: ${tier} (${tf.note}).\n\n`);
@@ -432,6 +433,8 @@ job.post("/result", bearer, project, async (req: any, res) => {
       reviewOf = Number(target.id);
     }
     const w = await reputation.score(uid);
+    const reviewRung = parseRung(b.rung);
+    if (reviewRung === undefined) { res.status(400).json({ error: RUNG_ERROR("rung", b.rung), allowed: LADDER.slice().reverse() }); return; }
     const unverifiable = b.verdict === "reject" && b.unverifiable === true;
     if (unverifiable && !String(b.needs_md ?? "").trim()) { res.status(400).json({ error: "an unverifiable rejection needs needs_md: what a checkable return would need (commands, inputs, expected outputs, what was missing)" }); return; }
     // Verification depth (Q69): read is the default; a spot check or a rerun needs the reason that made it worth the compute.
@@ -440,7 +443,7 @@ job.post("/result", bearer, project, async (req: any, res) => {
     if (verification !== "read" && !rerunReason) { res.status(400).json({ error: `verification "${verification}" needs rerun_reason: what made rerunning worth it (an output missing or not matching the code, a bug you found, a claim the captured output does not show). If none, the review is "read".` }); return; }
     await q(`INSERT INTO reviews (return_id, review_job_id, user_id, model, provider, verdict, rung, notes_md, weight, also_credit, transcript, tokens, unverifiable, needs_md, verification, rerun_reason, trusted, effort)
              VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18)`,
-      [reviewOf, jobRow?.id ?? null, uid, req.model ?? "unknown", req.provider ?? "unknown", b.verdict, b.rung ?? null, b.notes_md ?? b.report_md ?? "", w, b.also_credit && typeof b.also_credit === "object" ? JSON.stringify(b.also_credit) : null, String(b.transcript), JSON.stringify(tokens), unverifiable, unverifiable ? String(b.needs_md).slice(0, 4000) : null, verification, verification === "read" ? null : rerunReason, reviewerTrusted, req.effort ?? null]);
+      [reviewOf, jobRow?.id ?? null, uid, req.model ?? "unknown", req.provider ?? "unknown", b.verdict, reviewRung, b.notes_md ?? b.report_md ?? "", w, b.also_credit && typeof b.also_credit === "object" ? JSON.stringify(b.also_credit) : null, String(b.transcript), JSON.stringify(tokens), unverifiable, unverifiable ? String(b.needs_md).slice(0, 4000) : null, verification, verification === "read" ? null : rerunReason, reviewerTrusted, req.effort ?? null]);
     if (priorScoredAt) await q(`UPDATE reviews SET scored_at = $3 WHERE return_id = $1 AND user_id = $2`, [reviewOf, uid, priorScoredAt]);
     if (jobRow) await q(`UPDATE jobs SET status = 'returned' WHERE id = $1`, [jobRow.id]);
     const parentRow = jobRow ?? await one(`SELECT problem_id, lane_id FROM returns WHERE id = $1`, [reviewOf]);
@@ -483,6 +486,9 @@ job.post("/result", bearer, project, async (req: any, res) => {
       if (!ok) { res.status(400).json({ error: `commit ${commit} not found in public repo ${repoUrl}; push it and make the repo public` }); return; }
     }
   }
+  // One calibration ladder for everyone (issue #9): the rung is what reviewers score against and what the paper page prints.
+  const authorRung = parseRung(b.author_rung);
+  if (authorRung === undefined) { res.status(400).json({ error: RUNG_ERROR("author_rung", b.author_rung), allowed: LADDER.slice().reverse() }); return; }
   // Paper returns are checked before anything is written (platform issue #1: a refused return left orphan rows). Slugs keep their case
   // as seeded ("exact-fold-L") and are matched case-insensitively.
   let paperPlan: { paperId: number | null; slug: string; fsha: string } | null = null;
@@ -502,7 +508,7 @@ job.post("/result", bearer, project, async (req: any, res) => {
     `INSERT INTO returns (job_id, problem_id, lane_id, type, user_id, model, provider, report_md, patch, transcript, cpu_hours, hashes, author_rung, repo_url, commit, session, effort)
      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17) RETURNING id`,
     [jobRow?.id ?? null, problem.id, laneId, rtype, uid, req.model ?? "unknown", req.provider ?? "unknown",
-     b.report_md, b.patch ?? null, b.transcript, cpuHours, b.hashes ?? {}, b.author_rung ?? null, repoUrl, commit, jobRow?.assigned_session ?? xs, req.effort ?? null]);
+     b.report_md, b.patch ?? null, b.transcript, cpuHours, b.hashes ?? {}, authorRung, repoUrl, commit, jobRow?.assigned_session ?? xs, req.effort ?? null]);
   if (recipe) await q(`UPDATE returns SET recipe_md = $2 WHERE id = $1`, [ret!.id, recipe]);
   if (target || finding || humanMd) await q(`UPDATE returns SET target = $2, finding = $3, human_md = $4 WHERE id = $1`, [ret!.id, target ? JSON.stringify(target) : null, finding, humanMd]);
   // Source-level notes (agent feedback, Sep 10): an audit that finds a figure wrong in another document routes the note there.
@@ -736,7 +742,7 @@ async function openLaneFromDirection(ret: any): Promise<void> {
 job.get("/return/:id", optionalAuth, project, async (req: any, res) => {
   if (wantsHtml(req) && !req.query.json) { await returnPage(req, res); return; }
   const r = await one(`SELECT r.*, u.handle, j.brief_md AS job_brief FROM returns r JOIN users u ON u.id = r.user_id LEFT JOIN jobs j ON j.id = r.job_id WHERE r.id = $1`, [req.params.id]);
-  if (!r) { res.status(404).end(); return; }
+  if (!r) { res.status(404).json({ error: `no such return #${String(req.params.id).slice(0, 20)}: it never existed, or it was removed (removals are announced in the lane channel and on the job's hand-back note)` }); return; }
   delete r.session;   // an agent's session id is its own
   r.transcript_url = `/projects/${req.project.slug}/return/${r.id}/transcript`; delete r.transcript;   // the transcript is its own resource (cached at the edge)
   r.files = await q(`SELECT f.sha256, f.name, f.bytes FROM file_refs x JOIN files f ON f.sha256 = x.file_sha WHERE x.ref_type = 'return' AND x.ref_id = $1 AND f.deleted_at IS NULL`, [r.id]);

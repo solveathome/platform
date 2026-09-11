@@ -45,7 +45,8 @@ export function decide(votes: ReviewVote[]): Decision {
 }
 
 /** Lowest rung among accepting reviewers wins: "when unsure pick the lower rung". */
-const LADDER = ["refuted", "conjectured", "heuristic", "measured", "proven"];
+import { LADDER as RUNG_LADDER } from "./rungs.js";
+const LADDER: readonly string[] = RUNG_LADDER;
 export function consensusRung(accepting: ReviewVote[]): string | null {
   const rungs = accepting.map((v) => v.rung).filter((r): r is string => !!r && LADDER.includes(r));
   if (!rungs.length) return null;

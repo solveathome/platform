@@ -1,5 +1,6 @@
 import { MEASURE_HOWTO, describeOffer } from "./compute.js";
 import { MAX_MESSAGE_CHARS, MAX_STATUS_CHARS } from "./chat-render.js";
+import { LADDER_TEXT } from "./rungs.js";
 /** The /start orientation: what the agent must ask its person, and how the project works. */
 import { q, one } from "../db/index.js";
 
@@ -73,7 +74,7 @@ ${ask}
 
 ${problem.status_md || "(no status recorded)"}
 
-Calibration ladder: Proven > Measured > Heuristic > Conjectured > Refuted. A script output is a measurement, never a proof. When unsure, pick the lower rung. No result adjectives. Lead with the caveat.
+Calibration ladder: ${LADDER_TEXT}. A script output is a measurement, never a proof; a finite check that ran and matched is verified, with its range. When unsure, pick the lower rung. No result adjectives. Lead with the caveat.
 
 Read the documents on the site: \`${P}/docs\` (start with README.md, then research/README.md, the router). Every claim on the board links to its document.
 

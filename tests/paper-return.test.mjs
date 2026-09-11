@@ -20,7 +20,7 @@ const {job} = await import('../src/routes/job.ts');
 
 const tag = `paper-test-${Date.now().toString(36)}`;
 const slug = tag, handle = `${tag}-person`;
-let server, base, uid, pid, token, jobId, sha;
+let server, base, uid, pid, token, jobId, sha, auditJobId;
 
 before(async () => {
   await migrate();
@@ -80,4 +80,27 @@ test('a mixed-case paper slug is matched, and a refused paper return records not
   assert.equal(r.paper_slug, 'exact-fold-L'); assert.equal(r.revision_path, 'paper/proposals/prop-exact-fold-L.md'); assert.equal(r.revision_sha, sha);
   assert.equal((await one(`SELECT status FROM papers WHERE problem_id = $1`, [pid])).status, 'under_review');
   assert.equal(g.warnings.length, 1, JSON.stringify(g.warnings)); assert.match(g.warnings[0], /names 1 sha256/); assert.doesNotMatch(g.warnings[0], new RegExp(cited.slice(0, 12)), 'issue #7: a cited file is a known input');
+  assert.equal(r.paper_slug, 'exact-fold-L');
+});
+
+test('issue #9: the rung is one validated ladder; issue #10: a missing return is a JSON 404', async () => {
+  const s2 = await (await call('POST', '/start', {body: {agreed: true, ai: {max_assignments: 1}, transcript_preapproved: true}})).json();
+  const bad = await call('POST', '/result', {session: s2.session, body: {type: 'direction', report_md: 'A route worth trying.', transcript: 't', transcript_approved: true, author_rung: 'solid'}});
+  assert.equal(bad.status, 400); const bb = await bad.json(); assert.match(bb.error, /author_rung must be one of proven \| verified/); assert.deepEqual(bb.allowed, ['proven', 'verified', 'measured', 'heuristic', 'conjectured', 'refuted']);
+  const gone = await call('GET', '/return/999999999');
+  assert.equal(gone.status, 404); assert.match((await gone.json()).error, /no such return #999999999/);
+  await call('POST', `/sessions/${s2.session}/end`, {body: {note: 'test'}});
+});
+
+test('issue #8: the pending-revisions block finds a mixed-case paper slug', async () => {
+  // A pending audit return on the paper, then an audit job for it: the brief must point at the pending revision.
+  const rsha = (await files.store(uid, 'claude-fable-5-1', 'rev.md', 'md', '# Per-fold L\n\nRevised.\n')).sha;
+  await q(`INSERT INTO returns (problem_id, type, user_id, model, provider, report_md, transcript, status, paper_slug, revision_path, revision_sha) VALUES ($1,'audit',$2,'claude-fable-5-1','anthropic','Audit.','t','pending','exact-fold-L','paper/proposals/prop-exact-fold-L.md',$3)`, [pid, uid, rsha]);
+  const j = await one(`INSERT INTO jobs (problem_id, lane_id, type, title, brief_md, git_ref, compute_hint, budget_hours, min_tier, quorum, status) VALUES ($1,NULL,'audit','Audit: exact-fold-L','paper.slug: exact-fold-L\n\nAudit it.','main','{}',3,1,1,'queued') RETURNING id`, [pid]);
+  auditJobId = Number(j.id);
+  const s3 = await (await call('POST', '/start', {body: {agreed: true, ai: {max_assignments: 1}, transcript_preapproved: true}})).json();
+  assert.equal(Number(s3.job_id), auditJobId, JSON.stringify(s3).slice(0, 300));
+  assert.match(s3.brief_md, /## Pending revisions of this paper/);
+  assert.match(s3.brief_md, new RegExp(rsha.slice(0, 12)));
+  await call('POST', `/sessions/${s3.session}/end`, {body: {note: 'test'}});
 });
