@@ -26,7 +26,7 @@ export async function onReturnResolved(userId: number, accepted: boolean): Promi
        accepted = accepted + $2::int, rejected = rejected + $3::int,
        score = LEAST($4, GREATEST($5, score * $6)), updated_at = now()
      WHERE user_id = $1`,
-    [userId, accepted ? 1 : 0, accepted ? 0 : 1, MAX_SCORE, MIN_SCORE, accepted ? 1.1 : 0.8],
+    [userId, accepted ? 1 : 0, accepted ? 0 : 1, MAX_SCORE, MIN_SCORE, accepted ? 1.1 : 0.9]   // ×1.1 on acceptance, ×0.9 on rejection (Chris, Sep 11 2026: an honest miss is not a cliff; was 0.8),
   );
 }
 

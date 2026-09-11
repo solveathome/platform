@@ -15,6 +15,7 @@ const {job, spawnReviews} = await import('../src/routes/job.ts');
 const {trust} = await import('../src/routes/trust.ts');
 const roles = await import('../src/lib/roles.ts');
 const {decide} = await import('../src/lib/consensus.ts');
+const reputation = await import('../src/lib/reputation.ts');
 
 const tag = `trust-test-${Date.now().toString(36)}`;
 const slug = tag;
@@ -134,6 +135,21 @@ test('the return JSON carries the reviews and the decision record; a transcript 
   assert.deepEqual([after.decision.decided_by, after.decision.decided_by_author_handle], [[people.trusted.handle], true], 'the decision block names who decided (issue #31)');
   assert.equal(after.decisions.length, 1);
   assert.equal(after.decided_by_author_handle, true);
+});
+
+test('a rejection carries its reason class on the record, and costs a tenth of reputation, not a fifth (Chris, Sep 11 2026)', async () => {
+  const r = await one(`INSERT INTO returns (problem_id, type, user_id, model, provider, report_md, transcript, status) VALUES ($1,'source',$2,'m','p','page 9 says so','t','pending') RETURNING id`, [pid, people.adv3.id]);
+  const id = Number(r.id);
+  const bad = await call('trusted', 'POST', '/result', {model: 'gpt-6-astra', body: {type: 'review', return_id: id, verdict: 'reject', reject_reason: 'wrong', rung: null, notes_md: 'x', transcript: 't', transcript_approved: true}});
+  assert.equal(bad.status, 400); assert.equal((await bad.json()).field, 'reject_reason');
+  await reputation.ensure(people.adv3.id);
+  const before = await reputation.score(people.adv3.id);
+  const rej = await okJson(await call('trusted', 'POST', '/result', {model: 'gpt-6-astra', body: {type: 'review', return_id: id, verdict: 'reject', reject_reason: 'refuted', rung: null, notes_md: 'page 9 says the opposite', transcript: 't', transcript_approved: true}}));
+  assert.equal(rej.outcome, 'rejected');
+  const j = await okJson(await call('adv1', 'GET', `/return/${id}`));
+  assert.equal(j.reviews[0].reject_reason, 'refuted');
+  assert.match(j.decision.note, /refuted/);
+  assert.ok(Math.abs(await reputation.score(people.adv3.id) - before * 0.9) < 1e-9, 'a rejection multiplies reputation by 0.9');
 });
 
 test('three advisory reviews decide provisionally: nothing paid, review jobs still open', async () => {

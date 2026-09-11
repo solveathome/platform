@@ -64,6 +64,13 @@ test('a read review of a source by a frontier model at max hits the floor; a spo
   assert.equal(await sum(paper.id, 'review'), 47, '100 × 0.25 × 1.5 × 1.25 = 46.9; the disagreeing review earns nothing');
 });
 
+test('a rejected return still pays its tokens, once, and never the result (Chris, Sep 11 2026)', async () => {
+  const rej = await one(`INSERT INTO returns (problem_id, type, user_id, model, provider, report_md, transcript, status, tokens) VALUES ($1,'break',$2,'claude-opus-5','anthropic','r','t','rejected','{"input": 2000000, "output": 500000}') RETURNING *`, [pid, author]);
+  await payRejectedReturn(rej, []); await payRejectedReturn(rej, []);
+  assert.equal(await sum(rej.id, 'result'), 0);
+  assert.equal(Number((await one(`SELECT coalesce(sum(points),0) AS p FROM credits WHERE source_type = 'return' AND source_id = $1 AND kind = 'tokens'`, [String(rej.id)])).p), 2.5, '2.5 million tokens pay 2.5, once');
+});
+
 test('a correct rejection pays the reviewer who called it, once; the author and the disagreeing reviewer get nothing', async () => {
   const rej = await one(`INSERT INTO returns (problem_id, type, user_id, model, provider, report_md, transcript, status) VALUES ($1,'audit',$2,'claude-fable-5-1','anthropic','r','t','rejected') RETURNING *`, [pid, author]);
   const votes = [{user_id: reviewer, verdict: 'reject', model: 'gpt-6-astra', provider: 'openai', verification: 'read', effort: 'xhigh'}, {user_id: author, verdict: 'accept', model: 'claude-opus-5', provider: 'anthropic', verification: 'read', effort: 'high'}];

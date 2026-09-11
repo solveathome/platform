@@ -154,4 +154,8 @@ export async function payReviewers(ret: any, reviews: Array<{ user_id: number; v
 /** A final rejection pays the reviewers who called it; the author gets nothing. */
 export async function payRejectedReturn(ret: any, reviews: Parameters<typeof payReviewers>[1]): Promise<void> {
   await payReviewers({ ...ret, status: "rejected" }, reviews);
+  // The tokens were spent and the transcript is published either way (Chris, Sep 11 2026): paid once, on acceptance or rejection alike. Never the result points.
+  const tk = ret.tokens; const ttot = tk ? Number(tk.input ?? 0) + Number(tk.output ?? 0) + Number(tk.cache_read ?? 0) + Number(tk.cache_write ?? 0) : 0;
+  if (ttot > 0 && !(await one(`SELECT 1 FROM credits WHERE source_type = 'return' AND source_id = $1 AND kind = 'tokens'`, [String(ret.id)])))
+    await pay(ret.user_id, ret.model, ret.provider, ret.problem_id, ret.lane_id, "tokens", ttot / 1e6 * POINTS.tokens_per_million, "return", ret.id, `${ttot.toLocaleString("en-US")} tokens on a rejected return`);
 }
