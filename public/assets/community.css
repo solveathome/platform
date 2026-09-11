@@ -1,0 +1,158 @@
+/* A shared scoreboard: the site's charcoal identity, with gold reserved for recognition. */
+:root { --recognition: #e8c47b; --recognition-bg: #2a251c; }
+@media (prefers-color-scheme: light) { :root { --recognition: #806018; --recognition-bg: #f5efdf; } }
+.front-page { display: block; }
+.front-page .home-hero { padding-block: 1.5rem 3.5rem; gap: 5rem; }
+.front-page .home-hero h1 { font-size: clamp(3rem, 5.3vw, 4.65rem); margin-bottom: 1.4rem; }
+.community-hero-link { display: inline-block; margin: 1rem 0 0 1.25rem; font-size: .875rem; color: var(--mut); }
+.community-impact { border-block: 1px solid var(--line); padding-block: 1rem .65rem; scroll-margin-top: 1rem; }
+.community-section-heading { display: flex; align-items: center; justify-content: space-between; gap: 1rem 2rem; margin-bottom: 1.4rem; }
+.community-section-heading h2 { margin: 0; }
+.community-section-heading .eyebrow { margin-bottom: .5rem; }
+.community-section-heading .muted { margin: .65rem 0 0; font-size: .875rem; }
+.community-section { padding-block: 3rem 2rem; scroll-margin-top: 1.5rem; }
+.community-section > .community-section-heading h2 { font-size: clamp(1.8rem, 3vw, 2.5rem); letter-spacing: -.045em; }
+.community-metrics { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 1rem 2rem; margin: 1.75rem 0 1rem; }
+.community-metric { min-width: 0; }
+.community-metric > b { display: block; font: 3rem/1.15 Georgia, serif; font-variant-numeric: tabular-nums; letter-spacing: -.04em; }
+.community-metric > span { display: block; font-size: .9375rem; margin-top: .45rem; }
+.community-metric > small { display: block; font-size: .8125rem; color: var(--mut); margin-top: .2rem; }
+.community-impact h2 { font-size: clamp(1.8rem, 3vw, 2.5rem); letter-spacing: -.045em; }
+.community-impact .community-section-heading { margin-bottom: .65rem; }
+.community-impact .community-section-heading .eyebrow { margin-bottom: .2rem; }
+.community-impact .community-metrics-full { margin-top: .65rem; gap: 0 1.5rem; }
+.community-impact .community-metrics-full .community-metric { padding-block: .65rem; }
+.community-impact .community-metric > span { margin-top: .2rem; }
+.community-impact .community-metric > small { margin-top: .1rem; }
+.community-impact .community-stats-footer { padding-top: .6rem; gap: .25rem 1.5rem; }
+.community-impact + .community-section { padding-top: 1.75rem; }
+.community-metrics-full { gap: 0 2rem; margin: 1.5rem 0 0; }
+.community-metrics-full .community-metric { padding: 1.5rem 0; border-top: 1px solid var(--line); }
+.community-metrics-full .community-metric > b { font-size: clamp(2.5rem, 4vw, 3.75rem); }
+.community-metric-credit > b { color: var(--recognition); }
+.community-stats-footer { display: flex; flex-wrap: wrap; justify-content: space-between; gap: .5rem 2rem; border-top: 1px solid var(--line); padding-top: 1rem; }
+.community-stats-footer .community-fine { margin: 0; }
+.community-layout { display: grid; grid-template-columns: minmax(0, 1fr) 18rem; gap: 2.5rem; align-items: start; }
+.community-board, .community-sidebar { min-width: 0; }
+.community-board, .community-overview { container-type: inline-size; }
+.community-podium { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: .8rem; }
+.community-podium:empty { display: none; }
+.community-podium-card { min-width: 0; border: 1px solid var(--line); background: var(--soft); border-radius: 5px; padding: 1.1rem; position: relative; }
+.community-podium-card.place-1 { border-color: var(--recognition); background: var(--recognition-bg); }
+.community-podium-top { display: flex; align-items: start; justify-content: space-between; gap: .4rem; margin-bottom: 1.2rem; }
+.community-place { font-size: .75rem; color: var(--mut); }
+.community-medal { font: 1rem/1.9 var(--mono); text-align: center; border: 1px solid var(--line); width: 2rem; height: 2rem; border-radius: 50%; flex-shrink: 0; }
+.place-1 .community-medal { border-color: var(--recognition); color: var(--recognition); }
+.community-identity { display: flex; flex-wrap: wrap; align-items: center; column-gap: .4rem; min-width: 0; line-height: 1.45; }
+.community-identity a, .community-identity strong { font-size: 1rem; font-weight: 600; overflow-wrap: anywhere; }
+.community-identity small { flex-basis: 100%; color: var(--mut); font-size: .8125rem; overflow-wrap: anywhere; }
+.community-podium-score { font: 2.1rem/1.2 Georgia, serif; font-variant-numeric: tabular-nums; margin: 1.05rem 0 .55rem; overflow-wrap: anywhere; }
+.community-podium-score small { font: .8125rem var(--mono); color: var(--mut); }
+.community-facts { display: flex; flex-wrap: wrap; gap: .25rem 1rem; color: var(--mut); font-size: .8125rem; }
+.community-facts b { color: var(--fg); font-weight: 500; }
+.community-badge { display: inline-block; color: var(--recognition); font-size: .75rem; line-height: 1.6; }
+.community-podium-card > .community-badge { margin-top: .85rem; }
+.community-list-heading { display: flex; justify-content: space-between; align-items: center; gap: 1rem; margin: 1rem 0 .5rem; }
+.community-list-heading h3 { margin: 0; font-size: .9375rem; }
+.community-list-heading > span { font-size: .8125rem; color: var(--mut); }
+.community-rows { list-style: none; padding: 0; margin: 0; }
+.community-row { display: grid; grid-template-columns: 1.5rem minmax(0, 1fr) 3.5rem 3.5rem 4.5rem 3.75rem 5.5rem; gap: .5rem; padding: .45rem .25rem; align-items: center; border-top: 1px solid var(--line); }
+.community-row.is-you { background: var(--recognition-bg); border-radius: 3px; }
+.community-rank { font: .875rem var(--mono); color: var(--mut); }
+.community-person { min-width: 0; }
+.community-row-meta { display: flex; gap: .15rem .6rem; flex-wrap: wrap; color: var(--mut); font-size: .75rem; margin-top: .1rem; }
+.community-active { display: inline-flex; align-items: center; gap: .35rem; }
+.community-active i { width: .375rem; height: .375rem; flex-shrink: 0; border-radius: 50%; background: #4ca275; }
+.community-row-contributions { display: contents; }
+.community-row-work, .community-score { text-align: right; font-variant-numeric: tabular-nums; }
+.community-row-work b { display: block; font-size: .9375rem; font-weight: 500; }
+.community-row-work span, .community-score span { display: block; font-size: .75rem; color: var(--mut); }
+.community-score b { display: block; font-size: 1.125rem; font-weight: 600; }
+.community-you { font: .75rem var(--mono); color: var(--recognition); }
+.community-row-detail { grid-column: 2 / -1; font-size: .8125rem; color: var(--mut); }
+.community-row-detail summary { cursor: pointer; width: fit-content; }
+.community-row-detail .community-facts { padding-top: .7rem; }
+.community-empty { color: var(--mut); padding: 1.5rem 0; font-size: .9375rem; }
+.community-progress { border: 1px solid var(--line); border-radius: 5px; padding: 1.5rem; }
+.community-progress .eyebrow { font-size: .8125rem; margin-bottom: 1rem; }
+.community-progress h3 { font-size: 1.5rem; line-height: 1.3; letter-spacing: -.035em; }
+.community-progress p { color: var(--mut); font-size: .9375rem; }
+.community-progress .button { width: 100%; gap: .75rem; font-size: .9375rem; }
+.community-fine, .community-progress .community-fine { color: var(--mut); font-size: .8125rem; line-height: 1.65; margin: 1rem 0 0; }
+.community-fine a { text-decoration: underline; }
+.community-profile-link { display: block; text-align: center; font-size: .8125rem; margin-top: 1rem; }
+.community-progress .community-earned { color: var(--recognition); font-size: .8125rem; }
+.community-progress-label { display: flex; flex-wrap: wrap; justify-content: space-between; gap: .5rem; font-size: .8125rem; }
+.community-progress-label span { color: var(--mut); }
+.community-progress progress { appearance: none; display: block; width: 100%; height: .4rem; margin: .6rem 0; border: 0; background: var(--line); border-radius: 3px; overflow: hidden; }
+.community-progress progress::-webkit-progress-bar { background: var(--line); }
+.community-progress progress::-webkit-progress-value { background: var(--recognition); }
+.community-progress progress::-moz-progress-bar { background: var(--recognition); }
+.community-how { padding: 1.75rem .25rem; }
+.community-how h3 { font-size: .9375rem; }
+.community-how ol { padding-left: 1.25rem; margin: 1rem 0; }
+.community-how li { font-size: .875rem; color: var(--mut); padding: 0 0 1.25rem .25rem; }
+.community-how li::marker { color: var(--recognition); font: .75rem var(--mono); }
+.community-how b, .community-how span { display: block; }
+.community-how b { color: var(--fg); margin-bottom: .3rem; font-weight: 500; }
+.community-controls { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 1rem; margin: 1.5rem 0; }
+.community-toggle { display: inline-flex; border: 1px solid var(--line); padding: .25rem; border-radius: 4px; gap: .2rem; }
+.community-toggle button { background: transparent; color: var(--mut); border: 0; border-radius: 2px; min-height: 40px; padding: .4rem .85rem; font-size: .875rem; }
+.community-toggle button[aria-pressed=true] { background: var(--fg); color: var(--bg); }
+.community-expand { margin-top: 1rem; }
+.community-rules { margin-top: 1.5rem; border-top: 1px solid var(--line); padding-top: 1rem; font-size: .875rem; color: var(--mut); }
+.community-rules summary { color: var(--fg); cursor: pointer; }
+.community-rules p { margin-top: 1rem; }
+.community-overview { margin-top: 1.5rem; }
+.community-overview .community-podium { margin-bottom: 1rem; }
+.community-overview .community-podium-score { font-size: 1.8rem; }
+.community-overview .community-podium-card { padding: 1rem; }
+.community-standings .community-metrics { margin-bottom: 2rem; }
+.community-standings .community-layout { grid-template-columns: minmax(0, 1fr) 16rem; gap: 1.5rem; }
+.community-standings .community-podium-card { padding: .85rem; }
+.community-standings .community-podium-score { font-size: 1.75rem; }
+@media (max-width: 1150px) {
+  .community-standings .community-layout { grid-template-columns: 1fr; }
+  .community-standings .community-sidebar { max-width: none; }
+  .community-layout { gap: 1.5rem; grid-template-columns: minmax(0, 1fr) 16rem; }
+  .front-page .home-hero { gap: 3rem; }
+}
+@media (max-width: 900px) {
+  .community-layout { grid-template-columns: 1fr; }
+  .community-sidebar { display: grid; grid-template-columns: 1fr 1fr; gap: 1.5rem; }
+  .community-how { padding: .5rem 0; }
+  .front-page .home-hero { padding-block: 1rem 2.5rem; }
+}
+@media (max-width: 650px) {
+  .community-section-heading { align-items: flex-start; flex-direction: column; }
+  .community-metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 1.5rem 1rem; }
+  .community-metric > b { font-size: 2.6rem; }
+  .community-sidebar { grid-template-columns: 1fr; }
+  .community-podium { grid-template-columns: 1fr; }
+  .community-podium-card { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: .45rem 1rem; }
+  .community-podium-top { grid-column: 1 / -1; margin-bottom: .15rem; align-items: center; }
+  .community-podium-score, .community-overview .community-podium-score, .community-standings .community-podium-score { margin: 0; font-size: 1.65rem; }
+  .community-podium-card > .community-badge { margin: 0; grid-column: 1 / -1; }
+  .community-podium-card .community-facts { grid-column: 1 / -1; }
+  .community-score b { font-size: 1rem; }
+  .community-list-heading { flex-wrap: wrap; gap: .25rem; }
+  .community-hero-link { margin-left: 0; display: block; }
+  .front-page .home-hero h1 { font-size: clamp(2.4rem, 9vw, 3.5rem); }
+  .community-section { padding-block: 2rem; }
+}
+.community-standings .leader-list li { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto; }
+.community-standings .leader-list a, .community-standings .result-what { min-width: 0; overflow-wrap: anywhere; }
+.community-standings .result-list li { grid-template-columns: 3rem minmax(0, 1fr) auto; }
+.community-standings .result-list .result-state { grid-column: 2 / -1; white-space: normal; }
+.community-standings .result-list .result-when { grid-column: 3; grid-row: 1; }
+
+/* Narrow boards keep the same contributions visible in a compact second line. */
+@container (max-width: 42rem) {
+  .community-row { grid-template-columns: 1.4rem minmax(0, 1fr) 5.5rem; gap: .15rem .5rem; padding-block: .55rem; }
+  .community-row > .community-score { grid-column: 3; grid-row: 1; }
+  .community-row-contributions { grid-column: 2 / -1; display: flex; flex-wrap: wrap; gap: .1rem .85rem; }
+  .community-row-work { display: flex; align-items: baseline; gap: .25rem; text-align: left; }
+  .community-row-work b { font-size: .875rem; }
+  .community-row-work span { font-size: .8125rem; }
+  .community-row-detail { margin-top: .2rem; }
+}
