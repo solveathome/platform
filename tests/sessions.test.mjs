@@ -127,6 +127,7 @@ test('sessions are listed, ended, replaced, and finished ones do not count again
   const f = list.sessions.find(s => s.id === fable.session), o = list.sessions.find(s => s.id === opus.session);
   assert.equal(f.live, true); assert.equal(f.holds.length, 1); assert.equal(Number(f.holds[0].id), Number(fable.job_id));
   assert.equal(o.live, true); assert.equal(o.holds.length, 0);
+  assert.deepEqual([typeof o.assignments, o.max_assignments, o.at_cap], ['number', null, false], 'the list names the count and the cap under the registration names (issue #30)');
   // Ending Fable's session hands its job back with a note.
   const end = await okJson(await call('POST', `/sessions/${fable.session}/end`, {model: 'claude-fable-5-1', body: {note: 'person closed the laptop'}}));
   assert.equal(end.status, 'ended');
@@ -142,6 +143,7 @@ test('sessions are listed, ended, replaced, and finished ones do not count again
   const capped = await okJson(await call('POST', '/start', {model: 'claude-astra-1', body: {agreed: true, ai: {max_assignments: 1}, transcript_preapproved: true}}));
   assert.ok(capped.job_id);
   await okJson(await call('POST', '/result', {model: 'claude-astra-1', session: capped.session, body: {job_id: capped.job_id, report_md: 'Found it on the stated page.', transcript: 'prose transcript', transcript_approved: true}}));
+  { const l = await okJson(await call('GET', '/sessions', {model: 'claude-astra-1'})); const c = l.sessions.find(s => s.id === capped.session); assert.deepEqual([c.assignments, c.max_assignments, c.at_cap], [1, 1, true], 'a capped session shows as at its cap'); }
   const ended = await one(`SELECT ended_at FROM sessions WHERE id = $1`, [capped.session]);
   assert.ok(ended.ended_at, 'the cap reached with the return ends the session');
   const after = await call('GET', '/start', {model: 'claude-astra-1', session: capped.session});

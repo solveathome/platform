@@ -313,7 +313,9 @@ job.get("/sessions", bearer, project, async (req: any, res: any) => {
   const rows = await q(`SELECT s.id, s.model, s.effort, s.max_jobs, s.jobs, s.started_at, s.last_seen, s.ended_at, (${LIVE_SESSION}) AS live,
                           (SELECT json_agg(json_build_object('id', j.id, 'type', j.type, 'title', j.title, 'expires_at', j.expires_at)) FROM jobs j WHERE j.assigned_session = s.id AND j.status = 'assigned') AS holds
                         FROM sessions s WHERE s.problem_id = $1 AND s.user_id = $2 ORDER BY s.started_at DESC LIMIT 100`, [req.project.id, req.user!.id]);
-  res.json({ limit_live: MAX_LIVE_SESSIONS, live: rows.filter((r: any) => r.live).length, sessions: rows.map((r: any) => ({ ...r, holds: r.holds ?? [] })),
+  // The cap and the count taken are numbers under the names the registration used (issue #30), so a person sees which agent is at its cap.
+  const shape = (r: any) => { const max = r.max_jobs === null ? null : Number(r.max_jobs); const n = Number(r.jobs); return { ...r, jobs: n, max_jobs: max, assignments: n, max_assignments: max, at_cap: max !== null && n >= max, holds: r.holds ?? [] }; };
+  res.json({ limit_live: MAX_LIVE_SESSIONS, live: rows.filter((r: any) => r.live).length, sessions: rows.map(shape),
              how: `A session is live while it holds an assignment or was seen in the last hour; ended sessions never count. End one: POST ${BASE()}/projects/${req.project.slug}/sessions/<id>/end { "note": "why" } (its assignment goes back to the queue). Replace one with new settings: POST /start with X-Session: <id>.` });
 });
 
@@ -808,9 +810,12 @@ job.get("/return/:id", optionalAuth, project, async (req: any, res) => {
   // `decision` is the latest decision row (null while nothing has been decided) with the reviews that carried it, and `decisions` the whole record, oldest first.
   if (r.type === "curate") r.curation = r.decision; delete r.decision;
   r.reviews = (await q(`SELECT rv.id, u.handle, rv.model, rv.verdict, rv.rung, rv.verification, rv.rerun_reason, rv.trusted, rv.weight, rv.notes_md, rv.created_at FROM reviews rv JOIN users u ON u.id = rv.user_id WHERE rv.return_id = $1 ORDER BY rv.id`, [r.id])).map((v: any) => ({ ...v, id: Number(v.id), weight: Number(v.weight) }));
-  r.decisions = (await q(`SELECT d.status, d.final_rung, d.provisional, d.by, d.note, d.decided_at, u.handle AS decided_by FROM return_decisions d LEFT JOIN users u ON u.id = d.user_id WHERE d.return_id = $1 ORDER BY d.id`, [r.id])).map((d: any) => {
-    const carried = d.status === "pending" || !["trusted", "advisory"].includes(d.by) ? [] : r.reviews.filter((v: any) => v.trusted === (d.by === "trusted") && (v.verdict === "accept") === (d.status === "accepted")).map((v: any) => v.id);
-    return { ...d, review_ids: carried };
+  // Each decision row names who decided (issue #31): the reviewers whose verdicts carried it, or the person who reopened or challenged; and whether the author's own trusted handle was among them.
+  r.decisions = (await q(`SELECT d.status, d.final_rung, d.provisional, d.by, d.note, d.decided_at, u.handle AS actor FROM return_decisions d LEFT JOIN users u ON u.id = d.user_id WHERE d.return_id = $1 ORDER BY d.id`, [r.id])).map((d: any) => {
+    const carried = d.status === "pending" || !["trusted", "advisory"].includes(d.by) ? [] : r.reviews.filter((v: any) => v.trusted === (d.by === "trusted") && (v.verdict === "accept") === (d.status === "accepted"));
+    const decided_by = carried.length ? [...new Set(carried.map((v: any) => String(v.handle)))] : d.actor ? [String(d.actor)] : [];
+    const { actor, ...rest } = d;
+    return { ...rest, decided_by, decided_by_author_handle: d.by === "trusted" && decided_by.includes(String(r.handle)), review_ids: carried.map((v: any) => v.id) };
   });
   r.decision = r.decisions.length ? r.decisions[r.decisions.length - 1] : null;
   // pg returns bigint and numeric as strings (issue #25): ids and hours are numbers to a client.

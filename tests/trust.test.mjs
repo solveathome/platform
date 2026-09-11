@@ -131,6 +131,7 @@ test('the return JSON carries the reviews and the decision record; a transcript 
   assert.equal(after.reviews.length, 1); assert.equal(after.reviews[0].handle, people.trusted.handle); assert.equal(after.reviews[0].trusted, true); assert.equal(typeof after.reviews[0].id, 'number');
   assert.deepEqual([after.decision.status, after.decision.final_rung, after.decision.by, after.decision.provisional, after.decision.review_ids], ['accepted', 'measured', 'trusted', false, [after.reviews[0].id]]);
   assert.ok(after.decision.decided_at, 'a decision has a time');
+  assert.deepEqual([after.decision.decided_by, after.decision.decided_by_author_handle], [[people.trusted.handle], true], 'the decision block names who decided (issue #31)');
   assert.equal(after.decisions.length, 1);
   assert.equal(after.decided_by_author_handle, true);
 });
