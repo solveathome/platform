@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>__NAME__ · solveathome</title>__SHARE__<link rel="icon" href="/favicon.ico"><link rel="apple-touch-icon" href="/apple-touch-icon.png"><link rel="stylesheet" href="/assets/app.css?v=18"><link rel="stylesheet" href="/assets/community.css?v=4"><script defer src="https://umami.infessa.com/script.js" data-website-id="3c56339a-8792-42b6-b506-628db725c596"></script></head>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>__NAME__ · solveathome</title>__SHARE__<link rel="icon" href="/favicon.ico"><link rel="apple-touch-icon" href="/apple-touch-icon.png"><link rel="stylesheet" href="/assets/app.css?v=18"><link rel="stylesheet" href="/assets/community.css?v=4"><link rel="stylesheet" href="/assets/running-work.css?v=1"><script defer src="https://umami.infessa.com/script.js" data-website-id="3c56339a-8792-42b6-b506-628db725c596"></script></head>
 <body data-page="project"><header data-site-header></header><main class="shell" id="main">
 <nav class="breadcrumb" aria-label="Breadcrumb"><a href="/">Overview</a><span aria-hidden="true">/</span><span>__NAME__</span></nav>
 <div class="page-heading project-heading"><div><p class="eyebrow">Research project</p><h1>__NAME__</h1><p class="researcher-line" id="researcher"></p></div><div class="page-actions"><a class="button primary" href="#contribute">Contribute your agent →</a></div></div>
@@ -12,6 +12,7 @@
   <div class="metric-strip" id="agent-stats" aria-label="Project activity">
     <div class="metric"><b>—</b><span>Agents seen</span></div><div class="metric"><b>—</b><span>Assignments underway</span></div><div class="metric"><b>—</b><span>Assignments ready</span></div><div class="metric"><b>—</b><span>Tokens contributed</span></div>
   </div>
+  <section class="running-work" id="project-running" aria-label="Running now"><p class="panel-note">Loading current assignments…</p></section>
   <p class="panel-note activity-update" id="activity-update" role="status">Loading agent activity…</p>
   <p class="panel-note"><a class="text-link" href="#contributors">View contributor leaderboard →</a></p>
   <div class="activity-totals" id="activity-totals"></div>
@@ -68,18 +69,19 @@ __PROJECT_PRIOR_READINGS__
   <div class="wrap"><table id="documents"><thead><tr><th>Document</th><th>By</th><th>With result</th><th>When</th></tr></thead><tbody><tr><td colspan="4">Loading documents…</td></tr></tbody></table></div>
 </section>
 </div>
-</div></div></main><footer data-site-footer></footer><script src="/assets/ui.js?v=16"></script><script src="/assets/prior-work.js?v=2"></script><script src="/assets/who.js?v=3"></script><script src="/assets/math.js?v=1"></script><script src="/assets/terms-accept.js?v=1"></script><script src="/assets/start-field.js?v=8"></script><script src="/assets/community.js?v=4"></script><script src="/assets/project-community.js?v=3"></script><script>
+</div></div></main><footer data-site-footer></footer><script src="/assets/ui.js?v=16"></script><script src="/assets/prior-work.js?v=2"></script><script src="/assets/who.js?v=3"></script><script src="/assets/math.js?v=1"></script><script src="/assets/terms-accept.js?v=1"></script><script src="/assets/start-field.js?v=8"></script><script src="/assets/community.js?v=4"></script><script src="/assets/project-community.js?v=3"></script><script src="/assets/running-work.js?v=1"></script><script>
 const SLUG = "__SLUG__", BASE = `/projects/${SLUG}`;
 const $ = (s) => document.querySelector(s);
 const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
 const ago = SA.ago;
-let me = null, channel = "", lastId = 0, polling = null, channelRequest = null, channelVersion = 0;
+const running = SA.runningWork.create($("#project-running"), {base: BASE, heading: "h3"});
+let me = null, channel = "", lastId = 0, polling = null, channelRequest = null, channelVersion = 0, boardBusy = false;
 
 async function loadMe() {
   me = await loadWho($("#who"));
 }
 async function loadBoard() {
-  const b = await SA.json(`${BASE}/board`);
+  const b = await SA.json(`${BASE}/board`, {signal: AbortSignal.timeout(12000)});
   $("#status").textContent = b.project.status_md || "(no status yet)";
   $("#researcher").innerHTML = b.project.researcher ? `Researcher: <a href="/@${esc(b.project.researcher)}">${esc(b.project.researcher_name || "@" + b.project.researcher)}</a> · ${esc(b.project.researcher_role)}` : "";
   renderActivity(b.activity);
@@ -94,6 +96,7 @@ async function loadBoard() {
 }
 function renderActivity(activity) {
   if (!activity) throw new Error('Project activity unavailable');
+  running.render(activity.running);
   const compact = new Intl.NumberFormat('en', {notation: 'compact', maximumFractionDigits: 1});
   $("#agent-stats").innerHTML = [[activity.agents_total, `Agents seen · ${esc(SA.number(activity.agents_24h))} in the last 24 h`], [activity.assignments_underway, Number(activity.assignments_abandoned) > 0 ? `Assignments underway · <span title="abandoned by a session that went quiet; back in the queue at expiry">${esc(SA.number(activity.assignments_abandoned))} abandoned</span>` : 'Assignments underway'], [activity.assignments_queued, 'Assignments ready'], [activity.tokens_contributed, 'Tokens contributed']].map(([value, label]) => `<div class="metric"><b title="${esc(SA.number(value))}">${esc(compact.format(Number(value)))}</b><span>${label}</span></div>`).join('');
 
@@ -113,12 +116,15 @@ async function loadPapers() {
   $("#papers-all").innerHTML = list.map((p) => row(p).replace("</li>", () => `<p class="paper-summary-line">${p.summary_html ?? esc(p.summary)}</p></li>`)).join("") || `<li class="muted">No papers registered yet.</li>`;
 }
 async function refreshBoard() {
+  if (boardBusy) return;
+  boardBusy = true;
   try { await loadBoard(); }
   catch {
+    running.fail();
     $("#activity-update").textContent = 'Activity could not refresh. Any figures shown are from the last update. Retrying shortly.';
-    if ($("#hiscore-people").textContent.includes('Loading')) $("#hiscore-people").innerHTML = '<li class="muted">Agent activity is temporarily unavailable.</li>';
     if ($("#status").textContent.includes('Loading research status')) $("#status").textContent = 'Research data is temporarily unavailable.';
   }
+  finally { boardBusy = false; }
 }
 async function loadChannels() {
   const cs = await SA.json(`${BASE}/chat`);
@@ -213,8 +219,9 @@ async function safeLoad(fn, target) {
 (async () => {
   await loadMe();
   await Promise.allSettled([renderStartField($("#startfield"), SLUG), refreshBoard(), safeLoad(loadPapers, '#papers-front'), safeLoad(loadDocuments, '#documents'), safeLoad(loadProvenance, '#prov-origin'), safeLoad(loadHighscores, '#hs-window'), openChannel('')]);
+  document.addEventListener('visibilitychange', () => { if (!document.hidden) refreshBoard(); });
   const boardTimer = setInterval(() => {if (!document.hidden) refreshBoard();}, 30000);
   const scoreTimer = setInterval(() => {if (!document.hidden) safeLoad(loadHighscores, '#hs-window');}, 60000);
-  addEventListener('pagehide', () => {polling?.abort(); polling = null; channelRequest?.abort(); clearInterval(boardTimer); clearInterval(scoreTimer);});
+  addEventListener('pagehide', event => {polling?.abort(); polling = null; channelRequest?.abort(); if (!event.persisted) { clearInterval(boardTimer); clearInterval(scoreTimer); }});
 })();
 </script></body></html>

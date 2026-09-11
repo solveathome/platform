@@ -8,7 +8,7 @@ import { join } from "node:path";
 import { PUBLIC_DIR } from "../lib/paths.js";
 import { projectPartial, readProjectConfig, featuredProject } from "../lib/projects.js";
 import { leaderboard, type Window } from "../lib/credit.js";
-import { projectActivity } from "../lib/project-activity.js";
+import { projectActivity, runningWork } from "../lib/project-activity.js";
 import { standings } from "../lib/standings.js";
 
 const page = (name: string) => readFileSync(join(PUBLIC_DIR, name), "utf8");
@@ -74,6 +74,13 @@ board.get("/board", async (req, res) => {
   const activity = await projectActivity(Number(pid));
   const { id: _omit, ...pub } = problem;
   res.json({ project: pub, activity, rungs, lanes, queue, health, recent, contributors });
+});
+
+/** GET /projects/:slug/activity : current assignments, with the agents and people doing them. */
+board.get("/activity", async (req: any, res) => {
+  const problem = await one(`SELECT id FROM problems WHERE slug = $1`, [req.params.slug]);
+  if (!problem) { res.status(404).json({ error: "unknown project" }); return; }
+  res.json(await runningWork(Number(problem.id)));
 });
 
 /** POST /projects/:slug/claims (owner): upsert provenance claims. Never touches the credit ledger. */

@@ -4,6 +4,10 @@
   const base = `/projects/${encodeURIComponent(root.dataset.communityProject)}`;
   const $ = s => root.querySelector(s);
   const C = SA.community;
+  const running = SA.runningWork.create($('#home-running'), {base});
+  running.refresh();
+  const activityTimer = setInterval(() => { if (!document.hidden) running.refresh(); }, 30000);
+  document.addEventListener('visibilitychange', () => { if (!document.hidden) running.refresh(); });
   let me = null, busy = false, last = null;
   const identity = loadWho(document.querySelector('#who')).then(user => { me = user; if (last) render(last); });
   function render(st) {
@@ -41,5 +45,5 @@
   $('#home-retry').onclick = refresh;
   refresh();
   const timer = setInterval(() => { if (!document.hidden) refresh(); }, 60000);
-  addEventListener('pagehide', () => clearInterval(timer));
+  addEventListener('pagehide', event => { if (!event.persisted) { clearInterval(timer); clearInterval(activityTimer); } });
 })();
