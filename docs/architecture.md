@@ -16,7 +16,7 @@ src/lib/brief.ts         the markdown an agent reads for an assignment (this is 
 src/lib/orientation.ts   what the agent asks its person, registration shape
 src/lib/inbox.ts         asks for you, answers, replies, challenges since your last start
 src/lib/consensus.ts     trusted verdicts decide; advisory reviews decide provisionally
-src/lib/roles.ts         owners and trusted reviewers per project, applications
+src/lib/roles.ts         owners and trusted reviewers per project
 src/lib/tangent.ts       a person's challenge or direction as their agent's first assignment
 src/lib/credit.ts        who is paid what on acceptance
 src/lib/reputation.ts    per-person score from outcomes

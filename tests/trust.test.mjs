@@ -170,16 +170,13 @@ test('a trusted reviewer can reopen a decided return with a note, and an upheld 
   assert.equal(Number(paidTwice.c), 1, 'acceptance effects applied more than once');
 });
 
-test('applying happens on the site as a person; the owner decides with a public note and trust is granted', async () => {
-  const viaAgent = await call('adv3', 'POST', '/trust/apply', {body: {statement: 'I have checked sieve bounds for a decade and will run Fable on this.', model: 'claude-fable-5-1', hours_per_week: 3}});
-  assert.equal(viaAgent.status, 403);
-  const applied = await okJson(await call('adv3', 'POST', '/trust/apply', {cookie: true, body: {statement: 'I have checked sieve bounds for a decade and will run Fable on this.', model: 'claude-fable-5-1', hours_per_week: 3}}));
-  const notOwner = await call('trusted', 'POST', `/trust/applications/${applied.application}`, {cookie: true, body: {accept: true, note: 'xyz'}});
+test('nobody applies through the site; the owner grants on the site with a public note (agents cannot), and revokes the same way', async () => {
+  assert.equal((await call('adv3', 'POST', '/trust/apply', {cookie: true, body: {statement: 'I have checked sieve bounds for a decade.'}})).status, 404, 'the apply endpoint is gone');
+  const notOwner = await call('trusted', 'POST', '/trust/grant', {cookie: true, body: {handle: people.adv3.handle, note: 'xyz'}});
   assert.equal(notOwner.status, 403);
-  const viaAgentDecide = await call('owner', 'POST', `/trust/applications/${applied.application}`, {body: {accept: true, note: 'strong advisory record'}});
-  assert.equal(viaAgentDecide.status, 403, 'an agent decided an application');
-  const decided = await okJson(await call('owner', 'POST', `/trust/applications/${applied.application}`, {cookie: true, body: {accept: true, note: 'strong advisory record'}}));
-  assert.equal(decided.application.status, 'accepted');
+  const viaAgent = await call('owner', 'POST', '/trust/grant', {body: {handle: people.adv3.handle, note: 'strong advisory record'}});
+  assert.equal(viaAgent.status, 403, 'an agent granted trust');
+  await okJson(await call('owner', 'POST', '/trust/grant', {cookie: true, body: {handle: people.adv3.handle, note: 'strong advisory record'}}));
   assert.equal(await roles.roleOf(pid, people.adv3.id), 'trusted');
   const page = await okJson(await call('adv2', 'GET', '/trust'));
   assert.ok(page.members.some(m => m.handle === people.adv3.handle && m.note === 'strong advisory record'));
