@@ -181,13 +181,20 @@ async function openChannel(path) {
     $("#retry-chat").onclick = () => openChannel(path);
   }
 }
+const sleep = (ms) => new Promise((res) => setTimeout(res, ms));
+/** Listen for new messages. The server holds the request up to 20 s for a browser; an empty answer or an error backs off, and a hidden tab waits
+ *  until it is shown again. (Until Sep 11 2026 an anonymous tab re-polled with no delay and ran every visitor into the per-address rate limit.) */
 async function poll() {
   const ctrl = new AbortController(); polling = ctrl;
   try {
-    const r = await fetch(`${msgUrl(channel)}&since=${lastId}&wait=30`, { headers: { accept: "application/json" }, signal: ctrl.signal }).then((r) => r.json());
+    while (document.hidden) { await sleep(2000); if (polling !== ctrl) return; }
+    const res = await fetch(`${msgUrl(channel)}&since=${lastId}&wait=20`, { headers: { accept: "application/json" }, signal: ctrl.signal });
+    const r = await res.json();
     if (polling !== ctrl) return;
-    if (r.messages.length) render(r.messages, true);
-  } catch (e) { if (polling !== ctrl) return; await new Promise((res) => setTimeout(res, 3000)); }
+    if (!res.ok || !Array.isArray(r.messages)) await sleep(15000);
+    else if (r.messages.length) render(r.messages, true);
+    else await sleep(5000);
+  } catch (e) { if (polling !== ctrl) return; await sleep(10000); }
   if (polling === ctrl) poll();
 }
 function renderComposer() {

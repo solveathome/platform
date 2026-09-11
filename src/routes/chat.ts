@@ -3,6 +3,7 @@ import { q, one } from "../db/index.js";
 import { bearer, optionalAuth } from "../lib/auth.js";
 import * as files from "../lib/files.js";
 import { renderMessage, MAX_MESSAGE_CHARS, MAX_STATUS_CHARS, TOO_LONG } from "../lib/chat-render.js";
+import { clientIp } from "../lib/ratelimit.js";
 import { paperPages } from "../lib/paths-link.js";
 import { postRateOk, RATE_MESSAGE } from "../lib/messages.js";
 import { findSecret } from "../lib/files.js";
@@ -150,10 +151,11 @@ async function leaveHandler(req: any, res: any): Promise<void> {
 chat.get("/chat/*path/messages", optionalAuth, project, channel, listHandler);
 async function listHandler(req: any, res: any): Promise<void> {
   let wait = Math.min(MAX_WAIT, Math.max(0, Number(req.query.wait ?? 0)));
-  // Waiting is for agents with a token; a browser or an anonymous client gets what is there now.
-  if (wait > 0 && !req.user) wait = 0;
-  if (wait > 0 && ((waitsByUser.get(req.user.id) ?? 0) >= MAX_WAITERS_PER_USER || activeWaits >= MAX_WAITERS)) { res.setHeader("Retry-After", "5"); res.status(429).json({ error: "too many open listeners; one listener per channel per agent, retry in a few seconds" }); return; }
-  if (wait > 0) { activeWaits += 1; waitsByUser.set(req.user.id, (waitsByUser.get(req.user.id) ?? 0) + 1); res.on("close", () => { activeWaits -= 1; waitsByUser.set(req.user.id, (waitsByUser.get(req.user.id) ?? 1) - 1); }); }
+  // A browser or an anonymous client may wait too, a little less, keyed by address: without it a tab re-polled with no delay and ran its whole address into the rate limit (Sep 11 2026).
+  if (wait > 0 && !req.user) wait = Math.min(wait, 20);
+  const waiterKey = req.user ? req.user.id : `ip:${clientIp(req)}`;
+  if (wait > 0 && ((waitsByUser.get(waiterKey) ?? 0) >= MAX_WAITERS_PER_USER || activeWaits >= MAX_WAITERS)) { res.setHeader("Retry-After", "5"); res.status(429).json({ error: "too many open listeners; one listener per channel per agent, retry in a few seconds" }); return; }
+  if (wait > 0) { activeWaits += 1; waitsByUser.set(waiterKey, (waitsByUser.get(waiterKey) ?? 0) + 1); res.on("close", () => { activeWaits -= 1; waitsByUser.set(waiterKey, (waitsByUser.get(waiterKey) ?? 1) - 1); }); }
   const limit = Math.min(200, Math.max(1, Number(req.query.limit ?? RECENT)));
   // `before=<id>`: the `limit` messages before that one (the page's "Show earlier"); never waits.
   const before = Number(req.query.before ?? NaN); const upTo = Number.isFinite(before) && before > 0 ? Math.floor(before) : null;

@@ -176,6 +176,17 @@ test('trust by model (Chris, Sep 11): an Astra session at a top thinking level r
   assert.equal((await one(`SELECT status FROM returns WHERE id = $1`, [r2.id])).status, 'pending');
 });
 
+test('a self-assigned review is not capped by the handle\'s pending self-assigned returns (Astra report, Sep 11)', async () => {
+  const ids = [];
+  for (let i = 0; i < 6; i++) ids.push(Number((await one(`INSERT INTO returns (problem_id, type, user_id, model, provider, report_md, transcript, status) VALUES ($1,'audit',$2,'m','p','own audit','t','pending') RETURNING id`, [pid, people.trusted.id])).id));
+  const r = await one(`INSERT INTO returns (problem_id, type, user_id, model, provider, report_md, transcript, status) VALUES ($1,'source',$2,'m','p','page 6','t','pending') RETURNING id`, [pid, people.author.id]);
+  const capped = await call('trusted', 'POST', '/result', {model: 'gpt-6-astra', body: {type: 'audit', revision: {path: 'x.md', file: 'a'.repeat(64)}, report_md: 'another', transcript: 't', transcript_approved: true}});
+  assert.equal(capped.status, 429, 'a seventh self-assigned return should hit the cap');
+  const v = await okJson(await call('trusted', 'POST', '/result', {model: 'gpt-6-astra', body: {type: 'review', return_id: Number(r.id), verdict: 'accept', rung: 'measured', notes_md: 'checked page 6', transcript: 't', transcript_approved: true}}));
+  assert.equal(v.outcome, 'accepted');
+  await q(`DELETE FROM returns WHERE id = ANY($1)`, [ids]);
+});
+
 test('three advisory reviews decide provisionally: nothing paid, review jobs still open', async () => {
   for (const [who, model] of [['adv1', 'claude-fable-5-1'], ['adv2', 'gpt-6'], ['adv3', 'gemini-3-pro']]) {   // gpt-6, not astra: astra at max is trusted by model since Sep 11 evening
     const r = await okJson(await call(who, 'POST', '/result', {model, body: review('accept')}));
