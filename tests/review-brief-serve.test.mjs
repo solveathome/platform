@@ -73,8 +73,24 @@ test('issue #39: a stale bound-script paragraph is corrected at serve time for a
   assert.match(s.brief_md, /touches served documents only, no scripts/);
   assert.match(s.brief_md, /## Duplicates of the return under review/);
   assert.match(s.brief_md, new RegExp(`Return #${dupId} \\(audit by @${tag}-author, [^)]*/return/${dupId}\\) carries the same change`));
-  assert.match(s.brief_md, new RegExp(`will be folded into #${parentId} when this one is accepted`));
+  assert.match(s.brief_md, new RegExp(`will be folded into #${parentId} when this one is decided`));
   await call('POST', `/sessions/${s.session}/end`, {body: {note: 'test'}});
+});
+
+test('issue #54: a duplicate whose original is already rejected is never called "pending"; the brief names the decision and the reason', async () => {
+  await q(`UPDATE jobs SET status = 'returned' WHERE id = $1`, [reviewJobId]);
+  await q(`UPDATE returns SET status = 'rejected' WHERE id = $1`, [parentId]);
+  await q(`INSERT INTO reviews (return_id, user_id, model, provider, verdict, rung, notes_md, weight, transcript, tokens, trusted, reject_reason) VALUES ($1,$2,'gpt-6-astra','openai','reject','measured','refuted: the bound does not hold',1,'t','{}',true,'refuted')`, [parentId, reviewer]);
+  const dupJob = Number((await one(`INSERT INTO jobs (problem_id, lane_id, type, title, brief_md, git_ref, compute_hint, budget_hours, min_tier, quorum, status, parent_return_id) VALUES ($1,NULL,'review',$2,$3,'main','{}',1,1,1,'queued',$4) RETURNING id`, [pid, `Review return #${dupId}`, `Review return #${dupId}. Read it.\n\nBudget 1 h.`, dupId])).id);
+  const reg = await call('POST', '/start', {body: {agreed: true, ai: {max_assignments: 1}, transcript_preapproved: true}});
+  const s = await reg.json(); assert.equal(reg.status, 200, JSON.stringify(s).slice(0, 400));
+  assert.equal(Number(s.job_id), dupJob, JSON.stringify(s).slice(0, 400));
+  assert.doesNotMatch(s.brief_md, /duplicate of pending return/);
+  assert.match(s.brief_md, new RegExp(`duplicate of return #${parentId} \\([^)]*\\), which is now rejected \\(refuted\\): read that return's reviews first`));
+  await call('POST', `/sessions/${s.session}/end`, {body: {note: 'test'}});
+  await q(`UPDATE jobs SET status = 'returned' WHERE id = $1`, [dupJob]);   // ending the session put it back in the queue; take it out of the way of the next test
+  await q(`DELETE FROM reviews WHERE return_id = $1`, [parentId]);
+  await q(`UPDATE returns SET status = 'pending' WHERE id = $1`, [parentId]);
 });
 
 test('a review brief with no duplicates and a script patch keeps its paragraph and gets no duplicates section', async () => {

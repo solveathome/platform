@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import {test} from 'node:test';
 // Codex logs (issue #49): the thread's running total is a ceiling, never the credit; the same turn logged in two shapes is counted once.
-const {parseTranscript, effortFromTranscript, logKind, isSessionLog} = await import('../src/lib/tokens.ts');
+const {parseTranscript, effortFromTranscript, logKind, isSessionLog, assignmentMismatch, jobsNamed, logEndsAt} = await import('../src/lib/tokens.ts');
 
 const cum = (out, inp, cached) => JSON.stringify({type: 'event_msg', payload: {type: 'token_count', info: {total_token_usage: {input_tokens: inp, cached_input_tokens: cached, cache_write_input_tokens: 0, output_tokens: out, total_tokens: inp + out}, last_token_usage: {input_tokens: 52592, cached_input_tokens: 51072, cache_write_input_tokens: 0, output_tokens: 148, total_tokens: 52740}}}});
 const rec = (out, inp, cached) => JSON.stringify({type: 'token_usage_record', payload: {usage: {input_tokens: inp, cached_input_tokens: cached, cache_write_input_tokens: 0, output_tokens: out, total_tokens: inp + out}, thread_token_usage: {input_tokens: 7374324, cached_input_tokens: 7101184, output_tokens: 51309}}});
@@ -97,4 +97,31 @@ test('the solveathome format (agent-written) is accepted as a transcript: counte
   assert.equal(t.log, 'custom'); assert.equal(t.source, 'custom-jsonl'); assert.equal(isSessionLog(t), true); assert.equal(t.entries, 2);
   assert.equal(t.input, 3234); assert.equal(t.output, 356); assert.equal(t.cache_read, 1000); assert.deepEqual(t.models, {'gpt-6-astra': 356});
   assert.equal(effortFromTranscript(log), null);
+});
+
+test('issue #55: a log naming other assignments and never this one, or ending before it was handed out, is a mismatch; one naming this job, escaped or plain, is not', () => {
+  const line = (o) => JSON.stringify(o);
+  // Return #160's shape: the brief of job #282 in a tool result (escaped), the claim post's job_id in a tool input (escaped), timestamps hours before job #358.
+  const foreign = [
+    line({type: 'user', timestamp: '2026-09-11T16:00:38.893Z', message: {content: [{type: 'tool_result', content: '# solveathome job #282: Explore Q-xchannel-offset\n\nTaking job #282.'}]}}),
+    line({type: 'assistant', timestamp: '2026-09-11T16:01:10.230Z', message: {id: 'f1', model: 'claude-opus-5', usage: {input_tokens: 1, output_tokens: 1}, content: [{type: 'tool_use', input: {body: JSON.stringify({job_id: 282, kind: 'claim'})}}]}}),
+  ].join('\n');
+  assert.deepEqual(jobsNamed(foreign), [282]);
+  assert.equal(logEndsAt(foreign).toISOString(), '2026-09-11T16:01:10.230Z');
+  const m = assignmentMismatch(foreign, 358, new Date('2026-09-11T18:30:00Z'));
+  assert.match(m.reason, /names assignment #282 and never #358/); assert.deepEqual(m.jobs_named, [282]); assert.equal(m.job, 358);
+  assert.equal(assignmentMismatch(foreign, 282, new Date('2026-09-11T15:55:00Z')), null, 'its own assignment');
+  const both = foreign + '\n' + line({type: 'assistant', timestamp: '2026-09-11T18:40:00Z', message: {content: [{type: 'tool_use', input: {body: '{"job_id": 358}'}}]}});
+  assert.equal(assignmentMismatch(both, 358, new Date('2026-09-11T18:30:00Z')), null, 'a session that did two assignments names both');
+  assert.deepEqual(jobsNamed('{"job_id":"77"} and \\"job_id\\": 78 and "job_id" : 79'), [77, 78, 79]);
+  // Names nothing: only the time can tell, with an hour of slack for clocks.
+  const early = [line({type: 'user', timestamp: '2026-09-11T16:00:38Z', message: {content: 'hi'}}), line({type: 'assistant', timestamp: '2026-09-11T16:01:10Z', message: {content: 'ok'}})].join('\n');
+  const e = assignmentMismatch(early, 358, new Date('2026-09-11T18:30:00Z'));
+  assert.match(e.reason, /last line is from 2026-09-11 16:01 UTC, before assignment #358 was handed out at 2026-09-11 18:30 UTC/); assert.equal(e.ends_at, '2026-09-11T16:01:10.000Z');
+  assert.equal(assignmentMismatch(early, 358, new Date('2026-09-11T16:50:00Z')), null, 'within the slack');
+  assert.equal(assignmentMismatch(early, 358, null), null, 'no assignment time, nothing to compare');
+  assert.equal(assignmentMismatch('t', 358, new Date()), null, 'a bare placeholder names and dates nothing');
+  const oc = line({role: 'assistant', time: {created: Date.parse('2026-09-11T16:01:10Z')}, tokens: {input: 1, output: 1}, modelID: 'x', providerID: 'y'});
+  assert.equal(logEndsAt(oc).toISOString(), '2026-09-11T16:01:10.000Z', 'OpenCode millisecond times');
+  assert.equal(logEndsAt(line({time: {created: 1}})), null, 'a small counter is not a time');
 });

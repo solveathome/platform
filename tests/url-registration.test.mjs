@@ -281,3 +281,36 @@ test('a log from an unknown harness is accepted, the agent is told its system is
   } finally { await q(`DELETE FROM harness_reports WHERE id = $1`, [id]); }
   await end(j.session);
 });
+
+test('issue #55: a transcript from another assignment is accepted, labelled, counts nothing, tells the agent, and the right lines can be resubmitted', async () => {
+  const reg = await fetch(base + '/start?share=0', {headers: {authorization: `Bearer ${token}`, accept: 'application/json', 'x-model': 'claude-fable-5-1', 'x-effort': 'high'}});
+  const j = await reg.json(); assert.equal(reg.status, 200, JSON.stringify(j).slice(0, 300));
+  assert.match(j.brief_md, /a log from another assignment is accepted and kept, but labelled, counts no tokens/);
+  const H = {authorization: `Bearer ${token}`, accept: 'application/json', 'content-type': 'application/json', 'x-model': 'claude-fable-5-1', 'x-effort': 'high', 'x-session': j.session};
+  const otherJob = Number(j.job_id) + 100000;
+  const mk = (jobId, at) => [
+    JSON.stringify({type: 'user', timestamp: at, message: {content: [{type: 'tool_result', content: `# solveathome job #${jobId}: Some job\n\nDo it.`}]}}),
+    JSON.stringify({type: 'assistant', effort: 'high', timestamp: at, message: {id: `m-${jobId}`, model: 'claude-fable-5-1', usage: {input_tokens: 1000, output_tokens: 500}, content: [{type: 'tool_use', input: {body: JSON.stringify({job_id: jobId, kind: 'claim'})}}]}}),
+  ].join('\n');
+  const foreign = mk(otherJob, '2026-09-11T16:01:10.230Z');
+  const r = await fetch(base + '/result', {method: 'POST', headers: H, body: JSON.stringify({job_id: j.job_id, report_md: 'Found the page.', transcript: foreign, transcript_approved: true, author_rung: 'measured'})});
+  const t = await r.json(); assert.equal(r.status, 200, JSON.stringify(t).slice(0, 300));
+  assert.equal(t.tokens.log, 'claude-code'); assert.equal(t.tokens.output, 0); assert.equal(t.tokens.entries, 0);
+  assert.match(t.tokens.mismatch.reason, new RegExp(`names assignment #${otherJob} and never #${j.job_id}`));
+  const w = t.warnings.find(x => /your transcript is not this assignment's/.test(x)); assert.ok(w, JSON.stringify(t.warnings));
+  assert.match(w, /credited nothing for this work/); assert.match(w, new RegExp(`POST .*/return/${t.return_id}/transcript`));
+  assert.ok(!t.warnings.some(x => /thinking level/.test(x)), 'no effort evidence is taken from another assignment\'s log');
+  const page = await (await fetch(base + `/return/${t.return_id}`, {headers: {accept: 'text/html'}})).text();
+  assert.match(page, /from another assignment/);
+  const brief = await one(`SELECT brief_md FROM jobs WHERE parent_return_id = $1 ORDER BY id LIMIT 1`, [t.return_id]);
+  assert.ok(brief, 'a review job was spawned'); assert.match(brief.brief_md, /transcript belongs to another assignment/);
+  // The same wrong log again is refused on resubmit; this assignment's lines are taken and clear the label.
+  const again = await fetch(base + `/return/${t.return_id}/transcript`, {method: 'POST', headers: H, body: JSON.stringify({transcript: foreign})});
+  assert.equal(again.status, 400); assert.match((await again.json()).error, new RegExp(`not return #${t.return_id}'s: it names assignment #${otherJob}`));
+  const ok = await fetch(base + `/return/${t.return_id}/transcript`, {method: 'POST', headers: H, body: JSON.stringify({transcript: mk(Number(j.job_id), new Date().toISOString())})});
+  const o = await ok.json(); assert.equal(ok.status, 200, JSON.stringify(o).slice(0, 300)); assert.equal(o.tokens.output, 500);
+  const row = await one(`SELECT tokens FROM returns WHERE id = $1`, [t.return_id]);
+  assert.equal(row.tokens.mismatch, undefined); assert.equal(row.tokens.output, 500);
+  assert.doesNotMatch(await (await fetch(base + `/return/${t.return_id}`, {headers: {accept: 'text/html'}})).text(), /from another assignment/);
+  await end(j.session);
+});

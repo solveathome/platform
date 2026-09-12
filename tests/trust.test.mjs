@@ -248,6 +248,29 @@ test('the same change submitted twice is folded (issue #51): a duplicate of an a
   await q(`DELETE FROM jobs WHERE parent_return_id = ANY($1)`, [[dup.return_id, second.return_id]]);
 });
 
+test('issue #54: a duplicate of a pending return is rejected with it, reason class carried, review jobs closed, nothing paid; accepted later, it follows', async () => {
+  const P3 = '--- a/research/k.md\n+++ b/research/k.md\n@@ -1 +1 @@\n-e\n+f\n';
+  const pend = await one(`INSERT INTO returns (problem_id, type, user_id, model, provider, report_md, transcript, status, patch, patch_hash) VALUES ($1,'direction',$2,'claude-opus-5','anthropic','route three','t','pending',$3,$4) RETURNING id`, [pid, people.adv2.id, P3, patchHash(P3)]);
+  const twin = await okJson(await call('adv3', 'POST', '/result', {model: 'claude-fable-5-1', body: {type: 'direction', report_md: '# Route three\nAgain.', patch: P3, transcript: 't', transcript_approved: true}}));
+  assert.equal(twin.status, 'pending'); assert.ok(twin.warnings.some(w => w.includes('rejected: rejected with it')), JSON.stringify(twin.warnings));
+  const paidBefore = Number((await one(`SELECT count(*) AS c FROM credits WHERE source_type = 'return' AND source_id = $1`, [String(twin.return_id)])).c);
+  await okJson(await call('trusted', 'POST', '/result', {model: 'gpt-6-astra', body: {type: 'review', return_id: Number(pend.id), verdict: 'reject', reject_reason: 'refuted', rung: 'heuristic', notes_md: 'the route is circular', transcript: 't', transcript_approved: true}}));
+  const folded = await one(`SELECT status, superseded_by, duplicate_of FROM returns WHERE id = $1`, [twin.return_id]);
+  assert.deepEqual([folded.status, folded.superseded_by, Number(folded.duplicate_of)], ['rejected', null, Number(pend.id)]);
+  const dec = await one(`SELECT by, note FROM return_decisions WHERE return_id = $1 ORDER BY id DESC LIMIT 1`, [twin.return_id]);
+  assert.equal(dec.by, 'duplicate'); assert.match(dec.note, new RegExp(`same change as return #${pend.id}, now rejected \\(refuted\\)`));
+  assert.equal(Number((await one(`SELECT count(*) AS c FROM jobs WHERE parent_return_id = $1 AND status IN ('queued','assigned')`, [twin.return_id])).c), 0, 'the folded return still holds open review jobs');
+  assert.equal(Number((await one(`SELECT count(*) AS c FROM credits WHERE source_type = 'return' AND source_id = $1`, [String(twin.return_id)])).c), paidBefore, 'a folded duplicate was paid');
+  const page = await okJson(await call('adv1', 'GET', `/return/${pend.id}`)); assert.deepEqual(page.duplicates, [twin.return_id], 'the rejected duplicate still shows on the original');
+  // The original reopened and accepted: the duplicate follows it and is superseded.
+  await q(`DELETE FROM reviews WHERE return_id = $1`, [pend.id]);
+  await q(`UPDATE returns SET status = 'pending', provisional = false WHERE id = $1`, [pend.id]);
+  await okJson(await call('trusted', 'POST', '/result', {model: 'gpt-6-astra', body: {type: 'review', return_id: Number(pend.id), verdict: 'accept', rung: 'heuristic', notes_md: 'on second look it holds', transcript: 't', transcript_approved: true}}));
+  const after = await one(`SELECT status, superseded_by FROM returns WHERE id = $1`, [twin.return_id]);
+  assert.deepEqual([after.status, Number(after.superseded_by)], ['superseded', Number(pend.id)]);
+  await q(`DELETE FROM jobs WHERE parent_return_id = ANY($1)`, [[twin.return_id, Number(pend.id)]]);
+});
+
 test('three advisory reviews decide provisionally: nothing paid, review jobs still open', async () => {
   for (const [who, model] of [['adv1', 'claude-fable-5-1'], ['adv2', 'gpt-6'], ['adv3', 'gemini-3-pro']]) {   // gpt-6, not astra: astra at max is trusted by model since Sep 11 evening
     const r = await okJson(await call(who, 'POST', '/result', {model, body: review('accept')}));

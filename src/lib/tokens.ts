@@ -11,7 +11,40 @@ import { canonicalModel, parseEffort } from "./model-id.js";
 /** No single return spends more than this per field; anything above is a forged or broken transcript, not usage. */
 export const MAX_TOKENS_PER_FIELD = 50_000_000;
 export type LogKind = "claude-code" | "codex" | "copilot" | "opencode" | "custom" | "withheld" | "summary" | "unknown";
-export type Tokens = { input: number; output: number; cache_read: number; cache_write: number; entries: number; source: "claude-jsonl" | "codex-jsonl" | "copilot-jsonl" | "opencode-jsonl" | "custom-jsonl" | "reported" | "none"; models?: Record<string, number>; log?: LogKind };
+/** A transcript that is not the assignment's own (issue #55): what it names or when it ends, in words for the agent and the page. */
+export type Mismatch = { reason: string; job: number; jobs_named?: number[]; ends_at?: string };
+export type Tokens = { input: number; output: number; cache_read: number; cache_write: number; entries: number; source: "claude-jsonl" | "codex-jsonl" | "copilot-jsonl" | "opencode-jsonl" | "custom-jsonl" | "reported" | "none"; models?: Record<string, number>; log?: LogKind; mismatch?: Mismatch };
+
+/**
+ * The assignments a transcript names: the brief's title line ("# solveathome job #N", the GET /start result) and the job_id the agent
+ * sends in its chat posts and its return (a tool call's input). Both appear escaped inside tool results and plain in tool inputs.
+ */
+export function jobsNamed(text: string): number[] {
+  const t = String(text ?? ""); const ids = new Set<number>();
+  for (const m of t.matchAll(/solveathome job #(\d+)/g)) ids.add(Number(m[1]));
+  for (const m of t.matchAll(/\\?"job_id\\?"\s*:\s*\\?"?(\d+)/g)) ids.add(Number(m[1]));
+  return [...ids].sort((a, b) => a - b);
+}
+/** When the log ends: the latest ISO "timestamp" (Claude Code, Codex, Copilot) or millisecond "created" (OpenCode) it carries; null when it carries none. */
+export function logEndsAt(text: string): Date | null {
+  let max = 0;
+  for (const m of String(text ?? "").matchAll(/"timestamp"\s*:\s*"(\d{4}-\d{2}-\d{2}T[^"]{5,40})"/g)) { const v = Date.parse(m[1]); if (Number.isFinite(v) && v > max) max = v; }
+  for (const m of String(text ?? "").matchAll(/"created"\s*:\s*(1[5-9]\d{11})\b/g)) { const v = Number(m[1]); if (v > max) max = v; }
+  return max ? new Date(max) : null;
+}
+/** Clock skew a log may show before it counts as ending too early; a log from another assignment is hours off, a wrong clock rarely a whole hour. */
+export const MISMATCH_SLACK_MS = 60 * 60_000;
+/**
+ * Whether a transcript belongs to the assignment it is sent for (issue #55: return #160 carried job #282's session). Two cheap checks:
+ * it names other assignments and never this one, or every line of it predates the assignment. A log naming nothing and carrying no time passes.
+ */
+export function assignmentMismatch(text: string, jobId: number, assignedAt: Date | null): Mismatch | null {
+  const jobs = jobsNamed(text);
+  if (jobs.length && !jobs.includes(Number(jobId))) return { reason: `it names assignment${jobs.length > 1 ? "s" : ""} ${jobs.map((j) => `#${j}`).join(", ")} and never #${jobId}`, job: Number(jobId), jobs_named: jobs };
+  const ends = logEndsAt(text);
+  if (ends && assignedAt && Number.isFinite(assignedAt.getTime()) && ends.getTime() < assignedAt.getTime() - MISMATCH_SLACK_MS) return { reason: `its last line is from ${ends.toISOString().slice(0, 16).replace("T", " ")} UTC, before assignment #${jobId} was handed out at ${assignedAt.toISOString().slice(0, 16).replace("T", " ")} UTC`, job: Number(jobId), ends_at: ends.toISOString() };
+  return null;
+}
 /** Accepted as a transcript: a harness's own log, or one the agent wrote in the solveathome format (labelled agent-written, counts what it states). */
 export const SESSION_LOG_KINDS: LogKind[] = ["claude-code", "codex", "copilot", "opencode", "custom"];
 /** The format an agent may write itself when its harness keeps no log (Chris, Sep 12 2026); spec in docs/transcript-format.md. */
