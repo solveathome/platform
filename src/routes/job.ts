@@ -771,6 +771,8 @@ job.post("/result", bearer, project, async (req: any, res) => {
   if (Object.keys(cites).length) await q(`UPDATE returns SET cites = $2 WHERE id = $1`, [ret!.id, JSON.stringify(cites)]);
   await q(`UPDATE returns SET tokens = $2 WHERE id = $1`, [ret!.id, JSON.stringify(tokens)]);
   await registerEntries(uid, "return", Number(ret!.id), entryKeys);
+  // Token points are paid here, once, whatever becomes of the return (Chris, Sep 12 2026); a resubmitted transcript corrects the row.
+  await credit.payTokens({ id: Number(ret!.id), user_id: uid, model: req.model ?? null, provider: req.provider ?? null, problem_id: Number(problem.id), lane_id: laneId === null || laneId === undefined ? null : Number(laneId), tokens });
   if (paperPlan) {
     let paperId = paperPlan.paperId;
     if (paperId === null) {
@@ -1178,8 +1180,9 @@ async function resubmitTranscript(req: any, res: any, kind: "return" | "review")
   if (kind === "return") {
     const om = omissionShare(b.transcript);
     await q(`UPDATE returns SET transcript = $2, tokens = $3, transcript_omitted = $4, effort = coalesce($5, effort), transcript_resubmitted_at = now() WHERE id = $1`, [id, b.transcript, JSON.stringify(tokens), JSON.stringify(om), effortEvidence]);
-    // Token points are paid when the return is decided (credit.ts reads returns.tokens then); a return already decided has its row corrected here.
+    // The token row is corrected in place; a return from before intake paid gets its row now.
     await q(`UPDATE credits SET points = $2, note = $3 WHERE source_type = 'return' AND source_id = $1 AND kind = 'tokens'`, [String(id), ttot / 1e6 * credit.POINTS.tokens_per_million, `${ttot.toLocaleString("en-US")} tokens (${tokens.output.toLocaleString("en-US")} output), ${tokens.source}, transcript resubmitted`]);
+    await credit.payTokens({ id, user_id: uid, model: row.model ?? null, provider: row.provider ?? null, problem_id: Number(row.problem_id), lane_id: row.lane_id === null ? null : Number(row.lane_id), tokens });
   } else {
     await q(`UPDATE reviews SET transcript = $2, tokens = $3, effort = coalesce($4, effort), transcript_resubmitted_at = now() WHERE id = $1`, [id, b.transcript, JSON.stringify(tokens), effortEvidence]);
     const src = String(row.review_job_id ?? `r${row.return_id}`); const note = `${ttot.toLocaleString("en-US")} tokens (${tokens.output.toLocaleString("en-US")} output), ${tokens.source}, review of return #${row.return_id}, transcript resubmitted`;

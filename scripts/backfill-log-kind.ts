@@ -48,19 +48,21 @@ for (const r of rows) {
     }
   }
   const ttot = total(tokens);
-  if (ttot !== sum(stored) || mismatch) {
+  // Every return pays its tokens once whatever its outcome (Chris, Sep 12 2026): a row that never got one (recorded, superseded, pending) gets it now.
+  const unpaid = table === "returns" && ttot > 0 && !(await one(`SELECT 1 FROM credits WHERE source_type = 'return' AND source_id = $1 AND kind = 'tokens'`, [String(r.id)]));
+  if (ttot !== sum(stored) || mismatch || unpaid) {
     const shown = `${ttot.toLocaleString("en-US")} tokens (${Number(tokens.output ?? 0).toLocaleString("en-US")} output), ${tokens.source}`;
     if (table === "returns") {
       const note = why ? `${shown}: ${why}` : `${shown}, recounted`;
       const had = await one(`SELECT 1 FROM credits WHERE source_type = 'return' AND source_id = $1 AND kind = 'tokens'`, [String(r.id)]);
       if (had) await q(`UPDATE credits SET points = $2, note = $3 WHERE source_type = 'return' AND source_id = $1 AND kind = 'tokens'`, [String(r.id), ttot / 1e6 * POINTS.tokens_per_million, note]);
-      else if (ttot > 0 && ["accepted", "rejected"].includes(r.status)) await pay(Number(r.user_id), r.model, r.provider, Number(r.problem_id), r.lane_id === null ? null : Number(r.lane_id), "tokens", ttot / 1e6 * POINTS.tokens_per_million, "return", r.id, `${note} on a${r.status === "accepted" ? "n accepted" : " rejected"} return`);
+      else if (ttot > 0) await pay(Number(r.user_id), r.model, r.provider, Number(r.problem_id), r.lane_id === null ? null : Number(r.lane_id), "tokens", ttot / 1e6 * POINTS.tokens_per_million, "return", r.id, `${note} on a ${r.status} return`);
     } else {
       const src = String(r.review_job_id ?? `r${r.return_id}`); const note = `${shown}, review of return #${r.return_id}${why ? `: ${why}` : ", recounted"}`;
       if (await one(`SELECT 1 FROM credits WHERE source_type = 'review' AND source_id = $1 AND kind = 'tokens' AND user_id = $2`, [src, r.user_id])) await q(`UPDATE credits SET note = $3 WHERE source_type = 'review' AND source_id = $1 AND kind = 'tokens' AND user_id = $2`, [src, r.user_id, note]);
       else if (ttot > 0) await q(`INSERT INTO credits (user_id, model, provider, problem_id, lane_id, kind, points, source_type, source_id, note) SELECT $1, $2, rv.provider, rt.problem_id, rt.lane_id, 'tokens', 0, 'review', $3, $4 FROM reviews rv JOIN returns rt ON rt.id = rv.return_id WHERE rv.id = $5`, [r.user_id, r.model, src, note, r.id]);
     }
-    console.log(`${table} #${r.id}: ${sum(stored).toLocaleString("en-US")} → ${ttot.toLocaleString("en-US")} tokens${why ? `: ${why}` : ""}`);
+    console.log(`${table} #${r.id}: ${sum(stored).toLocaleString("en-US")} → ${ttot.toLocaleString("en-US")} tokens${why ? `: ${why}` : ""}${unpaid ? ` (paid now, ${r.status})` : ""}`);
   }
   await q(`UPDATE ${table} SET tokens = $2 WHERE id = $1`, [r.id, JSON.stringify(tokens)]);
   tally[`${table}:${log}`] = (tally[`${table}:${log}`] ?? 0) + 1;

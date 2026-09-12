@@ -324,6 +324,9 @@ test('a usage entry counts once per person: the same session log on a second ret
   const r1 = await (await fetch(base + '/result', {method: 'POST', headers: H(a.session), body: JSON.stringify({job_id: a.job_id, report_md: 'One.', transcript: first, transcript_approved: true, author_rung: 'measured'})})).json();
   assert.equal(r1.tokens.output, 30); assert.equal(r1.tokens.already_counted, undefined);
   assert.equal(Number((await one(`SELECT count(*) AS c FROM counted_entries WHERE source_type = 'return' AND source_id = $1`, [r1.return_id])).c), 2);
+  // Token points are paid at intake, once, whatever becomes of the return: 230 tokens on a pending return is a row already.
+  const paid = await q(`SELECT points, note FROM credits WHERE source_type = 'return' AND source_id = $1 AND kind = 'tokens'`, [String(r1.return_id)]);
+  assert.equal(paid.length, 1); assert.ok(Math.abs(Number(paid[0].points) - 230 / 1e6) < 1e-9, JSON.stringify(paid)); assert.match(paid[0].note, /230 tokens \(30 output\), claude-jsonl/);
   // The next assignment's return carries the whole session so far plus one new turn: only the new turn counts.
   const b = await (await fetch(base + '/start', {headers: {...H(a.session)}})).json();
   assert.ok(b.job_id && Number(b.job_id) !== Number(a.job_id), JSON.stringify(b).slice(0, 200));
@@ -337,6 +340,8 @@ test('a usage entry counts once per person: the same session log on a second ret
   // The same log again as a resubmit of the second return: its own entry is released first, so it counts the same 40, not 0.
   const rs = await (await fetch(base + `/return/${r2.return_id}/transcript`, {method: 'POST', headers: H(a.session), body: JSON.stringify({transcript: second})})).json();
   assert.equal(rs.tokens.output, 40, JSON.stringify(rs)); assert.deepEqual(rs.tokens.already_counted, {entries: 2, of: 3, on: [`return #${r1.return_id}`]});
+  const paid2 = await q(`SELECT points FROM credits WHERE source_type = 'return' AND source_id = $1 AND kind = 'tokens'`, [String(r2.return_id)]);
+  assert.equal(paid2.length, 1, 'one token row for the second return'); assert.ok(Math.abs(Number(paid2[0].points) - 140 / 1e6) < 1e-9, JSON.stringify(paid2));
   assert.equal(Number((await one(`SELECT count(*) AS c FROM counted_entries WHERE user_id = $1 AND key LIKE 'cc:' || $2 || '%'`, [uid, tag])).c), 3, 'three entries on record, each once');
   await end(a.session);
 });

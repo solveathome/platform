@@ -25,7 +25,7 @@ export const POINTS = {
   answer_useful: 10,                // your answer to an ask was marked useful by the asker (once per ask)
   review_also_credit_bonus: 3,      // a reviewer who restored missing attribution
   compute_per_cpu_hour: 1,
-  tokens_per_million: 1,            // 1 point per million tokens (input + output + cache), on acceptance; the count itself is the stat that matters
+  tokens_per_million: 1,            // 1 point per million tokens (input + output + cache), once per return whatever its outcome (Chris, Sep 12 2026: the tokens were spent); the count itself is the stat that matters
   max_cites_paid_per_return: 10,
 };
 
@@ -65,8 +65,7 @@ export async function payAcceptedReturn(ret: any, reviews: Array<{ user_id: numb
   if (ret.type === "challenge" && ret.finding === "holds") await pay(ret.user_id, ret.model, ret.provider, pid, lid, "breakthrough", POINTS.breakthrough.refuted, "return", rid, "a person's objection was upheld");
   if (ret.type === "formalize") await pay(ret.user_id, ret.model, ret.provider, pid, lid, "formalize", 0, "return", rid, "");
   if (Number(ret.cpu_hours) > 0) await pay(ret.user_id, null, null, pid, lid, "compute", Number(ret.cpu_hours) * POINTS.compute_per_cpu_hour, "return", rid, `${Number(ret.cpu_hours).toFixed(2)} CPU hours`);
-  const tk = ret.tokens; const ttot = tk ? Number(tk.input ?? 0) + Number(tk.output ?? 0) + Number(tk.cache_read ?? 0) + Number(tk.cache_write ?? 0) : 0;
-  if (ttot > 0) await pay(ret.user_id, ret.model, ret.provider, pid, lid, "tokens", ttot / 1e6 * POINTS.tokens_per_million, "return", rid, `${ttot.toLocaleString("en-US")} tokens (${Number(tk.output ?? 0).toLocaleString("en-US")} output), ${tk.source}`);
+  await payTokens(ret);
   if (ret.type === "direction") await pay(ret.user_id, ret.model, ret.provider, pid, lid, "direction", 0, "return", rid, "");
   // lane origin share
   if (lid) {
@@ -154,8 +153,15 @@ export async function payReviewers(ret: any, reviews: Array<{ user_id: number; v
 /** A final rejection pays the reviewers who called it; the author gets nothing. */
 export async function payRejectedReturn(ret: any, reviews: Parameters<typeof payReviewers>[1]): Promise<void> {
   await payReviewers({ ...ret, status: "rejected" }, reviews);
-  // The tokens were spent and the transcript is published either way (Chris, Sep 11 2026): paid once, on acceptance or rejection alike. Never the result points.
+  await payTokens(ret);
+}
+/**
+ * Token points: the tokens were spent and the transcript is published whatever happens to the return (Chris, Sep 11–12 2026), so every
+ * return pays them once, at intake, on the count the server made (entries counted once per person). Recorded explores, folded duplicates and
+ * rejections included; never the result points. The decision paths call this too for rows from before intake paid.
+ */
+export async function payTokens(ret: { id: number | string; user_id: number; model: string | null; provider: string | null; problem_id: number | null; lane_id: number | null; tokens: any }): Promise<void> {
   const tk = ret.tokens; const ttot = tk ? Number(tk.input ?? 0) + Number(tk.output ?? 0) + Number(tk.cache_read ?? 0) + Number(tk.cache_write ?? 0) : 0;
-  if (ttot > 0 && !(await one(`SELECT 1 FROM credits WHERE source_type = 'return' AND source_id = $1 AND kind = 'tokens'`, [String(ret.id)])))
-    await pay(ret.user_id, ret.model, ret.provider, ret.problem_id, ret.lane_id, "tokens", ttot / 1e6 * POINTS.tokens_per_million, "return", ret.id, `${ttot.toLocaleString("en-US")} tokens on a rejected return`);
+  if (ttot <= 0 || await one(`SELECT 1 FROM credits WHERE source_type = 'return' AND source_id = $1 AND kind = 'tokens'`, [String(ret.id)])) return;
+  await pay(ret.user_id, ret.model, ret.provider, ret.problem_id, ret.lane_id, "tokens", ttot / 1e6 * POINTS.tokens_per_million, "return", ret.id, `${ttot.toLocaleString("en-US")} tokens (${Number(tk.output ?? 0).toLocaleString("en-US")} output), ${tk.source}`);
 }
