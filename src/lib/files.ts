@@ -2,9 +2,9 @@
  * File handoff (scope Q37): content-addressed, text-only, served inert, quota by reputation, secrets rejected.
  */
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { q, one } from "../db/index.js";
+import { q, one, queueFileEffect, transaction } from "../db/index.js";
 import { ROOT } from "./paths.js";
 import * as reputation from "./reputation.js";
 import { needsSourceReview, SOURCE_REVIEW_MESSAGE, sourceReviewHit } from "./document-publication.js";
@@ -125,11 +125,13 @@ export async function attach(shas: unknown, refType: "message" | "return" | "job
 
 /** Owner veto: remove the blob, keep the record and the note. */
 export async function remove(sha: string, byUserId: number, note: string): Promise<boolean> {
-  const f = await one(`SELECT sha256 FROM files WHERE sha256 = $1 AND deleted_at IS NULL`, [sha]);
-  if (!f) return false;
-  const p = blobPath(sha); if (existsSync(p)) unlinkSync(p);
-  await q(`UPDATE files SET deleted_at = now(), deleted_by = $2, deleted_note = $3 WHERE sha256 = $1`, [sha, byUserId, note]);
-  return true;
+  return transaction(async () => {
+    const f = await one(`SELECT sha256 FROM files WHERE sha256 = $1 AND deleted_at IS NULL FOR UPDATE`, [sha]);
+    if (!f) return false;
+    await queueFileEffect(blobPath(sha), null);
+    await q(`UPDATE files SET deleted_at = now(), deleted_by = $2, deleted_note = $3 WHERE sha256 = $1`, [sha, byUserId, note]);
+    return true;
+  });
 }
 
 export const KEEP_BASE = Number(process.env.FILES_KEEP_BYTES_BASE ?? BASE_KEEP_BYTES);

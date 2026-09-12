@@ -4,10 +4,10 @@
  * (who changed it, who verified it, the unified diff), and moves a paper's current version forward. The mirror itself never changes;
  * accepted versions are what the owner pulls back into the research repository.
  */
-import { existsSync, mkdirSync, readFileSync, writeFileSync, unlinkSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { dirname, join, normalize } from "node:path";
 import { createTwoFilesPatch } from "diff";
-import { q, one } from "../db/index.js";
+import { q, one, queueFileEffect, pendingFileText, projectTransaction } from "../db/index.js";
 import { ROOT } from "./paths.js";
 import * as files from "./files.js";
 
@@ -24,7 +24,9 @@ export function overlayPath(slug: string, rel: string): string { return join(OVE
 export function mirrorPath(slug: string, rel: string): string { return join(REPOS, slug, rel); }
 /** The text the site serves for a document now: the overlay if the swarm revised it, else the mirror, else (agent-proposed paper) its current file. */
 export async function currentText(slug: string, rel: string, problemId?: number): Promise<{ text: string; from: "overlay" | "mirror" | "paper" } | null> {
-  const ov = overlayPath(slug, rel); if (existsSync(ov)) return { text: readFileSync(ov, "utf8"), from: "overlay" };
+  const pending = await pendingFileText(overlayPath(slug, rel));
+  if (pending?.content !== null && pending?.content !== undefined) return { text: pending.content, from: "overlay" };
+  const ov = overlayPath(slug, rel); if (!pending && existsSync(ov)) return { text: readFileSync(ov, "utf8"), from: "overlay" };
   const mp = mirrorPath(slug, rel); if (existsSync(mp)) return { text: readFileSync(mp, "utf8"), from: "mirror" };
   if (problemId) { const p = await one<{ current_file_sha: string | null }>(`SELECT current_file_sha FROM papers WHERE problem_id = $1 AND (path = $2 OR (path IS NULL AND 'paper/' || slug || '.md' = $2))`, [problemId, rel]); const t = p?.current_file_sha ? files.read(p.current_file_sha) : null; if (t !== null && t !== undefined) return { text: t, from: "paper" }; }
   return null;
@@ -33,6 +35,9 @@ export async function exists(slug: string, rel: string, problemId?: number): Pro
 
 /** Integrate an accepted return's revision. Idempotent per return. */
 export async function integrate(ret: any, slug: string, votes: Array<{ verdict: string; user_id: number; model?: string; verification?: string }>): Promise<void> {
+  return projectTransaction(ret.problem_id, () => integrateLocked(ret, slug, votes));
+}
+async function integrateLocked(ret: any, slug: string, votes: Array<{ verdict: string; user_id: number; model?: string; verification?: string }>): Promise<void> {
   const rel = safeRel(ret.revision_path); if (!rel || !ret.revision_sha) return;
   if (await one(`SELECT 1 FROM document_versions WHERE return_id = $1`, [ret.id])) return;
   const next = files.read(ret.revision_sha); if (next === null) return;
@@ -60,7 +65,7 @@ export async function integrate(ret: any, slug: string, votes: Array<{ verdict: 
   const row = await one<{ id: number }>(`INSERT INTO document_versions (problem_id, path, version, content_sha, base_sha, return_id, author_user_id, verified_by, summary, diff, author_model, verified_models) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12) RETURNING id`,
     [ret.problem_id, rel, version + 1, ret.revision_sha, files.sha256(baseText), ret.id, ret.user_id, JSON.stringify(verifiers.map((v) => v.handle)), summary, diff, ret.model ?? null, JSON.stringify(verifiedModels)]);
   await pin(String(ret.revision_sha), Number(row!.id));
-  const ov = overlayPath(slug, rel); mkdirSync(dirname(ov), { recursive: true }); writeFileSync(ov, next);
+  await queueFileEffect(overlayPath(slug, rel), next);
   await q(`UPDATE papers SET current_return_id = $3, current_file_sha = $4, status = 'reviewed', updated_at = now() WHERE problem_id = $1 AND (path = $2 OR (path IS NULL AND 'paper/' || slug || '.md' = $2))`, [ret.problem_id, rel, ret.id, ret.revision_sha]);
 }
 
@@ -90,6 +95,9 @@ async function pin(sha: string, versionId: number): Promise<void> {
  * researcher, no reviewers, diff against the latest) and served in place of the overlay. The trail never loses its base.
  */
 export async function recordMirrorCut(slug: string, problemId: number, note = ""): Promise<Array<{ path: string; action: "unchanged" | "caught-up" | "recorded" | "missing"; version?: number }>> {
+  return projectTransaction(problemId, () => recordMirrorCutLocked(slug, problemId, note));
+}
+async function recordMirrorCutLocked(slug: string, problemId: number, note: string): Promise<Array<{ path: string; action: "unchanged" | "caught-up" | "recorded" | "missing"; version?: number }>> {
   const out: Array<{ path: string; action: "unchanged" | "caught-up" | "recorded" | "missing"; version?: number }> = [];
   const latest = await q<{ path: string; version: string; content_sha: string | null; id: number }>(
     `SELECT DISTINCT ON (path) path, version, content_sha, id FROM document_versions WHERE problem_id = $1 ORDER BY path, version DESC`, [problemId]);
@@ -100,7 +108,7 @@ export async function recordMirrorCut(slug: string, problemId: number, note = ""
     const text = readFileSync(mp, "utf8"), sha = files.sha256(text);
     const ov = overlayPath(slug, l.path);
     if (sha === l.content_sha) {
-      if (existsSync(ov)) { unlinkSync(ov); out.push({ path: l.path, action: "caught-up", version: Number(l.version) }); }
+      if (existsSync(ov) || await pendingFileText(ov)) { await queueFileEffect(ov, null); out.push({ path: l.path, action: "caught-up", version: Number(l.version) }); }
       else out.push({ path: l.path, action: "unchanged", version: Number(l.version) });
       continue;
     }
@@ -113,7 +121,7 @@ export async function recordMirrorCut(slug: string, problemId: number, note = ""
     const row = await one<{ id: number }>(`INSERT INTO document_versions (problem_id, path, version, content_sha, base_sha, return_id, author_user_id, verified_by, summary, diff) VALUES ($1,$2,$3,$4,$5,NULL,$6,'[]',$7,$8) RETURNING id`,
       [problemId, l.path, version, sha, l.content_sha, keeper, `as mirrored from the research repository, cut of ${new Date().toISOString().slice(0, 10)}${note ? ` (${note})` : ""}`, diff]);
     await pin(sha, Number(row!.id));
-    if (existsSync(ov)) unlinkSync(ov);
+    await queueFileEffect(ov, null);
     await q(`UPDATE papers SET current_return_id = NULL, current_file_sha = $3, updated_at = now() WHERE problem_id = $1 AND (path = $2 OR (path IS NULL AND 'paper/' || slug || '.md' = $2))`, [problemId, l.path, sha]);
     out.push({ path: l.path, action: "recorded", version });
   }

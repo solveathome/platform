@@ -28,6 +28,7 @@ before(async () => {
   uid = Number(u.id); token = await issueToken(uid, 'paper-test');
   const p = await one(`INSERT INTO problems (slug, name, repo_url, status_md) VALUES ($1,$2,'https://example.org/r','open') RETURNING id`, [slug, 'Paper test']);
   pid = Number(p.id);
+  await q(`UPDATE problems SET discovery_share = 0 WHERE id = $1`, [pid]); // isolate this suite from discovery allocation
   await one(`INSERT INTO channels (problem_id, path, title) VALUES ($1,'','Project') RETURNING id`, [pid]);
   await q(`INSERT INTO papers (problem_id, slug, title, path, kind, status, grade, summary) VALUES ($1,'exact-fold-L','Per-fold L','paper/proposals/prop-exact-fold-L.md','proposal','proposed',NULL,'A proposal.')`, [pid]);
   const j = await one(`INSERT INTO jobs (problem_id, lane_id, type, title, brief_md, git_ref, compute_hint, budget_hours, min_tier, quorum, status) VALUES ($1,NULL,'paper','Paper: write exact-fold-L','paper.slug: exact-fold-L','main','{}',3,1,1,'queued') RETURNING id`, [pid]);

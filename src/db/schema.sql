@@ -564,3 +564,84 @@ CREATE TABLE IF NOT EXISTS counted_entries (
 );
 CREATE INDEX IF NOT EXISTS counted_entries_source_idx ON counted_entries (source_type, source_id);
 ALTER TABLE returns ADD COLUMN IF NOT EXISTS file_notes JSONB;   -- [{sha, name, notes[]}]: attached files that will not run or reproduce as shipped (never refused; the reviewer is told)
+
+-- Scheduler v2: the session remains the agent. Declared access is never inherited from another session.
+ALTER TABLE sessions ADD COLUMN IF NOT EXISTS capabilities JSONB NOT NULL DEFAULT '{}';
+ALTER TABLE sessions ADD COLUMN IF NOT EXISTS launch_key TEXT;
+ALTER TABLE sessions ADD COLUMN IF NOT EXISTS contact_id TEXT;
+CREATE UNIQUE INDEX IF NOT EXISTS sessions_launch_idx ON sessions (problem_id, user_id, launch_key) WHERE launch_key IS NOT NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS sessions_contact_idx ON sessions (contact_id) WHERE contact_id IS NOT NULL;
+ALTER TABLE problems ADD COLUMN IF NOT EXISTS discovery_share NUMERIC CHECK (discovery_share >= 0 AND discovery_share <= 1);
+ALTER TABLE jobs ADD COLUMN IF NOT EXISTS purpose TEXT NOT NULL DEFAULT 'work' CHECK (purpose IN ('work', 'discovery'));
+ALTER TABLE jobs ADD COLUMN IF NOT EXISTS required_tools TEXT[] NOT NULL DEFAULT '{}';
+ALTER TABLE jobs ADD COLUMN IF NOT EXISTS required_sources TEXT[] NOT NULL DEFAULT '{}';
+ALTER TABLE jobs ADD COLUMN IF NOT EXISTS preferred_skills TEXT[] NOT NULL DEFAULT '{}';
+ALTER TABLE jobs ADD COLUMN IF NOT EXISTS priority INTEGER NOT NULL DEFAULT 0 CHECK (priority BETWEEN -10 AND 10);
+ALTER TABLE jobs ADD COLUMN IF NOT EXISTS origin_key TEXT;
+ALTER TABLE jobs ADD COLUMN IF NOT EXISTS attempt_id TEXT;
+ALTER TABLE jobs ADD COLUMN IF NOT EXISTS ask_id BIGINT REFERENCES asks(id) ON DELETE SET NULL;
+CREATE INDEX IF NOT EXISTS jobs_ready_project_idx ON jobs (problem_id, purpose, created_at, id) WHERE status = 'queued';
+CREATE UNIQUE INDEX IF NOT EXISTS jobs_open_origin_idx ON jobs (problem_id, origin_key) WHERE origin_key IS NOT NULL AND status IN ('queued','assigned');
+CREATE TABLE IF NOT EXISTS assignment_attempts (
+  id TEXT PRIMARY KEY,
+  job_id BIGINT NOT NULL REFERENCES jobs(id) ON DELETE CASCADE,
+  problem_id BIGINT NOT NULL REFERENCES problems(id) ON DELETE CASCADE,
+  session_id TEXT,
+  user_id BIGINT NOT NULL,
+  model TEXT,
+  tier INTEGER,
+  purpose TEXT NOT NULL DEFAULT 'work',
+  scheduled BOOLEAN NOT NULL DEFAULT true,
+  budget_hours NUMERIC NOT NULL,
+  started_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  ended_at TIMESTAMPTZ,
+  status TEXT NOT NULL DEFAULT 'assigned',
+  reason JSONB NOT NULL DEFAULT '{}',
+  request_hash TEXT,
+  receipt JSONB
+);
+-- Preserve old assignments and their history. The pre-v2 race could leave one session holding several jobs.
+INSERT INTO assignment_attempts (id, job_id, problem_id, session_id, user_id, model, budget_hours, started_at, status)
+SELECT md5('legacy-job:' || j.id::text || ':' || coalesce(j.assigned_at::text,'')), j.id, j.problem_id,
+       j.assigned_session, j.assigned_to, s.model, LEAST(j.budget_hours, coalesce((s.ai->>'max_hours_per_assignment')::numeric, 2)), coalesce(j.assigned_at, now()), 'assigned'
+FROM jobs j LEFT JOIN sessions s ON s.id = j.assigned_session
+WHERE j.status = 'assigned' AND j.assigned_to IS NOT NULL AND j.attempt_id IS NULL
+ON CONFLICT DO NOTHING;
+UPDATE jobs j SET attempt_id = a.id FROM assignment_attempts a WHERE a.job_id = j.id AND j.status = 'assigned' AND j.attempt_id IS NULL AND a.status = 'assigned';
+WITH duplicates AS (
+  SELECT id, row_number() OVER (PARTITION BY assigned_session ORDER BY assigned_at, id) AS n
+  FROM jobs WHERE status = 'assigned' AND assigned_session IS NOT NULL
+)
+UPDATE jobs SET status = 'queued', last_released_session = assigned_session, assigned_session = NULL,
+  assigned_to = NULL, assigned_at = NULL, expires_at = NULL, release_count = release_count + 1,
+  last_release_note = 'scheduler migration: extra concurrent assignment returned to queue'
+WHERE id IN (SELECT id FROM duplicates WHERE n > 1);
+UPDATE assignment_attempts a SET status = 'released', ended_at = now()
+FROM jobs j WHERE j.id = a.job_id AND j.attempt_id = a.id AND j.status <> 'assigned' AND a.status = 'assigned';
+CREATE UNIQUE INDEX IF NOT EXISTS jobs_one_per_session_idx ON jobs (assigned_session) WHERE status = 'assigned' AND assigned_session IS NOT NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS attempts_one_per_session_idx ON assignment_attempts (session_id) WHERE status = 'assigned' AND session_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS attempts_allocation_idx ON assignment_attempts (problem_id, tier, started_at);
+CREATE OR REPLACE FUNCTION close_assignment_attempt() RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+  IF OLD.status = 'assigned' AND NEW.status <> 'assigned' THEN
+    UPDATE assignment_attempts SET status = CASE WHEN NEW.status = 'queued' THEN 'released' WHEN NEW.status = 'returned' THEN 'completed' ELSE 'cancelled' END,
+      ended_at = now() WHERE id = OLD.attempt_id AND status = 'assigned';
+  END IF;
+  RETURN NEW;
+END $$;
+DROP TRIGGER IF EXISTS jobs_close_attempt ON jobs;
+CREATE TRIGGER jobs_close_attempt AFTER UPDATE OF status ON jobs FOR EACH ROW EXECUTE FUNCTION close_assignment_attempt();
+
+-- Exact research contacts supplement handle/human asks; their public IDs are not session credentials.
+ALTER TABLE asks ADD COLUMN IF NOT EXISTS from_session TEXT;
+ALTER TABLE asks ADD COLUMN IF NOT EXISTS to_contact TEXT;
+CREATE INDEX IF NOT EXISTS asks_contact_idx ON asks (problem_id, to_contact) WHERE status = 'open';
+ALTER TABLE assignment_attempts ADD COLUMN IF NOT EXISTS assignment_payload JSONB;
+-- Committed publication effects survive a process crash and are replayed before startup/after mutations.
+CREATE TABLE IF NOT EXISTS pending_file_effects (id BIGSERIAL PRIMARY KEY, path TEXT NOT NULL, content TEXT);
+-- Routine publication/verification cannot be counted toward the discovery reserve.
+DO $$ BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'jobs_discovery_type_check') THEN
+    ALTER TABLE jobs ADD CONSTRAINT jobs_discovery_type_check CHECK (purpose <> 'discovery' OR type IN ('explore','direction','break','measure','formalize','source'));
+  END IF;
+END $$;

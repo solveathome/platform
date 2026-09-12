@@ -1,6 +1,9 @@
 import { Router } from "express";
 import { wantsHtml } from "../lib/negotiate.js";
-import { q, one, pool } from "../db/index.js";
+import { q, one, projectTransaction } from "../db/index.js";
+import { assignmentMutation, claimAssignment, releaseAssignment } from "../lib/assignments.js";
+import { parseCapabilities, researchContact, CAPABILITY_INSTRUCTIONS } from "../lib/agent-profile.js";
+import { backlogFor, selectJob, computeBlocked, discoveryShare, discoveryDue, allocation, type SchedulingAgent } from "../lib/scheduler.js";
 import { bearer, optionalAuth, modelTier } from "../lib/auth.js";
 import { marked } from "marked";
 import { protectMath } from "../lib/math.js";
@@ -15,7 +18,7 @@ import { omissionShare, effortFromTranscript, isSessionLog, notSessionLog, logSi
 import type { Tokens } from "../lib/tokens.js";
 /** Why a review rejected (Chris, Sep 11 2026). Overclaimed work should be accepted at the lower rung; the class exists so the record says which it was. */
 export const REJECT_REASONS = ["refuted", "overclaimed", "unsourced", "unverifiable"] as const;
-import { renderBrief, type JobRow } from "../lib/brief.js";
+import { renderBrief } from "../lib/brief.js";
 import { decide, MAX_REVIEWS, MIN_REVIEWS } from "../lib/consensus.js";
 import * as reputation from "../lib/reputation.js";
 import * as files from "../lib/files.js";
@@ -118,6 +121,7 @@ async function start(req: any, res: any): Promise<void> {
     const opened = await openSession(req, { via: "url", ...opts });
     if ("error" in opened) { if (wantsJson) res.status(opened.status).json({ error: opened.error }); else res.status(opened.status).type("text/markdown").send(`# Cannot register\n\n${opened.error}\n`); return; }
     session = opened.session; member = opened.member; req.session = session; req.justRegistered = true;
+    if (session.ended_at) { res.status(409).json({ error: "this launch already ended; a new instruction starts a fresh agent", session: session.id }); return; }
   }
   // One model per session: the tier, the provider rules and the credit all follow the model the session registered with.
   if (req.model && session.model && req.model !== session.model) {
@@ -125,7 +129,15 @@ async function start(req: any, res: any): Promise<void> {
     if (wantsJson) res.status(409).json({ error: msg, session: session.id, session_model: session.model }); else res.status(409).type("text/markdown").send(`# Wrong session for this model\n\n${msg}\n`);
     return;
   }
-  if (session.max_jobs !== null && Number(session.jobs) >= Number(session.max_jobs)) {
+  const held = await one(`SELECT j.*, l.slug AS lane_slug FROM jobs j LEFT JOIN lanes l ON l.id = j.lane_id WHERE j.problem_id = $1 AND assigned_session = $2 AND j.status = 'assigned' ORDER BY j.assigned_at DESC LIMIT 1`, [req.project.id, session.id]);
+  if (held && session.launch_key) {
+    const a = await one(`SELECT assignment_payload FROM assignment_attempts WHERE id = $1`, [held.attempt_id]);
+    if (a?.assignment_payload) {
+      if (wantsJson) res.json(a.assignment_payload); else res.type("text/markdown").send(a.assignment_payload.brief_md);
+      return;
+    }
+  }
+  if (!held && session.max_jobs !== null && Number(session.jobs) >= Number(session.max_jobs)) {
     await q(`UPDATE sessions SET ended_at = COALESCE(ended_at, now()) WHERE id = $1 AND NOT EXISTS (SELECT 1 FROM jobs WHERE assigned_session = $1 AND status = 'assigned')`, [session.id]);
     const md = `# solveathome / ${req.project.name}: session cap reached
 
@@ -144,7 +156,6 @@ Your person allowed ${session.max_jobs} assignment(s) in the instruction they ga
   const heldAll = await one<{ c: string }>(`SELECT count(*) AS c FROM jobs WHERE problem_id = $1 AND assigned_to = $2 AND status = 'assigned' AND (expires_at IS NULL OR expires_at > now())`, [req.project.id, req.user!.id]);
   if (Number(heldAll?.c ?? 0) >= MAX_HELD_PER_HANDLE) { const msg = `Your handle already holds ${heldAll!.c} assignments across its sessions (limit ${MAX_HELD_PER_HANDLE}). Finish or release some first.`; if (wantsJson) res.status(429).json({ error: msg }); else res.status(429).type("text/markdown").send(`# Too many assignments held\n\n${msg}\n`); return; }
   // Idling guard: an agent holding an unfinished assignment does not get another. Finish it or hand it back. The handle's other agents are not affected.
-  const held = await one(`SELECT id, type, title, expires_at FROM jobs WHERE problem_id = $1 AND assigned_session = $2 AND status = 'assigned' AND (expires_at IS NULL OR expires_at > now()) ORDER BY assigned_at DESC LIMIT 1`, [req.project.id, session.id]);
   if (held) {
     const msg = `You already hold job #${held.id} (${held.type}: ${held.title}), until ${held.expires_at}. Do not poll /start. Finish it and POST ${BASE()}/projects/${req.project.slug}/result, or hand it back with POST ${BASE()}/projects/${req.project.slug}/release { "job_id": ${held.id}, "note": "why" }. The brief: GET ${BASE()}/projects/${req.project.slug}/job/${held.id}`;
     if (wantsJson) res.status(409).json({ error: msg, job_id: held.id, inbox: ib }); else res.status(409).type("text/markdown").send(`# You already hold an assignment\n\n${msg}\n\n${inboxMd}`);
@@ -175,123 +186,77 @@ Your person allowed ${session.max_jobs} assignment(s) in the instruction they ga
   // /start decides (Chris, Sep 11: nobody passes ?type=); the query string is the person's configuration, read at registration only.
   const maxHours = prefs.maxHours;
   const lane = prefs.lane;
-  const type: string | null = null;
   const disk = diskFor(offer);
   const uid = req.user!.id;
 
-  // A tangent registered with this session is its first assignment (Sep 10): the person's objection or route outranks the queue.
+  const agent: SchedulingAgent = { problemId: Number(req.project.id), slug: req.project.slug, sessionId: session.id, uid,
+    tier, model: req.model ?? null, provider: req.provider ?? null, trusted, granted, lane, cpuHours: maxHours,
+    ramGb: prefs.ramGb, hasGpu: prefs.hasGpu, disk, maxHours: Number(settings.ai?.max_hours_per_assignment ?? 2),
+    reviewStreak: Number(session.review_streak ?? 0), capabilities: session.capabilities ?? {} };
   const tangentFirst = Number(session.jobs) === 0 && settings.input?.tangent ? await synthesizeTangent(req, session, settings.input.tangent as Tangent) : null;
-  // Tier 1 alternates (Chris, Sep 11): frontier agents are not a review pool. After a review or an audit the next assignment prefers
-  // research (paper, explore, direction, break); after research, verification comes first again. A fresh session starts with verification.
-  // Need-aware (Chris, Sep 11 evening: "NOBODY calls ?type=review"): the reviews-to-research ratio follows the backlog this session can take.
-  // With 119 reviews and 20 research jobs waiting, a frontier session does four verifications, then one research turn; with equal backlogs, one and one.
-  const need = tier === 1 ? await backlogFor(req, tier, trusted, prefs, uid) : { reviews: 0, research: 0 };
+  const need = tier === 1 ? await backlogFor(agent) : { reviews: 0, research: 0 };
   const runOfReviews = Math.min(4, Math.max(1, Math.ceil(need.reviews / Math.max(1, need.research))));
-  const preferResearch = tier === 1 && Number(session.review_streak ?? 0) >= runOfReviews;
-  const client = await pool.connect();
-  try {
-    await client.query("BEGIN");
-    const r = tangentFirst ? { rows: [tangentFirst] } : await client.query(
-      `SELECT j.*, l.slug AS lane_slug, p.repo_url
-       FROM jobs j JOIN problems p ON p.id = j.problem_id LEFT JOIN lanes l ON l.id = j.lane_id
-       LEFT JOIN returns pr ON pr.id = j.parent_return_id
-       LEFT JOIN model_tiers amt ON amt.model = pr.model
-       WHERE j.status = 'queued'
-         AND j.problem_id = $7
-         AND j.min_tier >= $1
-         AND COALESCE((j.compute_hint->>'cpu_hours')::numeric, 0) <= $2
-         AND COALESCE((j.compute_hint->>'ram_gb')::numeric, 0) <= CASE WHEN $9::numeric > 0 THEN $9::numeric ELSE 8 END   -- an offered share is the limit; with nothing offered, jobs up to 8 GB and no CPU hours
-         AND j.last_released_session IS DISTINCT FROM $14::text   -- a session never gets back what it just handed back
-         AND (COALESCE(j.compute_hint->>'gpu', 'false') IN ('false', '0', '') OR $10::boolean)
-         AND (COALESCE(j.compute_hint->>'mathlib_cache', 'false') IN ('false', '0', '') OR $16::numeric >= 10)   -- a Lean toolchain + Mathlib cache needs the 10 GB disk ceiling
-         AND COALESCE((j.compute_hint->>'disk_gb')::numeric, 0) <= $16::numeric
-         AND ($3::text IS NULL OR l.slug = $3)
-         AND ($4::text IS NULL OR j.type = $4)
-         AND (pr.id IS NULL OR pr.user_id <> $5 OR $15::boolean)
-         AND (pr.id IS NULL OR $12::boolean)
-         AND NOT EXISTS (SELECT 1 FROM reviews rv WHERE rv.return_id = j.parent_return_id AND rv.user_id = $5)
-         -- One review per person per return: the handle's other agent may already hold a review job for it.
-         AND NOT EXISTS (SELECT 1 FROM jobs j2 WHERE j2.parent_return_id = j.parent_return_id AND j2.id <> j.id AND j2.assigned_to = $5 AND j2.status = 'assigned')
-         -- Provenance (Q68): a model never reviews its own kind, and a judgment review goes to a model at least as capable as the author's.
-         AND (pr.id IS NULL OR pr.model IS DISTINCT FROM $11::text)
-         AND (pr.id IS NULL OR j.min_tier >= 99 OR $1 <= COALESCE(amt.tier, 99))
-       ORDER BY
-         -- Division of labour (Chris, Sep 9): top tier moves research forward, validates and integrates; lower tiers hunt
-         -- negative proofs and run the processing that donated CPU allows.
-         CASE WHEN $8 = 1
-           THEN CASE WHEN $13::boolean
-             THEN CASE j.type WHEN 'paper' THEN 0 WHEN 'explore' THEN 1 WHEN 'direction' THEN 1 WHEN 'break' THEN 2 WHEN 'audit' THEN 3 WHEN 'review' THEN 4 WHEN 'curate' THEN 5 WHEN 'source' THEN 6 WHEN 'formalize' THEN 7 ELSE 8 END
-             ELSE CASE j.type WHEN 'review' THEN 0 WHEN 'audit' THEN 1 WHEN 'paper' THEN 2 WHEN 'explore' THEN 3 WHEN 'direction' THEN 3 WHEN 'curate' THEN 4 WHEN 'source' THEN 5 WHEN 'formalize' THEN 6 ELSE 7 END END
-           ELSE CASE j.type WHEN 'break' THEN 0 WHEN 'measure' THEN 0 WHEN 'formalize' THEN 1 WHEN 'review' THEN 2 WHEN 'source' THEN 3 WHEN 'curate' THEN 4 ELSE 5 END END,
-         -- Other people's returns before your own handle's (Chris, Sep 11: his agents kept reviewing his own work while others' waited), then another provider's, then the oldest.
-         CASE WHEN pr.id IS NOT NULL AND pr.user_id = $5 THEN 1 ELSE 0 END,
-         CASE WHEN pr.id IS NOT NULL AND pr.provider <> $6 THEN 0 ELSE 1 END,
-         j.created_at
-       LIMIT 1 FOR UPDATE OF j SKIP LOCKED`,
-      [tier, maxHours, lane, type, uid, req.provider, req.project.id, tier, prefs.ramGb, prefs.hasGpu, req.model ?? null, trusted, preferResearch, session.id, granted, disk],
-    );
-    let row = r.rows[0] as (JobRow & { id: number; budget_hours: string }) | undefined;
-    if (!row) {
-      // An empty queue is still an assignment: explore the programme's open questions in a lane. Never a choice, never "try again".
-      await client.query("ROLLBACK");
-      row = await synthesizeExplore(req, session, lane, maxHours, await computeBlocked(req, tier, prefs, maxHours)) as any;
-      await client.query("BEGIN");
+  const preferResearch = tier === 1 && agent.reviewStreak >= runOfReviews;
+  const share = discoveryShare(req.project.slug, req.project.discovery_share);
+  const used = tier === 1 ? await allocation(Number(req.project.id)) : { total: 0, discovery: 0 };
+  let row: any = tangentFirst ?? await selectJob(agent, preferResearch);
+  const reserveDiscovery = !tangentFirst && tier === 1 && discoveryDue(share, used, Math.min(agent.maxHours, Number(row?.budget_hours ?? agent.maxHours)));
+  if (reserveDiscovery) row = await selectJob(agent, preferResearch, true)
+    ?? await synthesizeExplore(req, session, lane, maxHours, null, true);
+  if (!row) row = await synthesizeExplore(req, session, lane, maxHours, await computeBlocked(agent));
+  const reason = { policy: tangentFirst ? "person's tangent" : reserveDiscovery ? "reserved tier-1 discovery" : "eligible work by need and capability",
+    tier, discovery_share: share, discovery_allocation: used, eligible_backlog: need, prefer_research: preferResearch,
+    skill_matches: Number(row.skill_matches ?? 0), purpose: row.purpose ?? 'work' };
+  row = await claimAssignment(row, session, uid, tier, reason, !tangentFirst);
+  row.repo_url = req.project.repo_url;
+  const sess = { id: String(session.id), jobs: Number(session.jobs), max: session.max_jobs === null ? null : Number(session.max_jobs), length: lengthWords(session), disk, abandonAfterMin: ABANDON_AFTER_MIN, maxHours: agent.maxHours, compute: describeOffer(offer), transcriptPreapproved: settings.ai?.transcript_preapproved === true, subagents: settings.ai?.subagents?.allowed === false ? "not allowed" : settings.ai?.subagents?.max_parallel ? `allowed, up to ${settings.ai.subagents.max_parallel} at a time` : "allowed", files: await files.quota(uid).then((f) => ({ left: f.files_left, bytes_left: f.bytes_left, per_day: f.files_per_day })) };
+  if (Number(row.release_count ?? 0) > 0) row.prior_claims = await q(`SELECT m.id, u.handle, m.model, m.created_at FROM messages m JOIN users u ON u.id = m.user_id WHERE m.job_id = $1 AND m.kind = 'claim' ORDER BY m.id`, [row.id]);
+  let md = renderBrief(row, `${BASE()}/projects/${req.project.slug}`, sess);
+  { const note = unservedNote(String(row.brief_md ?? ""), req.project.slug, `${BASE()}/projects/${req.project.slug}`); if (note) md = md.replace(/\n## /, () => `\n${note}## `); }
+  // Reviews this handle cannot take with this model (a model never reviews its own kind) wait for its other agents: say so, or the handle stacks returns nobody reviews.
+  const waiting = row.type !== "review" ? await one<{ c: string; models: string[] }>(`SELECT count(*) AS c, array_agg(DISTINCT pr.model) AS models FROM jobs j JOIN returns pr ON pr.id = j.parent_return_id WHERE j.problem_id = $1 AND j.type = 'review' AND j.status = 'queued' AND pr.user_id = $2 AND pr.model = $3`, [req.project.id, uid, req.model ?? ""]) : null;
+  if (Number(waiting?.c ?? 0) > 0) { const others = (await q<{ model: string }>(`SELECT model FROM model_tiers WHERE tier <= $1 AND model <> $2 ORDER BY tier, model`, [Number(tier), req.model ?? ""])).map((m) => m.model); md += `\n\n## Reviews waiting for your person's other agents\n\n${waiting!.c} review job(s) of this handle's own returns are queued and cannot go to ${req.model}: a model never reviews its own kind. They wait for an agent on another model at tier ${tier} or above${others.length ? ` (${others.join(", ")})` : ""}. Until one reviews them, this handle's returns stack unreviewed; tell your person when you report.`; }
+  // An audit of a paper with a revision still under review starts from that revision, not from the last accepted text.
+  if (row.type === "audit") {
+    const pslug = /paper\.slug:\s*([A-Za-z0-9-]+)/.exec(String(row.brief_md ?? ""))?.[1];   // slugs keep their case (issue #8)
+    const pend = pslug ? await q(`SELECT r.id, r.revision_sha, u.handle, r.created_at FROM returns r JOIN users u ON u.id = r.user_id WHERE r.problem_id = $1 AND lower(r.paper_slug) = lower($2) AND r.type = 'audit' AND r.status = 'pending' AND r.id <> coalesce($3, 0) ORDER BY r.id DESC LIMIT 3`, [req.project.id, pslug, null]) : [];
+    if (pend.length) md += `\n\n## Pending revisions of this paper\n\nAnother audit of this paper is under review: ${pend.map((p: any) => `return #${p.id} by @${p.handle} (${BASE()}/projects/${req.project.slug}/return/${p.id}${p.revision_sha ? `, revised text ${BASE()}/files/${p.revision_sha}` : ""})`).join("; ")}. Read it first and build on it: audit the revised text, cite the return, and do not redo what it already fixed.`;
+  }
+  // Review briefs are written at intake and can go stale: a brief written before the #39 fix carries the bound-script paragraph for a
+  // documents-only patch; a duplicate can land after the brief was written (issue #53). Both are read from the record at serve time.
+  if (row.type === "review" && (row as any).parent_return_id) {
+    const pr = await one<{ id: string; duplicate_of: string | null; patch_scripts: boolean | null }>(`SELECT r.id, r.duplicate_of, (r.patch ~ '(^|\\n)(\\+\\+\\+|---) [^\\n]*\\.(js|mjs|cjs|ts|py|sh|c|h|cpp|rs|go|jl|lean|sql)(\\s|$)') AS patch_scripts FROM returns r WHERE r.id = $1`, [(row as any).parent_return_id]);
+    if (pr && !pr.patch_scripts) md = md.replace(/This return carries a patch against served scripts\.[^\n]*/, () => "This return carries a patch that touches served documents only, no scripts: apply it to a copy of the served file and read the diff before judging; there is no bound output block to check.");
+    const dups = pr ? await q<{ id: string; type: string; status: string; handle: string }>(`SELECT x.id, x.type, x.status, u.handle FROM returns x JOIN users u ON u.id = x.user_id WHERE x.superseded_by = $1 OR x.duplicate_of = $1 ORDER BY x.id`, [pr.id]) : [];
+    const twin = pr?.duplicate_of ? await one<{ id: string; type: string; status: string; handle: string; reasons: string | null }>(`SELECT x.id, x.type, x.status, u.handle, (SELECT string_agg(DISTINCT rv.reject_reason, ', ') FROM reviews rv WHERE rv.return_id = x.id AND rv.trusted AND rv.verdict = 'reject' AND rv.reject_reason IS NOT NULL) AS reasons FROM returns x JOIN users u ON u.id = x.user_id WHERE x.id = $1`, [pr.duplicate_of]) : null;
+    // The same patch decided before, under another return (issue #54): the reviewer reads that record first instead of re-deriving it.
+    const priors = pr ? await q<{ id: string; type: string; status: string; handle: string; decided_at: string | null; reasons: string | null }>(`SELECT x.id, x.type, x.status, u.handle, (SELECT max(d.decided_at) FROM return_decisions d WHERE d.return_id = x.id AND NOT d.provisional) AS decided_at, (SELECT string_agg(DISTINCT rv.reject_reason, ', ') FROM reviews rv WHERE rv.return_id = x.id AND rv.trusted AND rv.verdict = 'reject' AND rv.reject_reason IS NOT NULL) AS reasons FROM returns x JOIN users u ON u.id = x.user_id JOIN returns me ON me.id = $1 WHERE x.id <> me.id AND x.problem_id = me.problem_id AND x.patch_hash IS NOT NULL AND x.patch_hash = me.patch_hash AND x.status IN ('rejected', 'accepted') AND NOT x.provisional AND x.id <> coalesce(me.duplicate_of, 0) AND x.superseded_by IS NULL ORDER BY x.id`, [pr.id]) : [];
+    if (dups.length || twin || priors.length) {
+      const P = `${BASE()}/projects/${req.project.slug}`;
+      const lines = [
+        ...dups.map((d) => `- Return #${d.id} (${d.type} by @${d.handle}, ${P}/return/${d.id}) carries the same change (byte-identical patch or revised file)${d.status === "pending" ? ` and will be folded into #${pr!.id} when this one is decided: your verdict decides both. Check that nothing in it goes beyond this return; if it does, say so in your notes.` : ` and is already folded into #${pr!.id} (${d.status}).`}`),
+        ...(twin ? [twin.status === "pending"
+          ? `- This return is a duplicate of pending return #${twin.id} (${twin.type} by @${twin.handle}, ${P}/return/${twin.id}): treat the two as one change; when either is decided the other is folded into it.`
+          : `- This return is a duplicate of return #${twin.id} (${twin.type} by @${twin.handle}, ${P}/return/${twin.id}), which is now ${twin.status}${twin.reasons ? ` (${twin.reasons})` : ""}: read that return's reviews first. The same change gets the same verdict unless something here goes beyond it; if nothing does, say so in one line and give the same verdict with the same reason class, citing the earlier review in also_credit.`] : []),
+        ...priors.map((d) => `- Return #${d.id} (${d.type} by @${d.handle}, ${P}/return/${d.id}) carries the same patch and was ${d.status}${d.reasons ? ` (${d.reasons})` : ""}${d.decided_at ? ` on ${String(d.decided_at).slice(0, 10)}` : ""}: read its reviews first. If nothing in this return differs from it (the recipe, the sources, the claimed rung), the same verdict and reason class apply; say so in one line rather than re-deriving them.`),
+      ];
+      md += `\n\n## Duplicates of the return under review\n\n${lines.join("\n")}`;
     }
-    if (!row) { await client.query("ROLLBACK"); res.status(500).json({ error: "no assignment could be made" }); return; }
-    const upd = await client.query(
-      `UPDATE jobs SET status = 'assigned', assigned_to = $2, assigned_session = $4, assigned_at = now(),
-         expires_at = now() + ($3::numeric * interval '1 hour') * 2
-       WHERE id = $1 RETURNING expires_at`, [row.id, uid, row.budget_hours, session.id]);
-    await client.query(`UPDATE sessions SET jobs = jobs + 1, last_seen = now(), last_type = $2, review_streak = CASE WHEN $2 IN ('review','audit') THEN review_streak + 1 ELSE 0 END WHERE id = $1`, [session.id, row.type]);
-    await client.query("COMMIT");
-    row.expires_at = upd.rows[0].expires_at;
-    const sess = { id: String(session.id), jobs: Number(session.jobs) + 1, max: session.max_jobs === null ? null : Number(session.max_jobs), length: lengthWords(session), disk, abandonAfterMin: ABANDON_AFTER_MIN, maxHours: Number(settings.ai?.max_hours_per_assignment ?? 2), compute: describeOffer(offer), transcriptPreapproved: settings.ai?.transcript_preapproved === true, subagents: settings.ai?.subagents?.allowed === false ? "not allowed" : settings.ai?.subagents?.max_parallel ? `allowed, up to ${settings.ai.subagents.max_parallel} at a time` : "allowed", files: await files.quota(uid).then((f) => ({ left: f.files_left, bytes_left: f.bytes_left, per_day: f.files_per_day })) };
-    if (Number(row.release_count ?? 0) > 0) row.prior_claims = await q(`SELECT m.id, u.handle, m.model, m.created_at FROM messages m JOIN users u ON u.id = m.user_id WHERE m.job_id = $1 AND m.kind = 'claim' ORDER BY m.id`, [row.id]);
-    let md = renderBrief(row, `${BASE()}/projects/${req.project.slug}`, sess);
-    { const note = unservedNote(String(row.brief_md ?? ""), req.project.slug, `${BASE()}/projects/${req.project.slug}`); if (note) md = md.replace(/\n## /, () => `\n${note}## `); }
-    // Reviews this handle cannot take with this model (a model never reviews its own kind) wait for its other agents: say so, or the handle stacks returns nobody reviews.
-    const waiting = row.type !== "review" ? await one<{ c: string; models: string[] }>(`SELECT count(*) AS c, array_agg(DISTINCT pr.model) AS models FROM jobs j JOIN returns pr ON pr.id = j.parent_return_id WHERE j.problem_id = $1 AND j.type = 'review' AND j.status = 'queued' AND pr.user_id = $2 AND pr.model = $3`, [req.project.id, uid, req.model ?? ""]) : null;
-    if (Number(waiting?.c ?? 0) > 0) { const others = (await q<{ model: string }>(`SELECT model FROM model_tiers WHERE tier <= $1 AND model <> $2 ORDER BY tier, model`, [Number(tier), req.model ?? ""])).map((m) => m.model); md += `\n\n## Reviews waiting for your person's other agents\n\n${waiting!.c} review job(s) of this handle's own returns are queued and cannot go to ${req.model}: a model never reviews its own kind. They wait for an agent on another model at tier ${tier} or above${others.length ? ` (${others.join(", ")})` : ""}. Until one reviews them, this handle's returns stack unreviewed; tell your person when you report.`; }
-    // An audit of a paper with a revision still under review starts from that revision, not from the last accepted text.
-    if (row.type === "audit") {
-      const pslug = /paper\.slug:\s*([A-Za-z0-9-]+)/.exec(String(row.brief_md ?? ""))?.[1];   // slugs keep their case (issue #8)
-      const pend = pslug ? await q(`SELECT r.id, r.revision_sha, u.handle, r.created_at FROM returns r JOIN users u ON u.id = r.user_id WHERE r.problem_id = $1 AND lower(r.paper_slug) = lower($2) AND r.type = 'audit' AND r.status = 'pending' AND r.id <> coalesce($3, 0) ORDER BY r.id DESC LIMIT 3`, [req.project.id, pslug, null]) : [];
-      if (pend.length) md += `\n\n## Pending revisions of this paper\n\nAnother audit of this paper is under review: ${pend.map((p: any) => `return #${p.id} by @${p.handle} (${BASE()}/projects/${req.project.slug}/return/${p.id}${p.revision_sha ? `, revised text ${BASE()}/files/${p.revision_sha}` : ""})`).join("; ")}. Read it first and build on it: audit the revised text, cite the return, and do not redo what it already fixed.`;
-    }
-    // Review briefs are written at intake and can go stale: a brief written before the #39 fix carries the bound-script paragraph for a
-    // documents-only patch; a duplicate can land after the brief was written (issue #53). Both are read from the record at serve time.
-    if (row.type === "review" && (row as any).parent_return_id) {
-      const pr = await one<{ id: string; duplicate_of: string | null; patch_scripts: boolean | null }>(`SELECT r.id, r.duplicate_of, (r.patch ~ '(^|\\n)(\\+\\+\\+|---) [^\\n]*\\.(js|mjs|cjs|ts|py|sh|c|h|cpp|rs|go|jl|lean|sql)(\\s|$)') AS patch_scripts FROM returns r WHERE r.id = $1`, [(row as any).parent_return_id]);
-      if (pr && !pr.patch_scripts) md = md.replace(/This return carries a patch against served scripts\.[^\n]*/, () => "This return carries a patch that touches served documents only, no scripts: apply it to a copy of the served file and read the diff before judging; there is no bound output block to check.");
-      const dups = pr ? await q<{ id: string; type: string; status: string; handle: string }>(`SELECT x.id, x.type, x.status, u.handle FROM returns x JOIN users u ON u.id = x.user_id WHERE x.superseded_by = $1 OR x.duplicate_of = $1 ORDER BY x.id`, [pr.id]) : [];
-      const twin = pr?.duplicate_of ? await one<{ id: string; type: string; status: string; handle: string; reasons: string | null }>(`SELECT x.id, x.type, x.status, u.handle, (SELECT string_agg(DISTINCT rv.reject_reason, ', ') FROM reviews rv WHERE rv.return_id = x.id AND rv.trusted AND rv.verdict = 'reject' AND rv.reject_reason IS NOT NULL) AS reasons FROM returns x JOIN users u ON u.id = x.user_id WHERE x.id = $1`, [pr.duplicate_of]) : null;
-      // The same patch decided before, under another return (issue #54): the reviewer reads that record first instead of re-deriving it.
-      const priors = pr ? await q<{ id: string; type: string; status: string; handle: string; decided_at: string | null; reasons: string | null }>(`SELECT x.id, x.type, x.status, u.handle, (SELECT max(d.decided_at) FROM return_decisions d WHERE d.return_id = x.id AND NOT d.provisional) AS decided_at, (SELECT string_agg(DISTINCT rv.reject_reason, ', ') FROM reviews rv WHERE rv.return_id = x.id AND rv.trusted AND rv.verdict = 'reject' AND rv.reject_reason IS NOT NULL) AS reasons FROM returns x JOIN users u ON u.id = x.user_id JOIN returns me ON me.id = $1 WHERE x.id <> me.id AND x.problem_id = me.problem_id AND x.patch_hash IS NOT NULL AND x.patch_hash = me.patch_hash AND x.status IN ('rejected', 'accepted') AND NOT x.provisional AND x.id <> coalesce(me.duplicate_of, 0) AND x.superseded_by IS NULL ORDER BY x.id`, [pr.id]) : [];
-      if (dups.length || twin || priors.length) {
-        const P = `${BASE()}/projects/${req.project.slug}`;
-        const lines = [
-          ...dups.map((d) => `- Return #${d.id} (${d.type} by @${d.handle}, ${P}/return/${d.id}) carries the same change (byte-identical patch or revised file)${d.status === "pending" ? ` and will be folded into #${pr!.id} when this one is decided: your verdict decides both. Check that nothing in it goes beyond this return; if it does, say so in your notes.` : ` and is already folded into #${pr!.id} (${d.status}).`}`),
-          ...(twin ? [twin.status === "pending"
-            ? `- This return is a duplicate of pending return #${twin.id} (${twin.type} by @${twin.handle}, ${P}/return/${twin.id}): treat the two as one change; when either is decided the other is folded into it.`
-            : `- This return is a duplicate of return #${twin.id} (${twin.type} by @${twin.handle}, ${P}/return/${twin.id}), which is now ${twin.status}${twin.reasons ? ` (${twin.reasons})` : ""}: read that return's reviews first. The same change gets the same verdict unless something here goes beyond it; if nothing does, say so in one line and give the same verdict with the same reason class, citing the earlier review in also_credit.`] : []),
-          ...priors.map((d) => `- Return #${d.id} (${d.type} by @${d.handle}, ${P}/return/${d.id}) carries the same patch and was ${d.status}${d.reasons ? ` (${d.reasons})` : ""}${d.decided_at ? ` on ${String(d.decided_at).slice(0, 10)}` : ""}: read its reviews first. If nothing in this return differs from it (the recipe, the sources, the claimed rung), the same verdict and reason class apply; say so in one line rather than re-deriving them.`),
-        ];
-        md += `\n\n## Duplicates of the return under review\n\n${lines.join("\n")}`;
-      }
-    }
-    // Function replacements: the inserted text can carry "$" sequences (LaTeX in an inbox message), which String.replace would read as patterns and splice the brief around them (issue #13).
-    if (tf.note) md = md.replace(/\n\n/, () => `\n\nTier this session: ${tier} (${tf.note}).\n\n`);
-    if (req.justRegistered) md = (await orientation(req.project, BASE(), { ...member, ...settings, session: session.id, session_max_jobs: session.max_jobs, length: lengthWords(session), disk }, true, { model: req.model ?? null, uid, trusted, tier, effort: req.effort ?? null, tier_note: tf.note }, true)) + "\n\n---\n\n" + md;
-    md = ownerNote + md;
-    if (settings.input?.direction && !tangentFirst && row.type !== "direction") md += `\n\n## Your person's direction\n\nThey said: "${String(settings.input.direction).slice(0, 2000)}"\n\nIf this assignment does not serve that, you may set it aside: pursue their idea and submit it as type \`direction\` with their words in the report and their handle in \`cites.handles\`. Their name goes on the lane if it is accepted.\n`;
-    if (inboxMd) md = md.replace(/\n## /, () => `\n${inboxMd}## `);   // after the title block, before the first section
-    if (ib.max_message_id > Number(session.inbox_seen_message_id ?? 0)) await q(`UPDATE sessions SET inbox_seen_message_id = $2 WHERE id = $1`, [session.id, ib.max_message_id]);
-    if (wantsJson) res.json({ job_id: row.id, type: row.type, session: sess.id, session_jobs: sess.jobs, session_max_jobs: sess.max, inbox: ib, brief_md: md });
-    else res.type("text/markdown").send(md);
-  } catch (e) { await client.query("ROLLBACK"); throw e; } finally { client.release(); }
+  }
+  // Function replacements: the inserted text can carry "$" sequences (LaTeX in an inbox message), which String.replace would read as patterns and splice the brief around them (issue #13).
+  if (tf.note) md = md.replace(/\n\n/, () => `\n\nTier this session: ${tier} (${tf.note}).\n\n`);
+  if (req.justRegistered) md = (await orientation(req.project, BASE(), { ...member, ...settings, capabilities: session.capabilities, contact_id: session.contact_id, session: session.id, session_max_jobs: session.max_jobs, length: lengthWords(session), disk }, true, { model: req.model ?? null, uid, trusted, tier, effort: req.effort ?? null, tier_note: tf.note }, true)) + "\n\n---\n\n" + md;
+  md = ownerNote + md;
+  if (settings.input?.direction && !tangentFirst && row.type !== "direction") md += `\n\n## Your person's direction\n\nThey said: "${String(settings.input.direction).slice(0, 2000)}"\n\nIf this assignment does not serve that, you may set it aside: pursue their idea and submit it as type \`direction\` with their words in the report and their handle in \`cites.handles\`. Their name goes on the lane if it is accepted.\n`;
+  if (inboxMd) md = md.replace(/\n## /, () => `\n${inboxMd}## `);   // after the title block, before the first section
+  if (ib.max_message_id > Number(session.inbox_seen_message_id ?? 0)) await q(`UPDATE sessions SET inbox_seen_message_id = $2 WHERE id = $1`, [session.id, ib.max_message_id]);
+  const payload = { job_id: row.id, attempt_id: row.attempt_id, type: row.type, purpose: row.purpose, session: sess.id, session_jobs: sess.jobs, session_max_jobs: sess.max, inbox: ib, assignment_reason: reason, contact_id: session.contact_id, brief_md: md };
+  await q(`UPDATE assignment_attempts SET assignment_payload = $2 WHERE id = $1`, [row.attempt_id, JSON.stringify(payload)]);
+  if (wantsJson) res.json(payload);
+  else res.type("text/markdown").send(md);
 }
-job.get("/start", bearer, project, start);
-job.get("/job", bearer, project, start);
+job.get("/start", bearer, project, assignmentMutation(start, { commitErrors: true }));
+job.get("/job", bearer, project, assignmentMutation(start, { commitErrors: true }));
 
 /** The person's tangent as a job, assigned to this session on the spot. */
 async function synthesizeTangent(req: any, session: any, t: Tangent): Promise<any> {
@@ -301,26 +266,9 @@ async function synthesizeTangent(req: any, session: any, t: Tangent): Promise<an
   const laneSlug = session.input?.lane ?? null;
   const lane = laneSlug ? await one(`SELECT id FROM lanes WHERE problem_id = $1 AND slug = $2`, [req.project.id, laneSlug]) : null;
   const j = await one(`INSERT INTO jobs (problem_id, lane_id, type, title, brief_md, git_ref, compute_hint, budget_hours, min_tier, quorum, status, assigned_to, assigned_session, assigned_at, expires_at)
-                       VALUES ($1,$2,$3,$4,$5,'main','{}',$6,99,1,'assigned',$7,$8,now(),now() + ($6::numeric * interval '1 hour') * 2) RETURNING *`,
-    [req.project.id, lane?.id ?? null, spec.type, spec.title.slice(0, 200), spec.brief_md, hours, req.user!.id, session.id]);
+                       VALUES ($1,$2,$3,$4,$5,'main','{}',$6,99,1,'queued',NULL,NULL,NULL,NULL) RETURNING *`,
+    [req.project.id, lane?.id ?? null, spec.type, spec.title.slice(0, 200), spec.brief_md, hours]);
   return { ...j, lane_slug: laneSlug, repo_url: req.project.repo_url };
-}
-
-/** What is waiting that this session could take: review jobs it is eligible for (trusted, not its own kind, tier allows) and research jobs that fit its offer. */
-async function backlogFor(req: any, tier: number, trusted: boolean, prefs: { maxHours: number; ramGb: number; hasGpu: boolean }, uid: number): Promise<{ reviews: number; research: number }> {
-  const reviews = trusted ? Number((await one<{ c: string }>(`SELECT count(*) AS c FROM jobs j JOIN returns pr ON pr.id = j.parent_return_id LEFT JOIN model_tiers amt ON amt.model = pr.model
-      WHERE j.problem_id = $1 AND j.status = 'queued' AND j.type = 'review' AND pr.model IS DISTINCT FROM $2::text AND (j.min_tier >= 99 OR $3 <= COALESCE(amt.tier, 99))
-        AND NOT EXISTS (SELECT 1 FROM reviews rv WHERE rv.return_id = pr.id AND rv.user_id = $4)`, [req.project.id, req.model ?? null, tier, uid]))?.c ?? 0) : 0;
-  const research = Number((await one<{ c: string }>(`SELECT count(*) AS c FROM jobs j WHERE j.problem_id = $1 AND j.status = 'queued' AND j.type <> 'review' AND j.min_tier >= $2
-      AND COALESCE((j.compute_hint->>'cpu_hours')::numeric, 0) <= $3 AND COALESCE((j.compute_hint->>'ram_gb')::numeric, 0) <= CASE WHEN $4::numeric > 0 THEN $4::numeric ELSE 8 END`, [req.project.id, tier, prefs.maxHours, prefs.ramGb]))?.c ?? 0);
-  return { reviews, research };
-}
-/** Typed work for this tier that only the session's compute offer keeps it from: named in the explore fallback so the person can raise the share. */
-async function computeBlocked(req: any, tier: number, prefs: { maxHours: number; ramGb: number }, maxHours: number): Promise<{ n: number; types: string; ram: number; hours: number } | null> {
-  const r = await one<{ n: string; types: string; ram: string; hours: string }>(`SELECT count(*) AS n, string_agg(DISTINCT j.type, ', ' ORDER BY j.type) AS types, max(COALESCE((j.compute_hint->>'ram_gb')::numeric, 0)) AS ram, max(COALESCE((j.compute_hint->>'cpu_hours')::numeric, 0)) AS hours
-      FROM jobs j WHERE j.problem_id = $1 AND j.status = 'queued' AND j.type <> 'review' AND j.min_tier >= $2
-        AND (COALESCE((j.compute_hint->>'ram_gb')::numeric, 0) > CASE WHEN $3::numeric > 0 THEN $3::numeric ELSE 8 END OR COALESCE((j.compute_hint->>'cpu_hours')::numeric, 0) > $4)`, [req.project.id, tier, prefs.ramGb, maxHours]);
-  return Number(r?.n ?? 0) > 0 ? { n: Number(r!.n), types: r!.types, ram: Number(r!.ram), hours: Number(r!.hours) } : null;
 }
 
 /** Explore assignments made on the spot are named by what they point at (`Explore: Q-id`, `Leads: kind`), so the next session is handed something else. */
@@ -332,7 +280,7 @@ const LEAD_KINDS = ["elevate", "prior-art", "break", "registry", "synthesis", "r
  *  One open question per job, the one no session was handed inside the window (Chris, Sep 11: the same five questions went to every
  *  session and came back "already scored"); when every open question is in hand, a lead hunt from a rotating menu, so an agent with
  *  nothing typed to do goes looking for new leads instead of re-treading the list. */
-async function synthesizeExplore(req: any, session: any, laneSlug: string | null, _maxHours: number, blocked: { n: number; types: string; ram: number; hours: number } | null = null): Promise<any> {
+async function synthesizeExplore(req: any, session: any, laneSlug: string | null, _maxHours: number, blocked: { n: number; types: string; ram: number; hours: number } | null = null, discovery = false): Promise<any> {
   const hours = Math.max(0.5, Math.min(24, Number(session.ai?.max_hours_per_assignment ?? 2)));
   const lane = laneSlug
     ? await one(`SELECT l.id, l.slug, l.title FROM lanes l WHERE l.problem_id = $1 AND l.slug = $2`, [req.project.id, laneSlug])
@@ -340,13 +288,14 @@ async function synthesizeExplore(req: any, session: any, laneSlug: string | null
                  WHERE l.problem_id = $1 AND l.status = 'open'
                  ORDER BY (SELECT count(*) FROM jobs j WHERE j.lane_id = l.id AND j.status = 'assigned') ASC, (SELECT count(*) FROM channel_members m WHERE m.channel_id = c.id) ASC, l.id LIMIT 1`, [req.project.id]);
   const P = `${BASE()}/projects/${req.project.slug}`;
-  const served = new Set((await q<{ qid: string }>(`SELECT DISTINCT substring(title from 'Explore: (Q-[A-Za-z0-9_-]+)') AS qid FROM jobs WHERE problem_id = $1 AND type = 'explore' AND title LIKE 'Explore: Q-%' AND assigned_at > now() - interval '${SERVED_WINDOW}'`, [req.project.id])).map((r) => r.qid));
+  const served = new Set((await q<{ qid: string }>(`SELECT DISTINCT coalesce(substring(origin_key from '^question:(.*)$'), substring(title from 'Explore: (Q-[A-Za-z0-9_-]+)')) AS qid FROM jobs WHERE problem_id = $1 AND type = 'explore' AND (origin_key LIKE 'question:%' OR title LIKE 'Explore: Q-%') AND (status IN ('queued','assigned') OR created_at > now() - interval '${SERVED_WINDOW}')`, [req.project.id])).map((r) => r.qid));
   const pick = openQuestions(req.project.slug, 1000).find((x) => !served.has(x.id)) ?? null;
   const offered = session.compute?.usable ? `${Number(session.compute.usable.ram_gb ?? 0)} GB and ${Number(session.compute.usable.cpu_hours ?? 0)} CPU hours` : "no compute";
   const blockedNote = blocked ? `**Typed work is waiting for your tier: ${blocked.n} assignment(s) (${blocked.types}) need up to ${blocked.ram} GB RAM and ${blocked.hours} CPU hours, and this session offers ${offered}.** If your person can spare more, they raise Max compute share or Max disk usage in the instruction on the site and start an agent with it; that agent gets one of them. Until then, this is what fits.\n\n` : "";
   const tail = `\n\n**Return** as this job (type explore): a report with what you did, the rung of each claim, and the gap that remains, plus any files. If your work amounts to a new route, submit a second return of type \`direction\` with the route in your person's words or yours; if it finds a served document wrong, an \`audit\` return with the revised file. Then call \`GET ${P}/start\` once. Do not poll.`;
-  let title: string; let brief: string;
+  let title: string; let brief: string; let originKey: string; let isDiscovery = true;
   if (pick) {
+    originKey = `question:${pick.id}`;
     title = `Explore: ${pick.id} in ${lane?.slug ?? "the project"}`;
     brief = blockedNote + `Nothing typed that fits is queued for your tier, lane and budget right now, so this is your assignment. It needs no compute: reading, deriving, checking the registries and drafting a direction are always in scope.
 
@@ -356,8 +305,9 @@ async function synthesizeExplore(req: any, session: any, laneSlug: string | null
 
 **Do this, in order.** Read \`research/README.md\` (the router) and the rows of \`research/QUESTIONS.md\` and \`research/OUTCOMES.md\` that name this question. Then work it in lane **${lane?.slug ?? "any"}** for up to ${hours} h: read the records it names, check the claims at their stated calibration, try to break the standing verdict, and write down what you established, at which rung, and what would falsify it. If the record already answers the question and the registry row is stale, say so in one paragraph, return, and add an \`audit\` return on \`research/QUESTIONS.md\` with the corrected row; do not re-derive an answer that is on the record.` + tail;
   } else {
-    const n = Number((await one<{ c: string }>(`SELECT count(*) AS c FROM jobs WHERE problem_id = $1 AND type = 'explore' AND title LIKE 'Leads: %' AND assigned_at > now() - interval '${SERVED_WINDOW}'`, [req.project.id]))?.c ?? 0);
-    const kind = LEAD_KINDS[n % LEAD_KINDS.length];
+    const n = Number((await one<{ c: string }>(`SELECT count(*) AS c FROM jobs WHERE problem_id = $1 AND type = 'explore' AND (origin_key LIKE 'lead:%' OR title LIKE 'Leads: %') AND created_at > now() - interval '${SERVED_WINDOW}'`, [req.project.id]))?.c ?? 0);
+    const menu = discovery ? (["prior-art", "break", "synthesis", "route", "statistic"] as const) : LEAD_KINDS;
+    const kind = menu[n % menu.length];
     const recent = await q<{ id: number; type: string; handle: string; final_rung: string | null; head: string }>(`SELECT r.id, r.type, u.handle, r.final_rung, left(regexp_replace(r.report_md, E'\\n[\\\\s\\\\S]*$', ''), 140) AS head FROM returns r JOIN users u ON u.id = r.user_id WHERE r.problem_id = $1 AND r.status = 'accepted' AND r.type <> 'explore' AND r.user_id <> $2 ORDER BY r.id DESC LIMIT 12`, [req.project.id, req.user!.id]);
     const target = recent.length ? recent[(Math.floor(n / LEAD_KINDS.length)) % recent.length] : null;
     const recorded = await q<{ id: number; handle: string; head: string; lane: string | null }>(`SELECT r.id, u.handle, l.slug AS lane, left(regexp_replace(r.report_md, E'\\n[\\s\\S]*$', ''), 140) AS head FROM returns r JOIN users u ON u.id = r.user_id LEFT JOIN lanes l ON l.id = r.lane_id WHERE r.problem_id = $1 AND r.status = 'recorded' AND r.user_id <> $2 ORDER BY r.id DESC LIMIT 24`, [req.project.id, req.user!.id]);
@@ -373,6 +323,8 @@ async function synthesizeExplore(req: any, session: any, laneSlug: string | null
       "route": [`new route`, `**New route.** Read the closed-routes register (\`research/OUTCOMES.md\`, section "Closed routes") and the open questions (\`GET ${P}/questions\`). Draft one route to the target exponent or to the infinitude statement that is not on the record and not a closed route restated: the object, the step that would have to hold, the first check that could refute it cheaply, and what it would cost to run. Return it as \`direction\` (your words, or your person's verbatim if they gave it) with this job's explore report as the reasoning.`],
       "statistic": [`new statistic`, `**New statistic with a falsifier.** Design one finite statistic a run could actually decide something about, where the retained censuses could not: the decision it informs, a pre-registered falsifier written before any run, a matched control (random-sign, permutation or independent thinning, as the repo uses), and the scale at which the effect would be visible if present. If the run fits the compute your person offered, run it in the house format (question in comments, then code) and report; otherwise return the design with the cost, so a session with the compute can run it.`],
     };
+    originKey = `lead:${kind}:${Date.now()}:${n}`;
+    isDiscovery = kind !== "elevate" && kind !== "registry";
     const [what, body] = hunts[kind];
     title = `Leads: ${what}`;
     brief = blockedNote + `Nothing typed that fits is queued for your tier, lane and budget, and every open question in \`research/QUESTIONS.md\` has been handed to a session in the last two weeks. This is a lead hunt, in lane **${lane?.slug ?? "any"}**, for up to ${hours} h: the swarm needs new leads more than another pass over the list. It needs no compute unless you choose to run something that fits your offer.
@@ -381,10 +333,12 @@ ${body}
 
 Read \`research/README.md\` (the router) first if this is your first assignment here; cite every message, return, file and person you build on.` + tail;
   }
+  if (discovery) brief = brief.replace(/Nothing typed[^\n]+/, "This assignment uses the project's reserved tier-1 discovery capacity, even while other jobs are queued. Find something new: a route, connection, counterexample, or testable hypothesis. Record what you tried and learned, including negative findings.");
   const j = await one(`INSERT INTO jobs (problem_id, lane_id, type, title, brief_md, git_ref, compute_hint, budget_hours, min_tier, quorum, status, assigned_to, assigned_session, assigned_at, expires_at)
-                       VALUES ($1,$2,'explore',$3,$4,'main','{}',$5,99,1,'assigned',$6,$7,now(),now() + ($5::numeric * interval '1 hour') * 2) RETURNING *`,
-    [req.project.id, lane?.id ?? null, title.slice(0, 200), brief, hours, req.user!.id, session.id]);
-  return { ...j, lane_slug: lane?.slug ?? null, repo_url: req.project.repo_url };
+                       VALUES ($1,$2,'explore',$3,$4,'main','{}',$5,99,1,'queued',NULL,NULL,NULL,NULL) RETURNING *`,
+    [req.project.id, lane?.id ?? null, title.slice(0, 200), brief, hours]);
+  await q(`UPDATE jobs SET purpose = $2, origin_key = $3, preferred_skills = ARRAY['research','proof-analysis'] WHERE id = $1`, [j!.id, isDiscovery ? "discovery" : "work", originKey!]);
+  return { ...j, purpose: isDiscovery ? "discovery" : "work", origin_key: originKey!, lane_slug: lane?.slug ?? null, repo_url: req.project.repo_url };
 }
 
 /** A live session holds an assignment or was seen within the hour (platform issue #3: finished sessions must not count against the cap). Alias s. */
@@ -396,7 +350,7 @@ async function endSession(sessionId: string, uid: number, problemId: number, mod
   if (!s) return false;
   const held = await q<{ id: number; lane_id: number | null }>(`SELECT id, lane_id FROM jobs WHERE assigned_session = $1 AND status = 'assigned'`, [sessionId]);
   for (const j of held) {
-    await q(`UPDATE jobs SET status = 'queued', assigned_to = NULL, assigned_session = NULL, assigned_at = NULL, expires_at = NULL, release_count = release_count + 1, last_released_session = assigned_session, last_release_note = $2 WHERE id = $1`, [j.id, `session ended: ${note}`.slice(0, 500)]);
+    await releaseAssignment(j, `session ended: ${note}`);
     const ch = j.lane_id ? await one(`SELECT id FROM channels WHERE lane_id = $1 AND parent_id IS NOT NULL ORDER BY id LIMIT 1`, [j.lane_id]) : await one(`SELECT id FROM channels WHERE problem_id = $1 AND path = ''`, [problemId]);
     if (ch) await q(`INSERT INTO messages (channel_id, user_id, model, kind, body_md, job_id) VALUES ($1,$2,$3,'done',$4,$5)`, [ch.id, uid, model, `Released job #${j.id} back to the queue: session ended (${note}).`, j.id]);
   }
@@ -415,29 +369,48 @@ job.get("/sessions", bearer, project, async (req: any, res: any) => {
              how: `A session is live while it holds an assignment or was seen in the last hour; ended sessions never count. End one: POST ${BASE()}/projects/${req.project.slug}/sessions/<id>/end { "note": "why" } (its assignment goes back to the queue). Replace one with new settings: POST /start with X-Session: <id>.` });
 });
 
+/** Update this running agent's optional declarations; the person's limits never change here. */
+job.post("/sessions/:id/capabilities", bearer, project, assignmentMutation(async (req: any, res) => {
+  if (req.header("x-session") !== req.params.id || !req.agentSession || req.agentSession.ended_at) { res.status(403).json({ error: "a live session may update only its own capabilities" }); return; }
+  let profile;
+  try { profile = parseCapabilities(req.body?.capabilities ?? {}); } catch (error: any) { res.status(400).json({ error: error.message }); return; }
+  const contact = req.agentSession.contact_id ?? (researchContact(profile) ? randomBytes(12).toString("hex") : null);
+  await q(`UPDATE sessions SET capabilities = $2, contact_id = $3 WHERE id = $1`, [req.params.id, JSON.stringify(profile), contact]);
+  res.json({ ok: true, capabilities: profile, contact_id: researchContact(profile) ? contact : null });
+}));
+
+/** Scheduler allocation is operational context, not a claim that allocated hours were actually used. */
+job.get("/scheduler", bearer, project, async (req: any, res) => {
+  res.json({ discovery_share: discoveryShare(req.project.slug, req.project.discovery_share), window_days: 7, unit: "budgeted agent hours", tier1: await allocation(Number(req.project.id)) });
+});
+
 /** POST /sessions/:id/end { note? } : end one of this handle's sessions; its held assignment returns to the queue. */
-job.post("/sessions/:id/end", bearer, project, async (req: any, res: any) => {
+job.post("/sessions/:id/end", bearer, project, assignmentMutation(async (req: any, res: any) => {
   const id = String(req.params.id ?? "").trim();
   const ok = await endSession(id, req.user!.id, req.project.id, req.model ?? null, String(req.body?.note ?? "ended by the agent").slice(0, 200));
   if (!ok) { res.status(404).json({ error: "no live session with that id under this handle on this project" }); return; }
   res.json({ ok: true, session: id, status: "ended" });
-});
+}));
 
 /** POST /release { job_id, note? } : hand an assignment back to the queue (the agent was stopped, or cannot do it). Posts a note in the lane channel. */
-job.post("/release", bearer, project, async (req: any, res: any) => {
+job.post("/release", bearer, project, assignmentMutation(async (req: any, res: any) => {
   const id = Number(req.body?.job_id);
   if (!Number.isInteger(id) || id <= 0) { res.status(400).json({ error: "job_id is required: the id of the assignment you are handing back (see GET /sessions for what your sessions hold)" }); return; }
   const j = await one(`SELECT * FROM jobs WHERE id = $1 AND problem_id = $2`, [id, req.project.id]);
   if (!j) { res.status(404).json({ error: "job not found" }); return; }
   if (Number(j.assigned_to) !== req.user!.id) { res.status(403).json({ error: "not your assignment" }); return; }
+  const xs = String(req.header("x-session") ?? "").trim();
+  if (j.assigned_session && xs !== j.assigned_session) { res.status(403).json({ error: "release must come from the session holding the assignment; use /sessions/:id/end to stop an agent as its owner" }); return; }
+  const attempt = String(req.body?.attempt_id ?? req.header("x-attempt") ?? "");
+  if (attempt && attempt !== j.attempt_id) { res.status(409).json({ error: "this attempt no longer holds the job" }); return; }
   if (j.status !== "assigned") { res.status(409).json({ error: `job is ${j.status}` }); return; }
-  await q(`UPDATE jobs SET status = 'queued', assigned_to = NULL, assigned_session = NULL, assigned_at = NULL, expires_at = NULL, release_count = release_count + 1, last_released_session = assigned_session, last_release_note = $2 WHERE id = $1`, [id, req.body?.note ? String(req.body.note).slice(0, 500) : null]);
+  await releaseAssignment(j, String(req.body?.note ?? "released by agent"));
   if (!(await postRateOk(req.user!.id))) { res.json({ ok: true, job_id: id, status: "queued", note: "released; the release note was not posted (" + RATE_MESSAGE + ")" }); return; }
   const ch = j.lane_id ? await one(`SELECT id FROM channels WHERE lane_id = $1 AND parent_id IS NOT NULL ORDER BY id LIMIT 1`, [j.lane_id]) : await one(`SELECT id FROM channels WHERE problem_id = $1 AND path = ''`, [req.project.id]);
   if (ch) await q(`INSERT INTO messages (channel_id, user_id, model, kind, body_md, job_id) VALUES ($1,$2,$3,'done',$4,$5)`,
     [ch.id, req.user!.id, req.model ?? null, `Released job #${id} back to the queue${req.body?.note ? `: ${String(req.body.note).slice(0, 500)}` : ""}.`, id]);
   res.json({ ok: true, job_id: id, status: "queued" });
-});
+}, { completion: "release" }));
 
 /**
  * POST /start (legacy, pre-Sep-12 2026): a posted registration body. The way in is GET /start with the arguments of the pasted instruction.
@@ -485,6 +458,8 @@ You have no session yet and nothing is held for you. The model cannot see its ow
 - OpenCode: \`${EFFORT_COMMANDS.OpenCode}\` (the \`variant\` on your assistant messages).
 - GitHub Copilot CLI, or any harness that keeps no record of it: \`X-Effort: unmeasured\`.
 
+${CAPABILITY_INSTRUCTIONS}
+
 The value sets the tier this session works at (tier 1 needs high, xhigh or max on a top model; unmeasured works at tier 2), and the transcript of every return is checked against it: a wrong value costs the tier, never the work. Then \`GET ${base}/projects/${slug}/start\` with the same URL arguments registers you and gives your first assignment.
 `;
 }
@@ -499,6 +474,18 @@ export function lengthWords(session: any): string {
 type OpenOpts = { via: "url" | "body"; ai: any; maxJobs: number | null; endsIn: string | null; compute: ComputeOffer | null; input: any; holds?: any; fromSession?: string | null };
 /** Open a session for this agent: the pool row is the handle's standing registration (what it holds carries over), the session row is this agent's own settings and cap. */
 async function openSession(req: any, o: OpenOpts): Promise<{ session: any; member: any } | { error: string; status: number }> {
+  const launchKey = String(req.header("x-launch-id") ?? req.body?.launch_key ?? "").trim() || null;
+  if (launchKey && !/^[A-Za-z0-9_-]{8,100}$/.test(launchKey)) return { error: "X-Launch-ID must be 8–100 letters, digits, underscores or hyphens; generate it once per agent", status: 400 };
+  let capabilities;
+  try { capabilities = parseCapabilities(req.header("x-capabilities") ?? req.body?.capabilities); }
+  catch (error: any) { return { error: error.message, status: 400 }; }
+  if (launchKey) {
+    const existing = await one(`SELECT * FROM sessions WHERE problem_id = $1 AND user_id = $2 AND launch_key = $3`, [req.project.id, req.user.id, launchKey]);
+    if (existing) {
+      if (existing.model !== (req.model ?? null)) return { error: "this launch ID belongs to a different model; use a fresh ID for a different agent", status: 409 };
+      return { session: existing, member: await one(`SELECT * FROM pool WHERE problem_id = $1 AND user_id = $2`, [req.project.id, req.user.id]) };
+    }
+  }
   const prev = await one(`SELECT * FROM pool WHERE problem_id = $1 AND user_id = $2`, [req.project.id, req.user!.id]);
   const holds = o.holds === undefined ? (prev?.holds ?? {}) : o.holds;
   // Re-registering from an existing session (X-Session on the POST) ends that session first: new settings, new session, no cap hit (platform issue #3).
@@ -511,15 +498,15 @@ async function openSession(req: any, o: OpenOpts): Promise<{ session: any; membe
            ON CONFLICT (problem_id, user_id) DO UPDATE SET model = EXCLUDED.model, ai = EXCLUDED.ai, compute = EXCLUDED.compute, input = EXCLUDED.input, last_seen = now(), agreed_at = now(), holds = EXCLUDED.holds`,
     [req.project.id, req.user!.id, req.model ?? null, JSON.stringify(o.ai), o.compute ? JSON.stringify(o.compute) : null, o.input ? JSON.stringify(o.input) : null, JSON.stringify(holds)]);
   // The verification streak carries over from the handle's last session on this model (issue #41): one-assignment sessions alternate too.
-  const session = await one(`INSERT INTO sessions (id, problem_id, user_id, model, ai, compute, input, max_jobs, effort, review_streak, ends_at, registered_via)
-                             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9, COALESCE((SELECT review_streak FROM sessions WHERE problem_id = $2 AND user_id = $3 AND model IS NOT DISTINCT FROM $4 ORDER BY started_at DESC LIMIT 1), 0), CASE WHEN $10::text IS NULL THEN NULL ELSE now() + $10::interval END, $11) RETURNING *`,
-    [sessionId, req.project.id, req.user!.id, req.model ?? null, JSON.stringify(o.ai), o.compute ? JSON.stringify(o.compute) : null, o.input ? JSON.stringify(o.input) : null, o.maxJobs, req.effort ?? null, o.endsIn, o.via]);
+  const session = await one(`INSERT INTO sessions (id, problem_id, user_id, model, ai, compute, input, max_jobs, effort, review_streak, ends_at, registered_via, capabilities, launch_key, contact_id)
+                             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9, COALESCE((SELECT review_streak FROM sessions WHERE problem_id = $2 AND user_id = $3 AND model IS NOT DISTINCT FROM $4 ORDER BY started_at DESC LIMIT 1), 0), CASE WHEN $10::text IS NULL THEN NULL ELSE now() + $10::interval END, $11, $12, $13, $14) RETURNING *`,
+    [sessionId, req.project.id, req.user!.id, req.model ?? null, JSON.stringify(o.ai), o.compute ? JSON.stringify(o.compute) : null, o.input ? JSON.stringify(o.input) : null, o.maxJobs, req.effort ?? null, o.endsIn, o.via, JSON.stringify(capabilities), launchKey, researchContact(capabilities) ? randomBytes(12).toString("hex") : null]);
   const member = await one(`SELECT * FROM pool WHERE problem_id = $1 AND user_id = $2`, [req.project.id, req.user!.id]);
   return { session, member };
 }
 
 /** POST /start with a body: the registration shape agents used before Sep 12 2026 (kept for agents mid-flight; the instruction URL is the way in now). */
-job.post("/start", bearer, project, async (req: any, res: any) => {
+job.post("/start", bearer, project, assignmentMutation(async (req: any, res: any) => {
   const b = req.body ?? {};
   if (req.termsStale) { res.status(403).json({ error: req.termsStale }); return; }
   if (b.agreed !== true) { res.status(400).json({ error: "agreed:true is required on a posted registration. The usual way in is the instruction from the project page: GET /start with the arguments in its URL registers on the first fetch." }); return; }
@@ -545,13 +532,13 @@ job.post("/start", bearer, project, async (req: any, res: any) => {
   req.session = opened.session;
   req.justRegistered = true;
   await start(req, res);
-});
+}, { commitErrors: true }));
 
 /** GET /job/:id : the assignment as JSON for agents, as a page for browsers. Briefs are public (they are in the dataset). */
 job.get("/job/:id", optionalAuth, project, async (req: any, res) => {
   const row = await one(`SELECT j.*, l.slug AS lane_slug, p.repo_url, u.handle AS assigned_handle FROM jobs j JOIN problems p ON p.id=j.problem_id LEFT JOIN lanes l ON l.id=j.lane_id LEFT JOIN users u ON u.id = j.assigned_to WHERE j.id = $1 AND j.problem_id = $2`, [req.params.id, req.project.id]);
   if (!row) { res.status(404).json({ error: "no such job" }); return; }
-  if (req.query.format === "json" || !wantsHtml(req)) { const { assigned_session, ...pub } = row; res.json(pub); return; }
+  if (req.query.format === "json" || !wantsHtml(req)) { const { assigned_session, attempt_id, ...pub } = row; res.json(pub); return; }
   const P = `/projects/${req.project.slug}`;
   const pages = await paperPages(req.project.slug);
   const md = async (t: string) => { const m = protectMath(String(t ?? "").replace(/<!--[\s\S]*?-->/g, "")); return linkPaths(await linkPeople(m.restore(marked.parse(m.text.replace(/</g, "&lt;").replace(/>/g, "&gt;"), { gfm: true }) as string)), req.project.slug, "", pages); };
@@ -629,7 +616,7 @@ async function reportHarness(text: string, ctx: { returnId?: number; reviewId?: 
   return row ? { id: Number(row.id), count: Number(row.count) } : null;
 }
 
-job.post("/result", bearer, project, async (req: any, res) => {
+job.post("/result", bearer, project, assignmentMutation(async (req: any, res) => {
   const b = req.body ?? {};
   const uid = req.user!.id;
   if (req.termsStale) { res.status(403).json({ error: req.termsStale }); return; }
@@ -778,7 +765,7 @@ job.post("/result", bearer, project, async (req: any, res) => {
     if (!/^https:\/\/[A-Za-z0-9.-]+\/[A-Za-z0-9._\/-]+$/.test(repoUrl) || !/^[0-9a-f]{7,40}$/.test(commit)) { res.status(400).json({ error: "repo_url must be a public https git URL and commit a hex sha" }); return; }
     const gh = /^https:\/\/github\.com\/([^\/]+)\/([^\/]+?)(?:\.git)?$/.exec(repoUrl);
     if (gh) {
-      const ok = await fetch(`https://github.com/${gh[1]}/${gh[2]}/commit/${commit}`, { method: "HEAD", redirect: "manual" }).then((r) => r.status === 200).catch(() => false);
+      const ok = await fetch(`https://github.com/${gh[1]}/${gh[2]}/commit/${commit}`, { method: "HEAD", redirect: "manual", signal: AbortSignal.timeout(5000) }).then((r) => r.status === 200).catch(() => false);
       if (!ok) { res.status(400).json({ error: `commit ${commit} not found in public repo ${repoUrl}; push it and make the repo public` }); return; }
     }
   }
@@ -873,19 +860,15 @@ job.post("/result", bearer, project, async (req: any, res) => {
   if (twin) await q(`UPDATE returns SET duplicate_of = $2 WHERE id = $1`, [ret!.id, twin.id]);
   if (cpuHours > 0) await reputation.addCpuHours(uid, cpuHours);
   // Exploration is recorded, not reviewed: it costs reviewer time only when something builds on it or the author asks for a rung.
-  if (rtype === "explore" && b.request_review !== true) {
-    await q(`UPDATE returns SET status = 'recorded', final_rung = 'recorded' WHERE id = $1`, [ret!.id]);
-    if (jobRow) await q(`UPDATE jobs SET status = 'returned' WHERE id = $1`, [jobRow.id]);
-    res.json({ ok: true, return_id: Number(ret!.id), status: "recorded", reviews_requested: 0, note: `exploration is recorded without review. Anyone who reads it and believes a claim in it, you included, elevates it into review: POST ${BASE()}/projects/${problem.slug}/return/${ret!.id}/request-review { "note": "<what deserves verification>" }; the record shows who elevated.`, files: attached, tokens });
-    return;
-  }
+  const recordedExploration = rtype === "explore" && b.request_review !== true;
+  if (recordedExploration) await q(`UPDATE returns SET status = 'recorded', final_rung = 'recorded' WHERE id = $1`, [ret!.id]);
   // Review jobs cost trusted reviewers' time. A handle without an accepted return here gets them ten times a day, for any return that asks
   // for review (until Sep 11 2026 its self-assigned and requested-review explore returns got none at all, so newcomers' work sat pending and
   // reviewers only ever saw the owner's returns).
   const standing = (await isTrusted(Number(problem.id), uid, req.user!.handle, { model: req.model, effort: req.effort })) || !!(await one(`SELECT 1 FROM returns WHERE user_id = $1 AND problem_id = $2 AND status = 'accepted' AND NOT provisional AND id <> $3`, [uid, problem.id, ret!.id]));
   const spawnedToday = await one<{ c: string }>(`SELECT count(DISTINCT j.parent_return_id) AS c FROM jobs j JOIN returns r ON r.id = j.parent_return_id WHERE r.user_id = $1 AND r.created_at > now() - interval '1 day'`, [uid]);
   const mayReview = standing || Number(spawnedToday?.c ?? 0) < MAX_REVIEW_SPAWNS_PER_DAY;
-  if (mayReview) await spawnReviews(ret!.id, problem.id, laneId, MIN_REVIEWS);
+  if (mayReview && !recordedExploration) await spawnReviews(ret!.id, problem.id, laneId, MIN_REVIEWS);
   // A sha named in the recipe should be one of the declared hashes or an uploaded file; a typo there costs a reviewer a rerun (agent feedback, Sep 10).
   // Known (issue #7): declared hashes, this return's files, cited files, anything in the file store (a cited return's file, a pinned version), and the served portfolio's own hashes.
   const known = new Set<string>([...attached, ...(Array.isArray(b.files) ? b.files.map((x: any) => String(x).toLowerCase()) : []), ...(Array.isArray(cites.files) ? cites.files.map((x: any) => String(x).toLowerCase()) : []), ...JSON.stringify(b.hashes ?? {}).match(/[0-9a-f]{64}/g) ?? []]);
@@ -904,8 +887,22 @@ job.post("/result", bearer, project, async (req: any, res) => {
   const returnReport = tokens.log === "unknown" ? await reportHarness(String(b.transcript), { returnId: Number(ret!.id), uid, model: req.model ?? null }) : null;
   const returnLogWarn = logWarning(tokens, `POST ${BASE()}/projects/${req.project.slug}/return/${Number(ret!.id)}/transcript (same headers)`, returnReport);
   const warnings = [...(effortNote ? [effortNote] : []), ...(returnLogWarn ? [returnLogWarn] : []), ...onceWarning(tokens), ...scrubWarnings, ...fileWarn, ...patchWarning, ...ledgerWarn, ...omissionWarn, ...twinWarn, ...(stray.length ? [`recipe_md names ${stray.length} sha256 value(s) that are neither in hashes, nor among your or cited files, nor a served document: ${stray.map((x: string) => x.slice(0, 12) + "…").join(", ")}. If one is an expected output hash, put it in hashes too; if it is a typo, a reviewer's rerun will not match.`] : [])];
+  if (jobRow?.ask_id) {
+    const ask = await one(`SELECT a.id, a.message_id, m.channel_id FROM asks a JOIN messages m ON m.id = a.message_id WHERE a.id = $1`, [jobRow.ask_id]);
+    if (ask) {
+      const answer = await one(`INSERT INTO messages (channel_id, user_id, model, kind, reply_to, body_md, return_id, session)
+        VALUES ($1,$2,$3,'reply',$4,$5,$6,$7) RETURNING id`, [ask.channel_id, uid, req.model ?? null, ask.message_id,
+        `Research for ask #${ask.id}: return #${ret!.id} (${BASE()}/projects/${problem.slug}/return/${ret!.id}). These findings are awaiting review; read the evidence and uncertainty before using them.`, ret!.id, xs]);
+      await q(`UPDATE asks SET status = 'answered', answered_at = coalesce(answered_at, now()), answer_message_id = coalesce(answer_message_id,$2) WHERE id = $1`, [ask.id, answer!.id]);
+    }
+  }
+  if (recordedExploration) {
+    res.json({ ok: true, return_id: Number(ret!.id), status: "recorded", reviews_requested: 0, files: attached, tokens, warnings,
+      note: `Exploration is recorded without review. Elevate a claim when it deserves verification: POST ${BASE()}/projects/${problem.slug}/return/${ret!.id}/request-review { "note": "<what deserves verification>" }.` });
+    return;
+  }
   res.json({ ok: true, return_id: Number(ret!.id), status: "pending", reviews_requested: mayReview ? MIN_REVIEWS : 0, files: attached, tokens, warnings, note: mayReview ? undefined : "pending without review jobs: a trusted reviewer picks it up when they look; review jobs are spawned for assigned work, and for everything once you have an accepted return here" });
-});
+}, { completion: true }));
 
 /** Create review jobs for a return. Reviews require tier 1 (scope Q7/Q13). */
 export async function spawnReviews(returnId: number, problemId: number, laneId: number | null, n: number): Promise<void> {
@@ -957,6 +954,10 @@ export async function spawnReviews(returnId: number, problemId: number, laneId: 
 
 /** Apply the consensus rule to a return; escalate or resolve. */
 export async function resolveReturn(returnId: number): Promise<string> {
+  const ret = await one(`SELECT problem_id FROM returns WHERE id = $1`, [returnId]);
+  return ret ? projectTransaction(ret.problem_id, () => resolveReturnLocked(returnId)) : "unknown";
+}
+async function resolveReturnLocked(returnId: number): Promise<string> {
   const ret = await one(`SELECT * FROM returns WHERE id = $1`, [returnId]);
   if (!ret) return "unknown";
   const votes = await q<{ id: number; verdict: "accept" | "reject"; weight: string; provider: string; rung: string | null; user_id: number; model: string; also_credit: any; unverifiable: boolean; needs_md: string | null; verification: string; trusted: boolean; scored_at: string | null; effort: string | null; reject_reason: string | null }>(
@@ -1198,7 +1199,7 @@ async function returnPage(req: any, res: any): Promise<void> {
   res.type("text/html").send(page({ title: `Return #${r.id}`, dataPage: "return", description: `${r.type} by ${r.display_name || "@" + r.handle} (${r.model}), ${r.status}${r.final_rung ? `, ${r.final_rung}` : ""}. ${firstLine}`, path: `${P}/return/${r.id}`, crumbs: `<a href="${P}">${escHtml(req.project.name)}</a><span>/ results /</span>#${r.id}`, eyebrow: "Result", heading: r.job_title ?? `${r.type} return #${r.id}`, meta, aside, body }));
 }
 /** POST /return/:id/reopen { note } : a trusted reviewer puts a decided return back before the group, with a public note. */
-job.post("/return/:id/reopen", bearer, project, async (req: any, res) => {
+job.post("/return/:id/reopen", bearer, project, assignmentMutation(async (req: any, res) => {
   if (!(await isTrusted(Number(req.project.id), Number(req.user!.id), req.user!.handle, { model: req.model, effort: req.effort }))) { res.status(403).json({ error: "trusted reviewers reopen decisions; anyone else submits a challenge" }); return; }
   const note = String(req.body?.note ?? "").trim().slice(0, 1000);
   if (!note) { res.status(400).json({ error: "a reopening needs a public note: what should be looked at again" }); return; }
@@ -1207,12 +1208,12 @@ job.post("/return/:id/reopen", bearer, project, async (req: any, res) => {
   if (ret.status === "pending") { res.status(409).json({ error: "already under review" }); return; }
   await reopen(ret, Number(req.user!.id), note, "reopen");
   res.json({ ok: true, return_id: Number(ret.id), status: "pending", note });
-});
+}));
 
 /** POST /return/:id/request-review { note } : elevate a recorded return (an explore that did not ask for review) into the review queue.
  *  Anyone with a token may, the author included (Chris, Sep 11 2026: "we need a way for claims like this to be elevated and verified; that is
  *  where we win"). The elevation is on the record with the elevator's handle; a handle without standing may elevate ten a day. */
-job.post("/return/:id/request-review", bearer, project, async (req: any, res) => {
+job.post("/return/:id/request-review", bearer, project, assignmentMutation(async (req: any, res) => {
   const note = String(req.body?.note ?? "").trim().slice(0, 1000);
   if (!note) { res.status(400).json({ error: "say why: which claim in the return deserves verification, and what you checked" }); return; }
   const ret = await one(`SELECT * FROM returns WHERE id = $1 AND problem_id = $2`, [req.params.id, req.project.id]);
@@ -1230,7 +1231,7 @@ job.post("/return/:id/request-review", bearer, project, async (req: any, res) =>
   const ch = ret.lane_id ? await one(`SELECT id FROM channels WHERE lane_id = $1 AND parent_id IS NOT NULL ORDER BY id LIMIT 1`, [ret.lane_id]) : await one(`SELECT id FROM channels WHERE problem_id = $1 AND path = ''`, [ret.problem_id]);
   if (ch) await q(`INSERT INTO messages (channel_id, user_id, model, kind, body_md, return_id, session) VALUES ($1,$2,$3,'challenge',$4,$5,$6)`, [ch.id, uid, req.model ?? null, `Return #${ret.id} elevated for review by @${req.user!.handle}: ${note}. Reviewers, verify it.`, ret.id, String(req.header("x-session") ?? "").trim().slice(0, 64) || null]);
   res.json({ ok: true, return_id: Number(ret.id), status: "pending", elevated_by: req.user!.handle, note, reviews_requested: MIN_REVIEWS });
-});
+}));
 
 /**
  * Resubmit the transcript of a return or a review (Chris, Sep 12 2026): a summary was accepted at intake with a warning; the author sends the

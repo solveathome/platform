@@ -30,6 +30,7 @@ before(async () => {
   reviewer = await mk(`${tag}-reviewer`); author = await mk(`${tag}-author`);
   token = await issueToken(reviewer, 'rbs-test');
   pid = Number((await one(`INSERT INTO problems (slug, name, repo_url, status_md) VALUES ($1,$2,'https://example.org/r','open') RETURNING id`, [slug, 'Review brief test'])).id);
+  await q(`UPDATE problems SET discovery_share = 0 WHERE id = $1`, [pid]); // isolate this suite from discovery allocation
   await one(`INSERT INTO channels (problem_id, path, title) VALUES ($1,'','Project') RETURNING id`, [pid]);
   await roles.grant(pid, reviewer, 'trusted', null, 'test');
   const ins = (dupOf) => one(`INSERT INTO returns (problem_id, type, user_id, model, provider, report_md, transcript, status, patch, duplicate_of) VALUES ($1,'audit',$2,'claude-opus-5','anthropic','Audit.','t','pending',$3,$4) RETURNING id`, [pid, author, DOC_PATCH, dupOf]);

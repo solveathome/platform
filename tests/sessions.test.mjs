@@ -108,13 +108,12 @@ test('a session refuses a different model, and a return must come from the sessi
   assert.equal(ret.session, opus.session);
 });
 
-test('an unknown X-Session with a model registers a fresh session (Sep 12): the reply is the session block plus a brief', async () => {
-  const none = await call('GET', '/start', {model: 'claude-opus-5', session: 'not-a-session', effort: '"effort":"high"'});
-  assert.equal(none.status, 200);
-  const body = await none.json();
-  assert.ok(body.session && body.session !== 'not-a-session'); assert.ok(body.job_id);
-  assert.match(body.brief_md, /## Registered for this session/);
-  await call('POST', `/sessions/${body.session}/end`, {model: 'claude-opus-5', body: {note: 'test'}});
+test('an unknown X-Session is refused without creating an accidental fresh agent', async () => {
+  const before = await one(`SELECT count(*) AS n FROM sessions WHERE problem_id = $1`, [pid]);
+  const none = await call('GET', '/start', {model: 'claude-opus-5', session: 'not-a-session', effort: 'high'});
+  assert.equal(none.status, 403);
+  assert.match((await none.json()).error, /unknown session/);
+  assert.equal((await one(`SELECT count(*) AS n FROM sessions WHERE problem_id = $1`, [pid])).n, before.n);
 });
 
 test('release without job_id is a 400, not a 500', async () => {

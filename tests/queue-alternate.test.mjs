@@ -22,6 +22,7 @@ before(async () => {
   author = Number((await one(`INSERT INTO users (github_id, handle, terms_version, terms_accepted_at) VALUES ($1,$2,$3,now()) RETURNING id`, [900_000_000 + Math.floor(Math.random() * 1e8), `${tag}-author`, TERMS_VERSION])).id);
   token = await issueToken(uid, 'alt-test');
   pid = Number((await one(`INSERT INTO problems (slug, name, repo_url, status_md) VALUES ($1,$2,'https://example.org/r','open') RETURNING id`, [tag, 'Alternation test'])).id);
+  await q(`UPDATE problems SET discovery_share = 0 WHERE id = $1`, [pid]); // isolate this suite from discovery allocation
   await one(`INSERT INTO channels (problem_id, path, title) VALUES ($1,'','Project') RETURNING id`, [pid]);
   await q(`INSERT INTO project_roles (problem_id, user_id, role, note) VALUES ($1,$2,'trusted','test')`, [pid, uid]);   // review assignments go to trusted handles only
   // Two returns by an Opus author (a Fable reviewer may review them), a review job on each, and two paper jobs.
@@ -84,13 +85,18 @@ test('the run of reviews follows the backlog: many reviews and little research m
   assert.ok(run >= 2, `fixture should make a run of at least 2 (reviews ${reviews}, research ${research})`);
   await q(`UPDATE sessions SET review_streak = 0 WHERE user_id = $1`, [uid]);   // the streak carries across a handle's sessions (issue #41); start this one from zero
   const s = await okJson(await call('POST', '/start', {body: {agreed: true, ai: {max_assignments: 8}, transcript_preapproved: true}}));
-  const types = [s.type]; let job = s.job_id;
+  const types = [s.type]; let current = s;
   for (let i = 0; i < run; i++) {
-    await okJson(await call('POST', '/release', {session: s.session, body: {job_id: job, note: 'test'}}));
+    await okJson(await call('POST', '/release', {session: s.session, body: {job_id: current.job_id, note: 'test'}}));
     const n = await okJson(await call('GET', '/start', {session: s.session}));
-    types.push(n.type); job = n.job_id;
+    const need = n.assignment_reason.eligible_backlog;
+    const allowedRun = Math.min(4, Math.max(1, Math.ceil(need.reviews / Math.max(1, need.research))));
+    const streak = types.slice().reverse().findIndex(t => t !== 'review');
+    const reviewsTaken = streak === -1 ? types.length : streak;
+    assert.equal(n.type === 'review', reviewsTaken < allowedRun, `work must follow the eligible backlog, excluding every job this session released: ${JSON.stringify(n.assignment_reason)}`);
+    types.push(n.type); current = n;
   }
-  await call('POST', '/release', {session: s.session, body: {job_id: job, note: 'test'}});
-  assert.deepEqual(types.slice(0, run), Array(run).fill('review'), `expected ${run} reviews first, got ${types.join(', ')}`);
-  assert.notEqual(types[run], 'review', `after ${run} reviews the next should be research, got ${types.join(', ')}`);
+  await call('POST', '/release', {session: s.session, body: {job_id: current.job_id, note: 'test'}});
+  assert.ok(types.slice(0, 2).every(t => t === 'review'), 'a busy review backlog starts with several verifications');
+  assert.ok(types.some(t => t !== 'review'), 'research still receives a turn');
 });

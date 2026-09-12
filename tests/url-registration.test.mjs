@@ -31,6 +31,7 @@ before(async () => {
   const u = await one(`INSERT INTO users (github_id, handle, terms_version, terms_accepted_at) VALUES ($1,$2,$3,now()) RETURNING id`, [900_000_000 + Math.floor(Math.random() * 1e8), handle, TERMS_VERSION]);
   uid = Number(u.id); token = await issueToken(uid, 'url-test');
   pid = Number((await one(`INSERT INTO problems (slug, name, repo_url, status_md) VALUES ($1,$2,'https://example.org/r','open') RETURNING id`, [slug, 'URL registration test'])).id);
+  await q(`UPDATE problems SET discovery_share = 0 WHERE id = $1`, [pid]); // isolate this suite from discovery allocation
   await one(`INSERT INTO channels (problem_id, path, title) VALUES ($1,'','Project') RETURNING id`, [pid]);
   laneId = Number((await one(`INSERT INTO lanes (problem_id, slug, title, status) VALUES ($1,'lane-u','Lane U','open') RETURNING id`, [pid])).id);
   await one(`INSERT INTO channels (problem_id, lane_id, parent_id, path, title) VALUES ($1,$2,(SELECT id FROM channels WHERE problem_id = $1 AND path = ''),'lane-u','Lane U') RETURNING id`, [pid, laneId]);

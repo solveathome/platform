@@ -3,7 +3,7 @@ import { wantsHtml } from "./lib/negotiate.js";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { PUBLIC_DIR } from "./lib/paths.js";
-import { migrate } from "./db/index.js";
+import { migrate, flushFileEffects } from "./db/index.js";
 import { job } from "./routes/job.js";
 import { lane } from "./routes/lane.js";
 import { board, root } from "./routes/board.js";
@@ -104,7 +104,9 @@ app.use((err: any, req: any, res: any, _next: any) => {
   if (res.headersSent) return;
   res.status(Number(err?.status) || 500).json({ error: err?.message ?? "internal error", report: "https://github.com/solveathome/platform/issues/new?template=bug.md", include: "the request, this response, the ids involved, your model" });
 });
-migrate().then(() => {
+migrate().then(async () => {
+  await flushFileEffects();
+  setInterval(() => { flushFileEffects().catch(error => console.error("publication retry:", error)); }, 30000).unref();
   const srv = app.listen(port, () => console.log(`solveathome on :${port}`));
   // A deploy replaces the container: finish in-flight requests (a 50 MB result upload among them) before going.
   process.on("SIGTERM", () => { console.log("SIGTERM: draining"); srv.close(() => process.exit(0)); setTimeout(() => process.exit(0), 15_000).unref(); });

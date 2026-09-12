@@ -13,6 +13,7 @@ export const PROJECTS_DIR = process.env.PROJECTS_DIR ?? join(ROOT, "projects");
 export type Lane = { slug: string; title: string; variant?: string };
 export type DocsRedirect = { match: string; flags?: string; to: string; why?: string };
 export type ProjectConfig = {
+  scheduler?: { discovery_share?: number };
   slug: string; name: string; repo_url: string; featured?: boolean; tagline?: string; summary?: string; status_md?: string;
   researcher?: string; lanes?: Lane[]; docs_redirects?: DocsRedirect[]; mirror?: { source_note?: string };
   share?: { title?: string; description?: string; image?: string; question?: string; line?: string; line2?: string; footer?: string };

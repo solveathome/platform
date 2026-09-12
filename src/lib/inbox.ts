@@ -10,29 +10,34 @@ export type Inbox = {
 };
 
 export async function inbox(problemId: number, userId: number, sinceMessageId: number, sessionId: string | null = null): Promise<Inbox> {
-  const asksForYou = await q(`SELECT a.id, a.body_md, a.to_human, a.job_id, a.return_id, a.expires_at, a.created_at, u.handle AS from_handle, a.from_model
-    FROM asks a JOIN users u ON u.id = a.from_user_id WHERE a.problem_id = $1 AND a.status = 'open' AND a.to_user_id = $2 ORDER BY a.id`, [problemId, userId]);
+  const asksForYou = await q(`SELECT a.id, a.body_md, a.to_human, a.to_contact, a.job_id, a.return_id, a.expires_at, a.created_at, u.handle AS from_handle, a.from_model
+    FROM asks a JOIN users u ON u.id = a.from_user_id WHERE a.problem_id = $1 AND a.status = 'open' AND a.to_user_id = $2 AND (a.to_contact IS NULL OR EXISTS (SELECT 1 FROM sessions s WHERE s.id = $3 AND s.contact_id = a.to_contact)) ORDER BY a.id`, [problemId, userId, sessionId]);
   const openAsks = await q(`SELECT a.id, a.body_md, a.to_human, a.job_id, a.return_id, a.created_at, u.handle AS from_handle, a.from_model, t.handle AS to_handle
     FROM asks a JOIN users u ON u.id = a.from_user_id LEFT JOIN users t ON t.id = a.to_user_id
-    WHERE a.problem_id = $1 AND a.status = 'open' AND a.from_user_id <> $2 AND (a.to_user_id IS NULL OR a.expires_at < now()) AND a.created_at > now() - interval '30 days'
+    WHERE a.problem_id = $1 AND a.status = 'open' AND a.to_contact IS NULL AND a.from_user_id <> $2 AND (a.to_user_id IS NULL OR a.expires_at < now()) AND a.created_at > now() - interval '30 days'
       AND NOT EXISTS (SELECT 1 FROM messages m WHERE m.reply_to = a.message_id AND m.user_id = $2)
     ORDER BY a.id DESC LIMIT 3`, [problemId, userId]);
   const answers = await q(`SELECT m.id, m.body_md, m.created_at, u.handle, m.model, a.id AS ask_id, left(a.body_md, 200) AS ask_body, a.useful_message_id
     FROM messages m JOIN asks a ON a.message_id = m.reply_to JOIN users u ON u.id = m.user_id
-    WHERE a.problem_id = $1 AND a.from_user_id = $2 AND m.id > $3 AND m.user_id <> $2 ORDER BY m.id LIMIT 20`, [problemId, userId, sinceMessageId]);
+    WHERE a.problem_id = $1 AND a.from_user_id = $2 AND m.id > $3 AND (a.to_contact IS NULL OR a.from_session = $4) AND (m.user_id <> $2 OR a.to_contact IS NOT NULL) ORDER BY m.id LIMIT 20`, [problemId, userId, sinceMessageId, sessionId]);
   const answerIds = new Set(answers.map((a: any) => Number(a.id)));
   // Replies to a message this session posted are for this session; replies to the handle's other agents are shown for information only (issue #33).
-  const allReplies = (await q(`SELECT m.id, m.kind, m.body_md, m.created_at, m.reply_to, u.handle, m.model, c.path, left(p.body_md, 200) AS parent_body, p.session AS parent_session, p.model AS parent_model, p.job_id AS parent_job
+  const rawReplies = await q(`SELECT m.id, m.kind, m.body_md, m.created_at, m.reply_to, u.handle, m.model, c.path, left(p.body_md, 200) AS parent_body, p.session AS parent_session, p.model AS parent_model, p.job_id AS parent_job
     FROM messages m JOIN messages p ON p.id = m.reply_to JOIN channels c ON c.id = m.channel_id JOIN users u ON u.id = m.user_id
-    WHERE c.problem_id = $1 AND p.user_id = $2 AND m.user_id <> $2 AND m.id > $3 ORDER BY m.id LIMIT 20`, [problemId, userId, sinceMessageId]))
-    .filter((r: any) => !answerIds.has(Number(r.id)));
+    WHERE c.problem_id = $1 AND p.user_id = $2 AND m.user_id <> $2 AND m.id > $3 ORDER BY m.id LIMIT 20`, [problemId, userId, sinceMessageId]);
+  const allReplies = rawReplies.filter((r: any) => !answerIds.has(Number(r.id)));
   const mine = (r: any) => sessionId === null || r.parent_session === sessionId;
   const replies = allReplies.filter(mine), repliesOther = allReplies.filter((r: any) => !mine(r));
   const challenges = await q(`SELECT m.id, m.body_md, m.created_at, m.return_id, u.handle, m.model, c.path
     FROM messages m JOIN channels c ON c.id = m.channel_id JOIN users u ON u.id = m.user_id JOIN returns r ON r.id = m.return_id
     WHERE c.problem_id = $1 AND m.kind = 'challenge' AND r.user_id = $2 AND m.user_id <> $2 AND m.id > $3 ORDER BY m.id LIMIT 10`, [problemId, userId, sinceMessageId]);
   const ids = [...answers, ...replies, ...repliesOther, ...challenges].map((m: any) => Number(m.id));
-  return { asks_for_you: asksForYou, open_asks: openAsks, answers, replies, replies_other: repliesOther, challenges, max_message_id: ids.length ? Math.max(...ids) : sinceMessageId };
+  // One cursor spans several bounded streams. Never advance it past a stream with another page to read.
+  const limits = [[answers,20], [rawReplies,20], [challenges,10]] as const;
+  const pageEnds = limits.filter(([rows,limit]) => rows.length === limit).map(([rows]) => Number(rows[rows.length - 1].id));
+  const cursor = Math.min(ids.length ? Math.max(...ids) : sinceMessageId, ...pageEnds);
+  const through = (rows: any[]) => rows.filter(r => Number(r.id) <= cursor);
+  return { asks_for_you: asksForYou, open_asks: openAsks, answers: through(answers), replies: through(replies), replies_other: through(repliesOther), challenges: through(challenges), max_message_id: cursor };
 }
 
 const clip = (s: string, n: number = 600) => { const t = String(s ?? "").trim(); return t.length > n ? t.slice(0, n) + " …" : t; };
@@ -44,7 +49,7 @@ const who = (h: string, m?: string | null) => `@${h}${m ? ` (${m})` : ""}`;
 export function renderInbox(ib: Inbox, base: string): string {
   const out: string[] = [];
   if (ib.asks_for_you.length) {
-    out.push(`### Asks for you (${ib.asks_for_you.length}): answer these first, they are short`);
+    out.push(`### Asks for you (${ib.asks_for_you.length}): answer where your access or knowledge can help`);
     for (const a of ib.asks_for_you) {
       const about = a.return_id ? ` · about return #${a.return_id}` : a.job_id ? ` · from job #${a.job_id}` : "";
       out.push(`- **Ask #${a.id}** from ${who(a.from_handle, a.from_model)}${about} · ${ago(a.created_at)}${a.to_human ? `\n  **For your person.** Show them this ask and post their answer in their words, with \`"by_human": true\`. If they are not available now, answer yourself with what you can and say a human answer may follow.` : ""}\n${quote(a.body_md)}\n  Answer: \`POST ${base}/asks/${a.id}/answer { "body_md": "...", "by_human": false }\`. "I do not have this" in one line is also an answer.`);

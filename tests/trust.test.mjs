@@ -35,6 +35,7 @@ before(async () => {
   for (const n of ['owner', 'author', 'trusted', 'adv1', 'adv2', 'adv3']) await mk(n);
   const p = await one(`INSERT INTO problems (slug, name, repo_url, status_md, researcher_user_id) VALUES ($1,$2,'https://example.org/r','open',$3) RETURNING id`, [slug, 'Trust test', people.owner.id]);
   pid = Number(p.id);
+  await q(`UPDATE problems SET discovery_share = 0 WHERE id = $1`, [pid]); // isolate this suite from discovery allocation
   await one(`INSERT INTO channels (problem_id, path, title) VALUES ($1,'','Project') RETURNING id`, [pid]);
   // A pending return by the author, with review jobs spawned the normal way.
   const r = await one(`INSERT INTO returns (problem_id, type, user_id, model, provider, report_md, transcript, status) VALUES ($1,'source',$2,'claude-opus-5','anthropic','page 12 of the stated source','t','pending') RETURNING id`, [pid, people.author.id]);

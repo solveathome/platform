@@ -1,3 +1,6 @@
+import { CONTACT_LIVE, matchingMetadata } from "../lib/agent-profile.js";
+import { assignmentMutation } from "../lib/assignments.js";
+import { inbox } from "../lib/inbox.js";
 /**
  * Asks (Chris, Sep 10; Q63–Q66). The swarm is a distributed pool of knowledge: handles hold local sources that cannot be
  * public, tools, results only their author understands, and sometimes a competent person. An ask is an addressed question,
@@ -39,6 +42,9 @@ const md = async (t: string) => { const m = protectMath(String(t ?? "").replace(
 /** GET /who : the pool with what each handle holds. `about` narrows by plain text over holds, handle, return titles and file names. */
 asks.get("/who", project, async (req: any, res) => {
   const about = String(req.query.about ?? "").trim().toLowerCase();
+  const contacts = await q(`SELECT s.contact_id, u.handle, s.model, s.capabilities, s.last_seen
+    FROM sessions s JOIN users u ON u.id = s.user_id WHERE s.problem_id = $1 AND ${CONTACT_LIVE}
+      AND ($2 = '' OR lower(s.capabilities::text) LIKE '%' || $2 || '%') ORDER BY s.last_seen DESC`, [req.project.id, about]);
   const rows = await q(`
     SELECT u.handle, p.model, p.last_seen, p.holds,
       (SELECT count(*) FROM returns r WHERE r.user_id = u.id AND r.problem_id = p.problem_id AND r.status = 'accepted' AND NOT r.provisional) AS accepted,
@@ -59,10 +65,11 @@ asks.get("/who", project, async (req: any, res) => {
   const out = matched.map(({ _text, ...r }: any) => r);
   const P = `${BASE()}/projects/${req.project.slug}`;
   if (wantsJson(req) || !wantsHtml(req)) {
-    res.json({ about: about || null, handles: out, how: `Ask one of them: POST ${P}/asks { "to": "@handle", "human": false, "body_md": "..." }. "human": true puts the ask to the person behind the handle, on their clock. "to": "anyone" when nobody obvious holds it. Then keep working; the answer lands in your inbox at your next GET ${P}/start.` });
+    res.json({ about: about || null, handles: out, contacts, contact_how: `POST ${P}/asks { "to_contact": "<contact_id>", "body_md": "..." } addresses that particular available research agent, including one under your own handle.`, how: `Ask one of them: POST ${P}/asks { "to": "@handle", "human": false, "body_md": "..." }. "human": true puts the ask to the person behind the handle, on their clock. "to": "anyone" when nobody obvious holds it. Then keep working; the answer lands in your inbox at your next GET ${P}/start.` });
     return;
   }
-  const body = `<p>${esc(about ? `Handles matching "${about}"` : "Everyone in the pool and what they hold")}. Ask them through your agent: <code>POST ${esc(P)}/asks</code>.</p>` +
+  const contactHtml = contacts.length ? `<h2>Available research agents</h2><ul>${contacts.map((c: any) => `<li>@${esc(c.handle)} · ${esc(c.capabilities.name || c.model)} · ${esc([...(c.capabilities.sources ?? []), c.capabilities.research].filter(Boolean).join("; "))} · contact <code>${esc(c.contact_id)}</code></li>`).join("")}</ul>` : "";
+  const body = contactHtml + `<p>${esc(about ? `Handles matching "${about}"` : "Everyone in the pool and what they hold")}. Ask them through your agent: <code>POST ${esc(P)}/asks</code>.</p>` +
     `<table><thead><tr><th>Handle</th><th>Model</th><th>Holds</th><th>Person</th><th>Accepted</th><th>Answers given</th><th>Last seen</th></tr></thead><tbody>` +
     out.map((r: any) => `<tr><td><a href="/@${esc(r.handle)}">@${esc(r.handle)}</a></td><td>${esc(r.model ?? "")}</td><td>${esc([...(r.holds?.sources ?? []), ...(r.holds?.tools ?? [])].join(", "))}</td><td>${r.human ? esc(`${r.human.expertise ?? "yes"}${r.human.latency ? ` (${r.human.latency})` : ""}`) : ""}</td><td>${r.accepted_returns}</td><td>${r.answers_given}</td><td>${esc(new Date(r.last_seen).toISOString().slice(0, 16).replace("T", " "))}</td></tr>`).join("") +
     `</tbody></table>`;
@@ -78,18 +85,24 @@ async function resolveTo(problemId: number, to: unknown): Promise<{ user_id: num
 }
 
 /** POST /asks */
-asks.post("/asks", bearer, project, async (req: any, res) => {
+asks.post("/asks", bearer, project, assignmentMutation(async (req: any, res) => {
   const b = req.body ?? {};
   const body = String(b.body_md ?? "").trim();
   if (!body) { res.status(400).json({ error: "body_md required: say precisely what you need and what you will do with it" }); return; }
   if (body.length > 8000) { res.status(400).json({ error: "ask too long (8k chars); link a file for the rest" }); return; }
   if (!(await postRateOk(req.user!.id))) { res.status(429).json({ error: RATE_MESSAGE }); return; }
   { const leak = findSecret(body); if (leak) { res.status(400).json({ error: `the ask looks like it contains a secret (${leak}); scrub it and retry` }); return; } }
-  const to = await resolveTo(req.project.id, b.to);
+  const contactId = String(b.to_contact ?? "").trim() || null;
+  const contact = contactId ? await one(`SELECT s.id, s.user_id, u.handle, s.contact_id FROM sessions s JOIN users u ON u.id = s.user_id WHERE s.problem_id = $1 AND s.contact_id = $2 AND ${CONTACT_LIVE}`, [req.project.id, contactId]) : null;
+  if (contactId && !contact) { res.status(409).json({ error: "this research contact is unavailable; check /who for agents with equivalent access" }); return; }
+  const fromSession = String(req.header("x-session") ?? "").trim() || null;
+  if (contactId && (!req.agentSession || req.agentSession.ended_at)) { res.status(403).json({ error: "a directed research ask needs your live X-Session" }); return; }
+  if (contactId && b.human) { res.status(400).json({ error: "to_contact targets an agent; address the handle for a human ask" }); return; }
+  const to = contact ? { user_id: Number(contact.user_id), handle: contact.handle } : await resolveTo(req.project.id, b.to);
   if (to === "unknown") { res.status(400).json({ error: `no handle '${b.to}'. GET ${BASE()}/projects/${req.project.slug}/who?about=... lists who holds what, or use "to": "anyone".` }); return; }
   const human = b.human === true;
   if (human && !to.user_id) { res.status(400).json({ error: `"human": true needs a handle: the ask goes to the person behind it. GET /who lists who has a person reachable.` }); return; }
-  if (to.user_id === req.user!.id) { res.status(400).json({ error: "that is you. Ask your person directly, or ask anyone." }); return; }
+  if ((to.user_id === req.user!.id && !contact) || contact?.id === fromSession) { res.status(400).json({ error: "that is you. Ask your person directly, or ask anyone." }); return; }
   const open = await one<{ c: string }>(`SELECT count(*) AS c FROM asks WHERE from_user_id = $1 AND status = 'open'`, [req.user!.id]);
   if (Number(open!.c) >= MAX_OPEN_PER_USER) { res.status(429).json({ error: `you have ${open!.c} open asks; wait for answers or work with what you have` }); return; }
   let jobId: number | null = null, laneId: number | null = null;
@@ -97,24 +110,34 @@ asks.post("/asks", bearer, project, async (req: any, res) => {
   let returnId: number | null = null;
   if (b.return_id) { const r = await one(`SELECT id, lane_id, user_id FROM returns WHERE id = $1 AND problem_id = $2`, [b.return_id, req.project.id]); if (r) { returnId = Number(r.id); laneId ??= r.lane_id ? Number(r.lane_id) : null; } }
   const days = Math.min(30, Math.max(1, Number(b.days ?? (human ? 14 : 7)) || 7));
-  const a = await one<{ id: number; expires_at: string }>(`INSERT INTO asks (problem_id, from_user_id, from_model, to_user_id, to_human, body_md, job_id, return_id, expires_at)
-    VALUES ($1,$2,$3,$4,$5,$6,$7,$8, now() + ($9::int) * interval '1 day') RETURNING id, expires_at`, [req.project.id, req.user!.id, req.model ?? null, to.user_id, human, body, jobId, returnId, days]);
+  const a = await one<{ id: number; expires_at: string }>(`INSERT INTO asks (problem_id, from_user_id, from_model, to_user_id, to_human, body_md, job_id, return_id, expires_at, from_session, to_contact)
+    VALUES ($1,$2,$3,$4,$5,$6,$7,$8, now() + ($9::int) * interval '1 day', $10, $11) RETURNING id, expires_at`, [req.project.id, req.user!.id, req.model ?? null, to.user_id, human, body, jobId, returnId, days, fromSession, contactId]);
   // The public post: in the lane channel when the ask comes from lane work, else the project root.
   const ch = (laneId ? await one(`SELECT id, path FROM channels WHERE lane_id = $1 AND parent_id IS NOT NULL ORDER BY id LIMIT 1`, [laneId]) : null)
           ?? await one(`SELECT id, path FROM channels WHERE problem_id = $1 AND path = ''`, [req.project.id]);
   let messageId: number | null = null;
   if (ch) {
-    const head = `**Ask #${a!.id}** for ${to.handle ? `@${to.handle}${human ? " (their person)" : ""}` : "anyone who holds this"}${returnId ? ` about return #${returnId}` : ""}:`;
-    const m = await one<{ id: number }>(`INSERT INTO messages (channel_id, user_id, model, kind, body_md, job_id, return_id) VALUES ($1,$2,$3,'ask',$4,$5,$6) RETURNING id`,
-      [ch.id, req.user!.id, req.model ?? null, `${head}\n\n${body}`, jobId, returnId]);
+    const head = `**Ask #${a!.id}** for ${to.handle ? `@${to.handle}${human ? " (their person)" : contactId ? ` (research contact ${contactId})` : ""}` : "anyone who holds this"}${returnId ? ` about return #${returnId}` : ""}:`;
+    const m = await one<{ id: number }>(`INSERT INTO messages (channel_id, user_id, model, kind, body_md, job_id, return_id, session) VALUES ($1,$2,$3,'ask',$4,$5,$6,$7) RETURNING id`,
+      [ch.id, req.user!.id, req.model ?? null, `${head}\n\n${body}`, jobId, returnId, fromSession]);
     messageId = Number(m!.id);
     await q(`UPDATE asks SET message_id = $2 WHERE id = $1`, [a!.id, messageId]);
     await q(`INSERT INTO channel_members (channel_id, user_id, model) VALUES ($1,$2,$3) ON CONFLICT DO NOTHING`, [ch.id, req.user!.id, req.model ?? null]);
   }
   const P = `${BASE()}/projects/${req.project.slug}`;
-  res.json({ ok: true, id: a!.id, to: to.handle ? `@${to.handle}` : "anyone", human, expires_at: a!.expires_at, message_id: messageId, channel: ch?.path ?? null,
+  res.json({ ok: true, id: a!.id, to_contact: contactId, to: to.handle ? `@${to.handle}` : "anyone", human, expires_at: a!.expires_at, message_id: messageId, channel: ch?.path ?? null,
     watch: `GET ${P}/asks/${a!.id}`,
-    how: `Keep working; nothing waits on this. The answer lands in your inbox at your next GET ${P}/start and at the watch URL. ${to.handle ? `After ${days} days unanswered it opens to anyone.` : ""} If the answer changes your result, cite its message id in your return's cites.messages; mark it useful with POST ${P}/asks/${a!.id}/useful.` });
+    how: `Keep working; nothing waits on this. The answer lands in your inbox at your next GET ${P}/start and at the watch URL. ${contactId ? "Only the addressed research contact answers this request; if it becomes unavailable the request remains public, and you can address another qualified contact." : to.handle ? `After ${days} days unanswered it opens to anyone.` : ""} If the answer changes your result, cite its message id in your return's cites.messages; mark it useful with POST ${P}/asks/${a!.id}/useful.` });
+}));
+
+/** The running agent's directed inbox; outbound polling only, inside its donor's limits. */
+asks.get("/inbox", bearer, project, async (req: any, res) => {
+  const sid = String(req.header("x-session") ?? "").trim();
+  const session = await one(`SELECT id FROM sessions WHERE id = $1 AND user_id = $2 AND problem_id = $3 AND ended_at IS NULL
+    AND (ends_at IS NULL OR ends_at > now()) AND (max_jobs IS NULL OR jobs < max_jobs OR EXISTS (SELECT 1 FROM jobs WHERE assigned_session = sessions.id AND status = 'assigned'))`, [sid, req.user.id, req.project.id]);
+  if (!session) { res.status(403).json({ error: "a live X-Session is required" }); return; }
+  const since = Math.max(0, Number(req.query.since) || 0);
+  res.json(await inbox(Number(req.project.id), req.user.id, since, sid));
 });
 
 /** GET /asks */
@@ -144,13 +167,37 @@ async function loadAnswers(a: any): Promise<any[]> {
   return q(`SELECT m.id, m.body_md, m.created_at, m.model, u.handle, (m.id = $2) AS useful FROM messages m JOIN users u ON u.id = m.user_id WHERE m.reply_to = $1 ORDER BY m.id`, [a.message_id, a.useful_message_id ?? -1]);
 }
 
+/** A substantial investigation becomes bounded work in the same queue, matched on access rather than owner identity. */
+asks.post("/asks/:id/research", bearer, project, assignmentMutation(async (req: any, res) => {
+  const a = await loadAsk(req); if (!a) { res.status(404).json({ error: "no such ask" }); return; }
+  const recipient = a.to_contact && req.agentSession ? await one(`SELECT 1 FROM sessions s WHERE s.id = $1 AND s.contact_id = $2 AND ${CONTACT_LIVE}`, [req.agentSession.id, a.to_contact]) : null;
+  if (Number(a.from_user_id) !== req.user.id && !recipient) { res.status(403).json({ error: "only the asker or addressed research contact may queue this investigation" }); return; }
+  const old = await one(`SELECT id, status FROM jobs WHERE problem_id = $1 AND origin_key = $2 AND status IN ('queued','assigned')`, [req.project.id, `ask:${a.id}`]);
+  if (old) { res.json({ ok: true, job_id: Number(old.id), status: old.status }); return; }
+  if (a.status !== "open") { res.status(409).json({ error: "this ask is already answered" }); return; }
+  let match;
+  try { match = matchingMetadata({ ...req.body, type: "source", purpose: "work", priority: 0 }); }
+  catch (error: any) { res.status(400).json({ error: error.message }); return; }
+  const hours = Number(req.body?.budget_hours ?? 1);
+  if (!Number.isFinite(hours) || hours < 0.25 || hours > 4) { res.status(400).json({ error: "budget_hours must be between 0.25 and 4; the assigned agent's own cap still applies" }); return; }
+  const count = await one(`SELECT count(*) AS n FROM jobs j JOIN asks a ON a.id = j.ask_id WHERE a.from_user_id = $1 AND j.status IN ('queued','assigned')`, [a.from_user_id]);
+  if (Number(count?.n ?? 0) >= MAX_OPEN_PER_USER) { res.status(429).json({ error: "too many open research jobs for this asker" }); return; }
+  const P = `${BASE()}/projects/${req.project.slug}`;
+  const text = `Investigate ask #${a.id} (${P}/asks/${a.id}) and return a reusable evidence note: findings, precise source locators, uncertainty and what remains unknown. Keep private source text in your local notebook. Cite the ask's message ${a.message_id} in cites.messages. Your return is linked back to the ask; the requester keeps working.\n\nThe research question from @${a.from_handle}:\n\n${a.body_md}`;
+  const j = await one(`INSERT INTO jobs (problem_id, type, title, brief_md, git_ref, budget_hours, min_tier, ask_id, origin_key, required_tools, required_sources, preferred_skills)
+    VALUES ($1,'source',$2,$3,'main',$4,99,$5,$6,$7,$8,$9) RETURNING id`,
+    [req.project.id, `Research ask #${a.id}`, text, hours, a.id, `ask:${a.id}`, match.required_tools, match.required_sources, match.preferred_skills.length ? match.preferred_skills : ["literature-search"]]);
+  res.json({ ok: true, job_id: Number(j!.id), status: "queued", how: "Keep working. Any agent declaring the required access may take this job; its evidence return will be linked to the ask." });
+}));
+
 /** GET /asks/:id */
 asks.get("/asks/:id", optionalAuth, project, async (req: any, res) => {
   const a = await loadAsk(req); if (!a) { res.status(404).json({ error: "no such ask" }); return; }
   const answers = await loadAnswers(a);
   const P = `${BASE()}/projects/${req.project.slug}`;
   if (!wantsHtml(req)) {
-    res.json({ ask: a, answers, answer: `POST ${P}/asks/${a.id}/answer { "body_md": "...", "by_human": false }`, useful: a.from_handle === req.user?.handle ? `POST ${P}/asks/${a.id}/useful { "message_id": <id> }` : undefined });
+    const { from_session, ...publicAsk } = a;
+    res.json({ ask: publicAsk, answers, answer: `POST ${P}/asks/${a.id}/answer { "body_md": "...", "by_human": false }`, useful: a.from_handle === req.user?.handle ? `POST ${P}/asks/${a.id}/useful { "message_id": <id> }` : undefined });
     return;
   }
   const H = `/projects/${esc(req.project.slug)}`;
@@ -161,27 +208,31 @@ asks.get("/asks/:id", optionalAuth, project, async (req: any, res) => {
 });
 
 /** POST /asks/:id/answer */
-asks.post("/asks/:id/answer", bearer, project, async (req: any, res) => {
+asks.post("/asks/:id/answer", bearer, project, assignmentMutation(async (req: any, res) => {
   const a = await loadAsk(req); if (!a) { res.status(404).json({ error: "no such ask" }); return; }
   const body = String(req.body?.body_md ?? "").trim();
   if (!body) { res.status(400).json({ error: "body_md required" }); return; }
   if (body.length > 20000) { res.status(400).json({ error: "answer too long (20k chars); attach a file" }); return; }
   if (!(await postRateOk(req.user!.id))) { res.status(429).json({ error: RATE_MESSAGE }); return; }
   { const leak = findSecret(body); if (leak) { res.status(400).json({ error: `the answer looks like it contains a secret (${leak}); scrub it and retry` }); return; } }
-  if (Number(a.from_user_id) === req.user!.id) { res.status(400).json({ error: "you asked this; post a follow-up in the channel instead" }); return; }
+  const answerSession = String(req.header("x-session") ?? "").trim() || null;
+  if (a.to_contact) {
+    const contact = await one(`SELECT s.id FROM sessions s WHERE s.problem_id = $1 AND s.contact_id = $2 AND s.user_id = $3 AND s.id = $4 AND ${CONTACT_LIVE}`, [req.project.id, a.to_contact, req.user.id, answerSession]);
+    if (!contact) { res.status(403).json({ error: "only the addressed live research contact may answer this ask" }); return; }
+  } else if (Number(a.from_user_id) === req.user!.id) { res.status(400).json({ error: "you asked this; post a follow-up in the channel instead" }); return; }
   if (!a.message_id) { res.status(409).json({ error: "this ask has no channel post to answer under" }); return; }
   const ch = await one(`SELECT id, status FROM channels WHERE id = (SELECT channel_id FROM messages WHERE id = $1)`, [a.message_id]);
   const byHuman = req.body?.by_human === true;
   const text = byHuman ? `**Answer from @${req.user!.handle}'s person** (posted by their agent):\n\n${body}` : body;
-  const m = await one<{ id: number }>(`INSERT INTO messages (channel_id, user_id, model, kind, reply_to, body_md, job_id, return_id) VALUES ($1,$2,$3,'reply',$4,$5,$6,$7) RETURNING id`,
-    [ch!.id, req.user!.id, byHuman ? null : req.model ?? null, a.message_id, text, a.job_id, a.return_id]);
+  const m = await one<{ id: number }>(`INSERT INTO messages (channel_id, user_id, model, kind, reply_to, body_md, job_id, return_id, session) VALUES ($1,$2,$3,'reply',$4,$5,$6,$7,$8) RETURNING id`,
+    [ch!.id, req.user!.id, byHuman ? null : req.model ?? null, a.message_id, text, a.job_id, a.return_id, answerSession]);
   await q(`INSERT INTO channel_members (channel_id, user_id, model) VALUES ($1,$2,$3) ON CONFLICT DO NOTHING`, [ch!.id, req.user!.id, req.model ?? null]);
   await q(`UPDATE asks SET status = 'answered', answered_at = coalesce(answered_at, now()), answer_message_id = coalesce(answer_message_id, $2) WHERE id = $1`, [a.id, m!.id]);
   res.json({ ok: true, ask_id: a.id, message_id: m!.id, credited_when: "the asker marks it useful, or an accepted return cites this message id" });
-});
+}));
 
 /** POST /asks/:id/useful : the asker says which answer helped. Pays that answerer once per ask. */
-asks.post("/asks/:id/useful", bearer, project, async (req: any, res) => {
+asks.post("/asks/:id/useful", bearer, project, assignmentMutation(async (req: any, res) => {
   const a = await loadAsk(req); if (!a) { res.status(404).json({ error: "no such ask" }); return; }
   if (Number(a.from_user_id) !== req.user!.id) { res.status(403).json({ error: "only the asker marks an answer useful" }); return; }
   if (a.useful_message_id) { res.status(409).json({ error: `already marked: message ${a.useful_message_id}` }); return; }
@@ -196,4 +247,4 @@ asks.post("/asks/:id/useful", bearer, project, async (req: any, res) => {
   const prov = m.model ? (await one<{ provider: string }>(`SELECT provider FROM model_tiers WHERE model = $1`, [m.model]))?.provider ?? null : null;
   await credit.payUsefulAnswer(Number(m.user_id), m.model, prov, Number(req.project.id), Number(m.id), Number(a.id));
   res.json({ ok: true, ask_id: a.id, useful_message_id: m.id, paid: credit.POINTS.answer_useful });
-});
+}));
