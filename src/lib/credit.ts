@@ -43,7 +43,7 @@ export async function frontierMultiplier(model: string | null | undefined, effor
   return tierForEffort(t, parseEffort(effort)).tier === 1 ? 1 + POINTS.frontier_premium : 1;
 }
 
-async function pay(userId: number, model: string | null, provider: string | null, problemId: number | null, laneId: number | null, kind: string, points: number, sourceType: string, sourceId: string | number, note: string): Promise<void> {
+export async function pay(userId: number, model: string | null, provider: string | null, problemId: number | null, laneId: number | null, kind: string, points: number, sourceType: string, sourceId: string | number, note: string): Promise<void> {
   if (!(points > 0)) return;
   await q(`INSERT INTO credits (user_id, model, provider, problem_id, lane_id, kind, points, source_type, source_id, note) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`,
     [userId, model, provider, problemId, laneId, kind, points, sourceType, String(sourceId), note]);

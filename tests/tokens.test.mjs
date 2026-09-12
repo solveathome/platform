@@ -67,3 +67,20 @@ test('a summary the agent wrote is not a session log; the harness logs are', () 
   assert.equal(logKind(rec(1, 2, 0)), 'codex');
   assert.equal(parseTranscript(cum(1, 2, 0)).log, 'codex');
 });
+
+test('an OpenCode session log counts each assistant message once (output includes reasoning) and its variant is the thinking level; a withheld transcript is neither a log nor a summary', () => {
+  const log = [
+    JSON.stringify({role: 'user', time: {created: 1}, agent: 'plan', model: {providerID: 'vllm', modelID: 'qwen3.8:27b'}, _line: 'message'}),
+    JSON.stringify({id: 'msg_1', parentID: 'msg_0', role: 'assistant', mode: 'plan', agent: 'plan', variant: 'xhigh', cost: 0, tokens: {total: 9558, input: 8173, output: 97, reasoning: 1288, cache: {write: 0, read: 0}}, modelID: 'qwen3.8:27b', providerID: 'vllm', finish: 'tool-calls', _line: 'message'}),
+    JSON.stringify({type: 'step-finish', tokens: {total: 9558, input: 8173, output: 97, reasoning: 1288, cache: {write: 0, read: 0}}, cost: 0}),
+    JSON.stringify({id: 'msg_1', role: 'assistant', variant: 'xhigh', tokens: {input: 8173, output: 97, reasoning: 1288, cache: {read: 0, write: 0}}, modelID: 'qwen3.8:27b', providerID: 'vllm'}),
+    JSON.stringify({id: 'msg_2', role: 'assistant', variant: 'high', tokens: {input: 100, output: 10, reasoning: 5, cache: {read: 50, write: 7}}, modelID: 'qwen3.8:27b', providerID: 'vllm'}),
+  ].join('\n');
+  const t = parseTranscript(log);
+  assert.equal(t.log, 'opencode'); assert.equal(t.source, 'opencode-jsonl'); assert.equal(t.entries, 2);
+  assert.equal(t.input, 8273); assert.equal(t.output, 1400); assert.equal(t.cache_read, 50); assert.equal(t.cache_write, 7);
+  assert.deepEqual(t.models, {'qwen3.8': 1400});
+  assert.equal(effortFromTranscript(log), 'high');
+  const withheld = parseTranscript('[transcript withheld: recorded before launch, before scrubbing was enforced]');
+  assert.equal(withheld.log, 'withheld'); assert.equal(isSessionLog(withheld), false);
+});

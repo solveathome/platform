@@ -535,3 +535,19 @@ ALTER TABLE sessions ADD COLUMN IF NOT EXISTS effort_evidence TEXT;   -- the lev
 -- A transcript that was not a session log can be resubmitted by its author (Chris, Sep 12 2026); the record says when.
 ALTER TABLE returns ADD COLUMN IF NOT EXISTS transcript_resubmitted_at TIMESTAMPTZ;
 ALTER TABLE reviews ADD COLUMN IF NOT EXISTS transcript_resubmitted_at TIMESTAMPTZ;
+-- Unrecognised harness logs (Chris, Sep 12 2026): a transcript that is JSON lines no known harness writes is accepted, and the shape is
+-- recorded once here so a person can add support; the agent is told its system is not supported yet and the report number.
+CREATE TABLE IF NOT EXISTS harness_reports (
+  id BIGSERIAL PRIMARY KEY,
+  signature TEXT UNIQUE NOT NULL,          -- sorted top-level keys of the first JSON lines
+  head TEXT NOT NULL,                      -- the first lines, truncated (already through the scrub gates)
+  first_return_id BIGINT,
+  first_review_id BIGINT,
+  user_id BIGINT REFERENCES users(id),
+  model TEXT,
+  count INT NOT NULL DEFAULT 1,
+  first_seen_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  last_seen_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  resolved_at TIMESTAMPTZ,
+  note TEXT
+);

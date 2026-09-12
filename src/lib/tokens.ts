@@ -10,10 +10,12 @@ import { canonicalModel, parseEffort } from "./model-id.js";
 
 /** No single return spends more than this per field; anything above is a forged or broken transcript, not usage. */
 export const MAX_TOKENS_PER_FIELD = 50_000_000;
-export type LogKind = "claude-code" | "codex" | "copilot" | "summary" | "unknown";
-export type Tokens = { input: number; output: number; cache_read: number; cache_write: number; entries: number; source: "claude-jsonl" | "codex-jsonl" | "copilot-jsonl" | "reported" | "none"; models?: Record<string, number>; log?: LogKind };
-export const SESSION_LOG_KINDS: LogKind[] = ["claude-code", "codex", "copilot"];
+export type LogKind = "claude-code" | "codex" | "copilot" | "opencode" | "withheld" | "summary" | "unknown";
+export type Tokens = { input: number; output: number; cache_read: number; cache_write: number; entries: number; source: "claude-jsonl" | "codex-jsonl" | "copilot-jsonl" | "opencode-jsonl" | "reported" | "none"; models?: Record<string, number>; log?: LogKind };
+export const SESSION_LOG_KINDS: LogKind[] = ["claude-code", "codex", "copilot", "opencode"];
 export const isSessionLog = (t: { log?: LogKind } | null | undefined): boolean => !!t?.log && SESSION_LOG_KINDS.includes(t.log);
+/** A transcript the author wrote instead of attaching the log (summary), or one no known harness wrote (unknown). Withheld pre-launch transcripts are neither. */
+export const notSessionLog = (t: { log?: LogKind } | null | undefined): boolean => t?.log === "summary" || t?.log === "unknown";
 
 /**
  * What kind of record a transcript is, from the line shapes: a Claude Code session file, a Codex rollout, a Copilot CLI events log, or
@@ -24,13 +26,30 @@ export function logKind(text: string): LogKind {
   if (/"type":\s*"(?:assistant\.message|assistant\.turn_start|tool\.execution_(?:start|complete)|model\.model_call_success)"/.test(t)) return "copilot";
   if (/"type":\s*"(?:token_count|token_usage_record|response_item|event_msg|session_meta|turn_context)"/.test(t) || /"(?:last_token_usage|total_token_usage|thread_token_usage)"/.test(t)) return "codex";
   if (/"type":\s*"(?:assistant|user)"\s*,/.test(t) && /"message"\s*:\s*\{/.test(t)) return "claude-code";
+  if (/"role":\s*"assistant"/.test(t) && /"(?:providerID|modelID)"\s*:/.test(t)) return "opencode";
+  if (/^\s*\[transcript withheld/i.test(t)) return "withheld";
   if (/"type":\s*"activity_summary"|not a (?:native )?(?:conversation )?transcript|activity summary/i.test(t)) return "summary";
   const jsonLines = t.split("\n").filter((l) => l.trim().startsWith("{")).length;
   return jsonLines < 3 ? "summary" : "unknown";
 }
 
+/** The shape of an unrecognised log: the sorted top-level keys of its first JSON lines, so one harness is one report however many returns it sends. */
+export function logSignature(text: string): string {
+  const shapes: string[] = [];
+  for (const line of String(text ?? "").split("\n")) {
+    const s = line.trim(); if (!s.startsWith("{")) continue;
+    try { const d = JSON.parse(s); shapes.push(Object.keys(d).sort().join(",")); } catch { shapes.push("<unparsed>"); }
+    if (shapes.length >= 5) break;
+  }
+  return [...new Set(shapes)].join(" | ").slice(0, 1000);
+}
+/** The first lines of a log, truncated, for a person to look at. */
+export function logHead(text: string, lines = 3, width = 400): string {
+  return String(text ?? "").split("\n").filter((l) => l.trim()).slice(0, lines).map((l) => l.length > width ? l.slice(0, width) + "…" : l).join("\n");
+}
+
 /** Where each harness keeps the session log, for the brief, the orientation and the intake warning. */
-export const LOG_LOCATIONS = "Claude Code: `~/.claude/projects/<encoded-cwd>/<session>.jsonl` (newest: `ls -t ~/.claude/projects/$(pwd | tr / -)/*.jsonl | head -1`). Codex: `~/.codex/sessions/<year>/<month>/<day>/rollout-*.jsonl`. GitHub Copilot CLI: `~/.copilot/session-state/<session-id>/events.jsonl` (under `$COPILOT_HOME` if you relocated it; newest: `ls -td ~/.copilot/session-state/*/ | head -1`).";
+export const LOG_LOCATIONS = "Claude Code: `~/.claude/projects/<encoded-cwd>/<session>.jsonl` (newest: `ls -t ~/.claude/projects/$(pwd | tr / -)/*.jsonl | head -1`). Codex: `~/.codex/sessions/<year>/<month>/<day>/rollout-*.jsonl`. GitHub Copilot CLI: `~/.copilot/session-state/<session-id>/events.jsonl` (under `$COPILOT_HOME` if you relocated it; newest: `ls -td ~/.copilot/session-state/*/ | head -1`). OpenCode: `opencode export <session-id>`, or the message files under `~/.local/share/opencode/storage/`, one JSON object per line.";
 
 /** How much of a transcript's tool output was replaced by omission notes (issue #46): outputs counted by their JSONL types, omissions by bracketed notes saying "omitted". */
 export function omissionShare(text: string): { outputs: number; omitted: number; share: number } {
@@ -73,6 +92,15 @@ export function parseTranscript(text: string, reported?: any): Tokens {
       continue;
     }
     if (d?.type === "assistant.message" && d?.data?.model) { const m = canonicalModel(d.data.model); if (m) t.models![m] = t.models![m] ?? 0; continue; }
+    // OpenCode: each assistant message carries tokens {input, output, reasoning, cache: {read, write}} and modelID; step-finish lines repeat them and are skipped.
+    if (d?.role === "assistant" && d?.tokens && typeof d.tokens === "object" && (d.modelID !== undefined || d.providerID !== undefined)) {
+      const id = d.id ? String(d.id) : null; if (id) { if (seen.has(id)) continue; seen.add(id); }
+      const tk = d.tokens; const out = Number(tk.output ?? 0) + Number(tk.reasoning ?? 0);
+      t.input += Number(tk.input ?? 0); t.output += out; t.cache_read += Number(tk.cache?.read ?? 0); t.cache_write += Number(tk.cache?.write ?? 0);
+      t.entries++; t.source = "opencode-jsonl";
+      const m = canonicalModel(d.modelID) || "opencode"; t.models![m] = (t.models![m] ?? 0) + out;
+      continue;
+    }
     consider(d?.payload?.info?.total_token_usage); consider(d?.info?.total_token_usage); consider(d?.values?.info?.total_token_usage);
     consider(d?.values?.thread_token_usage); consider(d?.thread_token_usage);
     if (hasRecords && d?.type !== "token_usage_record" && (d?.payload?.info?.last_token_usage || d?.info?.last_token_usage || d?.values?.info?.last_token_usage)) continue;   // the same turn is in a token_usage_record line
@@ -123,15 +151,17 @@ export function total(t: Tokens): number { return t.input + t.output + t.cache_r
 /**
  * The thinking level a Claude Code session ran at, from its own record (Sep 12 2026): every assistant line of the session JSONL carries a
  * top-level `effort`. The last assistant line wins (a person can change it mid-session). The model itself does not know its level and
- * guesses when asked, so this is the evidence the server trusts over the declared X-Effort. Codex and Copilot CLI logs carry none: null.
+ * guesses when asked, so this is the evidence the server trusts over the declared X-Effort. OpenCode records it as `variant` on its assistant
+ * messages. Codex and Copilot CLI logs carry none: null.
  */
 export function effortFromTranscript(text: string): string | null {
   let last: string | null = null;
   for (const line of String(text ?? "").split("\n")) {
-    const s = line.trim(); if (!s.startsWith("{") || !s.includes('"effort"')) continue;
+    const s = line.trim(); if (!s.startsWith("{") || !(s.includes('"effort"') || s.includes('"variant"'))) continue;
     let d: any; try { d = JSON.parse(s); } catch { continue; }
-    if (d?.type !== "assistant" || typeof d.effort !== "string") continue;
-    const e = parseEffort(d.effort); if (e) last = e;
+    const raw = d?.type === "assistant" && typeof d.effort === "string" ? d.effort : d?.role === "assistant" && typeof d.variant === "string" && (d.modelID !== undefined || d.providerID !== undefined) ? d.variant : null;
+    if (!raw) continue;
+    const e = parseEffort(raw); if (e) last = e;
   }
   return last;
 }

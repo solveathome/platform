@@ -252,3 +252,27 @@ test('a summary in place of the transcript is accepted with a warning and no tok
   assert.doesNotMatch(page2, /not a session log/); assert.match(page2, /resubmitted \d{4}-\d{2}-\d{2}/);
   await end(j.session);
 });
+
+test('a log from an unknown harness is accepted, the agent is told its system is not supported yet with a report number, and the shape is recorded once', async () => {
+  const reg = await fetch(base + '/start?share=0', {headers: {authorization: `Bearer ${token}`, accept: 'application/json', 'x-model': 'claude-fable-5-1', 'x-effort': 'high'}});
+  const j = await reg.json(); assert.equal(reg.status, 200, JSON.stringify(j).slice(0, 300));
+  const H = {authorization: `Bearer ${token}`, accept: 'application/json', 'content-type': 'application/json', 'x-model': 'claude-fable-5-1', 'x-effort': 'high', 'x-session': j.session};
+  const key = `k_${tag.replace(/-/g, '_')}`;   // a key name unique to this run, so the shape (and its report) is this test's own
+  const odd = (n) => [1, 2, 3, 4].map(i => JSON.stringify({[key]: 1, event: 'turn', seq: i * n, who: i % 2 ? 'agent' : 'tool', body: `step ${i}`})).join('\n');
+  const r = await fetch(base + '/result', {method: 'POST', headers: H, body: JSON.stringify({job_id: j.job_id, report_md: 'Found the page.', transcript: odd(1), transcript_approved: true, author_rung: 'measured'})});
+  const t = await r.json(); assert.equal(r.status, 200, JSON.stringify(t).slice(0, 300));
+  assert.equal(t.tokens.log, 'unknown');
+  const w = t.warnings.find(x => /your harness is not supported yet/.test(x)); assert.ok(w, JSON.stringify(t.warnings));
+  const id = Number(w.match(/harness report #(\d+)/)[1]); assert.ok(id > 0); assert.match(w, /as soon as a person has looked at it/);
+  try {
+  const list = await (await fetch(base + '/harness-reports', {headers: {accept: 'application/json'}})).json();
+  const rep = list.reports.find(x => x.id === id); assert.ok(rep, JSON.stringify(list).slice(0, 300));
+  assert.equal(rep.count, 1); assert.equal(rep.first_return_id, t.return_id); assert.equal(rep.signature, `body,event,${key},seq,who`); assert.match(rep.head, /"event":"turn"/);
+  // The same shape again, from a resubmit attempt, counts on the same report and is refused as unsupported.
+  const again = await fetch(base + `/return/${t.return_id}/transcript`, {method: 'POST', headers: H, body: JSON.stringify({transcript: odd(7)})});
+  const a = await again.json(); assert.equal(again.status, 400); assert.match(a.error, /not supported yet \(harness report #/); assert.equal(a.harness_report, id);
+  const list2 = await (await fetch(base + '/harness-reports', {headers: {accept: 'application/json'}})).json();
+  assert.equal(list2.reports.find(x => x.id === id).count, 2);
+  } finally { await q(`DELETE FROM harness_reports WHERE id = $1`, [id]); }
+  await end(j.session);
+});
