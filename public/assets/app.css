@@ -462,3 +462,48 @@ input[type=checkbox] { accent-color: var(--fg); }
 .hs-bar i { display: block; height: 100%; background: var(--fg); }
 .hs-live { display: inline-block; width: .5rem; height: .5rem; border-radius: 50%; background: #2e9e5b; margin-right: .35rem; vertical-align: middle; box-shadow: 0 0 0 3px rgba(46, 158, 91, .18); }
 .chat-earlier { text-align: center; font-size: .8rem; margin: 0 0 .75rem; }
+
+/* Connect panel (Sep 12 2026): the instruction on the left, the four settings on the right; the URL carries only what differs from the defaults. */
+.sf-grid { display: grid; grid-template-columns: minmax(0, 1.15fr) minmax(0, 1fr); gap: 3rem; align-items: start; }
+@media (max-width: 860px) { .sf-grid { grid-template-columns: 1fr; gap: 2.25rem; } .sf-grid .sf-settings { order: 1; } .sf-grid .sf-instr { order: 2; } }
+.sf-settings { display: flex; flex-direction: column; }
+.sf-row { display: grid; grid-template-columns: 1fr; gap: .55rem; padding: 1.1rem 0; border-top: 1px solid var(--line); }
+.sf-row:first-child { border-top: 0; padding-top: 0; }
+.sf-row-head { display: flex; justify-content: space-between; align-items: baseline; gap: 1rem; }
+.sf-row-head h3 { font-size: 1rem; font-weight: 600; margin: 0; }
+.sf-arg { font: .75rem/1 var(--mono); color: var(--mut); }
+.sf-meaning { font-size: .875rem; line-height: 1.6; color: var(--mut); margin: 0; min-height: 1.4em; }
+.seg { display: flex; flex-wrap: wrap; border: 1px solid var(--line); border-radius: 3px; width: fit-content; max-width: 100%; }
+.seg label { position: relative; }
+.seg input { position: absolute; inset: 0; opacity: 0; margin: 0; cursor: pointer; }
+.seg span { display: inline-flex; align-items: center; min-height: 40px; padding: 0 .95rem; border-right: 1px solid var(--line); font-size: .875rem; font-weight: 500; white-space: nowrap; user-select: none; }
+.seg label:last-child span { border-right: 0; }
+.seg input:checked + span { background: var(--fg); color: var(--bg); }
+.seg input:focus-visible + span { outline: 2px solid var(--fg); outline-offset: 2px; border-radius: 2px; }
+@media (hover: hover) { .seg input:not(:checked):hover + span { background: var(--soft); } }
+.sf-instr-label { display: flex; justify-content: space-between; align-items: baseline; gap: 1rem; font-size: .875rem; font-weight: 500; margin-bottom: .75rem; }
+.sf-live { font-size: .75rem; color: var(--mut); font-weight: 400; }
+.sf-instr-text { font: .8125rem/1.9 var(--mono); padding: 1rem 1.1rem; border: 1px solid var(--line); border-radius: 3px; overflow-wrap: anywhere; min-height: 9rem; }
+.sf-tok { color: var(--mut); }
+.sf-chip { display: inline; padding: .05rem .3rem; margin: 0 .02rem; border-radius: 2px; background: var(--soft); border: 1px solid var(--line); transition: background .35s; }
+.sf-chip.flash { background: var(--fg); color: var(--bg); border-color: var(--fg); transition: none; }
+.sf-chip .k { color: var(--mut); }
+.sf-dirq { font-style: italic; }
+@media (prefers-reduced-motion: reduce) { .sf-chip { transition: none; } }
+.sf-fold { margin-top: .85rem; }
+.sf-fold summary { cursor: pointer; font-size: .875rem; font-weight: 500; list-style: none; display: flex; align-items: center; gap: .6rem; }
+.sf-fold summary::-webkit-details-marker { display: none; }
+.sf-fold summary::before { content: "+"; font-family: var(--mono); width: 1rem; color: var(--mut); }
+.sf-fold[open] summary::before { content: "–"; }
+.sf-dir { display: block; width: 100%; min-height: 6rem; margin: .75rem 0 .5rem; padding: .8rem .9rem; border: 1px solid var(--line); border-radius: 3px; background: transparent; color: var(--fg); font-size: .9375rem; line-height: 1.6; resize: vertical; }
+.sf-reply { margin: .9rem 0 0; padding: .9rem 1.1rem; border-left: 2px solid var(--line); font: .8125rem/1.8 var(--mono); color: var(--mut); white-space: pre-wrap; overflow-wrap: anywhere; }
+.sf-reply .rh { color: var(--fg); font-weight: 600; }
+.sf-reply .rid, .sf-reply .hl { color: var(--fg); }
+.sf-reply .hl { border-bottom: 1px solid var(--line); }
+.sf-actions { margin-top: 1.25rem; }
+.sf-who { font-size: .8125rem; color: var(--mut); margin: .25rem 0 0; }
+.sf-who b { color: var(--fg); font-weight: 500; }
+.sf-after { margin-top: 1.5rem; padding-top: 1.25rem; border-top: 1px solid var(--line); font-size: .8125rem; line-height: 1.7; color: var(--mut); }
+.sf-after p { margin: 0 0 .5rem; }
+.sf-after p:last-child { margin: 0; }
+.sf-after b { color: var(--fg); font-weight: 500; }

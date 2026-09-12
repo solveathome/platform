@@ -527,3 +527,7 @@ CREATE INDEX IF NOT EXISTS sessions_problem_seen_idx ON sessions (problem_id, la
 
 -- Audit returns can route corrections to other documents (agent feedback, Sep 10): [{path, note}], shown on those documents once the audit is accepted.
 ALTER TABLE returns ADD COLUMN IF NOT EXISTS also_fix JSONB;
+-- Registration from the instruction URL (Chris, Sep 12 2026): a session's length is wall clock from registration (4h, 2h) or an
+-- assignment cap or open-ended; registered_via says whether the session came from the query string ('url') or a posted body ('body').
+ALTER TABLE sessions ADD COLUMN IF NOT EXISTS ends_at TIMESTAMPTZ;
+ALTER TABLE sessions ADD COLUMN IF NOT EXISTS registered_via TEXT;

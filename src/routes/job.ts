@@ -21,7 +21,7 @@ import * as files from "../lib/files.js";
 import * as credit from "../lib/credit.js";
 import { orientation } from "../lib/orientation.js";
 import { inbox, renderInbox } from "../lib/inbox.js";
-import { parseOffer, describeOffer } from "../lib/compute.js";
+import { parseOffer, describeOffer, shareOffer, diskFor, SHARES, DISKS, SHARE_DEFAULT, DISK_DEFAULT, type ComputeOffer } from "../lib/compute.js";
 import { join } from "node:path";
 import { readProjectConfig } from "../lib/projects.js";
 import { unservedNote } from "../lib/served-paths.js";
@@ -73,13 +73,13 @@ async function start(req: any, res: any): Promise<void> {
   await sweepExpired(req.project.id);
   const root = await one(`SELECT id FROM channels WHERE problem_id = $1 AND path = ''`, [req.project.id]);
   if (root) await q(`INSERT INTO channel_members (channel_id, user_id, model) VALUES ($1,$2,$3) ON CONFLICT (channel_id, user_id) DO UPDATE SET model = EXCLUDED.model`, [root.id, req.user!.id, req.model ?? null]);
-  const member = await one(`SELECT * FROM pool WHERE problem_id = $1 AND user_id = $2`, [req.project.id, req.user!.id]);
+  let member: any = await one(`SELECT * FROM pool WHERE problem_id = $1 AND user_id = $2`, [req.project.id, req.user!.id]);
   const wantsJson = (req.header("accept") ?? "").includes("application/json");
   const ownerNote = "";
   // Consent is per agent session (Q51), and a session is one agent: a person runs several in parallel under one handle, each with
   // its own id (Sep 10). Without a live session id the agent gets the orientation: the terms, and for a returning handle the choice to continue.
   const sessionId = req.justRegistered ? req.session?.id : String(req.header("x-session") ?? "").trim();
-  const session = req.justRegistered ? req.session : (sessionId ? await one(`SELECT * FROM sessions WHERE id = $1 AND problem_id = $2 AND user_id = $3`, [sessionId, req.project.id, req.user!.id]) : undefined);
+  let session: any = req.justRegistered ? req.session : (sessionId ? await one(`SELECT * FROM sessions WHERE id = $1 AND problem_id = $2 AND user_id = $3`, [sessionId, req.project.id, req.user!.id]) : undefined);
   if (session?.ended_at) {
     // The session is over (cap reached, ended, or replaced): say so (issue #6). The join page would invite a second registration the person did not allow.
     const capped = session.max_jobs !== null && Number(session.jobs) >= Number(session.max_jobs);
@@ -88,14 +88,27 @@ async function start(req: any, res: any): Promise<void> {
     else res.status(409).type("text/markdown").send(md);
     return;
   }
-  if (!member || !session) {
-    const tf0 = tierForEffort(await modelTier(req.model ?? "unknown"), req.effort ?? null);
-    const viewer0 = { model: req.model ?? null, uid: req.user!.id, trusted: await isTrusted(Number(req.project.id), Number(req.user!.id), req.user!.handle, { model: req.model, effort: req.effort }), tier: tf0.tier, effort: req.effort ?? null, tier_note: tf0.note };
-    // The "been here before" block reads the cap from the handle's latest session, not the pool row, which carries none (issue #52).
-    const lastSess = member ? await one<{ max_jobs: number | null; model: string | null }>(`SELECT max_jobs, model FROM sessions WHERE problem_id = $1 AND user_id = $2 ORDER BY started_at DESC LIMIT 1`, [req.project.id, req.user!.id]) : null;
-    const md = ownerNote + await orientation(req.project, BASE(), member ? { ...member, ...(lastSess ? { session_max_jobs: lastSess.max_jobs, session_model: lastSess.model } : {}) } : null, false, viewer0);
-    if (wantsJson) res.json({ registered: !!member, session: null, orientation_md: md }); else res.type("text/markdown").send(md);
-    return;
+  if (!session) {
+    // No live session. Registration is the first fetch (Chris, Sep 12 2026): the person chose the settings on the site and they ride
+    // as query arguments on the URL they pasted; nothing is asked of them. A fetch without a model is a browser or a bare curl: it
+    // gets the page, never a session.
+    if (!req.model) {
+      const md = ownerNote + await orientation(req.project, BASE(), member ?? null, false, null);
+      if (wantsJson) res.json({ registered: !!member, session: null, orientation_md: md }); else res.type("text/markdown").send(md);
+      return;
+    }
+    // A lost X-Session must not open a second session: reunite with the live session on this model that still holds an assignment.
+    const holding = await one<{ id: string; job_id: string; type: string; title: string; expires_at: string }>(`SELECT s.id, j.id AS job_id, j.type, j.title, j.expires_at FROM sessions s JOIN jobs j ON j.assigned_session = s.id AND j.status = 'assigned' AND (j.expires_at IS NULL OR j.expires_at > now()) WHERE s.problem_id = $1 AND s.user_id = $2 AND s.model = $3 AND s.ended_at IS NULL ORDER BY j.assigned_at DESC LIMIT 1`, [req.project.id, req.user!.id, req.model]);
+    if (holding) {
+      const msg = `This handle's ${req.model} session ${holding.id} still holds job #${holding.job_id} (${holding.type}: ${holding.title}), until ${holding.expires_at}. That is you: send header X-Session: ${holding.id} on every request. Finish it and POST ${BASE()}/projects/${req.project.slug}/result, or hand it back with POST ${BASE()}/projects/${req.project.slug}/release { "job_id": ${holding.job_id}, "note": "why" }. The brief: GET ${BASE()}/projects/${req.project.slug}/job/${holding.job_id}`;
+      if (wantsJson) res.status(409).json({ error: msg, session: holding.id, job_id: Number(holding.job_id) }); else res.status(409).type("text/markdown").send(`# You already hold an assignment\n\n${msg}\n`);
+      return;
+    }
+    const opts = parseInstruction(req.query ?? {});
+    if ("error" in opts) { if (wantsJson) res.status(400).json(opts); else res.status(400).type("text/markdown").send(`# Bad instruction\n\n${opts.error}\n`); return; }
+    const opened = await openSession(req, { via: "url", ...opts });
+    if ("error" in opened) { if (wantsJson) res.status(opened.status).json({ error: opened.error }); else res.status(opened.status).type("text/markdown").send(`# Cannot register\n\n${opened.error}\n`); return; }
+    session = opened.session; member = opened.member; req.session = session; req.justRegistered = true;
   }
   // One model per session: the tier, the provider rules and the credit all follow the model the session registered with.
   if (req.model && session.model && req.model !== session.model) {
@@ -105,7 +118,10 @@ async function start(req: any, res: any): Promise<void> {
   }
   if (session.max_jobs !== null && Number(session.jobs) >= Number(session.max_jobs)) {
     await q(`UPDATE sessions SET ended_at = COALESCE(ended_at, now()) WHERE id = $1 AND NOT EXISTS (SELECT 1 FROM jobs WHERE assigned_session = $1 AND status = 'assigned')`, [session.id]);
-    const md = `# solveathome / ${req.project.name}: session cap reached\n\nYour person allowed ${session.max_jobs} assignment(s) this session and you have taken ${session.jobs}. Stop here. Tell them what you did and where it stands (\`${BASE()}/@${req.user!.handle}\`), and continue only if they say so: a new \`POST ${BASE()}/projects/${req.project.slug}/start\` with the full body again (\`agreed\`, \`ai\`, this machine's \`compute\`, \`input\`) opens a new session; a bare \`{ "agreed": true }\` means the defaults, not the same settings.\n`;
+    const md = `# solveathome / ${req.project.name}: session cap reached
+
+Your person allowed ${session.max_jobs} assignment(s) in the instruction they gave you and you have taken ${session.jobs}. Stop here and tell them where things stand (\`${BASE()}/@${req.user!.handle}\`). A new instruction from them starts a new session.
+`;
     if (wantsJson) res.status(409).json({ error: "session cap reached", session_jobs: session.jobs, session_max_jobs: session.max_jobs, orientation_md: md });
     else res.status(409).type("text/markdown").send(md);
     return;
@@ -126,8 +142,15 @@ async function start(req: any, res: any): Promise<void> {
     return;
   }
   if (req.termsStale) { if (wantsJson) res.status(403).json({ error: req.termsStale }); else res.status(403).type("text/markdown").send(`# Terms changed\n\n${req.termsStale}\n`); return; }
+  // Session length (Chris, Sep 12): 4h or 2h is wall clock from registration; the assignment in hand finishes (the held check above), then this.
+  if (session.ends_at && new Date(session.ends_at).getTime() <= Date.now()) {
+    await q(`UPDATE sessions SET ended_at = COALESCE(ended_at, now()) WHERE id = $1`, [session.id]);
+    const md = `# solveathome / ${req.project.name}: session length reached\n\nYour person allowed ${lengthWords(session)} and that time is up. Stop here and tell them where things stand (\`${BASE()}/@${req.user!.handle}\`). A new instruction from them starts a new session.\n`;
+    if (wantsJson) res.status(409).json({ error: "session length reached", session: session.id, ends_at: session.ends_at, orientation_md: md }); else res.status(409).type("text/markdown").send(md);
+    return;
+  }
   // Settings are the session's: two agents of one person may run with different time and different shares of different machines.
-  const settings = { ai: session.ai ?? member.ai ?? {}, compute: session.compute ?? null, input: session.input ?? null };
+  const settings = { ai: session.ai ?? member?.ai ?? {}, compute: session.compute ?? null, input: session.input ?? null };
   const offer = settings.compute?.usable ? settings.compute : parseOffer(settings.compute, Number(settings.ai?.max_hours_per_assignment ?? 2));
   const prefs = { maxHours: Number(offer?.usable?.cpu_hours ?? 0), ramGb: Number(offer?.usable?.ram_gb ?? 0), hasGpu: !!(offer?.usable?.vram_gb), lane: settings.input?.lane ?? null };
   // Tier 1 needs a top thinking level (Chris, Sep 10): a frontier model at a lower or undeclared level judges at tier 2.
@@ -136,9 +159,11 @@ async function start(req: any, res: any): Promise<void> {
   // Review assignments go to trusted reviewers (Sep 10); everyone else reviews advisorily, self-assigned. Trusted reviewers may review their own returns.
   const trusted = await isTrusted(Number(req.project.id), Number(req.user!.id), req.user!.handle, { model: req.model, effort: req.effort });
   const granted = await isGrantedTrusted(Number(req.project.id), Number(req.user!.id), req.user!.handle);   // only a grant reviews its own handle's returns
-  const maxHours = req.query.max_hours !== undefined ? Number(req.query.max_hours) : prefs.maxHours;
-  const lane = req.query.lane ? String(req.query.lane) : (req.query.any_lane ? null : prefs.lane);
-  const type = req.query.type ? String(req.query.type) : null;
+  // /start decides (Chris, Sep 11: nobody passes ?type=); the query string is the person's configuration, read at registration only.
+  const maxHours = prefs.maxHours;
+  const lane = prefs.lane;
+  const type: string | null = null;
+  const disk = diskFor(offer);
   const uid = req.user!.id;
 
   // A tangent registered with this session is its first assignment (Sep 10): the person's objection or route outranks the queue.
@@ -165,6 +190,8 @@ async function start(req: any, res: any): Promise<void> {
          AND COALESCE((j.compute_hint->>'ram_gb')::numeric, 0) <= CASE WHEN $9::numeric > 0 THEN $9::numeric ELSE 8 END   -- an offered share is the limit; with nothing offered, jobs up to 8 GB and no CPU hours
          AND j.last_released_session IS DISTINCT FROM $14::text   -- a session never gets back what it just handed back
          AND (COALESCE(j.compute_hint->>'gpu', 'false') IN ('false', '0', '') OR $10::boolean)
+         AND (COALESCE(j.compute_hint->>'mathlib_cache', 'false') IN ('false', '0', '') OR $16::numeric >= 10)   -- a Lean toolchain + Mathlib cache needs the 10 GB disk ceiling
+         AND COALESCE((j.compute_hint->>'disk_gb')::numeric, 0) <= $16::numeric
          AND ($3::text IS NULL OR l.slug = $3)
          AND ($4::text IS NULL OR j.type = $4)
          AND (pr.id IS NULL OR pr.user_id <> $5 OR $15::boolean)
@@ -188,7 +215,7 @@ async function start(req: any, res: any): Promise<void> {
          CASE WHEN pr.id IS NOT NULL AND pr.provider <> $6 THEN 0 ELSE 1 END,
          j.created_at
        LIMIT 1 FOR UPDATE OF j SKIP LOCKED`,
-      [tier, maxHours, lane, type, uid, req.provider, req.project.id, tier, prefs.ramGb, prefs.hasGpu, req.model ?? null, trusted, preferResearch, session.id, granted],
+      [tier, maxHours, lane, type, uid, req.provider, req.project.id, tier, prefs.ramGb, prefs.hasGpu, req.model ?? null, trusted, preferResearch, session.id, granted, disk],
     );
     let row = r.rows[0] as (JobRow & { id: number; budget_hours: string }) | undefined;
     if (!row) {
@@ -205,7 +232,7 @@ async function start(req: any, res: any): Promise<void> {
     await client.query(`UPDATE sessions SET jobs = jobs + 1, last_seen = now(), last_type = $2, review_streak = CASE WHEN $2 IN ('review','audit') THEN review_streak + 1 ELSE 0 END WHERE id = $1`, [session.id, row.type]);
     await client.query("COMMIT");
     row.expires_at = upd.rows[0].expires_at;
-    const sess = { id: String(session.id), jobs: Number(session.jobs) + 1, max: session.max_jobs === null ? null : Number(session.max_jobs), maxHours: Number(settings.ai?.max_hours_per_assignment ?? 2), compute: describeOffer(offer), transcriptPreapproved: settings.ai?.transcript_preapproved === true, subagents: settings.ai?.subagents?.allowed === false ? "not allowed" : settings.ai?.subagents?.max_parallel ? `allowed, up to ${settings.ai.subagents.max_parallel} at a time` : "allowed", files: await files.quota(uid).then((f) => ({ left: f.files_left, bytes_left: f.bytes_left, per_day: f.files_per_day })) };
+    const sess = { id: String(session.id), jobs: Number(session.jobs) + 1, max: session.max_jobs === null ? null : Number(session.max_jobs), length: lengthWords(session), disk, maxHours: Number(settings.ai?.max_hours_per_assignment ?? 2), compute: describeOffer(offer), transcriptPreapproved: settings.ai?.transcript_preapproved === true, subagents: settings.ai?.subagents?.allowed === false ? "not allowed" : settings.ai?.subagents?.max_parallel ? `allowed, up to ${settings.ai.subagents.max_parallel} at a time` : "allowed", files: await files.quota(uid).then((f) => ({ left: f.files_left, bytes_left: f.bytes_left, per_day: f.files_per_day })) };
     if (Number(row.release_count ?? 0) > 0) row.prior_claims = await q(`SELECT m.id, u.handle, m.model, m.created_at FROM messages m JOIN users u ON u.id = m.user_id WHERE m.job_id = $1 AND m.kind = 'claim' ORDER BY m.id`, [row.id]);
     let md = renderBrief(row, `${BASE()}/projects/${req.project.slug}`, sess);
     { const note = unservedNote(String(row.brief_md ?? ""), req.project.slug, `${BASE()}/projects/${req.project.slug}`); if (note) md = md.replace(/\n## /, () => `\n${note}## `); }
@@ -236,7 +263,7 @@ async function start(req: any, res: any): Promise<void> {
     }
     // Function replacements: the inserted text can carry "$" sequences (LaTeX in an inbox message), which String.replace would read as patterns and splice the brief around them (issue #13).
     if (tf.note) md = md.replace(/\n\n/, () => `\n\nTier this session: ${tier} (${tf.note}).\n\n`);
-    if (req.justRegistered) md = (await orientation(req.project, BASE(), { ...member, ...settings, session: session.id, session_max_jobs: session.max_jobs }, true, { model: req.model ?? null, uid, trusted, tier, effort: req.effort ?? null, tier_note: tf.note }, true)) + "\n\n---\n\n" + md;
+    if (req.justRegistered) md = (await orientation(req.project, BASE(), { ...member, ...settings, session: session.id, session_max_jobs: session.max_jobs, length: lengthWords(session), disk }, true, { model: req.model ?? null, uid, trusted, tier, effort: req.effort ?? null, tier_note: tf.note }, true)) + "\n\n---\n\n" + md;
     md = ownerNote + md;
     if (settings.input?.direction && !tangentFirst && row.type !== "direction") md += `\n\n## Your person's direction\n\nThey said: "${String(settings.input.direction).slice(0, 2000)}"\n\nIf this assignment does not serve that, you may set it aside: pursue their idea and submit it as type \`direction\` with their words in the report and their handle in \`cites.handles\`. Their name goes on the lane if it is accepted.\n`;
     if (inboxMd) md = md.replace(/\n## /, () => `\n${inboxMd}## `);   // after the title block, before the first section
@@ -298,7 +325,7 @@ async function synthesizeExplore(req: any, session: any, laneSlug: string | null
   const served = new Set((await q<{ qid: string }>(`SELECT DISTINCT substring(title from 'Explore: (Q-[A-Za-z0-9_-]+)') AS qid FROM jobs WHERE problem_id = $1 AND type = 'explore' AND title LIKE 'Explore: Q-%' AND assigned_at > now() - interval '${SERVED_WINDOW}'`, [req.project.id])).map((r) => r.qid));
   const pick = openQuestions(req.project.slug, 1000).find((x) => !served.has(x.id)) ?? null;
   const offered = session.compute?.usable ? `${Number(session.compute.usable.ram_gb ?? 0)} GB and ${Number(session.compute.usable.cpu_hours ?? 0)} CPU hours` : "no compute";
-  const blockedNote = blocked ? `**Typed work is waiting for your tier: ${blocked.n} assignment(s) (${blocked.types}) need up to ${blocked.ram} GB RAM and ${blocked.hours} CPU hours, and this session offers ${offered}.** If your person can spare more, re-register (\`POST ${P}/start\` with the full body and \`X-Session: ${session.id}\`) with a larger \`compute.share\` or \`cpu_hours\`, and the next \`/start\` hands you one of them. Until then, this is what fits.\n\n` : "";
+  const blockedNote = blocked ? `**Typed work is waiting for your tier: ${blocked.n} assignment(s) (${blocked.types}) need up to ${blocked.ram} GB RAM and ${blocked.hours} CPU hours, and this session offers ${offered}.** If your person can spare more, they raise Max compute share or Max disk usage in the instruction on the site and start an agent with it; that agent gets one of them. Until then, this is what fits.\n\n` : "";
   const tail = `\n\n**Return** as this job (type explore): a report with what you did, the rung of each claim, and the gap that remains, plus any files. If your work amounts to a new route, submit a second return of type \`direction\` with the route in your person's words or yours; if it finds a served document wrong, an \`audit\` return with the revised file. Then call \`GET ${P}/start\` once. Do not poll.`;
   let title: string; let brief: string;
   if (pick) {
@@ -361,7 +388,7 @@ async function endSession(sessionId: string, uid: number, problemId: number, mod
 
 /** GET /sessions : this handle's sessions on the project, newest first: what each holds, whether it counts as live. */
 job.get("/sessions", bearer, project, async (req: any, res: any) => {
-  const rows = await q(`SELECT s.id, s.model, s.effort, s.max_jobs, s.jobs, s.started_at, s.last_seen, s.ended_at, (${LIVE_SESSION}) AS live,
+  const rows = await q(`SELECT s.id, s.model, s.effort, s.max_jobs, s.jobs, s.started_at, s.last_seen, s.ended_at, s.ends_at, s.registered_via, (${LIVE_SESSION}) AS live,
                           (SELECT json_agg(json_build_object('id', j.id, 'type', j.type, 'title', j.title, 'expires_at', j.expires_at)) FROM jobs j WHERE j.assigned_session = s.id AND j.status = 'assigned') AS holds
                         FROM sessions s WHERE s.problem_id = $1 AND s.user_id = $2 ORDER BY s.started_at DESC LIMIT 100`, [req.project.id, req.user!.id]);
   // The cap and the count taken are numbers under the names the registration used (issue #30), so a person sees which agent is at its cap.
@@ -401,50 +428,85 @@ job.post("/release", bearer, project, async (req: any, res: any) => {
  * A returning handle sends only what changes; omitted fields keep their recorded values.
  * Replies with orientation + session id + first assignment.
  */
+/** The person's configuration, as the query string of the instruction they pasted (Chris, Sep 12 2026). Only what differs from the defaults travels. */
+const TIMES = ["continuous", "4h", "2h", "1task"] as const;
+export const INSTRUCTION_ARGS = { time: TIMES as readonly string[], subagents: ["yes", "no"], share: SHARES.map(String), disk: DISKS.map(String), directions: ["1", "0"] };
+const DIRECTIONS_PLACEHOLDER = "Your person wrote their directions in the instruction that started you. Those words are the assignment: quote them verbatim in human_md and work from them.";
+export function parseInstruction(qs: Record<string, unknown>): { ai: any; maxJobs: number | null; endsIn: string | null; compute: ComputeOffer | null; input: any } | { error: string; valid: typeof INSTRUCTION_ARGS } {
+  const pick = (k: keyof typeof INSTRUCTION_ARGS, dflt: string): string | { bad: string } => {
+    const v = qs[k]; if (v === undefined || v === null || v === "") return dflt;
+    const str = String(Array.isArray(v) ? v[0] : v).trim().toLowerCase();
+    const norm = k === "subagents" ? ({ true: "yes", "1": "yes", false: "no", "0": "no" } as Record<string, string>)[str] ?? str : k === "directions" ? ({ yes: "1", true: "1", no: "0", false: "0" } as Record<string, string>)[str] ?? str : str;
+    return INSTRUCTION_ARGS[k].includes(norm) ? norm : { bad: `${k} must be one of ${INSTRUCTION_ARGS[k].join(", ")} (got "${str.slice(0, 40)}")` };
+  };
+  const got: Record<string, string> = {};
+  for (const k of ["time", "subagents", "share", "disk", "directions"] as const) {
+    const v = pick(k, k === "time" ? "continuous" : k === "subagents" ? "yes" : k === "share" ? String(SHARE_DEFAULT) : k === "disk" ? String(DISK_DEFAULT) : "0");
+    if (typeof v !== "string") return { error: v.bad, valid: INSTRUCTION_ARGS };
+    got[k] = v;
+  }
+  const ai = { max_hours_per_assignment: 2, subagents: got.subagents === "no" ? { allowed: false, max_parallel: null } : { allowed: true, max_parallel: null }, transcript_preapproved: true };
+  return {
+    ai, maxJobs: got.time === "1task" ? 1 : null, endsIn: got.time === "4h" ? "4 hours" : got.time === "2h" ? "2 hours" : null,
+    compute: shareOffer(Number(got.share), Number(got.disk)),
+    input: got.directions === "1" ? { lane: null, direction: null, tangent: { kind: "direction", about: null, says: DIRECTIONS_PLACEHOLDER } } : null,
+  };
+}
+/** What a session is allowed, in words, for briefs and 409 pages. */
+export function lengthWords(session: any): string {
+  if (session.max_jobs === 1) return "one assignment";
+  if (session.max_jobs !== null && session.max_jobs !== undefined) return `${session.max_jobs} assignments`;
+  if (session.ends_at) { const h = Math.round((new Date(session.ends_at).getTime() - new Date(session.started_at ?? Date.now()).getTime()) / 36e5); return `${h} hour${h === 1 ? "" : "s"} from registration`; }
+  return "until your person stops you";
+}
+
+type OpenOpts = { via: "url" | "body"; ai: any; maxJobs: number | null; endsIn: string | null; compute: ComputeOffer | null; input: any; holds?: any; fromSession?: string | null };
+/** Open a session for this agent: the pool row is the handle's standing registration (what it holds carries over), the session row is this agent's own settings and cap. */
+async function openSession(req: any, o: OpenOpts): Promise<{ session: any; member: any } | { error: string; status: number }> {
+  const prev = await one(`SELECT * FROM pool WHERE problem_id = $1 AND user_id = $2`, [req.project.id, req.user!.id]);
+  const holds = o.holds === undefined ? (prev?.holds ?? {}) : o.holds;
+  // Re-registering from an existing session (X-Session on the POST) ends that session first: new settings, new session, no cap hit (platform issue #3).
+  if (o.fromSession) await endSession(o.fromSession, req.user!.id, req.project.id, req.model ?? null, "re-registered with new settings");
+  const live = await one<{ c: string }>(`SELECT count(*) AS c FROM sessions s WHERE ${LIVE_SESSION} AND s.problem_id = $1 AND s.user_id = $2`, [req.project.id, req.user!.id]);
+  if (Number(live?.c ?? 0) >= MAX_LIVE_SESSIONS) return { status: 429, error: `this handle already has ${live!.c} live sessions (limit ${MAX_LIVE_SESSIONS}): sessions holding an assignment or seen in the last hour. GET ${BASE()}/projects/${req.project.slug}/sessions lists them; POST .../sessions/<id>/end ends one (its assignment goes back to the queue).` };
+  const sessionId = randomBytes(12).toString("hex");
+  await q(`INSERT INTO pool (problem_id, user_id, model, ai, compute, input, agreed_at, holds)
+           VALUES ($1,$2,$3,$4,$5,$6,now(),$7)
+           ON CONFLICT (problem_id, user_id) DO UPDATE SET model = EXCLUDED.model, ai = EXCLUDED.ai, compute = EXCLUDED.compute, input = EXCLUDED.input, last_seen = now(), agreed_at = now(), holds = EXCLUDED.holds`,
+    [req.project.id, req.user!.id, req.model ?? null, JSON.stringify(o.ai), o.compute ? JSON.stringify(o.compute) : null, o.input ? JSON.stringify(o.input) : null, JSON.stringify(holds)]);
+  // The verification streak carries over from the handle's last session on this model (issue #41): one-assignment sessions alternate too.
+  const session = await one(`INSERT INTO sessions (id, problem_id, user_id, model, ai, compute, input, max_jobs, effort, review_streak, ends_at, registered_via)
+                             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9, COALESCE((SELECT review_streak FROM sessions WHERE problem_id = $2 AND user_id = $3 AND model IS NOT DISTINCT FROM $4 ORDER BY started_at DESC LIMIT 1), 0), CASE WHEN $10::text IS NULL THEN NULL ELSE now() + $10::interval END, $11) RETURNING *`,
+    [sessionId, req.project.id, req.user!.id, req.model ?? null, JSON.stringify(o.ai), o.compute ? JSON.stringify(o.compute) : null, o.input ? JSON.stringify(o.input) : null, o.maxJobs, req.effort ?? null, o.endsIn, o.via]);
+  const member = await one(`SELECT * FROM pool WHERE problem_id = $1 AND user_id = $2`, [req.project.id, req.user!.id]);
+  return { session, member };
+}
+
+/** POST /start with a body: the registration shape agents used before Sep 12 2026 (kept for agents mid-flight; the instruction URL is the way in now). */
 job.post("/start", bearer, project, async (req: any, res: any) => {
   const b = req.body ?? {};
   if (req.termsStale) { res.status(403).json({ error: req.termsStale }); return; }
-  if (b.agreed !== true) { res.status(400).json({ error: "agreed:true is required: show your person the terms from GET /start and register only after they agree" }); return; }
-  const prev = await one(`SELECT * FROM pool WHERE problem_id = $1 AND user_id = $2`, [req.project.id, req.user!.id]);
-  // Partial overrides: any field given replaces only that field; the rest stays as recorded (returning handles change one thing in one step).
-  // Each session states its own settings (Chris, Sep 11; issue #17): nothing is inherited from the handle's last registration,
-  // which may have been another agent on another machine. Only `holds` (what the handle can be asked for) carries over.
+  if (b.agreed !== true) { res.status(400).json({ error: "agreed:true is required on a posted registration. The usual way in is the instruction from the project page: GET /start with the arguments in its URL registers on the first fetch." }); return; }
   const ai: any = {};
-  // Sub-agents (Chris, Sep 10; Q70): allowed by default; the person may cap how many run at once or forbid them.
   { const v = b.ai?.subagents; ai.subagents = v === false ? { allowed: false, max_parallel: null } : typeof v === "number" && v >= 1 ? { allowed: true, max_parallel: Math.min(64, Math.floor(v)) } : (v && typeof v === "object") ? { allowed: v.allowed !== false, max_parallel: Number(v.max_parallel) >= 1 ? Math.min(64, Math.floor(Number(v.max_parallel))) : null } : { allowed: true, max_parallel: null }; }
   ai.max_hours_per_assignment = Math.min(24, Math.max(0.25, Number(b.ai?.max_hours_per_assignment ?? 2)));
   const pre = b.transcript_preapproved ?? b.ai?.transcript_preapproved;
   ai.transcript_preapproved = pre === true;
-  // Assignment count: the default is to keep going until the person stops the agent (NULL). A number caps the session.
   const rawMax = b.ai?.max_assignments;
   const maxJobs: number | null = rawMax === undefined || rawMax === null || rawMax === 0 || rawMax === "until_stopped" || rawMax === "unlimited" ? null : Math.min(50, Math.max(1, Math.floor(Number(rawMax)) || 1));
-  // Compute is a share of the measured machine (Q67), never a preset; the server derives what the share is worth per assignment.
-  const compute = parseOffer(b.compute, ai.max_hours_per_assignment);   // this machine's share, measured now, or nothing
-  // Steering: a lane, and/or a tangent (a challenge or a direction in the person's words). A tangent is the session's first assignment; it is not inherited by the next session.
+  const compute = parseOffer(b.compute, ai.max_hours_per_assignment);
   const tangent = b.input && typeof b.input === "object" ? parseTangent(b.input.tangent, b.input.direction) : null;
   const input = (b.input && typeof b.input === "object" && (b.input.lane || tangent) ? { lane: b.input.lane ? String(b.input.lane).slice(0, 80) : null, direction: tangent?.kind === "direction" ? tangent.says : null, tangent } : null);
-  // What the handle holds (Q66): local sources others may ask about, tools, and whether a person answers asks and how fast.
-  const holds = b.holds === undefined && prev ? (prev.holds ?? {}) : (b.holds && typeof b.holds === "object" ? {
+  const holds = b.holds === undefined ? undefined : (b.holds && typeof b.holds === "object" ? {
     sources: Array.isArray(b.holds.sources) ? b.holds.sources.map((x: unknown) => String(x).slice(0, 200)).slice(0, 30) : [],
     tools: Array.isArray(b.holds.tools) ? b.holds.tools.map((x: unknown) => String(x).slice(0, 80)).slice(0, 20) : [],
     human: b.holds.human && typeof b.holds.human === "object" ? { expertise: String(b.holds.human.expertise ?? "").slice(0, 300), latency: String(b.holds.human.latency ?? "days").slice(0, 40) } : null,
   } : {});
   if (b.input !== undefined && input?.lane) { const l = await one(`SELECT 1 FROM lanes WHERE problem_id = $1 AND slug = $2`, [req.project.id, input.lane]); if (!l) { res.status(400).json({ error: `unknown lane '${input.lane}'` }); return; } }
-  // Re-registering from an existing session (X-Session on the POST) ends that session first: new settings, new session, no cap hit (platform issue #3).
-  const fromSession = String(req.header("x-session") ?? "").trim();
-  if (fromSession) await endSession(fromSession, req.user!.id, req.project.id, req.model ?? null, "re-registered with new settings");
-  const live = await one<{ c: string }>(`SELECT count(*) AS c FROM sessions s WHERE ${LIVE_SESSION} AND s.problem_id = $1 AND s.user_id = $2`, [req.project.id, req.user!.id]);
-  if (Number(live?.c ?? 0) >= MAX_LIVE_SESSIONS) { res.status(429).json({ error: `this handle already has ${live!.c} live sessions (limit ${MAX_LIVE_SESSIONS}): sessions holding an assignment or seen in the last hour. GET ${BASE()}/projects/${req.project.slug}/sessions lists them; POST .../sessions/<id>/end ends one (its assignment goes back to the queue); or POST /start with X-Session of the one you are replacing.` }); return; }
-  const sessionId = randomBytes(12).toString("hex");
-  // The pool row is the handle's standing registration: the defaults the next agent inherits, and what the handle holds.
-  await q(`INSERT INTO pool (problem_id, user_id, model, ai, compute, input, agreed_at, holds)
-           VALUES ($1,$2,$3,$4,$5,$6,now(),$7)
-           ON CONFLICT (problem_id, user_id) DO UPDATE SET model = EXCLUDED.model, ai = EXCLUDED.ai, compute = EXCLUDED.compute, input = EXCLUDED.input, last_seen = now(), agreed_at = now(), holds = EXCLUDED.holds`,
-    [req.project.id, req.user!.id, req.model ?? null, JSON.stringify(ai), compute ? JSON.stringify(compute) : null, input ? JSON.stringify(input) : null, JSON.stringify(holds)]);
-  // The session is this agent: its model, its settings, its cap. Other sessions of the handle keep running.
-  // The verification streak carries over from the handle's last session on this model (issue #41): one-assignment sessions alternate too.
-  req.session = await one(`INSERT INTO sessions (id, problem_id, user_id, model, ai, compute, input, max_jobs, effort, review_streak) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9, COALESCE((SELECT review_streak FROM sessions WHERE problem_id = $2 AND user_id = $3 AND model IS NOT DISTINCT FROM $4 ORDER BY started_at DESC LIMIT 1), 0)) RETURNING *`,
-    [sessionId, req.project.id, req.user!.id, req.model ?? null, JSON.stringify(ai), compute ? JSON.stringify(compute) : null, input ? JSON.stringify(input) : null, maxJobs, req.effort ?? null]);
+  const fromSession = String(req.header("x-session") ?? "").trim() || null;
+  const opened = await openSession(req, { via: "body", ai, maxJobs, endsIn: null, compute, input, holds, fromSession });
+  if ("error" in opened) { res.status(opened.status).json({ error: opened.error }); return; }
+  req.session = opened.session;
   req.justRegistered = true;
   await start(req, res);
 });

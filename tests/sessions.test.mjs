@@ -108,12 +108,13 @@ test('a session refuses a different model, and a return must come from the sessi
   assert.equal(ret.session, opus.session);
 });
 
-test('without a live session the agent gets the orientation, not an assignment', async () => {
+test('an unknown X-Session with a model registers a fresh session (Sep 12): the reply is the session block plus a brief', async () => {
   const none = await call('GET', '/start', {model: 'claude-opus-5', session: 'not-a-session'});
   assert.equal(none.status, 200);
   const body = await none.json();
-  assert.equal(body.session, null); assert.equal(body.registered, true);
-  assert.match(body.orientation_md, /Many agents, one handle/);
+  assert.ok(body.session && body.session !== 'not-a-session'); assert.ok(body.job_id);
+  assert.match(body.brief_md, /## Registered for this session/);
+  await call('POST', `/sessions/${body.session}/end`, {model: 'claude-opus-5', body: {note: 'test'}});
 });
 
 test('release without job_id is a 400, not a 500', async () => {
@@ -168,7 +169,7 @@ test('issues #17 and #18: a session inherits nothing from the handle, and the re
   assert.equal(second.ai.transcript_preapproved, false);
   assert.match(bare.brief_md, /## Registered for this session/);
   assert.doesNotMatch(bare.brief_md, /You are being asked to join the processing pool/, 'the registration reply does not repeat the orientation');
-  assert.match(bare.brief_md, /nothing is inherited from the handle's earlier registrations/);
+  assert.match(bare.brief_md, /There is nothing to ask them/);
   await call('POST', `/sessions/${bare.session}/end`, {model: 'claude-opus-5', body: {note: 'test'}});
 });
 
@@ -183,10 +184,12 @@ test('compute fit: an offered share is the limit, so a 4 GB session never gets a
   await call('POST', `/sessions/${big.session}/end`, {model: 'claude-opus-5', body: {note: 'test'}});
 });
 
-test('the "been here before" block reports the last session\'s cap, not "until stopped" (issue #52)', async () => {
+test('a session-less GET with a model registers on the spot (Sep 12): no "been here before" block, no questions', async () => {
   const capped = await okJson(await call('POST', '/start', {model: 'claude-fable-5-1', body: {agreed: true, ai: {max_assignments: 1}, transcript_preapproved: true}}));
   await call('POST', '/release', {model: 'claude-fable-5-1', session: capped.session, body: {job_id: capped.job_id, note: 'test'}});
-  const page = await okJson(await call('GET', '/start', {model: 'claude-fable-5-1'}));
-  assert.match(page.orientation_md, /Last session \(claude-fable-5-1\): 1 assignment\(s\)\./);
-  assert.doesNotMatch(page.orientation_md, /Last session[^.]*until stopped/);
+  await call('POST', `/sessions/${fable.session}/end`, {model: 'claude-fable-5-1', body: {note: 'test'}});   // it still holds a job; a bare GET would reunite with it
+  const fresh = await okJson(await call('GET', '/start', {model: 'claude-fable-5-1'}));
+  assert.ok(fresh.session && fresh.session !== capped.session, 'a new session from the bare GET');
+  assert.doesNotMatch(fresh.brief_md, /been here before|Same as last time|How to ask/);
+  await call('POST', `/sessions/${fresh.session}/end`, {model: 'claude-fable-5-1', body: {note: 'test'}});
 });

@@ -81,7 +81,7 @@ test('the fallback names typed work that only the compute offer blocks', async (
   await q(`INSERT INTO jobs (problem_id, lane_id, type, title, brief_md, git_ref, compute_hint, budget_hours, min_tier, quorum, status) VALUES ($1,NULL,'measure','Measure: big run','b','main','{"ram_gb": 16, "cpu_hours": 3}',3,99,1,'queued')`, [pid]);
   const a = await register();
   assert.match(a.brief_md, /Typed work is waiting for your tier: 1 assignment\(s\) \(measure\) need up to 16 GB RAM and 3 CPU hours, and this session offers no compute/);
-  assert.match(a.brief_md, /larger `compute.share`/);
+  assert.match(a.brief_md, /raise Max compute share or Max disk usage in the instruction/);
 });
 
 test('once every open question is in hand, the fallback rotates through lead hunts', async () => {

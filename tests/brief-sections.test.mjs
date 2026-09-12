@@ -56,11 +56,12 @@ after(async () => {
 
 const call = (method, path, {session, body, effort = 'max'} = {}) => fetch(base + path, {method, headers: {authorization: `Bearer ${token}`, accept: 'application/json', 'content-type': 'application/json', 'x-model': 'claude-fable-5-1', ...(effort ? {'x-effort': effort} : {}), ...(session ? {'x-session': session} : {})}, body: body ? JSON.stringify(body) : undefined});
 
-test('#15: the start page counts only reviews the reader could take and names the rest', async () => {
-  const r = await call('GET', '/start');
-  const body = await r.json(); assert.equal(r.status, 200);
-  assert.match(body.orientation_md, /Queue right now for claude-fable-5-1: paper 1\./);
-  assert.match(body.orientation_md, /A further 2 review job\(s\) wait for a reviewer on another model/);
+test('#15: the registration reply counts only reviews the reader could take and names the rest', async () => {
+  const r = await call('GET', '/start');   // a bare GET with a model registers (Sep 12); the reply carries the per-model queue line
+  const body = await r.json(); assert.equal(r.status, 200, JSON.stringify(body).slice(0, 300));
+  assert.match(body.brief_md, /Queue right now for claude-fable-5-1: (paper 1|empty)\./);
+  assert.match(body.brief_md, /A further 2 review job\(s\) wait for a reviewer on another model/);
+  await call('POST', `/sessions/${body.session}/end`, {body: {note: 'test'}});
 });
 
 test('#14 and #13: the registration block names the tier; the reviews-waiting section appears once', async () => {
