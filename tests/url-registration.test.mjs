@@ -112,6 +112,31 @@ test('a wrong value is a 400 that names the valid ones, and no session is opened
   assert.equal(await sessions(), before);
 });
 
+test('the agent is never asked to guess its thinking level: a first fetch without X-Effort opens no session and gives the command that reads the record; what the record prints registers; "unmeasured" registers at tier 2', async () => {
+  const before = await sessions();
+  const H = {authorization: `Bearer ${token}`, accept: 'application/json', 'x-model': 'claude-fable-5-1'};
+  const r = await fetch(base + '/start?share=0', {headers: H}); const j = await r.json();
+  assert.equal(r.status, 200); assert.equal(j.session, null); assert.equal(j.measure, true);
+  assert.match(j.orientation_md, /measure your thinking level first/); assert.match(j.orientation_md, /do not answer this from memory/);
+  assert.match(j.orientation_md, /grep -o '"effort":"\[a-z\]\*"' \| tail -1/); assert.match(j.orientation_md, /model_reasoning_effort ~\/\.codex\/config\.toml/); assert.match(j.orientation_md, /X-Effort: unmeasured/);
+  assert.equal(await sessions(), before, 'no session opened');
+  const md = await (await fetch(base + '/start?share=0', {headers: {...H, accept: 'text/markdown'}})).text(); assert.match(md, /^# solveathome \/ .*: measure your thinking level first/);
+  // Exactly what the Claude Code command prints.
+  const ok = await fetch(base + '/start?share=0', {headers: {...H, 'x-effort': '"effort":"high"'}}); const s = await ok.json();
+  assert.equal(ok.status, 200, JSON.stringify(s).slice(0, 300)); assert.ok(s.session && s.job_id);
+  assert.equal((await one(`SELECT effort FROM sessions WHERE id = $1`, [s.session])).effort, 'high');
+  assert.match(s.brief_md, /On record: `high`: tier 1 this session/); assert.doesNotMatch(s.brief_md, /You declared/);
+  await end(s.session);
+  // What Codex's config prints.
+  const cx = await (await fetch(base + '/start?share=0', {headers: {...H, 'x-effort': 'model_reasoning_effort = "xhigh"'}})).json();
+  assert.equal((await one(`SELECT effort FROM sessions WHERE id = $1`, [cx.session])).effort, 'xhigh'); await end(cx.session);
+  // A harness with no record.
+  const um = await (await fetch(base + '/start?share=0', {headers: {...H, 'x-effort': 'unmeasured'}})).json();
+  assert.ok(um.session, JSON.stringify(um).slice(0, 200)); assert.equal((await one(`SELECT effort FROM sessions WHERE id = $1`, [um.session])).effort, null);
+  assert.match(um.brief_md, /Unmeasured: tier 2 this session/); assert.match(um.brief_md, /thinking level unmeasured: tier 2 for this session/);
+  await end(um.session);
+});
+
 test('without X-Model the fetch gets the page, not a session; the page points at the site', async () => {
   const before = await sessions();
   const r = await get('', {model: null}); const j = await r.json();
@@ -195,7 +220,7 @@ test('a posted registration body still works for agents mid-flight and is marked
 test('the transcript\'s recorded thinking level corrects a wrong declaration and the session\'s tier', async () => {
   const reg = await fetch(base + '/start?share=0', {headers: {authorization: `Bearer ${token}`, accept: 'application/json', 'x-model': 'claude-fable-5-1', 'x-effort': 'medium'}});
   const j = await reg.json(); assert.equal(reg.status, 200, JSON.stringify(j).slice(0, 300));
-  assert.match(j.brief_md, /You declared `medium`: tier 2 this session/);
+  assert.match(j.brief_md, /On record: `medium`: tier 2 this session/);
   assert.match(j.brief_md, /grep -o '"effort":"\[a-z\]\*"'/);
   const transcript = [
     JSON.stringify({type: 'user', message: {content: 'go'}}),

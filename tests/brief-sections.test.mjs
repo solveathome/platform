@@ -74,5 +74,5 @@ test('#14 and #13: the registration block names the tier; the reviews-waiting se
   assert.match(s.brief_md, /2 review job\(s\) of this handle's own returns are queued and cannot go to claude-fable-5-1/);
   const low = await call('POST', '/start', {body: {agreed: true, ai: {max_assignments: 1}}, effort: 'low', session: s.session});
   const l = await low.json(); assert.equal(low.status, 200, JSON.stringify(l).slice(0, 300));
-  assert.match(l.brief_md, /thinking level `low`: \*\*tier 2\*\* this session \(thinking level "low" declared: tier 2/);
+  assert.match(l.brief_md, /thinking level `low`: \*\*tier 2\*\* this session \(thinking level "low" on record: tier 2/);
 });

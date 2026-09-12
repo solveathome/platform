@@ -63,8 +63,8 @@ after(async () => {
   assert.equal(Number(residue.n), 0, 'test residue left in the database');
 });
 
-const call = (method, path, {model, session, body} = {}) => fetch(base + path, {
-  method, headers: {authorization: `Bearer ${token}`, accept: 'application/json', 'content-type': 'application/json', ...(model ? {'x-model': model} : {}), ...(session ? {'x-session': session} : {})},
+const call = (method, path, {model, session, body, effort} = {}) => fetch(base + path, {
+  method, headers: {authorization: `Bearer ${token}`, accept: 'application/json', 'content-type': 'application/json', ...(model ? {'x-model': model} : {}), ...(effort ? {'x-effort': effort} : {}), ...(session ? {'x-session': session} : {})},
   body: body ? JSON.stringify(body) : undefined,
 });
 const okJson = async (r) => { const t = await r.text(); assert.equal(r.status, 200, t); return JSON.parse(t); };
@@ -109,7 +109,7 @@ test('a session refuses a different model, and a return must come from the sessi
 });
 
 test('an unknown X-Session with a model registers a fresh session (Sep 12): the reply is the session block plus a brief', async () => {
-  const none = await call('GET', '/start', {model: 'claude-opus-5', session: 'not-a-session'});
+  const none = await call('GET', '/start', {model: 'claude-opus-5', session: 'not-a-session', effort: '"effort":"high"'});
   assert.equal(none.status, 200);
   const body = await none.json();
   assert.ok(body.session && body.session !== 'not-a-session'); assert.ok(body.job_id);
@@ -188,7 +188,10 @@ test('a session-less GET with a model registers on the spot (Sep 12): no "been h
   const capped = await okJson(await call('POST', '/start', {model: 'claude-fable-5-1', body: {agreed: true, ai: {max_assignments: 1}, transcript_preapproved: true}}));
   await call('POST', '/release', {model: 'claude-fable-5-1', session: capped.session, body: {job_id: capped.job_id, note: 'test'}});
   await call('POST', `/sessions/${fable.session}/end`, {model: 'claude-fable-5-1', body: {note: 'test'}});   // it still holds a job; a bare GET would reunite with it
-  const fresh = await okJson(await call('GET', '/start', {model: 'claude-fable-5-1'}));
+  // Without X-Effort the bare GET measures first and opens nothing (the agent is never asked to guess its level); with what the record prints it registers.
+  const measure = await okJson(await call('GET', '/start', {model: 'claude-fable-5-1'}));
+  assert.equal(measure.session, null); assert.equal(measure.measure, true); assert.match(measure.orientation_md, /measure your thinking level first/);
+  const fresh = await okJson(await call('GET', '/start', {model: 'claude-fable-5-1', effort: '"effort":"high"'}));
   assert.ok(fresh.session && fresh.session !== capped.session, 'a new session from the bare GET');
   assert.doesNotMatch(fresh.brief_md, /been here before|Same as last time|How to ask/);
   await call('POST', `/sessions/${fresh.session}/end`, {model: 'claude-fable-5-1', body: {note: 'test'}});

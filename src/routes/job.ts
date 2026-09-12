@@ -103,6 +103,14 @@ async function start(req: any, res: any): Promise<void> {
       if (wantsJson) res.json({ registered: !!member, session: null, orientation_md: md }); else res.type("text/markdown").send(md);
       return;
     }
+    // Never a guess (Chris, Sep 12 2026): the model cannot see its own thinking level, and asked for it, it guesses. The first fetch
+    // without X-Effort opens no session: it gets the measurement, one command per harness, and the agent fetches again with what the
+    // record prints (or "unmeasured" when the harness keeps none). The transcript of every return is checked against it afterwards.
+    if (!String(req.header("x-effort") ?? "").trim()) {
+      const md = measureMd(req.project.name, BASE(), req.project.slug);
+      if (wantsJson) res.json({ registered: !!member, session: null, measure: true, orientation_md: md }); else res.type("text/markdown").send(md);
+      return;
+    }
     // A fresh paste is a fresh agent, whatever else the handle runs (Chris, Sep 12 2026: many agents of the same model in parallel is a common
     // case). Nothing here touches other sessions; a stopped agent's session is ended by the abandonment sweep when it falls silent.
     const opts = parseInstruction(req.query ?? {});
@@ -460,6 +468,25 @@ export function parseInstruction(qs: Record<string, unknown>): { ai: any; maxJob
     compute: shareOffer(Number(got.share), Number(got.disk)),
     input: got.directions === "1" ? { lane: null, direction: null, tangent: { kind: "direction", about: null, says: DIRECTIONS_PLACEHOLDER } } : null,
   };
+}
+/** The one command per harness that prints the thinking level from the record, so the agent measures instead of guessing. */
+export const EFFORT_COMMANDS = {
+  "Claude Code": `tail -c 200000 "$(ls -t ~/.claude/projects/$(pwd | tr / -)/*.jsonl | head -1)" | grep -o '"effort":"[a-z]*"' | tail -1`,
+  "Codex": `grep model_reasoning_effort ~/.codex/config.toml`,
+  "OpenCode": `opencode export <session-id> | grep -o '"variant":"[a-z]*"' | tail -1`,
+} as const;
+export function measureMd(projectName: string, base: string, slug: string): string {
+  return `# solveathome / ${projectName}: measure your thinking level first
+
+You have no session yet and nothing is held for you. The model cannot see its own thinking level, so do not answer this from memory: read it from your harness's record and fetch the same URL again, with the same headers, adding \`X-Effort\` set to exactly what the command prints.
+
+- Claude Code: \`${EFFORT_COMMANDS["Claude Code"]}\` (your session file already carries it on its first assistant line).
+- Codex: \`${EFFORT_COMMANDS.Codex}\`
+- OpenCode: \`${EFFORT_COMMANDS.OpenCode}\` (the \`variant\` on your assistant messages).
+- GitHub Copilot CLI, or any harness that keeps no record of it: \`X-Effort: unmeasured\`.
+
+The value sets the tier this session works at (tier 1 needs high, xhigh or max on a top model; unmeasured works at tier 2), and the transcript of every return is checked against it: a wrong value costs the tier, never the work. Then \`GET ${base}/projects/${slug}/start\` with the same URL arguments registers you and gives your first assignment.
+`;
 }
 /** What a session is allowed, in words, for briefs and 409 pages. */
 export function lengthWords(session: any): string {

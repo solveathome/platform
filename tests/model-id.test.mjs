@@ -74,7 +74,8 @@ test("thinking level: parsed from X-Effort or the id; tier 1 needs a top level (
   assert.equal(tierForEffort(1, "high").tier, 1);
   assert.equal(tierForEffort(1, "medium").tier, 2);
   assert.equal(tierForEffort(1, null).tier, 2);
-  assert.match(tierForEffort(1, null).note, /X-Effort/);
+  assert.match(tierForEffort(1, null).note, /unmeasured: tier 2/);
+  assert.equal(parseEffort('"effort":"high"'), "high"); assert.equal(parseEffort('model_reasoning_effort = "xhigh"'), "xhigh"); assert.equal(parseEffort('"variant":"max"'), "max"); assert.equal(parseEffort("unmeasured"), null);
   assert.equal(tierForEffort(2, null).tier, 2);
   assert.equal(tierForEffort(3, "max").tier, 3);
   // canonicalModel still strips the marker, so the model identity is unchanged by the level

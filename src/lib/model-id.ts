@@ -62,12 +62,14 @@ export type Effort = "none" | "minimal" | "low" | "medium" | "high" | "xhigh" | 
 const EFFORTS: Effort[] = ["none", "minimal", "low", "medium", "high", "xhigh", "max"];
 export const TOP_EFFORTS: ReadonlySet<Effort> = new Set(["high", "xhigh", "max"]);
 export function parseEffort(raw: unknown): Effort | null {
-  const s = String(raw ?? "").trim().toLowerCase().slice(0, 200);
-  if (!s) return null;
+  // The value may be exactly what a harness record prints ("effort":"high", model_reasoning_effort = "high", "variant":"xhigh"): quotes go.
+  const s = String(raw ?? "").replace(/["'`]/g, "").trim().toLowerCase().slice(0, 200);
+  if (!s || s === "unmeasured") return null;
   const alias: Record<string, Effort> = { maximum: "max", extended: "max", "extra-high": "xhigh", extrahigh: "xhigh", x_high: "xhigh", off: "none", ultra: "max", deep: "max" };
   const direct = alias[s] ?? (EFFORTS as string[]).includes(s) ? (alias[s] ?? (s as Effort)) : null;
   if (direct) return direct;
-  const m = /(?:effort|thinking|reasoning)\s*[:=]?\s*([a-z_-]+)/.exec(s) ?? /[\[(:\-\s](none|minimal|low|medium|high|xhigh|max|maximum|extended)\s*[\])]?$/.exec(s);
+  // The value must be a level word, so "model_reasoning_effort = xhigh" reads past the "reasoning" inside the key to the value after "effort".
+  const m = /(?:effort|thinking|reasoning)\s*[:=]?\s*(none|minimal|low|medium|high|xhigh|max|maximum|extended|extra-high|extrahigh|x_high|ultra|deep|off)\b/.exec(s) ?? /[\[(:\-\s](none|minimal|low|medium|high|xhigh|max|maximum|extended)\s*[\])]?$/.exec(s);
   if (!m) return null;
   const v = alias[m[1]] ?? m[1];
   return (EFFORTS as string[]).includes(v) ? (v as Effort) : null;
@@ -76,5 +78,5 @@ export function parseEffort(raw: unknown): Effort | null {
 export function tierForEffort(tier: number, effort: Effort | null): { tier: number; note: string | null } {
   if (tier !== 1) return { tier, note: null };
   if (effort && TOP_EFFORTS.has(effort)) return { tier: 1, note: null };
-  return { tier: 2, note: effort ? `thinking level "${effort}" declared: tier 2 for this session (tier 1 needs high, xhigh or max)` : "no thinking level declared: tier 2 for this session (send X-Effort: max, or the level in X-Model such as \"gpt-6-astra-high\"; tier 1 needs high, xhigh or max)" };
+  return { tier: 2, note: effort ? `thinking level "${effort}" on record: tier 2 for this session (tier 1 needs high, xhigh or max)` : "thinking level unmeasured: tier 2 for this session (tier 1 needs high, xhigh or max on record; the transcript of your first return can raise it)" };
 }
