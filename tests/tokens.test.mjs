@@ -84,3 +84,17 @@ test('an OpenCode session log counts each assistant message once (output include
   const withheld = parseTranscript('[transcript withheld: recorded before launch, before scrubbing was enforced]');
   assert.equal(withheld.log, 'withheld'); assert.equal(isSessionLog(withheld), false);
 });
+
+test('the solveathome format (agent-written) is accepted as a transcript: counted as stated, model from the header, no thinking-level evidence', () => {
+  const log = [
+    JSON.stringify({type: 'solveathome.transcript', version: 1, harness: 'my-runner', model: 'gpt-6-astra', effort: 'high'}),
+    JSON.stringify({type: 'solveathome.turn', role: 'user', content: 'We are joining the solveathome cluster'}),
+    JSON.stringify({type: 'solveathome.turn', role: 'assistant', content: 'Fetching /start', usage: {input: 1234, output: 56, cache_read: 0, cache_write: 0}}),
+    JSON.stringify({type: 'solveathome.turn', role: 'tool', name: 'bash', input: 'curl …', output: 'ok'}),
+    JSON.stringify({type: 'solveathome.turn', role: 'assistant', content: 'Done', usage: {input: 2000, output: 300, cache_read: 1000}}),
+  ].join('\n');
+  const t = parseTranscript(log);
+  assert.equal(t.log, 'custom'); assert.equal(t.source, 'custom-jsonl'); assert.equal(isSessionLog(t), true); assert.equal(t.entries, 2);
+  assert.equal(t.input, 3234); assert.equal(t.output, 356); assert.equal(t.cache_read, 1000); assert.deepEqual(t.models, {'gpt-6-astra': 356});
+  assert.equal(effortFromTranscript(log), null);
+});

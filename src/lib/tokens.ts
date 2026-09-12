@@ -10,9 +10,12 @@ import { canonicalModel, parseEffort } from "./model-id.js";
 
 /** No single return spends more than this per field; anything above is a forged or broken transcript, not usage. */
 export const MAX_TOKENS_PER_FIELD = 50_000_000;
-export type LogKind = "claude-code" | "codex" | "copilot" | "opencode" | "withheld" | "summary" | "unknown";
-export type Tokens = { input: number; output: number; cache_read: number; cache_write: number; entries: number; source: "claude-jsonl" | "codex-jsonl" | "copilot-jsonl" | "opencode-jsonl" | "reported" | "none"; models?: Record<string, number>; log?: LogKind };
-export const SESSION_LOG_KINDS: LogKind[] = ["claude-code", "codex", "copilot", "opencode"];
+export type LogKind = "claude-code" | "codex" | "copilot" | "opencode" | "custom" | "withheld" | "summary" | "unknown";
+export type Tokens = { input: number; output: number; cache_read: number; cache_write: number; entries: number; source: "claude-jsonl" | "codex-jsonl" | "copilot-jsonl" | "opencode-jsonl" | "custom-jsonl" | "reported" | "none"; models?: Record<string, number>; log?: LogKind };
+/** Accepted as a transcript: a harness's own log, or one the agent wrote in the solveathome format (labelled agent-written, counts what it states). */
+export const SESSION_LOG_KINDS: LogKind[] = ["claude-code", "codex", "copilot", "opencode", "custom"];
+/** The format an agent may write itself when its harness keeps no log (Chris, Sep 12 2026); spec in docs/transcript-format.md. */
+export const CUSTOM_FORMAT_URL = "https://github.com/solveathome/platform/blob/main/docs/transcript-format.md";
 export const isSessionLog = (t: { log?: LogKind } | null | undefined): boolean => !!t?.log && SESSION_LOG_KINDS.includes(t.log);
 /** A transcript the author wrote instead of attaching the log (summary), or one no known harness wrote (unknown). Withheld pre-launch transcripts are neither. */
 export const notSessionLog = (t: { log?: LogKind } | null | undefined): boolean => t?.log === "summary" || t?.log === "unknown";
@@ -23,6 +26,7 @@ export const notSessionLog = (t: { log?: LogKind } | null | undefined): boolean 
  */
 export function logKind(text: string): LogKind {
   const t = String(text ?? "");
+  if (/"type":\s*"solveathome\.(?:transcript|turn)"/.test(t)) return "custom";
   if (/"type":\s*"(?:assistant\.message|assistant\.turn_start|tool\.execution_(?:start|complete)|model\.model_call_success)"/.test(t)) return "copilot";
   if (/"type":\s*"(?:token_count|token_usage_record|response_item|event_msg|session_meta|turn_context)"/.test(t) || /"(?:last_token_usage|total_token_usage|thread_token_usage)"/.test(t)) return "codex";
   if (/"type":\s*"(?:assistant|user)"\s*,/.test(t) && /"message"\s*:\s*\{/.test(t)) return "claude-code";
@@ -49,7 +53,7 @@ export function logHead(text: string, lines = 3, width = 400): string {
 }
 
 /** Where each harness keeps the session log, for the brief, the orientation and the intake warning. */
-export const LOG_LOCATIONS = "Claude Code: `~/.claude/projects/<encoded-cwd>/<session>.jsonl` (newest: `ls -t ~/.claude/projects/$(pwd | tr / -)/*.jsonl | head -1`). Codex: `~/.codex/sessions/<year>/<month>/<day>/rollout-*.jsonl`. GitHub Copilot CLI: `~/.copilot/session-state/<session-id>/events.jsonl` (under `$COPILOT_HOME` if you relocated it; newest: `ls -td ~/.copilot/session-state/*/ | head -1`). OpenCode: `opencode export <session-id>`, or the message files under `~/.local/share/opencode/storage/`, one JSON object per line.";
+export const LOG_LOCATIONS = "Claude Code: `~/.claude/projects/<encoded-cwd>/<session>.jsonl` (newest: `ls -t ~/.claude/projects/$(pwd | tr / -)/*.jsonl | head -1`). Codex: `~/.codex/sessions/<year>/<month>/<day>/rollout-*.jsonl`. GitHub Copilot CLI: `~/.copilot/session-state/<session-id>/events.jsonl` (under `$COPILOT_HOME` if you relocated it; newest: `ls -td ~/.copilot/session-state/*/ | head -1`). OpenCode: `opencode export <session-id>`, or the message files under `~/.local/share/opencode/storage/`, one JSON object per line. If your harness keeps no log at all, write one in the solveathome transcript format (" + CUSTOM_FORMAT_URL + "): one JSON line per turn with what was said, run and returned, and the usage you can read from your harness; it is accepted, counted as you state it, and labelled agent-written on the record.";
 
 /** How much of a transcript's tool output was replaced by omission notes (issue #46): outputs counted by their JSONL types, omissions by bracketed notes saying "omitted". */
 export function omissionShare(text: string): { outputs: number; omitted: number; share: number } {
@@ -81,6 +85,17 @@ export function parseTranscript(text: string, reported?: any): Tokens {
       t.cache_read += Number(u.cache_read_input_tokens ?? 0); t.cache_write += Number(u.cache_creation_input_tokens ?? 0);
       t.entries++; t.source = "claude-jsonl";
       const m = canonicalModel(d.message?.model); if (m) t.models![m] = (t.models![m] ?? 0) + Number(u.output_tokens ?? 0);
+      continue;
+    }
+    // The solveathome format (agent-written): a header line names the model; each turn may carry usage {input, output, cache_read, cache_write}.
+    if (d?.type === "solveathome.transcript") { const m = canonicalModel(d.model); if (m) t.models![m] = t.models![m] ?? 0; continue; }
+    if (d?.type === "solveathome.turn") {
+      const u = d.usage;
+      if (u && typeof u === "object" && (u.input !== undefined || u.output !== undefined)) {
+        t.input += Number(u.input ?? 0); t.output += Number(u.output ?? 0); t.cache_read += Number(u.cache_read ?? 0); t.cache_write += Number(u.cache_write ?? 0);
+        t.entries++; t.source = "custom-jsonl";
+        const m = canonicalModel(d.model) || Object.keys(t.models ?? {})[0] || "custom"; t.models![m] = (t.models![m] ?? 0) + Number(u.output ?? 0);
+      }
       continue;
     }
     // Copilot CLI: usage sits on model.model_call_success lines; the model that answered is on assistant.message lines (kept so X-Model can be checked).
@@ -152,7 +167,7 @@ export function total(t: Tokens): number { return t.input + t.output + t.cache_r
  * The thinking level a Claude Code session ran at, from its own record (Sep 12 2026): every assistant line of the session JSONL carries a
  * top-level `effort`. The last assistant line wins (a person can change it mid-session). The model itself does not know its level and
  * guesses when asked, so this is the evidence the server trusts over the declared X-Effort. OpenCode records it as `variant` on its assistant
- * messages. Codex and Copilot CLI logs carry none: null.
+ * messages. Codex and Copilot CLI logs carry none, and the agent-written solveathome format is not evidence: null.
  */
 export function effortFromTranscript(text: string): string | null {
   let last: string | null = null;

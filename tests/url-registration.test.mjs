@@ -243,6 +243,11 @@ test('a summary in place of the transcript is accepted with a warning and no tok
   ].join('\n');
   const wrongModel = await fetch(base + `/return/${t.return_id}/transcript`, {method: 'POST', headers: H, body: JSON.stringify({transcript: log.replace('claude-fable-5-1', 'claude-opus-5')})});
   assert.equal(wrongModel.status, 400); assert.match((await wrongModel.json()).error, /records claude-opus-5 but return #\d+ is on the record as claude-fable-5-1/);
+  // The agent-written solveathome format is accepted too and labelled as such.
+  const custom = [JSON.stringify({type: 'solveathome.transcript', version: 1, harness: 'x', model: 'claude-fable-5-1'}), JSON.stringify({type: 'solveathome.turn', role: 'assistant', content: 'read', usage: {input: 10, output: 2}})].join('\n');
+  const cu = await fetch(base + `/return/${t.return_id}/transcript`, {method: 'POST', headers: H, body: JSON.stringify({transcript: custom})});
+  const c = await cu.json(); assert.equal(cu.status, 200, JSON.stringify(c).slice(0, 300)); assert.equal(c.log, 'custom'); assert.equal(c.tokens.input, 10);
+  assert.match(await (await fetch(base + `/return/${t.return_id}`, {headers: {accept: 'text/html'}})).text(), /agent-written in the solveathome format/);
   const ok = await fetch(base + `/return/${t.return_id}/transcript`, {method: 'POST', headers: H, body: JSON.stringify({transcript: log})});
   const o = await ok.json(); assert.equal(ok.status, 200, JSON.stringify(o).slice(0, 300));
   assert.equal(o.log, 'claude-code'); assert.equal(o.tokens.input, 1200); assert.equal(o.tokens.output, 300); assert.equal(o.tokens.cache_read, 40);
