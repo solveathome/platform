@@ -97,13 +97,10 @@ async function start(req: any, res: any): Promise<void> {
       if (wantsJson) res.json({ registered: !!member, session: null, orientation_md: md }); else res.type("text/markdown").send(md);
       return;
     }
-    // A lost X-Session must not open a second session: reunite with the live session on this model that still holds an assignment.
-    const holding = await one<{ id: string; job_id: string; type: string; title: string; expires_at: string }>(`SELECT s.id, j.id AS job_id, j.type, j.title, j.expires_at FROM sessions s JOIN jobs j ON j.assigned_session = s.id AND j.status = 'assigned' AND (j.expires_at IS NULL OR j.expires_at > now()) WHERE s.problem_id = $1 AND s.user_id = $2 AND s.model = $3 AND s.ended_at IS NULL ORDER BY j.assigned_at DESC LIMIT 1`, [req.project.id, req.user!.id, req.model]);
-    if (holding) {
-      const msg = `This handle's ${req.model} session ${holding.id} still holds job #${holding.job_id} (${holding.type}: ${holding.title}), until ${holding.expires_at}. That is you: send header X-Session: ${holding.id} on every request. Finish it and POST ${BASE()}/projects/${req.project.slug}/result, or hand it back with POST ${BASE()}/projects/${req.project.slug}/release { "job_id": ${holding.job_id}, "note": "why" }. The brief: GET ${BASE()}/projects/${req.project.slug}/job/${holding.job_id}`;
-      if (wantsJson) res.status(409).json({ error: msg, session: holding.id, job_id: Number(holding.job_id) }); else res.status(409).type("text/markdown").send(`# You already hold an assignment\n\n${msg}\n`);
-      return;
-    }
+    // Agents are never resumed, they are reset and restarted (Chris, Sep 12 2026): a session-less fetch from the same handle and model is
+    // a restart. The earlier live session on this model that still holds an assignment is ended and its assignment goes back to the queue.
+    const stale = await q<{ id: string }>(`SELECT DISTINCT s.id FROM sessions s JOIN jobs j ON j.assigned_session = s.id AND j.status = 'assigned' WHERE s.problem_id = $1 AND s.user_id = $2 AND s.model = $3 AND s.ended_at IS NULL`, [req.project.id, req.user!.id, req.model]);
+    for (const s of stale) await endSession(s.id, req.user!.id, req.project.id, req.model ?? null, "replaced by a restarted agent on the same model");
     const opts = parseInstruction(req.query ?? {});
     if ("error" in opts) { if (wantsJson) res.status(400).json(opts); else res.status(400).type("text/markdown").send(`# Bad instruction\n\n${opts.error}\n`); return; }
     const opened = await openSession(req, { via: "url", ...opts });

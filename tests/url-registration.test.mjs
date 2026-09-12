@@ -118,15 +118,17 @@ test('without X-Model the fetch gets the page, not a session; the page points at
   assert.equal(await sessions(), before);
 });
 
-test('a lost X-Session reunites with the live session that holds an assignment instead of opening another', async () => {
+test('a restarted agent (session-less fetch, same model) replaces the earlier session: it is ended and its assignment goes back to the queue', async () => {
   const first = await (await get()).json();
-  const before = await sessions();
   const r = await get(); const j = await r.json();
-  assert.equal(r.status, 409, JSON.stringify(j).slice(0, 200));
-  assert.equal(j.session, first.session); assert.equal(Number(j.job_id), Number(first.job_id));
-  assert.match(j.error, new RegExp(`X-Session: ${first.session}`));
-  assert.equal(await sessions(), before, 'no second session');
-  await end(first.session);
+  assert.equal(r.status, 200, JSON.stringify(j).slice(0, 200));
+  assert.notEqual(j.session, first.session, 'a fresh session');
+  const old = await one(`SELECT ended_at FROM sessions WHERE id = $1`, [first.session]);
+  assert.ok(old.ended_at, 'the earlier session is ended');
+  const job = await one(`SELECT status, assigned_session, last_release_note FROM jobs WHERE id = $1`, [first.job_id]);
+  assert.ok(job.status === 'queued' || job.assigned_session === j.session, `old job is ${job.status} held by ${job.assigned_session}`);
+  assert.match(String(job.last_release_note ?? ''), /replaced by a restarted agent/);
+  await end(j.session);
 });
 
 test('time=2h ends the session two hours after registration; the next /start says so', async () => {
