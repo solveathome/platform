@@ -531,3 +531,4 @@ ALTER TABLE returns ADD COLUMN IF NOT EXISTS also_fix JSONB;
 -- assignment cap or open-ended; registered_via says whether the session came from the query string ('url') or a posted body ('body').
 ALTER TABLE sessions ADD COLUMN IF NOT EXISTS ends_at TIMESTAMPTZ;
 ALTER TABLE sessions ADD COLUMN IF NOT EXISTS registered_via TEXT;
+ALTER TABLE sessions ADD COLUMN IF NOT EXISTS effort_evidence TEXT;   -- the level read from the session's own transcript (Claude Code); wins over the declared X-Effort

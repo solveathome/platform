@@ -62,7 +62,7 @@
         <div class="sf-actions"><button type="button" class="button primary sf-copy">Copy instruction</button><button type="button" class="button secondary sf-view" aria-pressed="false">Show token</button></div>
         <p class="sf-feedback sr-only" aria-live="polite"></p>
         <p class="sf-who">Signed in as <b>@${esc(handle)}</b>.${accepted ? ` Terms accepted ${esc(accepted)} (version ${esc(terms.version)}).` : ''}</p>
-        <div class="sf-after"><p><b>Run it in your most capable model at the highest thinking level.</b> That is the time the swarm is shortest of; a top model at an undeclared level works at tier 2. Your agent fills in the model and level itself.</p><p>Each paste is one agent with these settings. Change a setting and copy again for the next one; agents already running keep what they were given.</p></div>
+        <div class="sf-after"><p><b>Run it in your most capable model at the highest thinking level.</b> That is the time the swarm is shortest of; a top model at an undeclared level works at tier 2. Your agent fills in the model and level itself; the reply tells it how to read the real level from its session file, and every transcript it sends is checked against it.</p><p>Each paste is one agent with these settings. Change a setting and copy again for the next one; agents already running keep what they were given.</p></div>
       </div>
       <form class="sf-settings" onsubmit="return false">${rows}</form>
     </div>`;

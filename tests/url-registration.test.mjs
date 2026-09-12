@@ -43,8 +43,11 @@ after(async () => {
   await q(`DELETE FROM messages WHERE user_id = $1`, [uid]);
   await q(`DELETE FROM channel_members WHERE user_id = $1`, [uid]);
   await q(`DELETE FROM credits WHERE problem_id = $1`, [pid]);
-  await q(`DELETE FROM jobs WHERE problem_id = $1`, [pid]);
+  await q(`DELETE FROM reviews WHERE return_id IN (SELECT id FROM returns WHERE problem_id = $1)`, [pid]);
+  await q(`DELETE FROM return_decisions WHERE return_id IN (SELECT id FROM returns WHERE problem_id = $1)`, [pid]);
+  await q(`DELETE FROM jobs WHERE parent_return_id IN (SELECT id FROM returns WHERE problem_id = $1)`, [pid]);
   await q(`DELETE FROM returns WHERE problem_id = $1`, [pid]);
+  await q(`DELETE FROM jobs WHERE problem_id = $1`, [pid]);
   await q(`DELETE FROM sessions WHERE problem_id = $1`, [pid]);
   await q(`DELETE FROM pool WHERE problem_id = $1`, [pid]);
   await q(`DELETE FROM channels WHERE problem_id = $1`, [pid]);
@@ -171,5 +174,27 @@ test('a posted registration body still works for agents mid-flight and is marked
   const r = await fetch(base + '/start', {method: 'POST', headers: {authorization: `Bearer ${token}`, accept: 'application/json', 'content-type': 'application/json', 'x-model': 'claude-opus-5'}, body: JSON.stringify({agreed: true, ai: {max_assignments: 1}, transcript_preapproved: true})});
   const j = await r.json(); assert.equal(r.status, 200, JSON.stringify(j).slice(0, 200));
   assert.equal((await one(`SELECT registered_via FROM sessions WHERE id = $1`, [j.session])).registered_via, 'body');
+  await end(j.session);
+});
+
+test('the transcript\'s recorded thinking level corrects a wrong declaration and the session\'s tier', async () => {
+  const reg = await fetch(base + '/start?share=0', {headers: {authorization: `Bearer ${token}`, accept: 'application/json', 'x-model': 'claude-fable-5-1', 'x-effort': 'medium'}});
+  const j = await reg.json(); assert.equal(reg.status, 200, JSON.stringify(j).slice(0, 300));
+  assert.match(j.brief_md, /You declared `medium`: tier 2 this session/);
+  assert.match(j.brief_md, /grep -o '"effort":"\[a-z\]\*"'/);
+  const transcript = [
+    JSON.stringify({type: 'user', message: {content: 'go'}}),
+    JSON.stringify({type: 'assistant', effort: 'high', message: {model: 'claude-fable-5-1', usage: {input_tokens: 10, output_tokens: 5}}}),
+  ].join('\n');
+  const r = await fetch(base + '/result', {method: 'POST', headers: {authorization: `Bearer ${token}`, accept: 'application/json', 'content-type': 'application/json', 'x-model': 'claude-fable-5-1', 'x-effort': 'medium', 'x-session': j.session}, body: JSON.stringify({job_id: j.job_id, report_md: 'Found the page.', transcript, transcript_approved: true, author_rung: 'measured'})});
+  const t = await r.json(); assert.equal(r.status, 200, JSON.stringify(t).slice(0, 300));
+  assert.ok(t.warnings.some(w => /records thinking level "high".*declared X-Effort "medium"/.test(w)), JSON.stringify(t.warnings));
+  const s = await one(`SELECT effort, effort_evidence FROM sessions WHERE id = $1`, [j.session]);
+  assert.equal(s.effort_evidence, 'high'); assert.equal(s.effort, 'high');
+  assert.equal((await one(`SELECT effort FROM returns WHERE id = $1`, [t.return_id])).effort, 'high');
+  const list = await (await fetch(base + '/sessions', {headers: {authorization: `Bearer ${token}`, accept: 'application/json', 'x-model': 'claude-fable-5-1'}})).json();
+  assert.equal(list.sessions.find(x => x.id === j.session).effort_evidence, 'high');
+  const next = await (await fetch(base + '/start', {headers: {authorization: `Bearer ${token}`, accept: 'application/json', 'x-model': 'claude-fable-5-1', 'x-effort': 'medium', 'x-session': j.session}})).json();
+  assert.doesNotMatch(next.brief_md ?? next.orientation_md ?? '', /tier 2 for this session/);
   await end(j.session);
 });

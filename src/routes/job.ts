@@ -11,7 +11,7 @@ import * as revisions from "../lib/revisions.js";
 import { openQuestions } from "../lib/questions.js";
 import { ledgerWarnings } from "../lib/ledger.js";
 import { patchHash } from "../lib/duplicates.js";
-import { omissionShare } from "../lib/tokens.js";
+import { omissionShare, effortFromTranscript } from "../lib/tokens.js";
 /** Why a review rejected (Chris, Sep 11 2026). Overclaimed work should be accepted at the lower rung; the class exists so the record says which it was. */
 export const REJECT_REASONS = ["refuted", "overclaimed", "unsourced", "unverifiable"] as const;
 import { renderBrief, type JobRow } from "../lib/brief.js";
@@ -154,6 +154,10 @@ Your person allowed ${session.max_jobs} assignment(s) in the instruction they ga
   const offer = settings.compute?.usable ? settings.compute : parseOffer(settings.compute, Number(settings.ai?.max_hours_per_assignment ?? 2));
   const prefs = { maxHours: Number(offer?.usable?.cpu_hours ?? 0), ramGb: Number(offer?.usable?.ram_gb ?? 0), hasGpu: !!(offer?.usable?.vram_gb), lane: settings.input?.lane ?? null };
   // Tier 1 needs a top thinking level (Chris, Sep 10): a frontier model at a lower or undeclared level judges at tier 2.
+  // The session's thinking level: evidence from its own transcript wins (set at each return); until then, the latest declaration, which an
+  // agent may correct after reading its session file (the registration reply says how).
+  if (session.effort_evidence) req.effort = session.effort_evidence;
+  else if (req.effort && req.effort !== session.effort) { await q(`UPDATE sessions SET effort = $2 WHERE id = $1`, [session.id, req.effort]); session.effort = req.effort; }
   const tf = tierForEffort(await modelTier(req.model ?? "unknown"), req.effort ?? null);
   const tier = tf.tier;
   // Review assignments go to trusted reviewers (Sep 10); everyone else reviews advisorily, self-assigned. Trusted reviewers may review their own returns.
@@ -388,7 +392,7 @@ async function endSession(sessionId: string, uid: number, problemId: number, mod
 
 /** GET /sessions : this handle's sessions on the project, newest first: what each holds, whether it counts as live. */
 job.get("/sessions", bearer, project, async (req: any, res: any) => {
-  const rows = await q(`SELECT s.id, s.model, s.effort, s.max_jobs, s.jobs, s.started_at, s.last_seen, s.ended_at, s.ends_at, s.registered_via, (${LIVE_SESSION}) AS live,
+  const rows = await q(`SELECT s.id, s.model, s.effort, s.effort_evidence, s.max_jobs, s.jobs, s.started_at, s.last_seen, s.ended_at, s.ends_at, s.registered_via, (${LIVE_SESSION}) AS live,
                           (SELECT json_agg(json_build_object('id', j.id, 'type', j.type, 'title', j.title, 'expires_at', j.expires_at)) FROM jobs j WHERE j.assigned_session = s.id AND j.status = 'assigned') AS holds
                         FROM sessions s WHERE s.problem_id = $1 AND s.user_id = $2 ORDER BY s.started_at DESC LIMIT 100`, [req.project.id, req.user!.id]);
   // The cap and the count taken are numbers under the names the registration used (issue #30), so a person sees which agent is at its cap.
@@ -573,6 +577,12 @@ job.post("/result", bearer, project, async (req: any, res) => {
   if (Number(hourly?.c ?? 0) >= MAX_RETURNS_PER_HOUR) { res.setHeader("Retry-After", "600"); res.status(429).json({ error: `rate limit: ${MAX_RETURNS_PER_HOUR} returns per hour per handle` }); return; }
 
   const tokens = parseTranscript(String(b.transcript), b.tokens);
+  // The thinking level from the transcript itself (Sep 12 2026): a Claude Code session file records it on every assistant line, and the
+  // model's own declaration is a guess. Evidence corrects the session for the rest of its life and is what the tier and trust use here.
+  const effortEvidence = effortFromTranscript(String(b.transcript));
+  const effortNote = effortEvidence && req.effort && effortEvidence !== req.effort ? `Your transcript records thinking level "${effortEvidence}" on its assistant lines; you declared X-Effort "${req.effort}". The transcript wins: this session is recorded at "${effortEvidence}" from now on, and its tier follows.` : (effortEvidence && !req.effort ? `Your transcript records thinking level "${effortEvidence}"; you declared none. The session is recorded at "${effortEvidence}" from now on.` : null);
+  if (effortEvidence && xs) await q(`UPDATE sessions SET effort_evidence = $2, effort = $2 WHERE id = $1 AND user_id = $3`, [xs, effortEvidence, uid]);
+  const effortEff = effortEvidence ?? req.effort ?? null;
   // The model an agent declares (X-Model) decides its tier. The transcript is the evidence: when it names models, the declared one must be among them.
   const observed = Object.keys(tokens.models ?? {}).filter((m) => m !== "codex");
   if (observed.length && req.model && !observed.some((m) => m.toLowerCase() === String(req.model).toLowerCase())) {
@@ -585,7 +595,7 @@ job.post("/result", bearer, project, async (req: any, res) => {
   if (jobRow?.type === "review" || (!jobRow && b.type === "review")) {
     if (!["accept", "reject"].includes(b.verdict)) { res.status(400).json({ error: "verdict must be accept|reject" }); return; }
     // Trusted reviewers decide; anyone else's review is advisory (Sep 10). A self-assigned review names the return it reviews.
-    const reviewerTrusted = await isTrusted(Number(req.project.id), uid, req.user!.handle, { model: req.model, effort: req.effort });
+    const reviewerTrusted = await isTrusted(Number(req.project.id), uid, req.user!.handle, { model: req.model, effort: effortEff });
     const reviewerGranted = await isGrantedTrusted(Number(req.project.id), uid, req.user!.handle);
     let reviewOf = jobRow ? Number(jobRow.parent_return_id) : Number(b.return_id);
     let priorScoredAt: string | null = null;
@@ -629,7 +639,7 @@ job.post("/result", bearer, project, async (req: any, res) => {
     // The reply names the review and the return's resulting state (issue #47), so the reviewer's done message needs no second round trip.
     const after = await one<{ status: string; final_rung: string | null; provisional: boolean; effects_applied_at: string | null }>(`SELECT status, final_rung, provisional, effects_applied_at FROM returns WHERE id = $1`, [reviewOf]);
     const myReview = await one<{ id: string }>(`SELECT max(id) AS id FROM reviews WHERE return_id = $1 AND user_id = $2`, [reviewOf, uid]);
-    res.json({ ok: true, review_of: reviewOf, review_id: Number(myReview?.id ?? 0) || null, outcome, advisory: !reviewerTrusted, trusted_by: reviewerGranted ? "grant" : reviewerTrusted ? "model" : null, return_status: after?.status ?? null, final_rung: after?.final_rung ?? null, provisional: after?.provisional ?? null, effects_applied_at: after?.effects_applied_at ?? null, tokens });
+    res.json({ ok: true, review_of: reviewOf, review_id: Number(myReview?.id ?? 0) || null, outcome, advisory: !reviewerTrusted, ...(effortNote ? { effort_note: effortNote } : {}), trusted_by: reviewerGranted ? "grant" : reviewerTrusted ? "model" : null, return_status: after?.status ?? null, final_rung: after?.final_rung ?? null, provisional: after?.provisional ?? null, effects_applied_at: after?.effects_applied_at ?? null, tokens });
     return;
   }
 
@@ -687,7 +697,7 @@ job.post("/result", bearer, project, async (req: any, res) => {
     `INSERT INTO returns (job_id, problem_id, lane_id, type, user_id, model, provider, report_md, patch, transcript, cpu_hours, hashes, author_rung, repo_url, commit, session, effort)
      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17) RETURNING id`,
     [jobRow?.id ?? null, problem.id, laneId, rtype, uid, req.model ?? "unknown", req.provider ?? "unknown",
-     b.report_md, b.patch ?? null, b.transcript, cpuHours, b.hashes ?? {}, authorRung, repoUrl, commit, jobRow?.assigned_session ?? xs, req.effort ?? null]);
+     b.report_md, b.patch ?? null, b.transcript, cpuHours, b.hashes ?? {}, authorRung, repoUrl, commit, jobRow?.assigned_session ?? xs, effortEff]);
   if (recipe) await q(`UPDATE returns SET recipe_md = $2 WHERE id = $1`, [ret!.id, recipe]);
   if (target || finding || humanMd) await q(`UPDATE returns SET target = $2, finding = $3, human_md = $4 WHERE id = $1`, [ret!.id, target ? JSON.stringify(target) : null, finding, humanMd]);
   // Source-level notes (agent feedback, Sep 10): an audit that finds a figure wrong in another document routes the note there.
@@ -775,7 +785,7 @@ job.post("/result", bearer, project, async (req: any, res) => {
   await q(`UPDATE returns SET transcript_omitted = $2 WHERE id = $1`, [ret!.id, JSON.stringify(om)]);
   const omissionWarn = mostlyOmitted ? [`your transcript replaces ${om.omitted} of ${om.outputs} tool outputs with omission notes. Reads of served documents (<project base>/docs/…) and of your own files are public and must stay in the transcript; only third-party payloads are replaced. This return is labelled "transcript mostly omitted" for reviewers.`] : [];
   const twinWarn = twin ? [`this change is byte-identical to pending return #${twin.id}: the two are one change; when #${twin.id} is accepted this return is folded into it (superseded, unpaid), and reviewers see both as one.`] : [];
-  const warnings = [...patchWarning, ...ledgerWarn, ...omissionWarn, ...twinWarn, ...(stray.length ? [`recipe_md names ${stray.length} sha256 value(s) that are neither in hashes, nor among your or cited files, nor a served document: ${stray.map((x: string) => x.slice(0, 12) + "…").join(", ")}. If one is an expected output hash, put it in hashes too; if it is a typo, a reviewer's rerun will not match.`] : [])];
+  const warnings = [...(effortNote ? [effortNote] : []), ...patchWarning, ...ledgerWarn, ...omissionWarn, ...twinWarn, ...(stray.length ? [`recipe_md names ${stray.length} sha256 value(s) that are neither in hashes, nor among your or cited files, nor a served document: ${stray.map((x: string) => x.slice(0, 12) + "…").join(", ")}. If one is an expected output hash, put it in hashes too; if it is a typo, a reviewer's rerun will not match.`] : [])];
   res.json({ ok: true, return_id: Number(ret!.id), status: "pending", reviews_requested: mayReview ? MIN_REVIEWS : 0, files: attached, tokens, warnings, note: mayReview ? undefined : "pending without review jobs: a trusted reviewer picks it up when they look; review jobs are spawned for assigned work, and for everything once you have an accepted return here" });
 });
 

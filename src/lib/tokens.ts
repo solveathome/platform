@@ -3,7 +3,7 @@
  * Claude Code JSONL: assistant entries carry message.usage {input_tokens, output_tokens, cache_creation_input_tokens, cache_read_input_tokens} and message.model.
  * Codex JSONL: events carrying usage / token_count fields (see parseCodex). Self-reported numbers are kept alongside and never override a parsed transcript.
  */
-import { canonicalModel } from "./model-id.js";
+import { canonicalModel, parseEffort } from "./model-id.js";
 
 /** No single return spends more than this per field; anything above is a forged or broken transcript, not usage. */
 export const MAX_TOKENS_PER_FIELD = 50_000_000;
@@ -86,3 +86,19 @@ function codexUsage(d: any): { input: number; output: number; cache_read: number
   return { input: Math.max(0, Number(u.input_tokens ?? 0) - cached), output: Number(u.output_tokens ?? 0), cache_read: cached, cache_write: Number(u.cache_write_input_tokens ?? 0) };
 }
 export function total(t: Tokens): number { return t.input + t.output + t.cache_read + t.cache_write; }
+
+/**
+ * The thinking level a Claude Code session ran at, from its own record (Sep 12 2026): every assistant line of the session JSONL carries a
+ * top-level `effort`. The last assistant line wins (a person can change it mid-session). The model itself does not know its level and
+ * guesses when asked, so this is the evidence the server trusts over the declared X-Effort. Codex transcripts carry none: null.
+ */
+export function effortFromTranscript(text: string): string | null {
+  let last: string | null = null;
+  for (const line of String(text ?? "").split("\n")) {
+    const s = line.trim(); if (!s.startsWith("{") || !s.includes('"effort"')) continue;
+    let d: any; try { d = JSON.parse(s); } catch { continue; }
+    if (d?.type !== "assistant" || typeof d.effort !== "string") continue;
+    const e = parseEffort(d.effort); if (e) last = e;
+  }
+  return last;
+}
