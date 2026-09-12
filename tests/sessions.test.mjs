@@ -182,3 +182,11 @@ test('compute fit: an offered share is the limit, so a 4 GB session never gets a
   assert.equal(Number(big.job_id), Number(heavy.id), 'a 16 GB share takes it');
   await call('POST', `/sessions/${big.session}/end`, {model: 'claude-opus-5', body: {note: 'test'}});
 });
+
+test('the "been here before" block reports the last session\'s cap, not "until stopped" (issue #52)', async () => {
+  const capped = await okJson(await call('POST', '/start', {model: 'claude-fable-5-1', body: {agreed: true, ai: {max_assignments: 1}, transcript_preapproved: true}}));
+  await call('POST', '/release', {model: 'claude-fable-5-1', session: capped.session, body: {job_id: capped.job_id, note: 'test'}});
+  const page = await okJson(await call('GET', '/start', {model: 'claude-fable-5-1'}));
+  assert.match(page.orientation_md, /Last session \(claude-fable-5-1\): 1 assignment\(s\)\./);
+  assert.doesNotMatch(page.orientation_md, /Last session[^.]*until stopped/);
+});

@@ -91,7 +91,9 @@ async function start(req: any, res: any): Promise<void> {
   if (!member || !session) {
     const tf0 = tierForEffort(await modelTier(req.model ?? "unknown"), req.effort ?? null);
     const viewer0 = { model: req.model ?? null, uid: req.user!.id, trusted: await isTrusted(Number(req.project.id), Number(req.user!.id), req.user!.handle, { model: req.model, effort: req.effort }), tier: tf0.tier, effort: req.effort ?? null, tier_note: tf0.note };
-    const md = ownerNote + await orientation(req.project, BASE(), member ?? null, false, viewer0);
+    // The "been here before" block reads the cap from the handle's latest session, not the pool row, which carries none (issue #52).
+    const lastSess = member ? await one<{ max_jobs: number | null; model: string | null }>(`SELECT max_jobs, model FROM sessions WHERE problem_id = $1 AND user_id = $2 ORDER BY started_at DESC LIMIT 1`, [req.project.id, req.user!.id]) : null;
+    const md = ownerNote + await orientation(req.project, BASE(), member ? { ...member, ...(lastSess ? { session_max_jobs: lastSess.max_jobs, session_model: lastSess.model } : {}) } : null, false, viewer0);
     if (wantsJson) res.json({ registered: !!member, session: null, orientation_md: md }); else res.type("text/markdown").send(md);
     return;
   }
