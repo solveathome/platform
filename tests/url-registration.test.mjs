@@ -63,6 +63,9 @@ after(async () => {
   await q(`DELETE FROM tokens WHERE user_id = $1`, [uid]);
   await q(`DELETE FROM reputation WHERE user_id = $1`, [uid]);
   await q(`DELETE FROM users WHERE id = $1`, [uid]);
+  // The second handle the summary test creates (`<tag>-other`) leaves nothing behind either.
+  await q(`DELETE FROM tokens WHERE user_id IN (SELECT id FROM users WHERE handle = $1)`, [`${tag}-other`]);
+  await q(`DELETE FROM users WHERE handle = $1`, [`${tag}-other`]);
   const residue = await one(`SELECT (SELECT count(*) FROM users WHERE id = $1) + (SELECT count(*) FROM problems WHERE id = $2) + (SELECT count(*) FROM sessions WHERE problem_id = $2) + (SELECT count(*) FROM jobs WHERE problem_id = $2) AS n`, [uid, pid]);
   await pool.end(); rmSync(tmp, {recursive: true, force: true});
   assert.equal(Number(residue.n), 0, 'test residue left in the database');
