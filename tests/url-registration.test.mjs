@@ -17,6 +17,8 @@ const {issueToken} = await import('../src/lib/auth.ts');
 const {TERMS_VERSION} = await import('../src/lib/terms.ts');
 const {job} = await import('../src/routes/job.ts');
 const {filesRouter} = await import('../src/routes/files.ts');
+const roles = await import('../src/lib/roles.ts');
+import {mkdirSync, writeFileSync} from 'node:fs';
 
 const tag = `url-test-${Date.now().toString(36)}`;
 const slug = tag, handle = `${tag}-person`;
@@ -43,12 +45,13 @@ after(async () => {
   server?.close();
   await q(`DELETE FROM file_refs WHERE file_sha IN (SELECT sha256 FROM files WHERE user_id = $1)`, [uid]);
   await q(`DELETE FROM files WHERE user_id = $1`, [uid]);
+  await q(`DELETE FROM project_roles WHERE problem_id = $1`, [pid]);
   await q(`DELETE FROM messages WHERE user_id = $1`, [uid]);
   await q(`DELETE FROM channel_members WHERE user_id = $1`, [uid]);
   await q(`DELETE FROM credits WHERE problem_id = $1`, [pid]);
   await q(`DELETE FROM reviews WHERE return_id IN (SELECT id FROM returns WHERE problem_id = $1)`, [pid]);
   await q(`DELETE FROM return_decisions WHERE return_id IN (SELECT id FROM returns WHERE problem_id = $1)`, [pid]);
-  await q(`DELETE FROM jobs WHERE parent_return_id IN (SELECT id FROM returns WHERE problem_id = $1)`, [pid]);
+  await q(`DELETE FROM jobs WHERE parent_return_id IN (SELECT id FROM returns WHERE problem_id = $1) OR follow_up_of IN (SELECT id FROM returns WHERE problem_id = $1)`, [pid]);
   await q(`DELETE FROM returns WHERE problem_id = $1`, [pid]);
   await q(`DELETE FROM jobs WHERE problem_id = $1`, [pid]);
   await q(`DELETE FROM sessions WHERE problem_id = $1`, [pid]);
@@ -394,5 +397,40 @@ test('a script with a hard-coded home path or a progress line is never refused: 
   assert.match(page, /Will not run as shipped/); assert.match(page, /hard-coded home directory/);
   const brief = await one(`SELECT brief_md FROM jobs WHERE parent_return_id = $1 ORDER BY id LIMIT 1`, [t.return_id]);
   assert.ok(brief, 'a review job was spawned'); assert.match(brief.brief_md, /Files that will not run as shipped/); assert.match(brief.brief_md, /fix the path or strip those lines when you rerun/);
+  // Detected at intake: the agent is told to fix it now, and a fix job is queued at once for anyone.
+  const fix = await one(`SELECT id, type, status, title, brief_md FROM jobs WHERE follow_up_of = $1 AND title LIKE 'Fix files of return %'`, [t.return_id]);
+  assert.ok(fix, 'a fix job was queued'); assert.equal(fix.status, 'queued'); assert.match(fix.title, new RegExp(`${tag}-compare.js`)); assert.match(fix.brief_md, /Upload a corrected copy of each file under the same name/);
+  assert.match(fw, new RegExp(`Fix it now: .*POST .*/return/${t.return_id}/files`)); assert.match(fw, new RegExp(`fix job \\(#${fix.id}\\) closes`));
+  // Someone else cannot attach; the author attaches a corrected copy under the same name, the note is marked fixed and the job closes.
+  const other = await one(`SELECT id FROM users WHERE handle = $1`, [`${tag}-other`]); const otherToken = await issueToken(Number(other.id), 'url-test');
+  const no = await fetch(base + `/return/${t.return_id}/files`, {method: 'POST', headers: {...H, authorization: `Bearer ${otherToken}`}, body: JSON.stringify({files: [u.sha256]})});
+  assert.equal(no.status, 403);
+  const good = `const base = "research/";\nsetInterval(() => console.error(\`\${pct}% done, elapsed \${t}s\`), 30000);\nconsole.log(base);\n`;
+  const up2 = await (await fetch(root + '/files', {method: 'POST', headers: H, body: JSON.stringify({name: `${tag}-compare.js`, content: good})})).json();
+  assert.deepEqual(up2.warnings, []);
+  const att = await fetch(base + `/return/${t.return_id}/files`, {method: 'POST', headers: H, body: JSON.stringify({files: [up2.sha256]})});
+  const a = await att.json(); assert.equal(att.status, 200, JSON.stringify(a).slice(0, 300));
+  assert.deepEqual([a.fixed, a.remaining, a.fix_job_closed, a.warnings], [[`${tag}-compare.js`], [], Number(fix.id), []]);
+  assert.equal((await one(`SELECT status FROM jobs WHERE id = $1`, [fix.id])).status, 'expired');
+  const notes = (await one(`SELECT file_notes FROM returns WHERE id = $1`, [t.return_id])).file_notes; assert.equal(notes[0].fixed_by, up2.sha256);
+  const page2 = await (await fetch(base + `/return/${t.return_id}`, {headers: {accept: 'text/html'}})).text();
+  assert.match(page2, /Replaced by the author/); assert.match(page2, new RegExp(`Corrected copy: <a href="/files/${up2.sha256}"`));
   await end(j.session);
+});
+
+test('a trusted reviewer\'s also_fix on a served file opens one audit fix job in the queue, with the note as the brief', async () => {
+  const H = {authorization: `Bearer ${token}`, accept: 'application/json', 'content-type': 'application/json', 'x-model': 'claude-fable-5-1', 'x-effort': 'high'};
+  mkdirSync(join(tmp, 'repos', slug, 'research'), {recursive: true}); writeFileSync(join(tmp, 'repos', slug, 'research', 'tool.js'), 'setInterval(() => console.log(`${p}% done`), 30000);\nconsole.log(1);\n');
+  await roles.grant(pid, uid, 'trusted', null, 'test');
+  const mine = await q(`SELECT id FROM returns WHERE problem_id = $1 AND user_id = $2 AND status = 'pending' ORDER BY id LIMIT 2`, [pid, uid]);
+  assert.ok(mine.length >= 2, 'two pending returns of this handle to review');
+  const rv = await fetch(base + '/result', {method: 'POST', headers: H, body: JSON.stringify({type: 'review', return_id: Number(mine[0].id), verdict: 'accept', rung: 'measured', notes_md: 'checked; the served tool prints ticks to stdout', also_fix: [{path: 'research/tool.js', note: 'line 1 prints a progress tick to stdout every 30 s; send it to stderr and re-embed the hash'}, {path: 'research/not-served.js', note: 'x'}], transcript: 't', transcript_approved: true})});
+  const r = await rv.json(); assert.equal(rv.status, 200, JSON.stringify(r).slice(0, 300)); assert.equal(r.trusted_by, 'grant');
+  const jobs = await q(`SELECT id, type, status, min_tier, title, brief_md FROM jobs WHERE problem_id = $1 AND title LIKE 'Fix %' AND title NOT LIKE 'Fix files%'`, [pid]);
+  assert.equal(jobs.length, 1, JSON.stringify(jobs.map(x => x.title))); assert.deepEqual([jobs[0].type, jobs[0].status, jobs[0].min_tier, jobs[0].title], ['audit', 'queued', 99, 'Fix research/tool.js']);
+  assert.match(jobs[0].brief_md, /> line 1 prints a progress tick to stdout every 30 s/); assert.match(jobs[0].brief_md, new RegExp(`review #${r.review_id} by @${handle}`)); assert.match(jobs[0].brief_md, /"revision": \{ "path": "research\/tool.js"/);
+  // The same path from another review: still one open job.
+  const rv2 = await fetch(base + '/result', {method: 'POST', headers: H, body: JSON.stringify({type: 'review', return_id: Number(mine[1].id), verdict: 'accept', rung: 'measured', notes_md: 'same defect', also_fix: [{path: 'research/tool.js', note: 'same'}], transcript: 't', transcript_approved: true})});
+  assert.equal(rv2.status, 200, await rv2.text());
+  assert.equal((await q(`SELECT id FROM jobs WHERE problem_id = $1 AND title = 'Fix research/tool.js'`, [pid])).length, 1);
 });
