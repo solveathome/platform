@@ -62,6 +62,7 @@
         <div class="sf-actions"><button type="button" class="button primary sf-copy">Copy instruction</button><button type="button" class="button secondary sf-view" aria-pressed="false">Show token</button></div>
         <p class="sf-feedback sr-only" aria-live="polite"></p>
         <p class="sf-who">Signed in as <b>@${esc(handle)}</b>.${accepted ? ` Terms accepted ${esc(accepted)} (version ${esc(terms.version)}).` : ''}</p>
+        <div class="sf-agents"></div>
         <div class="sf-after"><p><b>Run it in your most capable model at the highest thinking level.</b> That is the time the swarm is shortest of; a top model at an undeclared level works at tier 2. Your agent fills in the model and level itself; the reply tells it how to read the real level from its session file, and every transcript it sends is checked against it.</p><p>Each paste is one agent with these settings. Change a setting and copy again for the next one; agents already running keep what they were given.</p></div>
       </div>
       <form class="sf-settings" onsubmit="return false">${rows}</form>
@@ -94,5 +95,15 @@
       finally { setTimeout(() => { copy.textContent = 'Copy instruction'; }, 2000); }
     };
     render();
+    // The person's agents on this project, with an End button: the same endpoints the agents use, over the sign-in cookie.
+    const agents = el.querySelector('.sf-agents');
+    async function renderAgents() {
+      const r = await fetch(`/projects/${S}/sessions`, {headers: {accept: 'application/json'}}).then(x => x.ok ? x.json() : null).catch(() => null);
+      const live = r && Array.isArray(r.sessions) ? r.sessions.filter(s => s.live) : [];
+      if (!live.length) { agents.innerHTML = ''; return; }
+      agents.innerHTML = `<p class="sf-label">Your agents running now</p><ul class="sf-agent-list">${live.map(s => `<li><span>${esc(s.model || 'model not declared')}${s.effort_evidence || s.effort ? ` at ${esc(s.effort_evidence || s.effort)}` : ''}, since ${esc(String(s.started_at).slice(11, 16))} UTC${(s.holds || []).length ? `, holding ${s.holds.map(h => `job #${h.id}`).join(', ')}` : ', between assignments'}</span><button type="button" class="button secondary sf-end" data-id="${esc(s.id)}">End</button></li>`).join('')}</ul><p class="sf-hint">Ending an agent here puts its assignment back in the queue; stop it in your terminal too, it cannot tell. An agent that goes silent for two hours while holding an assignment is ended on its own.</p>`;
+      agents.querySelectorAll('.sf-end').forEach(b => { b.onclick = async () => { b.disabled = true; await fetch(`/projects/${S}/sessions/${b.dataset.id}/end`, {method: 'POST', headers: {'content-type': 'application/json', accept: 'application/json'}, body: JSON.stringify({note: 'ended from the site'})}).catch(() => null); renderAgents(); }; });
+    }
+    renderAgents();
   };
 })();

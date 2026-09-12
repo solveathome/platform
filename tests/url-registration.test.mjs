@@ -118,17 +118,26 @@ test('without X-Model the fetch gets the page, not a session; the page points at
   assert.equal(await sessions(), before);
 });
 
-test('a restarted agent (session-less fetch, same model) replaces the earlier session: it is ended and its assignment goes back to the queue', async () => {
+test('a fresh paste on the same model is a second agent: both sessions live, the first keeps its assignment', async () => {
   const first = await (await get()).json();
-  const r = await get(); const j = await r.json();
-  assert.equal(r.status, 200, JSON.stringify(j).slice(0, 200));
-  assert.notEqual(j.session, first.session, 'a fresh session');
-  const old = await one(`SELECT ended_at FROM sessions WHERE id = $1`, [first.session]);
-  assert.ok(old.ended_at, 'the earlier session is ended');
-  const job = await one(`SELECT status, assigned_session, last_release_note FROM jobs WHERE id = $1`, [first.job_id]);
-  assert.ok(job.status === 'queued' || job.assigned_session === j.session, `old job is ${job.status} held by ${job.assigned_session}`);
-  assert.match(String(job.last_release_note ?? ''), /replaced by a restarted agent/);
-  await end(j.session);
+  const second = await (await get()).json();
+  assert.ok(second.session && second.session !== first.session, 'a second session');
+  assert.notEqual(Number(second.job_id), Number(first.job_id), 'a different assignment');
+  assert.equal((await one(`SELECT ended_at FROM sessions WHERE id = $1`, [first.session])).ended_at, null, 'the first session is untouched');
+  assert.equal((await one(`SELECT assigned_session FROM jobs WHERE id = $1`, [first.job_id])).assigned_session, first.session);
+  assert.match(first.brief_md, /makes no request for 120 minutes is treated as stopped/);
+  await end(first.session); await end(second.session);
+});
+
+test('a session silent beyond the abandonment window while holding a job is ended by the sweep and the job returns', async () => {
+  const gone = await (await get()).json();
+  await q(`UPDATE sessions SET last_seen = now() - interval '3 hours' WHERE id = $1`, [gone.session]);
+  const other = await (await get()).json();   // any /start runs the sweep first
+  assert.ok((await one(`SELECT ended_at FROM sessions WHERE id = $1`, [gone.session])).ended_at, 'the silent session is ended');
+  const job = await one(`SELECT status, assigned_session, last_release_note FROM jobs WHERE id = $1`, [gone.job_id]);
+  assert.ok(job.status === 'queued' || job.assigned_session === other.session, `job is ${job.status} held by ${job.assigned_session}`);
+  assert.match(String(job.last_release_note ?? ''), /abandoned: no request from the agent for 120 minutes/);
+  await end(other.session);
 });
 
 test('time=2h ends the session two hours after registration; the next /start says so', async () => {

@@ -55,7 +55,12 @@ async function project(req: any, res: any, next: any): Promise<void> {
  * Returns the brief as markdown (default) or JSON (Accept: application/json). /job is a silent alias.
  */
 /** Expired assignments go back to the queue. Run on every /start so nothing is stuck behind an agent that vanished. */
+/** A session that holds an assignment and has made no request for this long is treated as gone: agents are reset and restarted, never resumed (Chris, Sep 12 2026). */
+export const ABANDON_AFTER_MIN = Number(process.env.ABANDON_AFTER_MIN ?? 120);   // two hours (Chris, Sep 12)
 async function sweepExpired(problemId: number): Promise<void> {
+  // Abandonment: the session is ended and its assignment goes back to the queue at once, instead of at the job's expiry hours later.
+  const silent = await q<{ id: string; user_id: number; model: string | null }>(`SELECT DISTINCT s.id, s.user_id, s.model FROM sessions s JOIN jobs j ON j.assigned_session = s.id AND j.status = 'assigned' WHERE s.problem_id = $1 AND s.ended_at IS NULL AND s.last_seen < now() - ($2::int * interval '1 minute')`, [problemId, ABANDON_AFTER_MIN]);
+  for (const s of silent) await endSession(s.id, Number(s.user_id), problemId, s.model, `abandoned: no request from the agent for ${ABANDON_AFTER_MIN} minutes`);
   // Jobs made on the spot for one session (an explore brief on the open questions, a person's tangent) die with that session; nothing else should inherit them.
   await q(`UPDATE jobs SET status = 'expired', last_release_note = 'expired with the session it was made for'
            WHERE problem_id = $1 AND status = 'assigned' AND expires_at < now() AND parent_return_id IS NULL AND (title LIKE 'Explore: open questions%' OR title LIKE 'Challenge: %' OR title LIKE 'Direction: %') AND assigned_session IS NOT NULL`, [problemId]);
@@ -97,10 +102,8 @@ async function start(req: any, res: any): Promise<void> {
       if (wantsJson) res.json({ registered: !!member, session: null, orientation_md: md }); else res.type("text/markdown").send(md);
       return;
     }
-    // Agents are never resumed, they are reset and restarted (Chris, Sep 12 2026): a session-less fetch from the same handle and model is
-    // a restart. The earlier live session on this model that still holds an assignment is ended and its assignment goes back to the queue.
-    const stale = await q<{ id: string }>(`SELECT DISTINCT s.id FROM sessions s JOIN jobs j ON j.assigned_session = s.id AND j.status = 'assigned' WHERE s.problem_id = $1 AND s.user_id = $2 AND s.model = $3 AND s.ended_at IS NULL`, [req.project.id, req.user!.id, req.model]);
-    for (const s of stale) await endSession(s.id, req.user!.id, req.project.id, req.model ?? null, "replaced by a restarted agent on the same model");
+    // A fresh paste is a fresh agent, whatever else the handle runs (Chris, Sep 12 2026: many agents of the same model in parallel is a common
+    // case). Nothing here touches other sessions; a stopped agent's session is ended by the abandonment sweep when it falls silent.
     const opts = parseInstruction(req.query ?? {});
     if ("error" in opts) { if (wantsJson) res.status(400).json(opts); else res.status(400).type("text/markdown").send(`# Bad instruction\n\n${opts.error}\n`); return; }
     const opened = await openSession(req, { via: "url", ...opts });
@@ -233,7 +236,7 @@ Your person allowed ${session.max_jobs} assignment(s) in the instruction they ga
     await client.query(`UPDATE sessions SET jobs = jobs + 1, last_seen = now(), last_type = $2, review_streak = CASE WHEN $2 IN ('review','audit') THEN review_streak + 1 ELSE 0 END WHERE id = $1`, [session.id, row.type]);
     await client.query("COMMIT");
     row.expires_at = upd.rows[0].expires_at;
-    const sess = { id: String(session.id), jobs: Number(session.jobs) + 1, max: session.max_jobs === null ? null : Number(session.max_jobs), length: lengthWords(session), disk, maxHours: Number(settings.ai?.max_hours_per_assignment ?? 2), compute: describeOffer(offer), transcriptPreapproved: settings.ai?.transcript_preapproved === true, subagents: settings.ai?.subagents?.allowed === false ? "not allowed" : settings.ai?.subagents?.max_parallel ? `allowed, up to ${settings.ai.subagents.max_parallel} at a time` : "allowed", files: await files.quota(uid).then((f) => ({ left: f.files_left, bytes_left: f.bytes_left, per_day: f.files_per_day })) };
+    const sess = { id: String(session.id), jobs: Number(session.jobs) + 1, max: session.max_jobs === null ? null : Number(session.max_jobs), length: lengthWords(session), disk, abandonAfterMin: ABANDON_AFTER_MIN, maxHours: Number(settings.ai?.max_hours_per_assignment ?? 2), compute: describeOffer(offer), transcriptPreapproved: settings.ai?.transcript_preapproved === true, subagents: settings.ai?.subagents?.allowed === false ? "not allowed" : settings.ai?.subagents?.max_parallel ? `allowed, up to ${settings.ai.subagents.max_parallel} at a time` : "allowed", files: await files.quota(uid).then((f) => ({ left: f.files_left, bytes_left: f.bytes_left, per_day: f.files_per_day })) };
     if (Number(row.release_count ?? 0) > 0) row.prior_claims = await q(`SELECT m.id, u.handle, m.model, m.created_at FROM messages m JOIN users u ON u.id = m.user_id WHERE m.job_id = $1 AND m.kind = 'claim' ORDER BY m.id`, [row.id]);
     let md = renderBrief(row, `${BASE()}/projects/${req.project.slug}`, sess);
     { const note = unservedNote(String(row.brief_md ?? ""), req.project.slug, `${BASE()}/projects/${req.project.slug}`); if (note) md = md.replace(/\n## /, () => `\n${note}## `); }

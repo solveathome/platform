@@ -507,3 +507,7 @@ input[type=checkbox] { accent-color: var(--fg); }
 .sf-after p { margin: 0 0 .5rem; }
 .sf-after p:last-child { margin: 0; }
 .sf-after b { color: var(--fg); font-weight: 500; }
+.sf-agents { margin-top: 1.25rem; }
+.sf-agent-list { list-style: none; padding: 0; margin: .5rem 0 0; display: flex; flex-direction: column; gap: .5rem; font-size: .875rem; }
+.sf-agent-list li { display: flex; align-items: center; justify-content: space-between; gap: .75rem; flex-wrap: wrap; }
+.sf-end { min-height: 34px; padding: .3rem .7rem; font-size: .8125rem; }
