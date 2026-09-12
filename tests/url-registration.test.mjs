@@ -209,3 +209,46 @@ test('the transcript\'s recorded thinking level corrects a wrong declaration and
   assert.doesNotMatch(next.brief_md ?? next.orientation_md ?? '', /tier 2 for this session/);
   await end(j.session);
 });
+
+
+test('a summary in place of the transcript is accepted with a warning and no tokens; the real log can be resubmitted and corrects the record', async () => {
+  const reg = await fetch(base + '/start?share=0', {headers: {authorization: `Bearer ${token}`, accept: 'application/json', 'x-model': 'claude-fable-5-1', 'x-effort': 'high'}});
+  const j = await reg.json(); assert.equal(reg.status, 200, JSON.stringify(j).slice(0, 300));
+  assert.match(j.brief_md, /Copilot CLI keeps `events\.jsonl`/);
+  assert.match(j.brief_md, /A summary is accepted and stays on the record, but it is recorded as "not a session log"/);
+  const summary = [
+    JSON.stringify({type: 'activity_summary', notice: 'Task-specific activity summary, not a native conversation transcript.'}),
+    JSON.stringify({type: 'activity_summary', action: 'Read the page.'}),
+    JSON.stringify({type: 'activity_summary', action: 'Wrote the report.'}),
+  ].join('\n');
+  const H = {authorization: `Bearer ${token}`, accept: 'application/json', 'content-type': 'application/json', 'x-model': 'claude-fable-5-1', 'x-effort': 'high', 'x-session': j.session};
+  const r = await fetch(base + '/result', {method: 'POST', headers: H, body: JSON.stringify({job_id: j.job_id, report_md: 'Found the page.', transcript: summary, transcript_approved: true, author_rung: 'measured'})});
+  const t = await r.json(); assert.equal(r.status, 200, JSON.stringify(t).slice(0, 300));
+  assert.equal(t.tokens.log, 'summary'); assert.equal(t.tokens.source, 'none');
+  const w = t.warnings.find(x => /not a session log: it reads as a summary you wrote/.test(x)); assert.ok(w, JSON.stringify(t.warnings));
+  assert.match(w, /credited nothing for the tokens/); assert.match(w, new RegExp(`POST .*/return/${t.return_id}/transcript`)); assert.match(w, /session-state\/<session-id>\/events\.jsonl/);
+  const page = await (await fetch(base + `/return/${t.return_id}`, {headers: {accept: 'text/html'}})).text();
+  assert.match(page, /not a session log/);
+  // Someone else's handle cannot resubmit.
+  const other = await one(`INSERT INTO users (github_id, handle, terms_version, terms_accepted_at) VALUES ($1,$2,$3,now()) RETURNING id`, [900_000_000 + Math.floor(Math.random() * 1e8), `${tag}-other`, TERMS_VERSION]);
+  const otherToken = await issueToken(Number(other.id), 'url-test');
+  const forbidden = await fetch(base + `/return/${t.return_id}/transcript`, {method: 'POST', headers: {...H, authorization: `Bearer ${otherToken}`}, body: JSON.stringify({transcript: summary})});
+  assert.equal(forbidden.status, 403);
+  // Another summary is refused; the real log is taken and corrects tokens, effort and the record.
+  const again = await fetch(base + `/return/${t.return_id}/transcript`, {method: 'POST', headers: H, body: JSON.stringify({transcript: summary})});
+  assert.equal(again.status, 400); assert.match((await again.json()).error, /still not a session log \(summary\)/);
+  const log = [
+    JSON.stringify({type: 'user', message: {content: 'go'}}),
+    JSON.stringify({type: 'assistant', effort: 'high', message: {id: 'm1', model: 'claude-fable-5-1', usage: {input_tokens: 1200, output_tokens: 300, cache_read_input_tokens: 40, cache_creation_input_tokens: 0}}}),
+  ].join('\n');
+  const wrongModel = await fetch(base + `/return/${t.return_id}/transcript`, {method: 'POST', headers: H, body: JSON.stringify({transcript: log.replace('claude-fable-5-1', 'claude-opus-5')})});
+  assert.equal(wrongModel.status, 400); assert.match((await wrongModel.json()).error, /records claude-opus-5 but return #\d+ is on the record as claude-fable-5-1/);
+  const ok = await fetch(base + `/return/${t.return_id}/transcript`, {method: 'POST', headers: H, body: JSON.stringify({transcript: log})});
+  const o = await ok.json(); assert.equal(ok.status, 200, JSON.stringify(o).slice(0, 300));
+  assert.equal(o.log, 'claude-code'); assert.equal(o.tokens.input, 1200); assert.equal(o.tokens.output, 300); assert.equal(o.tokens.cache_read, 40);
+  const row = await one(`SELECT tokens, transcript, transcript_resubmitted_at, effort FROM returns WHERE id = $1`, [t.return_id]);
+  assert.equal(row.tokens.log, 'claude-code'); assert.equal(row.transcript, log); assert.ok(row.transcript_resubmitted_at); assert.equal(row.effort, 'high');
+  const page2 = await (await fetch(base + `/return/${t.return_id}`, {headers: {accept: 'text/html'}})).text();
+  assert.doesNotMatch(page2, /not a session log/); assert.match(page2, /resubmitted \d{4}-\d{2}-\d{2}/);
+  await end(j.session);
+});

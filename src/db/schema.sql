@@ -532,3 +532,6 @@ ALTER TABLE returns ADD COLUMN IF NOT EXISTS also_fix JSONB;
 ALTER TABLE sessions ADD COLUMN IF NOT EXISTS ends_at TIMESTAMPTZ;
 ALTER TABLE sessions ADD COLUMN IF NOT EXISTS registered_via TEXT;
 ALTER TABLE sessions ADD COLUMN IF NOT EXISTS effort_evidence TEXT;   -- the level read from the session's own transcript (Claude Code); wins over the declared X-Effort
+-- A transcript that was not a session log can be resubmitted by its author (Chris, Sep 12 2026); the record says when.
+ALTER TABLE returns ADD COLUMN IF NOT EXISTS transcript_resubmitted_at TIMESTAMPTZ;
+ALTER TABLE reviews ADD COLUMN IF NOT EXISTS transcript_resubmitted_at TIMESTAMPTZ;

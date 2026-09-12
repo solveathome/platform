@@ -2,12 +2,35 @@
  * Token accounting (scope Q47). Counted server-side from the transcript every return must attach.
  * Claude Code JSONL: assistant entries carry message.usage {input_tokens, output_tokens, cache_creation_input_tokens, cache_read_input_tokens} and message.model.
  * Codex JSONL: events carrying usage / token_count fields (see parseCodex). Self-reported numbers are kept alongside and never override a parsed transcript.
+ * GitHub Copilot CLI events.jsonl (Sep 12 2026): `model.model_call_success` lines carry data.responseUsage {prompt_tokens, completion_tokens,
+ * prompt_tokens_details.cached_tokens}; the CLI does not write one for every turn, so the count is what the log has. `log` names the
+ * kind of record a transcript is; a summary the agent wrote is accepted but is not a session log and counts nothing.
  */
 import { canonicalModel, parseEffort } from "./model-id.js";
 
 /** No single return spends more than this per field; anything above is a forged or broken transcript, not usage. */
 export const MAX_TOKENS_PER_FIELD = 50_000_000;
-export type Tokens = { input: number; output: number; cache_read: number; cache_write: number; entries: number; source: "claude-jsonl" | "codex-jsonl" | "reported" | "none"; models?: Record<string, number> };
+export type LogKind = "claude-code" | "codex" | "copilot" | "summary" | "unknown";
+export type Tokens = { input: number; output: number; cache_read: number; cache_write: number; entries: number; source: "claude-jsonl" | "codex-jsonl" | "copilot-jsonl" | "reported" | "none"; models?: Record<string, number>; log?: LogKind };
+export const SESSION_LOG_KINDS: LogKind[] = ["claude-code", "codex", "copilot"];
+export const isSessionLog = (t: { log?: LogKind } | null | undefined): boolean => !!t?.log && SESSION_LOG_KINDS.includes(t.log);
+
+/**
+ * What kind of record a transcript is, from the line shapes: a Claude Code session file, a Codex rollout, a Copilot CLI events log, or
+ * neither: a summary the agent wrote (it usually says so: "activity_summary", "not a native transcript") or something unrecognised.
+ */
+export function logKind(text: string): LogKind {
+  const t = String(text ?? "");
+  if (/"type":\s*"(?:assistant\.message|assistant\.turn_start|tool\.execution_(?:start|complete)|model\.model_call_success)"/.test(t)) return "copilot";
+  if (/"type":\s*"(?:token_count|token_usage_record|response_item|event_msg|session_meta|turn_context)"/.test(t) || /"(?:last_token_usage|total_token_usage|thread_token_usage)"/.test(t)) return "codex";
+  if (/"type":\s*"(?:assistant|user)"\s*,/.test(t) && /"message"\s*:\s*\{/.test(t)) return "claude-code";
+  if (/"type":\s*"activity_summary"|not a (?:native )?(?:conversation )?transcript|activity summary/i.test(t)) return "summary";
+  const jsonLines = t.split("\n").filter((l) => l.trim().startsWith("{")).length;
+  return jsonLines < 3 ? "summary" : "unknown";
+}
+
+/** Where each harness keeps the session log, for the brief, the orientation and the intake warning. */
+export const LOG_LOCATIONS = "Claude Code: `~/.claude/projects/<encoded-cwd>/<session>.jsonl` (newest: `ls -t ~/.claude/projects/$(pwd | tr / -)/*.jsonl | head -1`). Codex: `~/.codex/sessions/<year>/<month>/<day>/rollout-*.jsonl`. GitHub Copilot CLI: `~/.copilot/session-state/<session-id>/events.jsonl` (under `$COPILOT_HOME` if you relocated it; newest: `ls -td ~/.copilot/session-state/*/ | head -1`).";
 
 /** How much of a transcript's tool output was replaced by omission notes (issue #46): outputs counted by their JSONL types, omissions by bracketed notes saying "omitted". */
 export function omissionShare(text: string): { outputs: number; omitted: number; share: number } {
@@ -41,6 +64,15 @@ export function parseTranscript(text: string, reported?: any): Tokens {
       const m = canonicalModel(d.message?.model); if (m) t.models![m] = (t.models![m] ?? 0) + Number(u.output_tokens ?? 0);
       continue;
     }
+    // Copilot CLI: usage sits on model.model_call_success lines; the model that answered is on assistant.message lines (kept so X-Model can be checked).
+    if (d?.type === "model.model_call_success" && d?.data?.responseUsage && typeof d.data.responseUsage === "object") {
+      const ru = d.data.responseUsage; const cached = Number(ru.prompt_tokens_details?.cached_tokens ?? 0);
+      t.input += Math.max(0, Number(ru.prompt_tokens ?? 0) - cached); t.cache_read += cached; t.output += Number(ru.completion_tokens ?? 0);
+      t.entries++; t.source = "copilot-jsonl";
+      const m = canonicalModel(d.data.copilotUsage?.token_details?.find((x: any) => x?.model)?.model) || "copilot"; t.models![m] = (t.models![m] ?? 0) + Number(ru.completion_tokens ?? 0);
+      continue;
+    }
+    if (d?.type === "assistant.message" && d?.data?.model) { const m = canonicalModel(d.data.model); if (m) t.models![m] = t.models![m] ?? 0; continue; }
     consider(d?.payload?.info?.total_token_usage); consider(d?.info?.total_token_usage); consider(d?.values?.info?.total_token_usage);
     consider(d?.values?.thread_token_usage); consider(d?.thread_token_usage);
     if (hasRecords && d?.type !== "token_usage_record" && (d?.payload?.info?.last_token_usage || d?.info?.last_token_usage || d?.values?.info?.last_token_usage)) continue;   // the same turn is in a token_usage_record line
@@ -59,6 +91,7 @@ export function parseTranscript(text: string, reported?: any): Tokens {
   }
   for (const k of ["input", "output", "cache_read", "cache_write"] as const) t[k] = Math.min(Math.max(0, Number.isFinite(t[k]) ? t[k] : 0), MAX_TOKENS_PER_FIELD);
   for (const k of Object.keys(t.models ?? {})) t.models![k] = Math.min(Math.max(0, t.models![k] || 0), MAX_TOKENS_PER_FIELD);
+  t.log = logKind(text);
   return t;
 }
 
@@ -90,7 +123,7 @@ export function total(t: Tokens): number { return t.input + t.output + t.cache_r
 /**
  * The thinking level a Claude Code session ran at, from its own record (Sep 12 2026): every assistant line of the session JSONL carries a
  * top-level `effort`. The last assistant line wins (a person can change it mid-session). The model itself does not know its level and
- * guesses when asked, so this is the evidence the server trusts over the declared X-Effort. Codex transcripts carry none: null.
+ * guesses when asked, so this is the evidence the server trusts over the declared X-Effort. Codex and Copilot CLI logs carry none: null.
  */
 export function effortFromTranscript(text: string): string | null {
   let last: string | null = null;
