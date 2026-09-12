@@ -6,14 +6,20 @@
  * prompt_tokens_details.cached_tokens}; the CLI does not write one for every turn, so the count is what the log has. `log` names the
  * kind of record a transcript is; a summary the agent wrote is accepted but is not a session log and counts nothing.
  */
+import { createHash } from "node:crypto";
 import { canonicalModel, parseEffort } from "./model-id.js";
+
+/** The key of a usage entry (Chris, Sep 12 2026: a usage entry counts once per person): the harness's message id when the line carries one, else the line itself. */
+const lineKey = (s: string): string => "l:" + createHash("sha1").update(s).digest("hex").slice(0, 16);
 
 /** No single return spends more than this per field; anything above is a forged or broken transcript, not usage. */
 export const MAX_TOKENS_PER_FIELD = 50_000_000;
 export type LogKind = "claude-code" | "codex" | "copilot" | "opencode" | "custom" | "withheld" | "summary" | "unknown";
 /** A transcript that is not the assignment's own (issue #55): what it names or when it ends, in words for the agent and the page. */
 export type Mismatch = { reason: string; job: number; jobs_named?: number[]; ends_at?: string };
-export type Tokens = { input: number; output: number; cache_read: number; cache_write: number; entries: number; source: "claude-jsonl" | "codex-jsonl" | "copilot-jsonl" | "opencode-jsonl" | "custom-jsonl" | "reported" | "none"; models?: Record<string, number>; log?: LogKind; mismatch?: Mismatch };
+/** Usage entries of this transcript that were already counted on the person's earlier returns or reviews, and where. */
+export type AlreadyCounted = { entries: number; of: number; on: string[] };
+export type Tokens = { input: number; output: number; cache_read: number; cache_write: number; entries: number; source: "claude-jsonl" | "codex-jsonl" | "copilot-jsonl" | "opencode-jsonl" | "custom-jsonl" | "reported" | "none"; models?: Record<string, number>; log?: LogKind; mismatch?: Mismatch; already_counted?: AlreadyCounted };
 
 /**
  * The assignments a transcript names: the brief's title line ("# solveathome job #N", the GET /start result) and the job_id the agent
@@ -96,8 +102,15 @@ export function omissionShare(text: string): { outputs: number; omitted: number;
   return { outputs, omitted, share: outputs ? Math.min(1, omitted / outputs) : 0 };
 }
 
-export function parseTranscript(text: string, reported?: any): Tokens {
+export function parseTranscript(text: string, reported?: any): Tokens { return parseTranscriptWithKeys(text, reported).tokens; }
+/**
+ * The count plus the key of every counted usage entry, so the caller can record them per person and pass the ones already on record
+ * as `exclude`: those entries are skipped (listed in `skipped`), and the self-reported fallback never fills in for skipped entries.
+ */
+export function parseTranscriptWithKeys(text: string, reported?: any, exclude?: Set<string>): { tokens: Tokens; keys: string[]; skipped: string[] } {
   const t: Tokens = { input: 0, output: 0, cache_read: 0, cache_write: 0, entries: 0, source: "none", models: {} };
+  const keys: string[] = [], skipped: string[] = [];
+  const take = (key: string): boolean => { if (exclude?.has(key)) { skipped.push(key); return false; } keys.push(key); return true; };
   const lines = text.split("\n");
   // Claude Code writes one JSONL line per content block of an assistant message, each repeating the same message.usage: count a message id once.
   const seen = new Set<string>(); lastCodex = "";
@@ -114,6 +127,7 @@ export function parseTranscript(text: string, reported?: any): Tokens {
     if (u && typeof u === "object" && (u.input_tokens !== undefined || u.output_tokens !== undefined)) {
       const id = d.message?.id ? String(d.message.id) : null;
       if (id) { if (seen.has(id)) continue; seen.add(id); }
+      if (!take(id ? "cc:" + id : lineKey(s))) continue;
       t.input += Number(u.input_tokens ?? 0); t.output += Number(u.output_tokens ?? 0);
       t.cache_read += Number(u.cache_read_input_tokens ?? 0); t.cache_write += Number(u.cache_creation_input_tokens ?? 0);
       t.entries++; t.source = "claude-jsonl";
@@ -125,6 +139,7 @@ export function parseTranscript(text: string, reported?: any): Tokens {
     if (d?.type === "solveathome.turn") {
       const u = d.usage;
       if (u && typeof u === "object" && (u.input !== undefined || u.output !== undefined)) {
+        if (!take(lineKey(s))) continue;
         t.input += Number(u.input ?? 0); t.output += Number(u.output ?? 0); t.cache_read += Number(u.cache_read ?? 0); t.cache_write += Number(u.cache_write ?? 0);
         t.entries++; t.source = "custom-jsonl";
         const m = canonicalModel(d.model) || Object.keys(t.models ?? {})[0] || "custom"; t.models![m] = (t.models![m] ?? 0) + Number(u.output ?? 0);
@@ -133,6 +148,7 @@ export function parseTranscript(text: string, reported?: any): Tokens {
     }
     // Copilot CLI: usage sits on model.model_call_success lines; the model that answered is on assistant.message lines (kept so X-Model can be checked).
     if (d?.type === "model.model_call_success" && d?.data?.responseUsage && typeof d.data.responseUsage === "object") {
+      if (!take(lineKey(s))) continue;
       const ru = d.data.responseUsage; const cached = Number(ru.prompt_tokens_details?.cached_tokens ?? 0);
       t.input += Math.max(0, Number(ru.prompt_tokens ?? 0) - cached); t.cache_read += cached; t.output += Number(ru.completion_tokens ?? 0);
       t.entries++; t.source = "copilot-jsonl";
@@ -143,6 +159,7 @@ export function parseTranscript(text: string, reported?: any): Tokens {
     // OpenCode: each assistant message carries tokens {input, output, reasoning, cache: {read, write}} and modelID; step-finish lines repeat them and are skipped.
     if (d?.role === "assistant" && d?.tokens && typeof d.tokens === "object" && (d.modelID !== undefined || d.providerID !== undefined)) {
       const id = d.id ? String(d.id) : null; if (id) { if (seen.has(id)) continue; seen.add(id); }
+      if (!take(id ? "oc:" + id : lineKey(s))) continue;
       const tk = d.tokens; const out = Number(tk.output ?? 0) + Number(tk.reasoning ?? 0);
       t.input += Number(tk.input ?? 0); t.output += out; t.cache_read += Number(tk.cache?.read ?? 0); t.cache_write += Number(tk.cache?.write ?? 0);
       t.entries++; t.source = "opencode-jsonl";
@@ -153,6 +170,7 @@ export function parseTranscript(text: string, reported?: any): Tokens {
     consider(d?.values?.thread_token_usage); consider(d?.thread_token_usage);
     if (hasRecords && d?.type !== "token_usage_record" && (d?.payload?.info?.last_token_usage || d?.info?.last_token_usage || d?.values?.info?.last_token_usage)) continue;   // the same turn is in a token_usage_record line
     const c = codexUsage(d);
+    if (c && !take(lineKey(s))) continue;
     if (c) { t.input += c.input; t.output += c.output; t.cache_read += c.cache_read; t.cache_write += c.cache_write; t.entries++; t.source = "codex-jsonl"; const m = canonicalModel(d?.payload?.model ?? d?.model ?? d?.values?.model) || "codex"; t.models![m] = (t.models![m] ?? 0) + c.output; }
   }
   if (cumulative && t.source === "codex-jsonl") {
@@ -161,14 +179,14 @@ export function parseTranscript(text: string, reported?: any): Tokens {
     t.input = Math.min(t.input, Math.max(0, Number(cumulative.input_tokens ?? 0) - cached)); t.cache_read = Math.min(t.cache_read, cached); t.output = Math.min(t.output, Number(cumulative.output_tokens ?? 0)); t.cache_write = Math.min(t.cache_write, Number(cumulative.cache_write_input_tokens ?? 0));
     const keys = Object.keys(t.models ?? {}); if (keys.length === 1) t.models![keys[0]] = t.output;
   }
-  if (t.entries === 0 && reported && typeof reported === "object") {
+  if (t.entries === 0 && skipped.length === 0 && reported && typeof reported === "object") {
     t.input = Number(reported.input ?? 0); t.output = Number(reported.output ?? 0); t.cache_read = Number(reported.cache_read ?? 0); t.cache_write = Number(reported.cache_write ?? 0);
     t.source = (t.input || t.output) ? "reported" : "none";
   }
   for (const k of ["input", "output", "cache_read", "cache_write"] as const) t[k] = Math.min(Math.max(0, Number.isFinite(t[k]) ? t[k] : 0), MAX_TOKENS_PER_FIELD);
   for (const k of Object.keys(t.models ?? {})) t.models![k] = Math.min(Math.max(0, t.models![k] || 0), MAX_TOKENS_PER_FIELD);
   t.log = logKind(text);
-  return t;
+  return { tokens: t, keys, skipped };
 }
 
 /**

@@ -1,7 +1,23 @@
 import assert from 'node:assert/strict';
 import {test} from 'node:test';
 // Codex logs (issue #49): the thread's running total is a ceiling, never the credit; the same turn logged in two shapes is counted once.
-const {parseTranscript, effortFromTranscript, logKind, isSessionLog, assignmentMismatch, jobsNamed, logEndsAt} = await import('../src/lib/tokens.ts');
+const {parseTranscript, parseTranscriptWithKeys, effortFromTranscript, logKind, isSessionLog, assignmentMismatch, jobsNamed, logEndsAt} = await import('../src/lib/tokens.ts');
+
+test('a usage entry counts once: every counted entry has a key (the message id, else the line), excluded keys are skipped, and the self-reported fallback never fills in for them', () => {
+  const cc = (id, out) => JSON.stringify({type: 'assistant', message: {id, model: 'claude-fable-5-1', usage: {input_tokens: 100, output_tokens: out}}});
+  const one = parseTranscriptWithKeys([cc('msg_a', 10), cc('msg_a', 10), cc('msg_b', 20)].join('\n'));
+  assert.deepEqual(one.keys, ['cc:msg_a', 'cc:msg_b']); assert.equal(one.tokens.output, 30); assert.deepEqual(one.skipped, []);
+  const two = parseTranscriptWithKeys([cc('msg_a', 10), cc('msg_b', 20), cc('msg_c', 40)].join('\n'), {input: 9, output: 9}, new Set(['cc:msg_a', 'cc:msg_b']));
+  assert.deepEqual([two.keys, two.skipped], [['cc:msg_c'], ['cc:msg_a', 'cc:msg_b']]); assert.equal(two.tokens.output, 40); assert.equal(two.tokens.entries, 1);
+  const all = parseTranscriptWithKeys([cc('msg_a', 10)].join('\n'), {input: 9, output: 9}, new Set(['cc:msg_a']));
+  assert.equal(all.tokens.output, 0); assert.equal(all.tokens.input, 0, 'nothing new: the reported numbers do not fill in'); assert.equal(all.tokens.source, 'none'); assert.equal(all.tokens.entries, 0); assert.deepEqual(all.skipped, ['cc:msg_a']);
+  const codex = parseTranscriptWithKeys([rec(148, 52592, 51072), rec(1133, 54274, 52352)].join('\n'));
+  assert.equal(codex.keys.length, 2); assert.ok(codex.keys.every(k => /^l:[0-9a-f]{16}$/.test(k)), 'Codex entries carry no id: the line is the key');
+  assert.equal(parseTranscriptWithKeys([rec(148, 52592, 51072), rec(1133, 54274, 52352)].join('\n'), undefined, new Set([codex.keys[0]])).tokens.output, 1133);
+  const oc = JSON.stringify({id: 'msg_1', role: 'assistant', tokens: {input: 5, output: 7, reasoning: 1, cache: {read: 0, write: 0}}, modelID: 'x', providerID: 'y'});
+  assert.deepEqual(parseTranscriptWithKeys(oc).keys, ['oc:msg_1']);
+  assert.equal(parseTranscript('t').entries, 0);
+});
 
 const cum = (out, inp, cached) => JSON.stringify({type: 'event_msg', payload: {type: 'token_count', info: {total_token_usage: {input_tokens: inp, cached_input_tokens: cached, cache_write_input_tokens: 0, output_tokens: out, total_tokens: inp + out}, last_token_usage: {input_tokens: 52592, cached_input_tokens: 51072, cache_write_input_tokens: 0, output_tokens: 148, total_tokens: 52740}}}});
 const rec = (out, inp, cached) => JSON.stringify({type: 'token_usage_record', payload: {usage: {input_tokens: inp, cached_input_tokens: cached, cache_write_input_tokens: 0, output_tokens: out, total_tokens: inp + out}, thread_token_usage: {input_tokens: 7374324, cached_input_tokens: 7101184, output_tokens: 51309}}});

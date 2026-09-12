@@ -551,3 +551,15 @@ CREATE TABLE IF NOT EXISTS harness_reports (
   resolved_at TIMESTAMPTZ,
   note TEXT
 );
+
+-- A usage entry counts once per person (Chris, Sep 12 2026: "clean up the highscore"): the same session log sent on two returns, or a
+-- superset of an earlier one, credited its tokens twice (bjj 169/170, natepac 105/107). Every counted entry's key is recorded here at
+-- intake; an entry already on record for the handle is skipped and the reply says so. The backfill rebuilds the table from scratch.
+CREATE TABLE IF NOT EXISTS counted_entries (
+  user_id     BIGINT NOT NULL REFERENCES users(id),
+  key         TEXT NOT NULL,                 -- cc:<message id> | oc:<message id> | l:<sha1 of the line> for logs whose entries carry no id
+  source_type TEXT NOT NULL,                 -- return | review
+  source_id   BIGINT NOT NULL,
+  PRIMARY KEY (user_id, key)
+);
+CREATE INDEX IF NOT EXISTS counted_entries_source_idx ON counted_entries (source_type, source_id);

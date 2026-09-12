@@ -53,6 +53,7 @@ after(async () => {
   await q(`DELETE FROM channels WHERE problem_id = $1`, [pid]);
   await q(`DELETE FROM lanes WHERE problem_id = $1`, [pid]);
   await q(`DELETE FROM problems WHERE id = $1`, [pid]);
+  await q(`DELETE FROM counted_entries WHERE user_id = $1`, [uid]);
   await q(`DELETE FROM tokens WHERE user_id = $1`, [uid]);
   await q(`DELETE FROM reputation WHERE user_id = $1`, [uid]);
   await q(`DELETE FROM users WHERE id = $1`, [uid]);
@@ -313,4 +314,29 @@ test('issue #55: a transcript from another assignment is accepted, labelled, cou
   assert.equal(row.tokens.mismatch, undefined); assert.equal(row.tokens.output, 500);
   assert.doesNotMatch(await (await fetch(base + `/return/${t.return_id}`, {headers: {accept: 'text/html'}})).text(), /from another assignment/);
   await end(j.session);
+});
+
+test('a usage entry counts once per person: the same session log on a second return counts only its new entries, the reply and the page say so, and a resubmit releases its own entries first', async () => {
+  const H = (session) => ({authorization: `Bearer ${token}`, accept: 'application/json', 'content-type': 'application/json', 'x-model': 'claude-fable-5-1', 'x-effort': 'high', 'x-session': session});
+  const cc = (id, jobId, out) => JSON.stringify({type: 'assistant', effort: 'high', timestamp: new Date().toISOString(), message: {id, model: 'claude-fable-5-1', usage: {input_tokens: 100, output_tokens: out}, content: [{type: 'tool_use', input: {body: JSON.stringify({job_id: jobId})}}]}});
+  const a = await (await fetch(base + '/start?share=0', {headers: {authorization: `Bearer ${token}`, accept: 'application/json', 'x-model': 'claude-fable-5-1', 'x-effort': 'high'}})).json();
+  const first = [cc(`${tag}-m1`, a.job_id, 10), cc(`${tag}-m2`, a.job_id, 20)].join('\n');
+  const r1 = await (await fetch(base + '/result', {method: 'POST', headers: H(a.session), body: JSON.stringify({job_id: a.job_id, report_md: 'One.', transcript: first, transcript_approved: true, author_rung: 'measured'})})).json();
+  assert.equal(r1.tokens.output, 30); assert.equal(r1.tokens.already_counted, undefined);
+  assert.equal(Number((await one(`SELECT count(*) AS c FROM counted_entries WHERE source_type = 'return' AND source_id = $1`, [r1.return_id])).c), 2);
+  // The next assignment's return carries the whole session so far plus one new turn: only the new turn counts.
+  const b = await (await fetch(base + '/start', {headers: {...H(a.session)}})).json();
+  assert.ok(b.job_id && Number(b.job_id) !== Number(a.job_id), JSON.stringify(b).slice(0, 200));
+  const second = first + '\n' + cc(`${tag}-m3`, b.job_id, 40);
+  const r2 = await (await fetch(base + '/result', {method: 'POST', headers: H(a.session), body: JSON.stringify({job_id: b.job_id, report_md: 'Two.', transcript: second, transcript_approved: true, author_rung: 'measured'})})).json();
+  assert.equal(r2.tokens.output, 40, JSON.stringify(r2.tokens)); assert.equal(r2.tokens.entries, 1);
+  assert.deepEqual(r2.tokens.already_counted, {entries: 2, of: 3, on: [`return #${r1.return_id}`]});
+  const w = r2.warnings.find(x => /already counted/.test(x)); assert.ok(w, JSON.stringify(r2.warnings));
+  assert.match(w, new RegExp(`2 of 3 usage entries in this transcript were already counted on your return #${r1.return_id}`)); assert.match(w, /only the 1 new one\(s\) count here \(140 tokens\)/);
+  assert.match(await (await fetch(base + `/return/${r2.return_id}`, {headers: {accept: 'text/html'}})).text(), new RegExp(`counted once</b>: 2 of 3 usage entries were already counted on return #${r1.return_id}`));
+  // The same log again as a resubmit of the second return: its own entry is released first, so it counts the same 40, not 0.
+  const rs = await (await fetch(base + `/return/${r2.return_id}/transcript`, {method: 'POST', headers: H(a.session), body: JSON.stringify({transcript: second})})).json();
+  assert.equal(rs.tokens.output, 40, JSON.stringify(rs)); assert.deepEqual(rs.tokens.already_counted, {entries: 2, of: 3, on: [`return #${r1.return_id}`]});
+  assert.equal(Number((await one(`SELECT count(*) AS c FROM counted_entries WHERE user_id = $1 AND key LIKE 'cc:' || $2 || '%'`, [uid, tag])).c), 3, 'three entries on record, each once');
+  await end(a.session);
 });
