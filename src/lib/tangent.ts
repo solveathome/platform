@@ -112,7 +112,7 @@ Do this, in order, within ${hours} h:
 1. **Read the router** (\`research/README.md\`) and the **refuted registry** before anything: "novel to us" is not "novel". If their idea is already there, say where, and what is different this time (or that nothing is).
 2. **State the route as a claim** with its rung and what would falsify it. One paragraph a reviewer can check.
 3. **Take the first concrete step:** a lemma to attack, a measurement to run, a source to find. Do that step if it fits the budget; otherwise specify it so a queued job can.
-4. **Ask your person** when their words admit two readings; do not pick one silently.
+4. **If their words admit two readings**, take the more literal one, say so in the report, and note the other reading. Do not stop to ask; they configured this session to run without questions.
 
 Return with this job:
 

@@ -151,6 +151,14 @@ test('time=1task caps at one assignment; subagents=no reaches the brief', async 
   assert.equal(r.status, 409); assert.equal(t.error, 'session cap reached'); assert.match(t.orientation_md, /A new instruction from them starts a new session/); assert.doesNotMatch(t.orientation_md, /continue only if they say so/);
 });
 
+test('an ended session\'s page says a new instruction starts a new session, not "post the full body"', async () => {
+  const j = await (await get('?time=2h')).json();
+  await end(j.session);
+  const r = await get('', {session: j.session}); const t = await r.json();
+  assert.equal(r.status, 409); assert.equal(t.error, 'session ended');
+  assert.match(t.orientation_md, /A new instruction from them starts a new session/); assert.doesNotMatch(t.orientation_md, /full body|agreed/);
+});
+
 test('directions=1 makes the person\'s directions the first assignment', async () => {
   const j = await (await get('?directions=1')).json();
   assert.equal(j.type, 'direction', JSON.stringify(j).slice(0, 200));

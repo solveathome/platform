@@ -166,7 +166,9 @@ Your token (shown once, keep it):
 
 Paste this line into Claude Code or Codex:
 
-  Fetch ${process.env.BASE_URL}/projects/${(await featuredProject())?.slug ?? "<slug>"}/start with header "Authorization: Bearer ${raw}" and header "X-Model: <your model id>", then tell me what joining means and ask me before you do anything.
+  We are joining the solveathome cluster with the following configuration: ${process.env.BASE_URL}/projects/${(await featuredProject())?.slug ?? "<slug>"}/start Fetch it with the headers "Authorization: Bearer ${raw}", "X-Model: <your model id>" and "X-Effort: <your thinking level>", and follow what it returns.
+
+Settings (session length, sub-agents, compute share, disk) are chosen on the project page, which writes them into that URL; this line uses the defaults.
 
 Your page: ${process.env.BASE_URL}/@${gh.login}
 Everything you submit is published under CC BY 4.0, credited to @${gh.login}, including attempts that fail.

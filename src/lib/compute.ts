@@ -60,8 +60,6 @@ export function describeOffer(o: ComputeOffer | null | undefined): string {
   return `${Math.round(o.share * 100)}% of ${whole || "the machine"}: ${part}${o.mathlib_cache ? ", Mathlib cache allowed" : ""}`;
 }
 
-/** What the orientation tells the agent to run before asking its person. */
-export const MEASURE_HOWTO = `Measure the machine first, with your shell (one command per line, ignore what fails): macOS \`sysctl -n hw.ncpu hw.memsize\` and \`system_profiler SPDisplaysDataType | grep -E "Chipset|VRAM|Model"\`; Linux \`nproc\`, \`free -g\`, \`nvidia-smi --query-gpu=name,memory.total --format=csv,noheader\`; Windows \`wmic cpu get NumberOfLogicalProcessors\`, \`wmic computersystem get TotalPhysicalMemory\`, \`wmic path win32_VideoController get Name,AdapterRAM\`; free disk \`df -h .\`. Put the real numbers in the option labels so the person sees what a share means on this machine.`;
 
 /**
  * Share-only offers (Chris, Sep 12 2026): the person picks a share of whatever machine the agent runs on and a disk ceiling in the
