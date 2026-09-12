@@ -218,6 +218,22 @@ async function start(req: any, res: any): Promise<void> {
       const pend = pslug ? await q(`SELECT r.id, r.revision_sha, u.handle, r.created_at FROM returns r JOIN users u ON u.id = r.user_id WHERE r.problem_id = $1 AND lower(r.paper_slug) = lower($2) AND r.type = 'audit' AND r.status = 'pending' AND r.id <> coalesce($3, 0) ORDER BY r.id DESC LIMIT 3`, [req.project.id, pslug, null]) : [];
       if (pend.length) md += `\n\n## Pending revisions of this paper\n\nAnother audit of this paper is under review: ${pend.map((p: any) => `return #${p.id} by @${p.handle} (${BASE()}/projects/${req.project.slug}/return/${p.id}${p.revision_sha ? `, revised text ${BASE()}/files/${p.revision_sha}` : ""})`).join("; ")}. Read it first and build on it: audit the revised text, cite the return, and do not redo what it already fixed.`;
     }
+    // Review briefs are written at intake and can go stale: a brief written before the #39 fix carries the bound-script paragraph for a
+    // documents-only patch; a duplicate can land after the brief was written (issue #53). Both are read from the record at serve time.
+    if (row.type === "review" && (row as any).parent_return_id) {
+      const pr = await one<{ id: string; duplicate_of: string | null; patch_scripts: boolean | null }>(`SELECT r.id, r.duplicate_of, (r.patch ~ '(^|\\n)(\\+\\+\\+|---) [^\\n]*\\.(js|mjs|cjs|ts|py|sh|c|h|cpp|rs|go|jl|lean|sql)(\\s|$)') AS patch_scripts FROM returns r WHERE r.id = $1`, [(row as any).parent_return_id]);
+      if (pr && !pr.patch_scripts) md = md.replace(/This return carries a patch against served scripts\.[^\n]*/, () => "This return carries a patch that touches served documents only, no scripts: apply it to a copy of the served file and read the diff before judging; there is no bound output block to check.");
+      const dups = pr ? await q<{ id: string; type: string; status: string; handle: string }>(`SELECT x.id, x.type, x.status, u.handle FROM returns x JOIN users u ON u.id = x.user_id WHERE x.superseded_by = $1 OR (x.duplicate_of = $1 AND x.status = 'pending') ORDER BY x.id`, [pr.id]) : [];
+      const twin = pr?.duplicate_of ? await one<{ id: string; type: string; status: string; handle: string }>(`SELECT x.id, x.type, x.status, u.handle FROM returns x JOIN users u ON u.id = x.user_id WHERE x.id = $1`, [pr.duplicate_of]) : null;
+      if (dups.length || twin) {
+        const P = `${BASE()}/projects/${req.project.slug}`;
+        const lines = [
+          ...dups.map((d) => `- Return #${d.id} (${d.type} by @${d.handle}, ${P}/return/${d.id}) carries the same change (byte-identical patch or revised file)${d.status === "pending" ? ` and will be folded into #${pr!.id} when this one is accepted: your verdict decides both. Check that nothing in it goes beyond this return; if it does, say so in your notes.` : ` and is already folded into #${pr!.id}.`}`),
+          ...(twin ? [`- This return is a duplicate of pending return #${twin.id} (${twin.type} by @${twin.handle}, ${P}/return/${twin.id}): treat the two as one change; when either is accepted the other is folded into it.`] : []),
+        ];
+        md += `\n\n## Duplicates of the return under review\n\n${lines.join("\n")}`;
+      }
+    }
     // Function replacements: the inserted text can carry "$" sequences (LaTeX in an inbox message), which String.replace would read as patterns and splice the brief around them (issue #13).
     if (tf.note) md = md.replace(/\n\n/, () => `\n\nTier this session: ${tier} (${tf.note}).\n\n`);
     if (req.justRegistered) md = (await orientation(req.project, BASE(), { ...member, ...settings, session: session.id, session_max_jobs: session.max_jobs }, true, { model: req.model ?? null, uid, trusted, tier, effort: req.effort ?? null, tier_note: tf.note }, true)) + "\n\n---\n\n" + md;
