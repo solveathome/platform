@@ -16,6 +16,7 @@ const {migrate, q, one, pool} = await import('../src/db/index.ts');
 const {issueToken} = await import('../src/lib/auth.ts');
 const {TERMS_VERSION} = await import('../src/lib/terms.ts');
 const {job} = await import('../src/routes/job.ts');
+const {filesRouter} = await import('../src/routes/files.ts');
 
 const tag = `url-test-${Date.now().toString(36)}`;
 const slug = tag, handle = `${tag}-person`;
@@ -34,12 +35,14 @@ before(async () => {
   for (let i = 0; i < 6; i++) plainIds.push(Number((await mkJob('source', `Source ${i}`, {})).id));
   heavyId = Number((await mkJob('measure', 'Heavy measure', {ram_gb: 16, cpu_hours: 3})).id);
   mathlibId = Number((await mkJob('formalize', 'Formalize with Mathlib', {ram_gb: 8, cpu_hours: 1, mathlib_cache: true})).id);
-  const app = express(); app.use(express.json()); app.use('/projects/:slug', job);
+  const app = express(); app.use(express.json()); app.use('/projects/:slug', job); app.use(filesRouter);
   server = app.listen(0, '127.0.0.1'); await new Promise(r => server.once('listening', r));
   base = `http://127.0.0.1:${server.address().port}/projects/${slug}`;
 });
 after(async () => {
   server?.close();
+  await q(`DELETE FROM file_refs WHERE file_sha IN (SELECT sha256 FROM files WHERE user_id = $1)`, [uid]);
+  await q(`DELETE FROM files WHERE user_id = $1`, [uid]);
   await q(`DELETE FROM messages WHERE user_id = $1`, [uid]);
   await q(`DELETE FROM channel_members WHERE user_id = $1`, [uid]);
   await q(`DELETE FROM credits WHERE problem_id = $1`, [pid]);
@@ -344,4 +347,27 @@ test('a usage entry counts once per person: the same session log on a second ret
   assert.equal(paid2.length, 1, 'one token row for the second return'); assert.ok(Math.abs(Number(paid2[0].points) - 140 / 1e6) < 1e-9, JSON.stringify(paid2));
   assert.equal(Number((await one(`SELECT count(*) AS c FROM counted_entries WHERE user_id = $1 AND key LIKE 'cc:' || $2 || '%'`, [uid, tag])).c), 3, 'three entries on record, each once');
   await end(a.session);
+});
+
+test('a script with a hard-coded home path or a progress line is never refused: the upload and the return warn, the page and the review brief carry the note; a home path in a text field warns too', async () => {
+  const H = {authorization: `Bearer ${token}`, accept: 'application/json', 'content-type': 'application/json', 'x-model': 'claude-fable-5-1', 'x-effort': 'high'};
+  const root = base.replace(/\/projects\/.*$/, '');
+  const script = `const base = "/Users/nate/twin-primes/research/";\nsetInterval(() => console.log(\`\${pct}% done, elapsed \${t}s\`), 30000);\nconsole.log(base);\n`;
+  const up = await fetch(root + '/files', {method: 'POST', headers: H, body: JSON.stringify({name: `${tag}-compare.js`, content: script})});
+  const u = await up.json(); assert.equal(up.status, 200, JSON.stringify(u).slice(0, 300));
+  assert.equal(u.warnings.length, 2, JSON.stringify(u.warnings)); assert.match(u.warnings[0], /hard-coded home directory: \/Users\/nate\/twin-primes\/research\/ \(line 1\)/); assert.match(u.warnings[1], /progress or timing to stdout on line 2/);
+  const reg = await fetch(base + '/start?share=0', {headers: {...H}});
+  const j = await reg.json(); assert.equal(reg.status, 200, JSON.stringify(j).slice(0, 300));
+  assert.match(j.brief_md, /stdout is the artifact and must reproduce byte for byte elsewhere/);
+  const r = await fetch(base + '/result', {method: 'POST', headers: {...H, 'x-session': j.session}, body: JSON.stringify({job_id: j.job_id, report_md: 'Compared with the script at /Users/nate/twin-primes/compare.js.', transcript: 't', transcript_approved: true, author_rung: 'measured', files: [u.sha256]})});
+  const t = await r.json(); assert.equal(r.status, 200, JSON.stringify(t).slice(0, 400));
+  assert.ok(t.warnings.some(w => /"report_md" contains a local home path/.test(w)), JSON.stringify(t.warnings));
+  const fw = t.warnings.find(w => /will not run as shipped/.test(w)); assert.ok(fw, JSON.stringify(t.warnings)); assert.match(fw, new RegExp(`${tag}-compare.js`)); assert.match(fw, /hard-coded home directory/); assert.match(fw, /progress or timing/);
+  const row = await one(`SELECT file_notes FROM returns WHERE id = $1`, [t.return_id]);
+  assert.equal(row.file_notes.length, 1); assert.equal(row.file_notes[0].sha, u.sha256); assert.equal(row.file_notes[0].notes.length, 2);
+  const page = await (await fetch(base + `/return/${t.return_id}`, {headers: {accept: 'text/html'}})).text();
+  assert.match(page, /Will not run as shipped/); assert.match(page, /hard-coded home directory/);
+  const brief = await one(`SELECT brief_md FROM jobs WHERE parent_return_id = $1 ORDER BY id LIMIT 1`, [t.return_id]);
+  assert.ok(brief, 'a review job was spawned'); assert.match(brief.brief_md, /Files that will not run as shipped/); assert.match(brief.brief_md, /fix the path or strip those lines when you rerun/);
+  await end(j.session);
 });

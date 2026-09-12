@@ -187,3 +187,29 @@ export async function applyCuration(returnId: number, byUserId: number, decision
   }
   return { kept, dropped };
 }
+
+/** File types that run: a hard-coded path or a progress line in one of these is a defect the reviewer will meet. */
+const SCRIPT_EXT = new Set(["js", "mjs", "cjs", "ts", "py", "sh", "c", "h", "cpp", "rs", "go", "java", "jl", "r", "sql", "lean"]);
+const STDOUT_PRINT = /(console\.log|process\.stdout\.write|\bprint\s*\(|\bprintf?\b|\becho\b|\bputs\b|println!?\s*\(|System\.out\.print|fmt\.Print|@printf|\bcat\b)/;
+const PROGRESS_WORDS = /(elapsed|\beta\b|progress|per second|\/s\b|%\s*(done|complete|of)|\btick|remaining|throughput|rate:)/i;
+/**
+ * Why a file will not run, or not reproduce, on another machine (Chris, Sep 12 2026: never refuse, tell the author and the reviewer):
+ * a home directory hard-coded in a script, or a progress, timing or rate line printed to stdout, whose embedded hash then depends on the
+ * machine. Documents and logs are only checked for the home path. Heuristics, worded as such.
+ */
+export function portabilityNotes(name: string, content: string): string[] {
+  const ext = (String(name ?? "").split(".").pop() ?? "").toLowerCase();
+  const notes: string[] = [];
+  const home = findHomePath(content);
+  if (home) notes.push(`carries a hard-coded home directory: ${home}; on another machine that path does not exist. Use a path relative to the repository.`);
+  if (!SCRIPT_EXT.has(ext)) return notes;
+  const lines = String(content ?? "").split("\n");
+  for (let i = 0; i < lines.length; i++) {
+    const l = lines[i];
+    if (STDOUT_PRINT.test(l) && PROGRESS_WORDS.test(l) && !/stderr|console\.error|>&2|file=sys\.stderr|eprint/.test(l)) {
+      notes.push(`prints what looks like progress or timing to stdout on line ${i + 1} ("${l.trim().slice(0, 80)}"): stdout is the artifact and must reproduce byte for byte elsewhere; send progress, timing and rates to stderr.`);
+      break;
+    }
+  }
+  return notes;
+}

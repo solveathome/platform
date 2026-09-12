@@ -563,3 +563,4 @@ CREATE TABLE IF NOT EXISTS counted_entries (
   PRIMARY KEY (user_id, key)
 );
 CREATE INDEX IF NOT EXISTS counted_entries_source_idx ON counted_entries (source_type, source_id);
+ALTER TABLE returns ADD COLUMN IF NOT EXISTS file_notes JSONB;   -- [{sha, name, notes[]}]: attached files that will not run or reproduce as shipped (never refused; the reviewer is told)

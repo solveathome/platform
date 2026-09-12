@@ -28,7 +28,9 @@ filesRouter.post("/files", bearer, async (req: any, res) => {
       const j = await one(`SELECT id FROM jobs WHERE id = $1 AND assigned_to = $2`, [b.job_id, req.user.id]);
       if (j) await files.attach([r.sha], "job", Number(j.id));
     }
-    res.json({ ok: true, sha256: r.sha, existed: r.existed, url: `/files/${r.sha}`, bytes: size, quota: await files.quota(req.user.id) });
+    // Never refused (Chris, Sep 12 2026): a file that will not run or reproduce elsewhere is stored and the author told where; the reviewer hears it too.
+    const warnings = files.portabilityNotes(chk.name, b.content).map((n) => `${chk.name} ${n} The file is stored as sent; fix it and upload again to spare the reviewer, or leave it and they will fix it when rerunning.`);
+    res.json({ ok: true, sha256: r.sha, existed: r.existed, url: `/files/${r.sha}`, bytes: size, quota: await files.quota(req.user.id), warnings });
   } catch (e: any) { res.status(e.status ?? 500).json({ error: e.message }); }
 });
 
