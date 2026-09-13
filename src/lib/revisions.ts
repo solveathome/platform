@@ -6,7 +6,7 @@ import {recordPublication} from "./document-record.js";
  * accepted versions are what the owner pulls back into the research repository.
  */
 import { existsSync, readFileSync } from "node:fs";
-import { dirname, join, normalize } from "node:path";
+import { join, posix } from "node:path";
 import { createTwoFilesPatch } from "diff";
 import { q, one, queueFileEffect, pendingFileText, projectTransaction } from "../db/index.js";
 import { ROOT } from "./paths.js";
@@ -17,7 +17,9 @@ export const OVERLAY = process.env.OVERLAY_DIR ?? join(ROOT, "data", "overlay");
 const EDITABLE = /\.(md|js|mjs|ts|py|lean|json|jsonl|csv|tsv|sh|tex|bib|txt|yaml|yml)$/i;
 
 export function safeRel(path: string): string | null {
-  const n = normalize("/" + String(path ?? "")).replace(/^\/+/, "");
+  // Normalise as POSIX so a document path is forward-slash on every platform. win32 path.normalize rewrites the
+  // separator to a backslash: that leaked into stored paths and left them one segment, defeating the guards below.
+  const n = posix.normalize("/" + String(path ?? "").replace(/\\/g, "/")).replace(/^\/+/, "");
   if (!n || n.split("/").some((s) => s === ".." || s.startsWith(".git")) || !EDITABLE.test(n)) return null;
   return n;
 }
