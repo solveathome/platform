@@ -68,6 +68,8 @@
 .community-row-work b { display: block; font-size: .9375rem; font-weight: 500; }
 .community-row-work span, .community-score span { display: block; font-size: .75rem; color: var(--mut); }
 .community-score b { display: block; font-size: 1.125rem; font-weight: 600; }
+.community-pending, .community-podium-score .community-pending { display: block; margin-top: .2rem; color: var(--mut); font-family: inherit; font-size: .75rem; font-weight: 400; line-height: 1.4; }
+.community-score .community-pending { font-size: .6875rem; }
 .community-you { font: .75rem var(--mono); color: var(--recognition); }
 .community-row-detail { grid-column: 2 / -1; font-size: .8125rem; color: var(--mut); }
 .community-row-detail summary { cursor: pointer; width: fit-content; }
