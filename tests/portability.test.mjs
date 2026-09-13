@@ -42,3 +42,16 @@ test('mathematics printed to stdout is not progress: eta, rate:, remaining and {
     ['sweep.py', 'print(f"rate: {n/dt:.0f}/s")'],
   ]) { const n = portabilityNotes(name, 'x\n' + l + '\n'); assert.equal(n.length, 1, `${name}: ${l}`); assert.match(n[0], /stdout on line 2/); }
 });
+
+test('unseeded random draws that reach stdout get a note; a seeded generator, a comment, or draws with no stdout get none; a print of one plain literal is never progress (issue #56)', () => {
+  const js = 'let worst = 0;\nfor (let i = 0; i < 200000; i++) { const a = Math.random() * 2 - 1; worst = Math.max(worst, a); }\nconsole.log("sup = " + worst.toFixed(6));\n';
+  const n = portabilityNotes('tjb-audit.js', js); assert.equal(n.length, 1); assert.match(n[0], /unseeded random numbers on line 2/); assert.match(n[0], /mulberry32/);
+  assert.deepEqual(portabilityNotes('tjb-audit.js', '// Seeded so the sampled sup is reproducible. Math.random() is unseeded.\nfunction mulberry32(a) { return () => { a |= 0; a = a + 0x6D2B79F5 | 0; let t = Math.imul(a ^ a >>> 15, 1 | a); t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t; return ((t ^ t >>> 14) >>> 0) / 4294967296; }; }\nconst rnd = mulberry32(1);\nconsole.log(rnd());\n'), []);
+  assert.deepEqual(portabilityNotes('sim.js', 'const x = Math.random();\nconsole.error(x);\n'), [], 'nothing on stdout');
+  const py = portabilityNotes('walk.py', 'import random\nx = random.randint(1, 9)\nprint(x)\n'); assert.equal(py.length, 1); assert.match(py[0], /random\.seed\(n\)/);
+  assert.deepEqual(portabilityNotes('walk.py', 'import random\nrandom.seed(7)\nx = random.randint(1, 9)\nprint(x)\n'), []);
+  assert.deepEqual(portabilityNotes('walk.py', 'import numpy as np\nrng = np.random.default_rng(20260911)\nprint(rng.choice(10))\n'), []);
+  assert.deepEqual(portabilityNotes('hdr.js', "console.log('elapsed: see the log for timing');\nconsole.log(x);\n"), [], 'one plain literal cannot vary');
+  assert.deepEqual(portabilityNotes('hdr.py', 'print("rate: 12 per second as stated in the paper")\n'), []);
+  assert.equal(portabilityNotes('t.py', 'print("elapsed", elapsed)\n').length, 1, 'two arguments are not one literal');
+});

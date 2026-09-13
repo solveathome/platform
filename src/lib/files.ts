@@ -204,6 +204,16 @@ const ETA = /\bETA\b/; // upper case only: lower-case eta is a Greek letter in e
  * machine. Documents and logs are only checked for the home path. Heuristics, worded as such; a miss costs nothing (the reviewer reruns),
  * a false flag opens a fix job somebody works, so the stdout check errs towards silence.
  */
+// A print whose only argument is one plain string literal cannot vary between runs (issue #56, natepac's suggestion).
+const LITERAL_ONLY = /(console\.log|process\.stdout\.write|\bprint|\bputs|println!?|System\.out\.print(ln)?|fmt\.Print(ln)?)\s*\(\s*(['"])(?:(?!\4)[^\\\n]|\\.)*\4\s*\)\s*;?\s*(\/\/.*|#.*)?$/;
+// Unseeded randomness that reaches stdout (issue #56: three served scripts gave eight stdout hashes in eight runs, none flagged).
+const RNG_CALL: Record<string, RegExp> = {
+  js: /Math\.random\s*\(/, mjs: /Math\.random\s*\(/, cjs: /Math\.random\s*\(/, ts: /Math\.random\s*\(/,
+  py: /\b(random\.(random|randint|randrange|choice|choices|sample|shuffle|uniform|gauss)|np\.random\.(rand|randn|randint|random|choice|shuffle|permutation|uniform|normal)|numpy\.random\.\w+)\s*\(/,
+  go: /\brand\.(Int|Intn|Int63|Float64|Perm|Shuffle)\s*\(/, rs: /\b(thread_rng|rand::random)\s*\(/, jl: /\brand(n)?\s*\(/,
+};
+const RNG_SEEDED = /(random\.seed\s*\(|Random\s*\(\s*\d|np\.random\.seed\s*\(|default_rng\s*\(\s*[^)\s]|RandomState\s*\(\s*\d|rand\.Seed\s*\(|rand\.New\s*\(|seed_from_u64|from_seed|StdRng|Random\.seed!|MersenneTwister\s*\(\s*\d|mulberry32|splitmix|xorshift|xoshiro|\bseed\b)/i;
+const COMMENT = /^\s*(\/\/|#|\/\*|\*)/;
 export function portabilityNotes(name: string, content: string): string[] {
   const ext = (String(name ?? "").split(".").pop() ?? "").toLowerCase();
   const notes: string[] = [];
@@ -211,12 +221,21 @@ export function portabilityNotes(name: string, content: string): string[] {
   if (home) notes.push(`carries a hard-coded home directory: ${home}; on another machine that path does not exist. Use a path relative to the repository.`);
   if (!SCRIPT_EXT.has(ext)) return notes;
   const lines = String(content ?? "").split("\n");
+  let printsStdout = false;
   for (let i = 0; i < lines.length; i++) {
     const l = lines[i];
-    if (STDOUT_PRINT.test(l) && (PROGRESS_WORDS.test(l) || ETA.test(l)) && !/stderr|console\.error|>&2|file=sys\.stderr|eprint/.test(l)) {
+    if (COMMENT.test(l)) continue;
+    const toStdout = STDOUT_PRINT.test(l) && !/stderr|console\.error|>&2|file=sys\.stderr|eprint/.test(l);
+    printsStdout = printsStdout || toStdout;
+    if (toStdout && (PROGRESS_WORDS.test(l) || ETA.test(l)) && !LITERAL_ONLY.test(l)) {
       notes.push(`prints what looks like progress or timing to stdout on line ${i + 1} ("${l.trim().slice(0, 80)}"): stdout is the artifact and must reproduce byte for byte elsewhere; send progress, timing and rates to stderr.`);
       break;
     }
+  }
+  const rng = RNG_CALL[ext];
+  if (rng && printsStdout && !RNG_SEEDED.test(content)) {
+    const at = lines.findIndex((l) => !COMMENT.test(l) && rng.test(l));
+    if (at >= 0) notes.push(`draws unseeded random numbers on line ${at + 1} ("${lines[at].trim().slice(0, 80)}") and prints to stdout: two runs give two outputs. Seed the generator (${ext === "py" ? "random.seed(n) / np.random.default_rng(n)" : /^(js|mjs|cjs|ts)$/.test(ext) ? "Math.random() cannot be seeded; use a small seeded generator such as mulberry32" : "a fixed seed"}) or keep the draws out of stdout.`);
   }
   return notes;
 }
