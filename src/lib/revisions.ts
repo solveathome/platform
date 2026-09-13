@@ -1,3 +1,4 @@
+import {recordPublication} from "./document-record.js";
 /**
  * Revisions (Chris, Sep 9): the swarm edits the body of work with a full record. An accepted audit or paper return carries a
  * revised document; integration writes it to the overlay the site serves on top of the read-only mirror, records the version
@@ -95,7 +96,10 @@ async function pin(sha: string, versionId: number): Promise<void> {
  * researcher, no reviewers, diff against the latest) and served in place of the overlay. The trail never loses its base.
  */
 export async function recordMirrorCut(slug: string, problemId: number, note = ""): Promise<Array<{ path: string; action: "unchanged" | "caught-up" | "recorded" | "missing"; version?: number }>> {
-  return projectTransaction(problemId, () => recordMirrorCutLocked(slug, problemId, note));
+  return projectTransaction(problemId, async () => {
+    await recordPublication(slug, problemId);
+    return recordMirrorCutLocked(slug, problemId, note);
+  });
 }
 async function recordMirrorCutLocked(slug: string, problemId: number, note: string): Promise<Array<{ path: string; action: "unchanged" | "caught-up" | "recorded" | "missing"; version?: number }>> {
   const out: Array<{ path: string; action: "unchanged" | "caught-up" | "recorded" | "missing"; version?: number }> = [];

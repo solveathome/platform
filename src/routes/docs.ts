@@ -1,3 +1,5 @@
+import {datesForDocument, documentRecords, documentDates, recordHtml} from "../lib/document-record.js";
+import {datesHtml, timeHtml} from "../lib/timestamps.js";
 /**
  * Docs browser (scope Q43): render the research repo's documents on the site. Read-only, from a filtered copy of the
  * repo under data/repos/<slug> (rsynced by the mirror script; pulled from the public repo after launch).
@@ -12,7 +14,7 @@ import { safeRenderer } from "../lib/markdown.js";
 import { challengesFor, challengeBanner } from "../lib/tangent.js";
 import { one, q } from "../db/index.js";
 import { ROOT } from "../lib/paths.js";
-import { readPublication, publishedDocument } from "../lib/document-publication.js";
+import { readPublication, publishedDocument, sha256 as contentHash } from "../lib/document-publication.js";
 import { docsRedirect } from "../lib/projects.js";
 import { protectMath } from "../lib/math.js";
 import { linkPeople } from "../lib/people.js";
@@ -30,8 +32,8 @@ const SEED = process.env.SEED_DIR ?? join(ROOT, "data", "seed");
 type Edition = "docs" | "seed";
 function seedInfo(slug: string): { date: string; note: string } | null {
   const meta = join(SEED, `${slug}.json`);
-  try { if (existsSync(meta)) { const j = JSON.parse(readFileSync(meta, "utf8")); return { date: String(j.date ?? "").slice(0, 10), note: String(j.note ?? "") }; } } catch { /* fall through */ }
-  const dir = join(SEED, slug); return existsSync(dir) ? { date: statSync(dir).mtime.toISOString().slice(0, 10), note: "" } : null;
+  try { if (existsSync(meta)) { const j = JSON.parse(readFileSync(meta, "utf8")); return { date: String(j.date ?? ""), note: String(j.note ?? "") }; } } catch { /* fall through */ }
+  return null; // A copied directory’s mtime is not historical evidence.
 }
 const TEXT_EXT = new Set([".js", ".ts", ".py", ".sh", ".txt", ".json", ".jsonl", ".csv", ".tsv", ".lean", ".tex", ".bib", ".log", ".yaml", ".yml", ".toml", ".sha256", ".ots.txt", ""]);
 const IMG: Record<string, string> = { ".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".gif": "image/gif", ".svg": "image/svg+xml", ".webp": "image/webp" };
@@ -48,7 +50,7 @@ function safePath(root: string, rel: string): string | null {
 }
 
 function chrome(slug: string, title: string, crumbs: string, body: string, extra = "", path = ""): string {
-  return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>${esc(title)} · ${esc(slug)} · solveathome</title>${shareMeta({ title: `${title} · ${slug}`, description: `A research document served by solveathome, with accepted revisions in place and the record one click away.`, path: path || `/projects/${slug}/docs`, type: "article" })}<link rel="icon" href="/favicon.ico"><link rel="stylesheet" href="/assets/app.css?v=4"><script defer src="https://umami.infessa.com/script.js" data-website-id="3c56339a-8792-42b6-b506-628db725c596"></script></head><body data-page="docs"><header data-site-header></header><main class="shell document-main" id="main"><nav class="breadcrumb" aria-label="Breadcrumb"><a href="/projects/${esc(slug)}">${esc(slug)}</a><span>/ documents /</span>${crumbs}</nav>${extra ? `<p class="panel-note">${extra}</p>` : ""}<article class="document">${body}</article></main><footer data-site-footer></footer><script src="/assets/ui.js?v=16"></script><script src="/assets/who.js?v=3"></script><script src="/assets/math.js?v=1"></script><script>loadWho(document.querySelector("#who"));</script></body></html>`;
+  return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>${esc(title)} · ${esc(slug)} · solveathome</title>${shareMeta({ title: `${title} · ${slug}`, description: `A research document served by solveathome, with accepted revisions in place and the record one click away.`, path: path || `/projects/${slug}/docs`, type: "article" })}<link rel="icon" href="/favicon.ico"><link rel="stylesheet" href="/assets/app.css?v=21"><script defer src="https://umami.infessa.com/script.js" data-website-id="3c56339a-8792-42b6-b506-628db725c596"></script></head><body data-page="docs"><header data-site-header></header><main class="shell document-main" id="main"><nav class="breadcrumb" aria-label="Breadcrumb"><a href="/projects/${esc(slug)}">${esc(slug)}</a><span>/ documents /</span>${crumbs}</nav>${extra ? `<p class="panel-note">${extra}</p>` : ""}<article class="document">${body}</article></main><footer data-site-footer></footer><script src="/assets/ui.js?v=16"></script><script src="/assets/who.js?v=3"></script><script src="/assets/math.js?v=1"></script><script>loadWho(document.querySelector("#who"));</script></body></html>`;
 }
 
 function crumbsFor(slug: string, rel: string, edition: Edition = "docs"): string {
@@ -117,7 +119,8 @@ async function serve(req: any, res: any, edition: Edition): Promise<void> {
     if (statSync(join(abs, name)).isDirectory()) return Object.keys(publication.files).some(file => file.startsWith(path + "/") && publishedDocument(root, file, publication));
     return publishedDocument(root, path, publication);
   };
-  const browser = wantsHtml(req);
+  const browser = wantsHtml(req) && !req.query.raw;
+  const pid = seed ? undefined : (await one<{ id: number }>(`SELECT id FROM problems WHERE slug = $1`, [slug]))?.id;
   if (st.isDirectory() && !browser) {
     const entries = readdirSync(abs).filter((n) => !n.startsWith(".") && visible(n)).sort();
     res.type("text/plain").send(entries.map((n) => statSync(join(abs, n)).isDirectory() ? `${n}/` : n).join("\n") + "\n"); return;
@@ -127,39 +130,54 @@ async function serve(req: any, res: any, edition: Edition): Promise<void> {
     const readme = entries.find((n) => /^readme\.md$/i.test(n));
     let intro = "";
     if (readme) { const r = await renderMarkdown(readFileSync(join(abs, readme), "utf8"), slug, posix.join(rel, readme), edition); intro = `${ledgerHtml(r.ledger)}${r.html}<hr>`; }
-    const list = entries.map((n) => { const s = statSync(join(abs, n)); const href = `/projects/${esc(slug)}/${edition}/${esc(posix.join(rel, n))}`; return `<li><a href="${href}">${esc(n)}${s.isDirectory() ? "/" : ""}</a>${s.isDirectory() ? "" : `<small>${s.size} B</small>`}</li>`; }).join("");
+    const records = pid ? await documentRecords(Number(pid)) : new Map();
+    const list = entries.map((n) => { const s = statSync(join(abs, n)); const href = `/projects/${esc(slug)}/${edition}/${esc(posix.join(rel, n))}`; return `<li><a href="${href}">${esc(n)}${s.isDirectory() ? "/" : ""}</a>${s.isDirectory() ? "" : `<small>${s.size} B</small><div class="tree-dates">${datesHtml(documentDates(publication, posix.join(rel, n), records.get(posix.join(rel, n)), !seed && !req.query.original && existsSync(join(OVERLAY, slug, rel, n)) ? sha256(readFileSync(join(OVERLAY, slug, rel, n), "utf8")) : undefined, seed))}</div>`}</li>`; }).join("");
     res.type("text/html").send(chrome(slug, rel || (seed ? "seed" : "root"), crumbsFor(slug, rel, edition), `${seed ? await seedBanner(slug, rel) : ""}${intro}<ul class="tree">${list}</ul>`, seed ? seedNote(slug, rel) : ""));
     return;
   }
   const ext = extname(abs).toLowerCase();
   // The swarm edition: an accepted revision is served in place of the mirrored file, with the record one click away.
   const ovAbs = join(OVERLAY, slug, rel);
-  const pid = seed ? undefined : (await one<{ id: number }>(`SELECT id FROM problems WHERE slug = $1`, [slug]))?.id;
   const revised = pid ? (await revisedPaths(Number(pid))).get(rel) : undefined;
   const src = !seed && existsSync(ovAbs) ? ovAbs : abs;
-  const revisedNote = revised ? `<span class="muted">${revised.swarm ? `swarm edition, version ${revised.versions}: changed by <a href="/@${esc(revised.author)}">@${esc(revised.author)}</a>${revised.verified.length ? `, verified by ${revised.verified.map((h: string) => `<a href="/@${esc(h)}">@${esc(h)}</a>`).join(", ")}` : ""}` : `version ${revised.versions}, as cut from the research repository on ${esc(String(revised.at).slice(0, 10))}`} · <a href="/projects/${esc(slug)}/history/${esc(rel)}">history and diffs</a>${revised.swarm ? ` · <a href="/projects/${esc(slug)}/docs/${esc(rel)}?original=1">current mirror</a>` : ""}</span>` : "";
+  const selected = req.query.original ? abs : src;
+  const content = readFileSync(selected);
+  const digest = contentHash(content);
+  const timestamps = await datesForDocument(pid ? Number(pid) : undefined, publication, rel, digest, seed);
+  const historyUrl = `/projects/${encodeURIComponent(slug)}/history/${rel.split("/").map(encodeURIComponent).join("/")}`;
+  const record = recordHtml(timestamps, historyUrl);
+  res.set("X-Content-SHA256", digest);
+  if (timestamps.created_at) res.set("X-Document-Created-At", timestamps.created_at);
+  if (timestamps.modified_at) res.set("X-Document-Modified-At", timestamps.modified_at);
+  if (timestamps.recorded_at) res.set("X-Document-Recorded-At", timestamps.recorded_at);
+  if (req.query.meta) { res.json({path: rel, edition, timestamps, source: publication.files[rel]?.source ?? null, history_url: historyUrl}); return; }
+  const revisedNote = revised ? `<span class="muted">${revised.swarm ? `swarm edition, version ${revised.versions}: changed by <a href="/@${esc(revised.author)}">@${esc(revised.author)}</a>${revised.verified.length ? `, verified by ${revised.verified.map((h: string) => `<a href="/@${esc(h)}">@${esc(h)}</a>`).join(", ")}` : ""}` : `version ${revised.versions}, as cut from the research repository on ${timeHtml(revised.at)}`} · <a href="/projects/${esc(slug)}/history/${esc(rel)}">history and diffs</a>${revised.swarm ? ` · <a href="/projects/${esc(slug)}/docs/${esc(rel)}?original=1">current mirror</a>` : ""}</span>` : "";
   if (ext === ".md" && !browser) {
-    res.set({ "Content-Type": "text/markdown; charset=utf-8", "X-Content-Type-Options": "nosniff" }).send(readFileSync(req.query.original ? abs : src, "utf8")); return;
+    res.set({ "Content-Type": "text/markdown; charset=utf-8", "X-Content-Type-Options": "nosniff" }).send(content.toString("utf8")); return;
   }
-  if (ext === ".md" && st.size > 1024 * 1024) { res.set({ "Content-Type": "text/markdown; charset=utf-8", "X-Content-Type-Options": "nosniff" }).send(readFileSync(req.query.original ? abs : src, "utf8")); return; }   // rendering is for documents, not dumps
-  if (ext === ".md") {
-    const r = await renderMarkdown(readFileSync(req.query.original ? abs : src, "utf8"), slug, rel, edition);
-    if (seed) { res.type("text/html").send(chrome(slug, r.title, crumbsFor(slug, rel, "seed"), `${await seedBanner(slug, rel, readFileSync(abs, "utf8"))}${ledgerHtml(r.ledger)}${await linkPeople(r.html)}`, seedNote(slug, rel), `/projects/${slug}/seed/${rel}`)); return; }
+  if (ext === ".md" && content.length <= 1024 * 1024) {
+    const r = await renderMarkdown(content.toString("utf8"), slug, rel, edition);
+    if (seed) { res.type("text/html").send(chrome(slug, r.title, crumbsFor(slug, rel, "seed"), `${record}${await seedBanner(slug, rel, readFileSync(abs, "utf8"))}${ledgerHtml(r.ledger)}${await linkPeople(r.html)}`, seedNote(slug, rel), `/projects/${slug}/seed/${rel}`)); return; }
     const claim = await one(`SELECT c.status, c.origin_handle FROM claims c JOIN problems p ON p.id = c.problem_id WHERE p.slug = $1 AND c.path = $2`, [slug, rel]);
     const extra = (revisedNote && !req.query.original ? revisedNote + (claim ? " · " : "") : "") + (claim ? `<span class="muted">claim status <span class="status">${esc(String(claim.status).toLowerCase())}</span> · origin <a href="/@${esc(claim.origin_handle)}" style="font-weight:400">@${esc(claim.origin_handle)}</a></span>` : "");
     const banner = pid ? challengeBanner(await challengesFor(Number(pid), "document", rel), `/projects/${slug}`) : "";
     const fixes = pid ? await q(`SELECT r.id, u.handle, x->>'note' AS note FROM returns r JOIN users u ON u.id = r.user_id, jsonb_array_elements(r.also_fix) x WHERE r.problem_id = $1 AND r.type = 'audit' AND r.status = 'accepted' AND NOT r.provisional AND x->>'path' = $2
       UNION ALL SELECT r.id, u.handle, x->>'note' AS note FROM reviews rv JOIN returns r ON r.id = rv.return_id JOIN users u ON u.id = rv.user_id, jsonb_array_elements(rv.also_fix) x WHERE r.problem_id = $1 AND r.status = 'accepted' AND NOT r.provisional AND x->>'path' = $2 ORDER BY id DESC LIMIT 10`, [pid, rel]) : [];
     const fixNotes = fixes.length ? `<div class="panel" style="margin:0 0 1.5rem;padding:.9rem 1.1rem;border-left:4px solid var(--line)"><p style="margin:0 0 .4rem"><b>Notes from accepted audits and their reviewers</b> <span class="muted">(corrections routed to this document; not yet applied here)</span></p><ul style="margin:0;padding-left:1.1rem">${fixes.map((f: any) => `<li><a href="/projects/${esc(slug)}/return/${f.id}">audit #${f.id}</a> by <a href="/@${esc(f.handle)}">@${esc(f.handle)}</a>: ${esc(f.note)}</li>`).join("")}</ul></div>` : "";
-    res.type("text/html").send(chrome(slug, r.title, crumbsFor(slug, rel), `${banner}${fixNotes}${ledgerHtml(r.ledger)}${await linkPeople(r.html)}`, extra, `/projects/${slug}/docs/${rel}`));
+    res.type("text/html").send(chrome(slug, r.title, crumbsFor(slug, rel), `${record}${banner}${fixNotes}${ledgerHtml(r.ledger)}${await linkPeople(r.html)}`, extra, `/projects/${slug}/docs/${rel}`));
     return;
   }
-  if (IMG[ext]) { res.type(IMG[ext]).set({ "X-Content-Type-Options": "nosniff", "Content-Security-Policy": "default-src 'none'; sandbox" }).send(readFileSync(abs)); return; }
+  if (browser) {
+    const rawUrl = `?raw=1${req.query.original ? "&amp;original=1" : ""}`;
+    const body = TEXT_EXT.has(ext) && content.length <= MAX_TEXT ? `<pre><code>${esc(content.toString("utf8"))}</code></pre>` : `<p>This file is available as a download.</p>`;
+    res.type("text/html").send(chrome(slug, rel, crumbsFor(slug, rel, edition), `${record}<p><a href="${rawUrl}">Raw file / download</a></p>${body}`)); return;
+  }
+  if (IMG[ext]) { res.type(IMG[ext]).set({ "X-Content-Type-Options": "nosniff", "Content-Security-Policy": "default-src 'none'; sandbox" }).send(content); return; }
   if (TEXT_EXT.has(ext) && st.size <= MAX_TEXT) {
-    res.set({ "Content-Type": "text/plain; charset=utf-8", "X-Content-Type-Options": "nosniff", "Content-Security-Policy": "default-src 'none'; sandbox" }).send(readFileSync(req.query.original ? abs : src, "utf8"));
+    res.set({ "Content-Type": "text/plain; charset=utf-8", "X-Content-Type-Options": "nosniff", "Content-Security-Policy": "default-src 'none'; sandbox" }).send(content.toString("utf8"));
     return;
   }
-  res.set({ "Content-Type": "application/octet-stream", "Content-Disposition": `attachment; filename="${posix.basename(rel)}"`, "X-Content-Type-Options": "nosniff" }).send(readFileSync(abs));
+  res.set({ "Content-Type": "application/octet-stream", "Content-Disposition": `attachment; filename="${posix.basename(rel)}"`, "X-Content-Type-Options": "nosniff" }).send(content);
 }
 
 function seedNote(slug: string, rel: string): string {

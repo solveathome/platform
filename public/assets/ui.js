@@ -8,6 +8,14 @@
     if (!Number.isFinite(seconds)) return 'Date unavailable';
     return seconds < 60 ? 'just now' : seconds < 3600 ? `${Math.floor(seconds / 60)}m ago` : seconds < 86400 ? `${Math.floor(seconds / 3600)}h ago` : `${Math.floor(seconds / 86400)}d ago`;
   };
+  const time = value => {
+    if (!value) return 'not recorded';
+    const date = new Date(value);
+    if (!Number.isFinite(date.getTime())) return 'not recorded';
+    const iso = date.toISOString();
+    return `<time datetime="${iso}">${iso.replace('T', ' ').replace('Z', ' UTC')}</time>`;
+  };
+  const dates = (d = {}) => `<span>Created${d.created_basis ? ` (${esc(d.created_basis)})` : ''}: ${time(d.created_at)}</span> · <span>Modified${d.modified_basis ? ` (${esc(d.modified_basis)})` : ''}: ${time(d.modified_at)}</span> · <span>First recorded here: ${time(d.first_recorded_at)}</span>${d.recorded_at ? ` · <span>This version recorded: ${time(d.recorded_at)}</span>` : ''}`;
   const json = async (url, options = {}) => {
     const r = await fetch(url, {...options, headers: {accept: 'application/json', ...options.headers}});
     if (!r.ok) { const error = new Error(`Request failed (${r.status})`); error.status = r.status; throw error; }
@@ -40,5 +48,5 @@
   }
   showPanel(location.hash.slice(1));
   addEventListener('hashchange', () => showPanel(location.hash.slice(1)));
-  window.SA = {esc, number, ago, json, metric, showPanel};
+  window.SA = {esc, number, ago, time, dates, json, metric, showPanel};
 })();

@@ -1,3 +1,4 @@
+import {recordAllPublications} from "./lib/document-record.js";
 import express from "express";
 import { wantsHtml } from "./lib/negotiate.js";
 import { readFileSync } from "node:fs";
@@ -108,6 +109,7 @@ app.use((err: any, req: any, res: any, _next: any) => {
 });
 migrate().then(async () => {
   await flushFileEffects();
+  await recordAllPublications();
   setInterval(() => { flushFileEffects().catch(error => console.error("publication retry:", error)); }, 30000).unref();
   const srv = app.listen(port, () => console.log(`solveathome on :${port}`));
   // A deploy replaces the container: finish in-flight requests (a 50 MB result upload among them) before going.

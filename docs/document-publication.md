@@ -26,6 +26,16 @@ Uploads and research returns are screened for possible source reproductions. Age
 
 For existing material, preserve the original outside all public mounts, replace reports with explicitly labelled public editions, and withdraw content-addressed uploads with a public reason. Never replace bytes under an existing content hash. Keep author, model, timestamps, research status and recorded credit unchanged. Audit previously generated exports too. Previously downloaded or cached copies cannot be recalled by changing the current portfolio.
 
+## Timestamp history
+
+Every prepared file carries a SHA-256 and, when available, the first and last dates in its source Git history (UTC, following renames), together with those commit IDs. The first Git record is evidence of the file in that repository, not its original creation or discovery. Uncommitted content has no asserted Git modification time; shallow or unavailable history leaves the origin unknown. Generated notices are identified separately. Filesystem creation and modification times are never used as historical evidence.
+
+The server records every admitted portfolio edition at startup and each mirror cut in `document_publications`. A repeated identical cut keeps its original observation time; changed content, reversions, and newly supplied source evidence append rows. `prepared_at` describes portfolio preparation, while `recorded_at` comes from the database clock when the server observes the verified bytes. Existing `document_versions` continue to retain accepted revisions, authors, verifiers, diffs and pinned content. Dates for the current document are selected by its content hash, so an accepted overlay and the original mirror show the dates for their own text.
+
+Papers, OEIS proposals, document pages and listings display exact UTC dates. Unknown dates say “not recorded.” Raw documents preserve their bytes and expose timestamp/hash headers; `?meta=1` returns structured metadata, and `?raw=1` bypasses browser rendering. Uploads display their upload time and immutable content hash. History pages explain the evidence and link to the dataset, whose exports include paper, publication and revision records under the existing OpenTimestamps manifest process. A proof needs independent verification; displayed dates alone do not establish priority.
+
+For existing portfolios, run `backfill-document-dates <dated-PUBLICATION.json> <slug>` against a freshly prepared manifest from the source repository. It adds dates only to existing published paths with identical prepared content hashes. It preserves document bodies and the original portfolio preparation date, and records the newly supplied evidence at the current server time. Unmatched files require their historical source edition; do not substitute current-source dates for different bytes.
+
 ## Validation
 
 Run `npm run check` and `node --import tsx --test tests/document-publication.test.mjs`. Tests cover preparation, nested source text, rejected uploads, exact content hashes, unknown files, symlinks, absent manifests and publisher redirects for the former book scans.

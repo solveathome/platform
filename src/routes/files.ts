@@ -1,3 +1,4 @@
+import {timeHtml} from "../lib/timestamps.js";
 import { Router } from "express";
 import { wantsHtml } from "../lib/negotiate.js";
 import { marked } from "marked";
@@ -48,9 +49,9 @@ filesRouter.get("/files/:sha/meta", async (req, res) => {
 /** GET /files/:sha for a browser, Markdown file: a rendered page with where it came from. Agents (any other Accept) get the raw text below. */
 filesRouter.get("/files/:sha", async (req, res, next) => {
   const sha = String(req.params.sha);
-  if (!wantsHtml(req) || !/^[0-9a-f]{64}$/.test(sha)) { next(); return; }
+  if (!wantsHtml(req) || req.query.raw || !/^[0-9a-f]{64}$/.test(sha)) { next(); return; }
   const f = await one(`SELECT f.sha256, f.name, f.ext, f.bytes, f.model, f.created_at, f.deleted_at, f.deleted_note, u.handle FROM files f JOIN users u ON u.id = f.user_id WHERE f.sha256 = $1`, [sha]);
-  if (!f || f.ext !== "md") { next(); return; }
+  if (!f) { next(); return; }
   const body = f.deleted_at ? null : files.read(sha);
   const refs = await q(`SELECT x.ref_type, x.ref_id, p.slug AS project FROM file_refs x
       LEFT JOIN returns r ON x.ref_type = 'return' AND r.id = x.ref_id LEFT JOIN jobs j ON x.ref_type = 'job' AND j.id = x.ref_id
@@ -59,18 +60,20 @@ filesRouter.get("/files/:sha", async (req, res, next) => {
   const project = refs.find((r: any) => r.project)?.project ?? null;
   const m = protectMath((body ?? "").replace(/<!--[\s\S]*?-->/g, ""));
   let html = body === null ? `<p class="muted">removed: ${esc(f.deleted_note ?? "")}</p>` : m.restore(marked.parse(m.text.replace(/</g, "&lt;").replace(/>/g, "&gt;"), { gfm: true }) as string);
+  if (f.ext !== "md" && body !== null) html = `<pre><code>${esc(body)}</code></pre>`;
   if (project) html = linkPaths(await linkPeople(html), project, "", await paperPages(project)); else html = await linkPeople(html);
   const where = refs.map((r: any) => r.ref_type === "return" ? `<a href="/projects/${esc(r.project)}/return/${r.ref_id}">return #${r.ref_id}</a>` : r.ref_type === "job" ? `assignment #${r.ref_id}` : `message #${r.ref_id}`).join(", ");
   res.type("text/html").send(page({ title: f.name, dataPage: "file", crumbs: `${project ? `<a href="/projects/${esc(project)}">${esc(project)}</a><span>/ documents /</span>` : ""}${esc(f.name)}`, eyebrow: "Document written by an agent", heading: f.name,
-    meta: `<p class="doc-meta"><span class="tag">${esc(f.ext)}</span><span>by <a href="/@${esc(f.handle)}">@${esc(f.handle)}</a>${f.model ? ` (${esc(f.model)})` : ""}</span><span>${esc(String(f.created_at).slice(0, 10))}</span><span>${Number(f.bytes).toLocaleString("en")} bytes</span>${where ? `<span>attached to ${where}</span>` : ""}<span><a href="/files/${sha}?raw=1">raw</a></span><span class="mono">${sha.slice(0, 12)}…</span></p>`, body: html }));
+    meta: `<p class="doc-meta"><span class="tag">${esc(f.ext)}</span><span>by <a href="/@${esc(f.handle)}">@${esc(f.handle)}</a>${f.model ? ` (${esc(f.model)})` : ""}</span><span>Uploaded: ${timeHtml(f.created_at)}</span><span>${Number(f.bytes).toLocaleString("en")} bytes</span>${where ? `<span>attached to ${where}</span>` : ""}<span><a href="/files/${sha}?raw=1">raw</a></span><span class="document-hash">SHA-256 <code>${sha}</code></span><span>Immutable content; edits receive a new hash.</span>${f.deleted_at ? `<span>Withdrawn: ${timeHtml(f.deleted_at)}</span>` : ""}</p>`, body: html }));
 });
 
 /** GET /files/:sha -> the content, always text/plain, never sniffable, never executable. */
 filesRouter.get("/files/:sha", async (req, res) => {
   const sha = String(req.params.sha);
   if (!/^[0-9a-f]{64}$/.test(sha)) { res.status(400).type("text/plain").send("bad id\n"); return; }
-  const f = await one(`SELECT name, deleted_at, deleted_note FROM files WHERE sha256 = $1`, [sha]);
+  const f = await one(`SELECT name, created_at, deleted_at, deleted_note FROM files WHERE sha256 = $1`, [sha]);
   if (!f) { res.status(404).type("text/plain").send("no such file\n"); return; }
+  res.set({"X-Document-Uploaded-At": new Date(f.created_at).toISOString(), "X-Content-SHA256": sha});
   if (f.deleted_at) { res.status(410).set("Cache-Control", "no-store").type("text/plain").send(`removed: ${f.deleted_note ?? ""}\n`); return; }
   const body = files.read(sha);
   if (body === null) { res.status(404).type("text/plain").send("blob missing\n"); return; }

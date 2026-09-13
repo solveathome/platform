@@ -1,10 +1,11 @@
 import {createHash} from "node:crypto";
 import {readFileSync, realpathSync, statSync} from "node:fs";
 import {join, relative, sep} from "node:path";
+import type {SourceDates} from "./timestamps.js";
 
 export const BOOK_SOURCE = "https://doi.org/10.1017/CBO9780511542909";
 export const PUBLICATION_FILE = "PUBLICATION.json";
-export type Publication = {version: 1; generated_at: string; files: Record<string, {sha256: string; mode: "project" | "source-links"}>};
+export type Publication = {version: 1; generated_at: string; files: Record<string, {sha256: string; mode: "project" | "source-links"; source?: SourceDates}>};
 export const sha256 = (body: string | Buffer) => createHash("sha256").update(body).digest("hex");
 
 // Explicitly limit the portfolio to project text/code/data and timestamp digests.
@@ -15,7 +16,7 @@ export function permittedDocumentPath(path: string): boolean {
   if (parts.some(p => !p || p === "." || p === ".." || p.startsWith(".") || /^(node_modules|vendor|third[-_]party|downloads?|source[-_]copies|book-ch5-6)$/i.test(p))) return false;
   if (parts.at(-1) === "human_notes_not_for_ai.txt" || path === PUBLICATION_FILE) return false;
   if (/(?:^|\/)(?:screenshot|scan|scanned)[\s._-]/i.test(path)) return false;
-  return EXTENSIONS.has(path.split(".").at(-1)!.toLowerCase());
+  return path === "LICENSE" || EXTENSIONS.has(path.split(".").at(-1)!.toLowerCase());
 }
 
 export function externalSources(text: string): string[] {

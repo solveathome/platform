@@ -27,6 +27,9 @@ const tables: Record<string, string> = {
   model_tiers: `SELECT model, provider, tier, note, updated_at FROM model_tiers ORDER BY tier, model`,
   claims:    `SELECT p.slug AS project, c.ledger_id, c.path, c.kind, c.status, c.question, c.verdict, c.origin_handle, c.origin_role, c.origin_model, c.origin_model_role, c.origin_note, c.first_commit, c.last_commit, c.commits, c.corpus, c.model_commits, c.scored FROM claims c JOIN problems p ON p.id = c.problem_id ORDER BY c.path`,
   credits:   `SELECT c.id, u.handle, c.model, c.provider, c.kind, c.points, c.source_type, c.source_id, c.note, c.created_at FROM credits c JOIN users u ON u.id = c.user_id ORDER BY c.id`,
+  papers: `SELECT p.slug AS project, a.slug, a.title, a.path, a.status, a.current_file_sha, a.current_return_id, a.created_at, a.updated_at FROM papers a JOIN problems p ON p.id = a.problem_id ORDER BY a.id`,
+  document_publications: `SELECT p.slug AS project, d.path, d.sha256, d.prepared_at, d.source, d.recorded_at FROM document_publications d JOIN problems p ON p.id = d.problem_id ORDER BY d.id`,
+  document_versions: `SELECT p.slug AS project, d.path, d.version, d.content_sha, d.base_sha, d.return_id, d.created_at, u.handle AS author, d.author_model, d.verified_by, d.verified_models FROM document_versions d JOIN problems p ON p.id = d.problem_id LEFT JOIN users u ON u.id = d.author_user_id ORDER BY d.id`,
   files:     `SELECT f.sha256, u.handle, f.model, f.name, f.ext, f.bytes, f.created_at, f.deleted_at, f.deleted_note, (SELECT json_agg(json_build_object('type', r.ref_type, 'id', r.ref_id)) FROM file_refs r WHERE r.file_sha = f.sha256) AS refs FROM files f JOIN users u ON u.id = f.user_id ORDER BY f.created_at`,
 };
 

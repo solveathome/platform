@@ -3,7 +3,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { ROOT } from "./paths.js";
 import { readProjectConfig } from "./projects.js";
-import { publishedDocument, readPublication } from "./document-publication.js";
+import { publishedDocument, readPublication, sha256 } from "./document-publication.js";
 
 const REPOS = process.env.DOCS_DIR ?? join(ROOT, "data", "repos");
 const OVERLAY = process.env.OVERLAY_DIR ?? join(ROOT, "data", "overlay");
@@ -34,9 +34,10 @@ export function sequenceProposals(slug: string, paths = readProjectConfig(slug)?
     // Match /docs: the mirror must be admitted, even when an accepted revision supplies the current bytes.
     if (!path.endsWith(".md") || !publishedDocument(root, path, publication)) return [];
     const revised = join(overlay, slug, path);
-    const proposal = parseSequenceProposal(readFileSync(existsSync(revised) ? revised : join(root, path), "utf8"));
+    const content = readFileSync(existsSync(revised) ? revised : join(root, path), "utf8");
+    const proposal = parseSequenceProposal(content);
     if (!proposal) return [];
     const encoded = path.split("/").map(encodeURIComponent).join("/");
-    return [{ ...proposal, path, url: `/projects/${slug}/docs/${encoded}`, history_url: `/projects/${slug}/history/${encoded}` }];
+    return [{ ...proposal, sha256: sha256(content), path, url: `/projects/${slug}/docs/${encoded}`, history_url: `/projects/${slug}/history/${encoded}` }];
   });
 }

@@ -6,6 +6,7 @@
       <p class="paper-summary-line">${esc(sequence.definition)}</p>
       ${sequence.terms.length ? `<p class="paper-summary-line"><b>Initial terms:</b> <code>${sequence.terms.slice(0, 20).map(esc).join(', ')}${sequence.terms.length > 20 ? ', …' : ''}</code></p>` : ''}
       <span class="paper-facts">${sequence.terms.length ? `${sequence.terms.length} terms in the draft${sequence.offset !== null ? ` · offset ${esc(sequence.offset)}` : ''} · ` : ''}<a href="${esc(sequence.url)}">Read the proposal →</a>${full ? ` · <a href="${esc(sequence.history_url)}">Revision history</a>` : ''}</span>
+      <span class="paper-facts document-dates">${SA.dates(sequence.timestamps)}</span>
       ${full && sequence.status_note ? `<p class="paper-summary-line">${esc(sequence.status_note)}</p>` : ''}</li>`;
   }
   SA.createSequences = ({base, front, active, retired, retiredPanel, retry}) => {

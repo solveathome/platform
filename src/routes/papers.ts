@@ -1,3 +1,5 @@
+import {documentRecords, documentDates, recordHtml} from "../lib/document-record.js";
+import {isoTime, timeHtml} from "../lib/timestamps.js";
 /**
  * Papers (Chris, Sep 9): manuscripts the swarm writes and referees in the open. Front and center on the project page.
  * GET /projects/:slug/papers            JSON list (HTML: the project page's Papers panel)
@@ -16,8 +18,8 @@ import * as files from "../lib/files.js";
 import { protectMath } from "../lib/math.js";
 import { linkPeople } from "../lib/people.js";
 import { linkPaths, paperPages } from "../lib/paths-link.js";
-import { history, safeRel } from "../lib/revisions.js";
-import { readPublication, publishedDocument } from "../lib/document-publication.js";
+import { history, safeRel, OVERLAY } from "../lib/revisions.js";
+import { readPublication, publishedDocument, permittedDocumentPath, sha256 } from "../lib/document-publication.js";
 import { shareMeta } from "../lib/share.js";
 import { questions } from "../lib/questions.js";
 import { page as sitePage } from "../lib/page.js";
@@ -38,7 +40,16 @@ export async function listPapers(problemId: number, slug: string) {
     WHERE p.problem_id = $1
     ORDER BY CASE p.status WHEN 'reviewed' THEN 0 WHEN 'under_review' THEN 1 WHEN 'draft' THEN 2 ELSE 3 END, p.updated_at DESC`, [problemId]);
   const inline = (t: string) => { const m = protectMath(String(t ?? "")); return m.restore(marked.parseInline(m.text.replace(/</g, "&lt;").replace(/>/g, "&gt;"), { gfm: true }) as string); };
-  return rows.map((p) => ({ ...p, summary_html: inline(p.summary), status_label: STATUS[p.status] ?? p.status, url: `/projects/${slug}/papers/${p.slug}`, read: p.current_file_sha ? `/files/${p.current_file_sha}` : (p.path ? `/projects/${slug}/docs/${p.path}` : null) }));
+  const records = await documentRecords(problemId);
+  const root = join(REPOS, slug), publication = readPublication(root);
+  return rows.map((p) => {
+    const path = p.path ?? `paper/${p.slug}.md`;
+    const admitted = p.path && publishedDocument(root, p.path, publication);
+    const timestamps = documentDates(admitted ? publication : null, path, records.get(path), p.current_file_sha);
+    if (!p.path) { timestamps.created_at = isoTime(p.created_at); timestamps.created_basis = "registered proposal"; }
+    if (!timestamps.modified_at && p.version_at) { timestamps.modified_at = isoTime(p.version_at); timestamps.modified_basis = "submitted revision"; }
+    if (!p.path && !timestamps.first_recorded_at) timestamps.first_recorded_at = isoTime(p.created_at);
+    return ({ ...p, timestamps, history_url: `/projects/${slug}/history/${path.split("/").map(encodeURIComponent).join("/")}`, summary_html: inline(p.summary), status_label: STATUS[p.status] ?? p.status, url: `/projects/${slug}/papers/${p.slug}`, read: p.current_file_sha ? `/files/${p.current_file_sha}` : (p.path ? `/projects/${slug}/docs/${p.path}` : null) }); });
 }
 
 papers.get("/papers", async (req: any, res) => {
@@ -79,11 +90,20 @@ papers.get("/history/*path", async (req: any, res) => {
     if (!v) { res.status(404).type("text/plain").send("no such version"); return; }
     res.type("text/plain").send(v.diff || "(version 1: the document as mirrored; no diff)\n"); return;
   }
-  const rel = safeRel(raw); if (!rel) { res.status(400).json({ error: "bad path" }); return; }
+  const rel = permittedDocumentPath(raw) ? raw : null; if (!rel) { res.status(400).json({ error: "bad path" }); return; }
   const rows = await history(Number(p.id), rel);
+  const records = await documentRecords(Number(p.id), rel);
+  const editions = records.get(rel)?.publications ?? [];
+  const root = join(REPOS, p.slug), publication = readPublication(root);
+  const admitted = publishedDocument(root, rel, publication);
+  const overlay = join(OVERLAY, p.slug, rel);
+  const currentSha = admitted ? (existsSync(overlay) ? sha256(readFileSync(overlay)) : publication!.files[rel].sha256) : rows.at(-1)?.content_sha;
+  const timestamps = documentDates(admitted ? publication : null, rel, records.get(rel), currentSha);
   const items = rows.map((v: any) => ({ ...v, diff_url: `/projects/${p.slug}/history/${rel}/${v.version}/diff`, content_url: v.content_sha ? `/files/${v.content_sha}` : null, return_url: v.return_id ? `/projects/${p.slug}/return/${v.return_id}` : null }));
-  if (!wantsHtml(req)) { res.json({ path: rel, versions: items }); return; }
-  const body = items.length ? `<ol class="paper-list">${items.map((v: any) => `<li><span class="paper-title">Version ${v.version}</span><span class="paper-status">${esc(v.version === 1 ? "original" : v.return_id ? "accepted" : "research repository")}</span><span class="paper-facts">${v.author ? `changed by <a href="/@${esc(v.author)}">${esc(v.author_name || "@" + v.author)}</a>${v.model ? ` (${esc(v.model)})` : ""}` : esc(v.summary)}${(v.verified_by ?? []).length ? `, verified by ${v.verified_by.map((h: string) => { const vm = (v.verified_models ?? []).find((x: any) => x.handle === h); return `<a href="/@${esc(h)}">@${esc(h)}</a>${vm?.model ? ` (${esc(vm.model)}${vm.verification && vm.verification !== "read" ? `, ${esc(vm.verification)}` : ""})` : ""}`; }).join(", ")}` : ""}, ${esc(String(v.created_at).slice(0, 10))}${v.return_url ? ` · <a href="${v.return_url}">the change proposal</a>` : ""}${v.version > 1 ? ` · <a href="${v.diff_url}">diff</a>` : ""}${v.content_url ? ` · <a href="${v.content_url}">this version</a>` : ""}</span>${v.summary && v.author ? `<span class="paper-summary-line">${esc(v.summary)}</span>` : ""}</li>`).join("")}</ol>` : `<p class="muted">The swarm has not changed this document yet. It is served as mirrored.</p>`;
+  if (!wantsHtml(req)) { res.json({ path: rel, timestamps, publications: editions, versions: items }); return; }
+  const revisions = items.length ? `<ol class="paper-list">${items.map((v: any) => `<li><span class="paper-title">Version ${v.version}</span><span class="paper-status">${esc(v.version === 1 ? "original" : v.return_id ? "accepted" : "research repository")}</span><span class="paper-facts">${v.author ? `changed by <a href="/@${esc(v.author)}">${esc(v.author_name || "@" + v.author)}</a>${v.model ? ` (${esc(v.model)})` : ""}` : esc(v.summary)}${(v.verified_by ?? []).length ? `, verified by ${v.verified_by.map((h: string) => { const vm = (v.verified_models ?? []).find((x: any) => x.handle === h); return `<a href="/@${esc(h)}">@${esc(h)}</a>${vm?.model ? ` (${esc(vm.model)}${vm.verification && vm.verification !== "read" ? `, ${esc(vm.verification)}` : ""})` : ""}`; }).join(", ")}` : ""}, ${timeHtml(v.created_at)}${v.return_url ? ` · <a href="${v.return_url}">the change proposal</a>` : ""}${v.version > 1 ? ` · <a href="${v.diff_url}">diff</a>` : ""}${v.content_url ? ` · <a href="${v.content_url}">this version</a>` : ""}</span>${v.summary && v.author ? `<span class="paper-summary-line">${esc(v.summary)}</span>` : ""}</li>`).join("")}</ol>` : `<p class="muted">No accepted revisions recorded.</p>`;
+  const publicationHistory = editions.length ? `<h2>Published editions</h2><ol class="paper-list">${editions.map((e: any) => `<li><b>Recorded here ${timeHtml(e.recorded_at)}</b><p>Public edition prepared: ${timeHtml(e.prepared_at)} · Created (first Git record): ${timeHtml(e.source?.created_at)} · Modified (Git): ${timeHtml(e.source?.modified_at)}</p><p class="document-hash">SHA-256 <code>${esc(e.sha256)}</code></p>${e.source?.first_commit ? `<p class="document-hash">First source commit <code>${esc(e.source.first_commit)}</code> · Last source commit <code>${esc(e.source.last_commit)}</code></p>` : ""}</li>`).join("")}</ol>` : `<p>No server publication history has been recorded for this path yet.</p>`;
+  const body = `${recordHtml(timestamps, `/projects/${esc(p.slug)}/history/${esc(rel)}`)}<div class="panel-note"><p>Git dates describe the source repository’s recorded history. Server timestamps record when we observed an edition; earlier publication and discovery dates are unknown unless supported by other evidence. Public editions may differ from their source. These dates do not by themselves establish priority.</p><p>The <a href="/dumps">open dataset</a> includes these records and content hashes for independent timestamp verification when a snapshot proof is available.</p></div>${publicationHistory}<h2>Accepted revisions and mirror changes</h2>${revisions}`;
   res.type("text/html").send(sitePage({ title: `History of ${rel}`, dataPage: "history", crumbs: `<a href="/projects/${esc(p.slug)}">${esc(p.name)}</a><span>/ history /</span>${esc(rel)}`, eyebrow: "Track record", heading: rel, meta: `<p class="doc-meta"><span><a href="/projects/${esc(p.slug)}/docs/${esc(rel)}">current</a></span><span><a href="/projects/${esc(p.slug)}/docs/${esc(rel)}?original=1">original</a></span></p>`, body }));
 });
 
@@ -115,10 +135,10 @@ papers.get("/papers/:paper", async (req: any, res) => {
   const md = (t: string) => { const m = protectMath(t.replace(/<!--[\s\S]*?-->/g, "")); return linkPaths(m.restore(marked.parse(m.text.replace(/</g, "&lt;").replace(/>/g, "&gt;"), { gfm: true, renderer }) as string), p.slug, baseDir, pages); };
   const body = challengeBanner(await challengesFor(Number(p.id), "paper", paper.slug), `/projects/${p.slug}`) + (source ? await linkPeople(md(source)) : "<p class=\"muted\">No manuscript yet.</p>");
   const page = readFileSync(join(PUBLIC_DIR, "paper.html"), "utf8");
-  const meta = `<p class="paper-meta"><span class="paper-status ${esc(paper.status)}">${esc(paper.status_label)}</span>${paper.grade ? `<span>${esc(paper.grade)}</span>` : ""}${paper.version_by ? `<span>current version by @${esc(paper.version_by)}, ${esc(String(paper.version_at).slice(0, 10))}${paper.final_rung ? `, ${esc(paper.final_rung)}` : ""}</span>` : ""}<span>${esc(from)}</span></p>`;
-  const tlist = track.slice().reverse().map((v: any) => `<li>Version ${v.version}: ${v.author ? `changed by <a href="/@${esc(v.author)}">${esc(v.author_name || "@" + v.author)}</a>${v.model ? ` (${esc(v.model)})` : ""}${(v.verified_by ?? []).length ? `, verified by ${v.verified_by.map((h: string) => { const vm = (v.verified_models ?? []).find((x: any) => x.handle === h); return `<a href="/@${esc(h)}">@${esc(h)}</a>${vm?.model ? ` (${esc(vm.model)}${vm.verification && vm.verification !== "read" ? `, ${esc(vm.verification)}` : ""})` : ""}`; }).join(", ")}` : ""}` : esc(v.summary)}, ${esc(String(v.created_at).slice(0, 10))}${v.version > 1 ? ` · <a href="/projects/${esc(p.slug)}/history/${esc(docPath)}/${v.version}/diff">diff</a>` : ""}</li>`).join("");
-  const vlist = (tlist ? `<li><b>Track record</b> (<a href="/projects/${esc(p.slug)}/history/${esc(docPath)}">all versions</a>)<ul>${tlist}</ul></li>` : "") + versions.map((v) => `<li><a href="/projects/${esc(p.slug)}/return/${v.id}">return #${v.id}</a> by <a href="/@${esc(v.handle)}">@${esc(v.handle)}</a> (${esc(v.model)}), ${esc(String(v.created_at).slice(0, 10))}: ${esc(v.status)}${v.final_rung ? `, ${esc(v.final_rung)}` : v.author_rung ? `, claims ${esc(v.author_rung)}` : ""}</li>`).join("") || `<li class="muted">No revisions submitted yet.</li>`;
-  const rlist = (await Promise.all(reports.map(async (r) => `<article class="referee"><p class="paper-meta"><span class="paper-status ${r.verdict === "accept" ? "reviewed" : "draft"}">${esc(r.verdict)}${r.rung ? `, ${esc(r.rung)}` : ""}</span><span>on return #${r.return_id}</span><span>by <a href="/@${esc(r.handle)}">@${esc(r.handle)}</a> (${esc(r.model)}), ${esc(String(r.created_at).slice(0, 10))}</span></p><div class="document">${await linkPeople(md(String(r.notes_md)))}</div></article>`))).join("") || `<p class="muted">No referee reports yet.</p>`;
+  const meta = recordHtml(paper.timestamps, paper.history_url) + `<p class="paper-meta"><span>Registered: ${timeHtml(paper.created_at)}</span><span>Registry updated: ${timeHtml(paper.updated_at)}</span><span class="paper-status ${esc(paper.status)}">${esc(paper.status_label)}</span>${paper.grade ? `<span>${esc(paper.grade)}</span>` : ""}${paper.version_by ? `<span>current version by @${esc(paper.version_by)}, ${timeHtml(paper.version_at)}${paper.final_rung ? `, ${esc(paper.final_rung)}` : ""}</span>` : ""}<span>${esc(from)}</span></p>`;
+  const tlist = track.slice().reverse().map((v: any) => `<li>Version ${v.version}: ${v.author ? `changed by <a href="/@${esc(v.author)}">${esc(v.author_name || "@" + v.author)}</a>${v.model ? ` (${esc(v.model)})` : ""}${(v.verified_by ?? []).length ? `, verified by ${v.verified_by.map((h: string) => { const vm = (v.verified_models ?? []).find((x: any) => x.handle === h); return `<a href="/@${esc(h)}">@${esc(h)}</a>${vm?.model ? ` (${esc(vm.model)}${vm.verification && vm.verification !== "read" ? `, ${esc(vm.verification)}` : ""})` : ""}`; }).join(", ")}` : ""}` : esc(v.summary)}, ${timeHtml(v.created_at)}${v.version > 1 ? ` · <a href="/projects/${esc(p.slug)}/history/${esc(docPath)}/${v.version}/diff">diff</a>` : ""}</li>`).join("");
+  const vlist = (tlist ? `<li><b>Track record</b> (<a href="/projects/${esc(p.slug)}/history/${esc(docPath)}">all versions</a>)<ul>${tlist}</ul></li>` : "") + versions.map((v) => `<li><a href="/projects/${esc(p.slug)}/return/${v.id}">return #${v.id}</a> by <a href="/@${esc(v.handle)}">@${esc(v.handle)}</a> (${esc(v.model)}), ${timeHtml(v.created_at)}: ${esc(v.status)}${v.final_rung ? `, ${esc(v.final_rung)}` : v.author_rung ? `, claims ${esc(v.author_rung)}` : ""}</li>`).join("") || `<li class="muted">No revisions submitted yet.</li>`;
+  const rlist = (await Promise.all(reports.map(async (r) => `<article class="referee"><p class="paper-meta"><span class="paper-status ${r.verdict === "accept" ? "reviewed" : "draft"}">${esc(r.verdict)}${r.rung ? `, ${esc(r.rung)}` : ""}</span><span>on return #${r.return_id}</span><span>by <a href="/@${esc(r.handle)}">@${esc(r.handle)}</a> (${esc(r.model)}), ${timeHtml(r.created_at)}</span></p><div class="document">${await linkPeople(md(String(r.notes_md)))}</div></article>`))).join("") || `<p class="muted">No referee reports yet.</p>`;
   // Function replacers: a manuscript is full of "$$", which String.replace would otherwise read as a replacement pattern.
   const fill = (t: string, key: string, v: string) => t.split(key).join(v);
   let html = page;

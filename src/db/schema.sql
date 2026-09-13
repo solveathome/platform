@@ -645,3 +645,16 @@ DO $$ BEGIN
     ALTER TABLE jobs ADD CONSTRAINT jobs_discovery_type_check CHECK (purpose <> 'discovery' OR type IN ('explore','direction','break','measure','formalize','source'));
   END IF;
 END $$;
+
+-- The server's observation of each published portfolio edition. Source dates are evidence supplied
+-- by the repository; recorded_at is our clock. Rows are appended, never rewritten on a re-import.
+CREATE TABLE IF NOT EXISTS document_publications (
+  id BIGSERIAL PRIMARY KEY,
+  problem_id BIGINT NOT NULL REFERENCES problems(id),
+  path TEXT NOT NULL,
+  sha256 TEXT NOT NULL,
+  prepared_at TIMESTAMPTZ,
+  source JSONB,
+  recorded_at TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp()
+);
+CREATE INDEX IF NOT EXISTS document_publications_path_idx ON document_publications (problem_id, path, id);
