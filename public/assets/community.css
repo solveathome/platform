@@ -55,6 +55,10 @@
 .community-list-heading { display: flex; justify-content: space-between; align-items: center; gap: 1rem; margin: 1rem 0 .5rem; }
 .community-list-heading h3 { margin: 0; font-size: .9375rem; }
 .community-list-heading > span { font-size: .8125rem; color: var(--mut); }
+.community-sort { display: flex; align-items: center; flex-wrap: wrap; gap: .5rem; color: var(--mut); font-size: .8125rem; }
+.community-sort select { min-height: 40px; padding: .4rem .6rem; border: 1px solid var(--line); border-radius: 3px; background: var(--bg); color: var(--fg); cursor: pointer; }
+.community-sort select:focus-visible { outline: 2px solid var(--fg); outline-offset: 3px; }
+.community-board > .community-podium { margin-block: 1rem; }
 .community-rows { list-style: none; padding: 0; margin: 0; }
 .community-row { display: grid; grid-template-columns: 1.5rem minmax(0, 1fr) 3.5rem 3.5rem 4.5rem 3.75rem 5.5rem; gap: .5rem; padding: .45rem .25rem; align-items: center; border-top: 1px solid var(--line); }
 .community-row.is-you { background: var(--recognition-bg); border-radius: 3px; }
@@ -68,6 +72,7 @@
 .community-row-work b { display: block; font-size: .9375rem; font-weight: 500; }
 .community-row-work span, .community-score span { display: block; font-size: .75rem; color: var(--mut); }
 .community-score b { display: block; font-size: 1.125rem; font-weight: 600; }
+.community-row .is-sorted b { color: var(--recognition); font-weight: 600; }
 .community-pending, .community-podium-score .community-pending { display: block; margin-top: .2rem; color: var(--mut); font-family: inherit; font-size: .75rem; font-weight: 400; line-height: 1.4; }
 .community-score .community-pending { font-size: .6875rem; }
 .community-you { font: .75rem var(--mono); color: var(--recognition); }

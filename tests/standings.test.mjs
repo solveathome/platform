@@ -95,3 +95,61 @@ test('empty projects have zero totals, no ranked people, and no artificial winne
   assert.deepEqual(st.agents, []);
   assert.ok(Object.values(st.totals).every(v => Number(v) === 0));
 });
+
+test('each metric ranks all people and models before limiting, with points breaking ties and my rank matching', async () => {
+  await db.query('BEGIN');
+  try {
+    await db.query(`
+      INSERT INTO returns (id, problem_id, user_id, type, model, provider, report_md, transcript, status, cpu_hours)
+        SELECT 100+n, 1, n, 'source', CASE WHEN n=12 THEN 'zz-compute' ELSE 'fixture-' || n END, 'test', 'x', 't', 'recorded', CASE WHEN n=12 THEN 11.3 ELSE 0 END
+        FROM generate_series(4,12) n;
+      UPDATE returns SET cpu_hours=2 WHERE id=1;
+      INSERT INTO reviews (id, return_id, user_id, model, provider, verdict) VALUES
+        (3,1,4,'review-other','test','accept'), (4,2,4,'review-other','test','accept');
+      INSERT INTO credits (id, user_id, problem_id, model, kind, points, source_type, source_id)
+        VALUES (6,4,1,'review-other','review',50,'review','3');
+    `);
+    const defaultBoard = await standings(1, '7d', 5, 'person-12');
+    assert.equal(defaultBoard.sort, 'points');
+    assert.ok(defaultBoard.me.rank > 5);
+    assert.ok(!defaultBoard.agents.some(r => r.model === 'zz-compute'));
+    const winners = [
+      ['points', 'person-15', 'model-a'],
+      ['accepted', 'person-1', 'model-a'],
+      ['reviews', 'person-4', 'review-other'],
+      ['all_tokens', 'person-2', 'model-a'],
+      ['cpu_hours', 'person-12', 'zz-compute'],
+    ];
+    for (const [sort, handle, model] of winners) {
+      const st = await standings(1, '7d', 5, handle, sort);
+      assert.equal(st.sort, sort);
+      assert.equal(st.people[0].handle, handle, sort);
+      assert.equal(st.agents[0].model, model, sort);
+      assert.equal(st.me.rank, 1, sort);
+      assert.equal(st.me.active_rank, sort === 'points' ? null : 1, sort);
+      assert.equal(st.active_people[0].handle, sort === 'points' ? 'person-1' : handle, sort);
+      for (const list of [st.people, st.active_people, st.agents]) {
+        assert.equal(list.length, 5);
+        assert.deepEqual(list.map(r => r.rank), [1,2,3,4,5]);
+        assert.ok(list.every((r, i) => !i || Number(list[i-1][sort]) >= Number(r[sort])), sort);
+      }
+      assert.deepEqual(st.totals, defaultBoard.totals, 'sorting cannot change contribution totals');
+    }
+    const expanded = await standings(1, '7d', 100, 'person-3', 'reviews');
+    assert.equal(expanded.me.rank, 2, 'awarded points break equal review counts');
+    const week = await standings(1, '7d', 5, null, 'all_tokens');
+    const all = await standings(1, 'all', 5, null, 'all_tokens');
+    assert.equal(week.people[0].handle, 'person-2');
+    assert.equal(all.people[0].handle, 'person-14', 'the selected window still scopes the metric');
+  } finally { await db.query('ROLLBACK'); }
+});
+
+test('unsupported sort values safely fall back to the default points ranking', async () => {
+  const expected = await standings(1, '7d', 5);
+  for (const sort of ['', 'pending_points', 'points ASC', 'points; SELECT 1', '__proto__']) {
+    const actual = await standings(1, '7d', 5, null, sort);
+    assert.equal(actual.sort, 'points');
+    assert.deepEqual(actual.people, expected.people);
+    assert.deepEqual(actual.agents, expected.agents);
+  }
+});

@@ -43,6 +43,22 @@ test('milestones survive window changes, acknowledge reached thresholds, and sup
   assert.ok(C.progress(null,null,'/projects/example').includes('Contribute your agent'));
 });
 
+test('work rankings show the chosen metric on the podium and personal rank while preserving point milestones', () => {
+  const r = {handle:'reviewer', rank:1, points:0, reviews:59, accepted:36, all_tokens:683100000, cpu_hours:11.3, pending_points:100, all_time_points:500};
+  assert.equal(C.podium([r]), '', 'no points podium without awarded points');
+  for (const [sort, value, unit] of [['accepted','36','accepted'], ['reviews','59','reviews'], ['all_tokens','683.1M','tokens'], ['cpu_hours','11.3','CPU h']]) {
+    const podium = C.podium([r], {sort});
+    assert.ok(podium.includes(`${value} <small>${unit}</small>`), sort);
+    assert.ok(!podium.includes('+100 pending'), 'pending points are not added to another metric');
+    assert.ok(C.rows([r], {sort}).replace(/ title="[^"]*"/g, '').includes(`is-sorted"><b>${value}</b><span>${unit}</span>`), sort);
+    assert.equal(C.podium([{...r, points:100, [sort]:0}], {sort}), '', 'zero activity has no podium');
+    const progress = C.progress(r, {signed_in:true,handle:r.handle}, '/projects/example', {sort});
+    assert.ok(progress.includes(`#1 by ${C.sortLabel(sort, true)}`));
+    assert.ok(progress.includes('Progress toward 1000 all-time points'));
+  }
+  assert.ok(C.podium([{...r, cpu_hours:0.01}], {sort:'cpu_hours'}).includes('&lt;0.1 <small>CPU h</small>'));
+});
+
 test('running assignments safely link the job and its contributor, with per-agent identity', () => {
   const job = {id:123, title:'<img src=x onerror=alert(1)>', type:'" onclick="oops', handle:'" onclick="oops', model:'<script>bad</script>', effort:'<b>max</b>', last_seen:new Date().toISOString()};
   const html = context.SA.runningWork.rows([job, {...job, id:124, model:'another-agent'}], '/projects/example');

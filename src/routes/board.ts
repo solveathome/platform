@@ -128,14 +128,14 @@ board.get("/leaderboard", async (req: any, res) => {
   const w = (["all", "30d", "7d"].includes(String(req.query.window)) ? String(req.query.window) : "all") as Window;
   res.json(await leaderboard(Number(p.id), w));
 });
-/** GET /projects/:slug/standings?window=all|30d|7d : the Contributors panel: totals, people, agents (models), leaders, recent returns. */
+/** GET /projects/:slug/standings?window=all|30d|7d&sort=points|accepted|reviews|all_tokens|cpu_hours */
 board.get("/standings", async (req: any, res) => {
   if (wantsHtml(req)) { res.redirect(302, `/projects/${req.params.slug}#contributors`); return; }
   const p = await one(`SELECT id FROM problems WHERE slug = $1`, [req.params.slug]);
   if (!p) { res.status(404).json({ error: "unknown project" }); return; }
   const w = (["all", "30d", "7d"].includes(String(req.query.window)) ? String(req.query.window) : "all") as Window;
   const me = req.query.me ? String(req.query.me).slice(0, 80) : null;
-  res.json(await standings(Number(p.id), w, Math.min(500, Math.max(5, Number(req.query.limit ?? 100) || 100)), me));
+  res.json(await standings(Number(p.id), w, Math.min(500, Math.max(5, Number(req.query.limit ?? 100) || 100)), me, String(req.query.sort ?? "points")));
 });
 /** GET /leaderboard?window= : across all projects. */
 root.get("/leaderboard", async (req, res) => {

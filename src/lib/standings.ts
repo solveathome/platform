@@ -1,8 +1,7 @@
 /**
  * Standings for a project's Contributors panel: two ledgers, kept apart on purpose.
  * Credit (points) is paid only on accepted consensus (scope Q40). Activity (returns, reviews, posts, tokens, compute)
- * is what has been contributed, scored or not. Sort by points, then by what is in review, so the board is alive
- * before the first acceptance and honest after it.
+ * is what has been contributed, scored or not. Rankings default to points and can use any displayed work metric.
  */
 import { q, one } from "../db/index.js";
 import { POINTS, type Window } from "./credit.js";
@@ -12,7 +11,10 @@ const PENDING_POINTS_SQL = `coalesce(sum(CASE WHEN status = 'pending' OR provisi
 
 const since = (w: Window) => w === "7d" ? "now() - interval '7 days'" : w === "30d" ? "now() - interval '30 days'" : "'epoch'::timestamptz";
 
-export async function standings(problemId: number, w: Window, limit = 100, meHandle: string | null = null) {
+export async function standings(problemId: number, w: Window, limit = 100, meHandle: string | null = null, sortBy = "points") {
+  // Only these aggregate columns can enter ORDER BY. Keep the existing points order as the tie-breaker.
+  const sort = ["points", "accepted", "reviews", "all_tokens", "cpu_hours"].includes(sortBy) ? sortBy : "points";
+  const order = sort === "points" ? "" : `${sort} DESC, `;
   const S = since(w);
   const P = [problemId];
   const totals = await one(`
@@ -86,12 +88,13 @@ export async function standings(problemId: number, w: Window, limit = 100, meHan
     LEFT JOIN ret ON ret.user_id = u.id LEFT JOIN rev ON rev.user_id = u.id LEFT JOIN msg ON msg.user_id = u.id LEFT JOIN cr ON cr.user_id = u.id
     LEFT JOIN seen ON seen.user_id = u.id LEFT JOIN lifetime ON lifetime.user_id = u.id
     LEFT JOIN reputation rp ON rp.user_id = u.id
-    ORDER BY points DESC, accepted DESC, submitted DESC, reviews DESC, output_tokens DESC, messages DESC, last_active DESC NULLS LAST, u.handle`, P);
+    ORDER BY ${order}points DESC, accepted DESC, submitted DESC, reviews DESC, output_tokens DESC, messages DESC, last_active DESC NULLS LAST, u.handle`, P);
   peopleAll.forEach((r, i) => { r.rank = i + 1; });
   const people = peopleAll.slice(0, limit);
   // Credit can arrive long after a person stopped contributing. The front page explicitly features recent activity.
   const activePeople = peopleAll.filter(r => r.last_active != null).map((r, i) => ({ ...r, rank: i + 1 }));
   let me = meHandle ? peopleAll.find((r) => String(r.handle).toLowerCase() === meHandle.toLowerCase()) ?? null : null;
+  if (me) me = { ...me, active_rank: activePeople.find(r => r.handle === me.handle)?.rank ?? null };
 
   // A returning contributor may have no activity in this window; keep their lifetime milestone available without inventing a rank.
   if (meHandle && !me) me = await one(`SELECT u.handle, u.display_name, NULL AS rank, 0 AS points,
@@ -125,7 +128,7 @@ export async function standings(problemId: number, w: Window, limit = 100, meHan
       ret.last_return AS last_active
     FROM ids LEFT JOIN model_tiers mt ON mt.model = ids.model
     LEFT JOIN ret ON ret.model = ids.model LEFT JOIN rev ON rev.model = ids.model LEFT JOIN msg ON msg.model = ids.model LEFT JOIN cr ON cr.model = ids.model
-    ORDER BY points DESC, accepted DESC, returns DESC, output_tokens DESC, ids.model`, P);
+    ORDER BY ${order}points DESC, accepted DESC, returns DESC, output_tokens DESC, ids.model`, P);
   agents.forEach((r, i) => { r.rank = i + 1; });
 
   const kinds = ["result", "breakthrough", "integrated", "insight", "direction", "review", "compute", "tokens"];
@@ -144,5 +147,5 @@ export async function standings(problemId: number, w: Window, limit = 100, meHan
     FROM returns r JOIN users u ON u.id = r.user_id LEFT JOIN lanes l ON l.id = r.lane_id
     WHERE r.problem_id = $1 AND r.created_at >= ${S} ORDER BY r.id DESC LIMIT 12`, P);
 
-  return { window: w, as_of: new Date().toISOString(), totals, people, people_total: peopleAll.length, active_people: activePeople.slice(0, limit), active_people_total: activePeople.length, me, agents: agents.slice(0, limit), agents_total: agents.length, leaders, activity_leaders, recent, points: POINTS };
+  return { window: w, sort, as_of: new Date().toISOString(), totals, people, people_total: peopleAll.length, active_people: activePeople.slice(0, limit), active_people_total: activePeople.length, me, agents: agents.slice(0, limit), agents_total: agents.length, leaders, activity_leaders, recent, points: POINTS };
 }
