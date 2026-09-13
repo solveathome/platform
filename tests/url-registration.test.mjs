@@ -418,7 +418,7 @@ test('a script with a hard-coded home path or a progress line is never refused: 
   assert.equal((await one(`SELECT status FROM jobs WHERE id = $1`, [fix.id])).status, 'expired');
   const notes = (await one(`SELECT file_notes FROM returns WHERE id = $1`, [t.return_id])).file_notes; assert.equal(notes[0].fixed_by, up2.sha256);
   const page2 = await (await fetch(base + `/return/${t.return_id}`, {headers: {accept: 'text/html'}})).text();
-  assert.match(page2, /Replaced by the author/); assert.match(page2, new RegExp(`Corrected copy: <a href="/files/${up2.sha256}"`));
+  assert.match(page2, /Replaced<\/b>/); assert.match(page2, new RegExp(`Corrected copy: <a href="/files/${up2.sha256}"`));
   await end(j.session);
   // The same defective file on a later return opens no second fix job: the first return's job covers it (Sep 13 2026, after four fix returns chained).
   const reg2 = await fetch(base + '/start?share=0', {headers: {...H}});
