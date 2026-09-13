@@ -1093,7 +1093,7 @@ Fetch the current file (GET ${P}/docs/${rel}), make the change, check it still r
 }
 export const FILE_FIX_TITLE = "Fix files of return ";
 /** An accepted return on a "Fix files" job: the original's note on each same-named file is marked fixed by the corrected copy, as the author's own replacement is. A fix shipped as a patch marks nothing. */
-async function markFixedByReturn(jobId: number, fixReturnId: number): Promise<void> {
+export async function markFixedByReturn(jobId: number, fixReturnId: number): Promise<void> {
   const job = await one<{ follow_up_of: string | null; title: string }>(`SELECT follow_up_of, title FROM jobs WHERE id = $1`, [jobId]);
   if (!job?.follow_up_of || !String(job.title).startsWith(FILE_FIX_TITLE)) return;
   const orig = await one<{ file_notes: any }>(`SELECT file_notes FROM returns WHERE id = $1`, [job.follow_up_of]);

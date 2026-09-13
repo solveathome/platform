@@ -9,7 +9,7 @@
  */
 import { q, one, pool } from "../src/db/index.js";
 import * as files from "../src/lib/files.js";
-import { spawnFixJob, spawnFileFixJob, FILE_FIX_TITLE } from "../src/routes/job.js";
+import { spawnFixJob, spawnFileFixJob, markFixedByReturn, FILE_FIX_TITLE } from "../src/routes/job.js";
 
 const args = process.argv.slice(2);
 const pairs: { review: number; path: string }[] = [];
@@ -39,6 +39,8 @@ for (const [id, e] of byReturn) {
   if (isNew) { spawned++; console.log(`return #${id}: fix job #${jid} queued for ${remaining.map((f) => f.name).join(", ")}`); }
 }
 console.log(`file notes re-derived on ${byReturn.size} returns with files; ${spawned} fix job(s) queued, ${closed} closed`);
+// Fix returns accepted before acceptance marked the original's note (Sep 13 2026): mark them now.
+for (const a of await q<{ id: string; return_id: string }>(`SELECT j.id, r.id AS return_id FROM jobs j JOIN returns r ON r.job_id = j.id AND r.status = 'accepted' WHERE j.title LIKE $1 AND j.status = 'accepted'`, [`${FILE_FIX_TITLE}%`])) await markFixedByReturn(Number(a.id), Number(a.return_id));
 for (const p of pairs) {
   const rv = await one<any>(`SELECT rv.id, rv.return_id, rv.notes_md, u.handle, rt.problem_id, rt.lane_id, pr.slug FROM reviews rv JOIN users u ON u.id = rv.user_id JOIN returns rt ON rt.id = rv.return_id JOIN problems pr ON pr.id = rt.problem_id WHERE rv.id = $1`, [p.review]);
   if (!rv) { console.log(`review #${p.review}: not found`); continue; }
