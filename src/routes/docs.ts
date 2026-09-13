@@ -8,7 +8,7 @@ import {datesHtml, timeHtml} from "../lib/timestamps.js";
 import { Router } from "express";
 import { wantsHtml } from "../lib/negotiate.js";
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
-import { join, normalize, extname, dirname, posix } from "node:path";
+import { join, extname, dirname, posix } from "node:path";
 import { marked } from "marked";
 import { safeRenderer } from "../lib/markdown.js";
 import { challengesFor, challengeBanner } from "../lib/tangent.js";
@@ -41,7 +41,9 @@ const MAX_TEXT = 3 * 1024 * 1024;
 const esc = (s: string) => s.replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]!));
 
 function safePath(root: string, rel: string): string | null {
-  const n = normalize("/" + rel).replace(/^\/+/, "");
+  // POSIX-normalise so the separators stay forward-slash on win32, where path.normalize returns a single segment
+  // beginning with a backslash and the dotfile test below could never match (a request for .env would be served).
+  const n = posix.normalize("/" + String(rel ?? "").replace(/\\/g, "/")).replace(/^\/+/, "");
   // No dot-segments and no dotfiles at all: nothing published starts with a dot, and .env, .git and the manifest never leave the disk.
   if (n.split("/").some((seg) => seg === ".." || seg === "." || seg.startsWith("."))) return null;
   const abs = join(root, n);
