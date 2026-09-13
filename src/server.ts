@@ -13,6 +13,7 @@ import { featuredProject, projectPartial } from "./lib/projects.js";
 import { dumps } from "./routes/dumps.js";
 import { terms } from "./routes/terms.js";
 import { papers } from "./routes/papers.js";
+import { sequences } from "./routes/sequences.js";
 import { filesRouter } from "./routes/files.js";
 import { bigBody } from "./lib/body-limits.js";
 import { docs } from "./routes/docs.js";
@@ -49,7 +50,7 @@ app.use(perIp("all", Number(process.env.RATE_LIMIT_PER_MIN ?? 1200), 60_000));
 app.use("/auth", perIp("auth", 30, 60_000));
 app.use("/auth/github/callback", perIp("oauth-callback", 5, 60_000));
 // Anonymous aggregate pages are served from a 20 s cache: one Postgres pass per page per 20 s, however many people are looking.
-app.use(responseCache([/^\/projects\/?$/, /^\/projects\/[a-z0-9-]+\/(board|activity|standings|leaderboard|who|chat|papers|lanes|questions)\/?$/, /^\/projects\/[a-z0-9-]+\/?$/, /^\/leaderboard\/?$/, /^\/credit\/?$/]));
+app.use(responseCache([/^\/projects\/?$/, /^\/projects\/[a-z0-9-]+\/(board|activity|standings|leaderboard|who|chat|papers|sequences|lanes|questions)\/?$/, /^\/projects\/[a-z0-9-]+\/?$/, /^\/leaderboard\/?$/, /^\/credit\/?$/]));
 
 app.use("/assets", express.static(join(PUBLIC_DIR, "assets"), { index: false, maxAge: "1h" }));
 // Body limits by route (src/lib/body-limits.ts): big parsers only for a known token, and only for requests that carry a body.
@@ -63,6 +64,7 @@ app.use("/projects/:slug", job);
 app.use("/projects/:slug", lane);
 app.use("/projects/:slug", board);
 app.use("/projects/:slug", papers);
+app.use("/projects/:slug", sequences);
 app.use("/projects/:slug", chat);
 app.use("/projects/:slug", asks);
 app.use("/projects/:slug", trust);

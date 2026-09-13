@@ -16,6 +16,10 @@
   },
   "status_md": "Twin-prime infinitude remains OPEN. Central object G₂(x#); proven upper bound exponent 4.26645; target exponent 2. Status is copied verbatim from the repo README at each dump.",
   "researcher": "Benjaminsen",
+  "sequence_proposals": [
+    "research/oeis-seam-submission.md",
+    "research/oeis-G2-submission.md"
+  ],
   "lanes": [
     {
       "slug": "g2-exponent",
