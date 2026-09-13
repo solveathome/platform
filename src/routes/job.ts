@@ -604,7 +604,7 @@ const onceWarning = (tokens: Tokens): string[] => tokens.already_counted ? [`${t
 function logWarning(tokens: any, what: string, report?: { id: number; count: number } | null): string | null {
   if (tokens.mismatch) return `your transcript is not this assignment's: ${tokens.mismatch.reason}. It is accepted and on the record as you sent it, but it is the wrong log, for two reasons. The transcript is the history of the research: a reviewer must see what you read, ran and reasoned for this assignment, and this log shows another one. And it is how your person gets credit: no tokens are counted from a log that belongs to another assignment (that one was credited on its own return), so your person is credited nothing for this work until the right lines are on record. Resubmit the lines of this assignment, from the GET /start that received it to this return: ${what} with { "transcript": "<those session log lines>" }. ${LOG_LOCATIONS} Scrub as data, keep the original line format.`;
   if (tokens.log === "custom") return `your transcript is in the solveathome format, written by you: accepted and counted as you state it (${(tokens.input + tokens.output + tokens.cache_read + tokens.cache_write).toLocaleString("en-US")} tokens), and labelled agent-written on the record. If your harness does keep a log, that is always preferred: ${LOG_LOCATIONS}`;
-  if (tokens.log === "antigravity") return `your transcript is a Google Antigravity transcript.jsonl: recognised and on the record as the history of this assignment. Antigravity writes no usage into it, so no tokens are counted from the log${tokens.source === "reported" ? `; the ${(tokens.input + tokens.output + tokens.cache_read + tokens.cache_write).toLocaleString("en-US")} tokens you stated in \`tokens\` are credited as reported` : `; if your harness shows this session's usage, resubmit with \`tokens\` { "input", "output", "cache_read" } stated with the return and it is credited as you state it`}.`;
+  if (tokens.log === "antigravity") return `your transcript is a Google Antigravity transcript.jsonl: recognised and on the record as the history of this assignment. Antigravity writes no usage into it, so no tokens are counted from the log${tokens.source === "reported" ? `; the ${(tokens.input + tokens.output + tokens.cache_read + tokens.cache_write).toLocaleString("en-US")} tokens you stated in \`tokens\` are credited as reported` : `; if your harness shows this assignment's usage, send ${what} with { "transcript": "<the same assignment log>", "tokens": { "input": <count>, "output": <count>, "cache_read": <count> } }; the supplied usage is credited as reported. Report only this assignment's usage, never a whole session total already claimed on another return`}.`;
   if (isSessionLog(tokens)) return tokens.log === "copilot" ? `your transcript is a GitHub Copilot CLI events log: recognised. Copilot writes usage only on its model.model_call_success lines, not on every turn, so the server counted ${tokens.entries} usage record(s) (${(tokens.input + tokens.output + tokens.cache_read + tokens.cache_write).toLocaleString("en-US")} tokens); that is what your person is credited.` : null;
   if (tokens.log === "unknown") return `your transcript is a log the server does not recognise: your harness is not supported yet. The return is accepted and on the record as it is, and the log stays in the history of the research as you sent it, but no tokens are counted from it, so your person is credited nothing for the tokens this work cost until support exists. The shape is recorded as harness report #${report?.id ?? "?"}${report && report.count > 1 ? ` (seen ${report.count} times)` : ""}; support is added as soon as a person has looked at it, and you can then resubmit this log with ${what} with { "transcript": ... } to be credited. Until then, if you want your person credited now, rewrite your log into the solveathome transcript format (${CUSTOM_FORMAT_URL}), one JSON line per turn with the usage your harness shows, and resubmit that; it is counted as you state it and labelled agent-written. Tell your person: the harness name and where it keeps its session log, posted at https://github.com/solveathome/platform/issues, gets it done sooner. Supported today: Claude Code, Codex, GitHub Copilot CLI, OpenCode, Google Antigravity.`;
   return `your transcript is not a session log${tokens.log === "summary" ? ": it reads as a summary you wrote" : ": the server recognises no harness in it"}. It is accepted and on the record, but this is wrong, for two reasons. The transcript is the history of the research: reviewers and anyone later need to see what you read, ran and reasoned, and a summary hides that. And it is how your person gets credit: the server counts tokens from the log's own usage lines, so your person is credited nothing for the tokens this work cost. Resubmit the real log: ${what} with { "transcript": "<the session log lines of this assignment>" }. It is a file your harness already wrote; do not write one unless your harness keeps none, and then only in the solveathome transcript format (${CUSTOM_FORMAT_URL}). ${LOG_LOCATIONS} Cut to this assignment's lines, scrub as data, keep the original line format.`;
@@ -744,7 +744,9 @@ job.post("/result", bearer, project, assignmentMutation(async (req: any, res) =>
   const problem = req.project;
   if (jobRow && Number(jobRow.problem_id) !== Number(problem.id)) { res.status(400).json({ error: "job belongs to another project" }); return; }
   const laneId = jobRow?.lane_id ?? (b.lane ? (await one(`SELECT id FROM lanes WHERE slug = $1 AND problem_id = $2`, [b.lane, problem.id]))?.id : null) ?? null;
-  const rtype = jobRow?.type ?? b.type ?? "direction";
+  // A file repair is mechanical work, even when its source was a paper, audit or direction (issue #57).
+  // Recognise jobs already handed out before the fix as well as newly generated measure jobs.
+  const rtype = jobRow?.follow_up_of && String(jobRow.title).startsWith(FILE_FIX_TITLE) ? "measure" : jobRow?.type ?? b.type ?? "direction";
   // Checkable work carries its own verification recipe, so the reviewer runs it instead of redoing the job.
   const recipe = typeof b.recipe_md === "string" ? b.recipe_md.trim() : "";
   if (["break", "measure", "formalize"].includes(rtype) && recipe.length < 40) { res.status(400).json({ error: "recipe_md is required for break, measure and formalize returns: the exact commands (served script paths, inputs, parameters), the expected outputs and their sha256, and how long they take. A reviewer runs the recipe; they do not redo your work." }); return; }
@@ -779,7 +781,7 @@ job.post("/result", bearer, project, assignmentMutation(async (req: any, res) =>
   // Paper returns are checked before anything is written (platform issue #1: a refused return left orphan rows). Slugs keep their case
   // as seeded ("exact-fold-L") and are matched case-insensitively.
   let paperPlan: { paperId: number | null; slug: string; fsha: string } | null = null;
-  if (jobRow?.type === "paper" || (!jobRow && b.type === "paper")) {
+  if (rtype === "paper") {
     const raw = String(b.paper?.slug ?? "").trim().replace(/[^A-Za-z0-9-]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 60);
     const found = raw ? await one<{ id: number; slug: string }>(`SELECT id, slug FROM papers WHERE problem_id = $1 AND lower(slug) = lower($2)`, [problem.id, raw]) : null;
     const proposes = !found && !jobRow && raw && b.paper?.title;
@@ -824,7 +826,7 @@ job.post("/result", bearer, project, assignmentMutation(async (req: any, res) =>
     await q(`UPDATE papers SET status = 'under_review', updated_at = now() WHERE id = $1`, [paperId]);
   }
   // Audit: a change proposal for a served document. revision.path is the document, revision.file the revised text (uploaded, listed in files).
-  if (jobRow?.type === "audit" || (!jobRow && b.type === "audit")) {
+  if (rtype === "audit") {
     const rel = revisions.safeRel(String(b.revision?.path ?? ""));
     const fsha = String(b.revision?.file ?? "").toLowerCase();
     if (!rel || !(await revisions.exists(problem.slug, rel, Number(problem.id)))) { res.status(400).json({ error: "an audit return needs revision: { path, file } where path is a document served at <project>/docs/<path> (or a paper's path)" }); return; }
@@ -833,7 +835,7 @@ job.post("/result", bearer, project, assignmentMutation(async (req: any, res) =>
     const paper = await one(`SELECT slug FROM papers WHERE problem_id = $1 AND path = $2`, [problem.id, rel]);
     if (paper) await q(`UPDATE returns SET paper_slug = $2 WHERE id = $1`, [ret!.id, paper.slug]);
   }
-  if (jobRow?.type === "curate") {
+  if (rtype === "curate") {
     if (!b.decision || typeof b.decision !== "object") { res.status(400).json({ error: "curate returns need a decision object" }); return; }
     await q(`UPDATE returns SET decision = $2 WHERE id = $1`, [ret!.id, JSON.stringify(b.decision)]);
   }
@@ -1129,7 +1131,7 @@ ${notes.map((f) => `- ${f.name} (GET /files/${f.sha}): ${f.notes.join(" ")}`).jo
 
 Fix ${notes.length === 1 ? "it" : "them"}; do not redo the work. Upload a corrected copy of each file under the same name (POST /files; paths relative to the repository, progress and timing to stderr, random draws seeded), run it from a fresh directory against the served scripts to check it works, and return as this job with the new sha(s) in \`files\`, \`"cites": { "returns": [${ret.id}] }\`, a recipe that runs the corrected file, and a one-line report of what changed. The original return keeps its record; yours carries the working copy.`;
   const j = await one<{ id: string }>(`INSERT INTO jobs (problem_id, lane_id, type, title, brief_md, git_ref, compute_hint, budget_hours, min_tier, quorum, follow_up_of) VALUES ($1,$2,$3,$4,$5,'main','{}',$6,99,1,$7) RETURNING id`,
-    [ret.problem_id, ret.lane_id, ret.type, `Fix files of return #${ret.id}: ${notes.map((f) => f.name).join(", ")}`.slice(0, 200), brief, Math.min(1, Number(orig?.budget_hours ?? 1)) || 1, ret.id]);
+    [ret.problem_id, ret.lane_id, "measure", `Fix files of return #${ret.id}: ${notes.map((f) => f.name).join(", ")}`.slice(0, 200), brief, Math.min(1, Number(orig?.budget_hours ?? 1)) || 1, ret.id]);
   return j ? Number(j.id) : null;
 }
 /** A follow-up job: bring a return that could not be checked to a checkable state. Any tier for mechanical types; the original work travels with it; the follow-up cites the original so its author is paid on acceptance. */
@@ -1276,10 +1278,10 @@ async function resubmitTranscript(req: any, res: any, kind: "return" | "review")
   if (Number(row.user_id) !== uid) { res.status(403).json({ error: `only the author's handle can resubmit the transcript of ${kind} #${id}` }); return; }
   const bad = scrubError("transcript", b.transcript); if (bad) { res.status(400).json(bad); return; }
   if (needsSourceReview(b.transcript)) { res.status(400).json({ error: `${SOURCE_REVIEW_MESSAGE} The check tripped in "transcript" on this line: "${sourceReviewHit(b.transcript) ?? "?"}".`, field: "transcript" }); return; }
-  // This source's own entries are released before the new log is counted, so a corrected cut of the same session is not "already counted" against itself.
-  await q(`DELETE FROM counted_entries WHERE source_type = $1 AND source_id = $2`, [kind, id]);
-  const counted = await countOnce(uid, b.transcript);
-  const tokens = counted.tokens;
+  // Antigravity logs contain no usage: accept the same reported fallback as intake. Preserve a
+  // previously reported count when only the log is corrected; native usage still takes precedence.
+  const reported = b.tokens ?? (row.tokens?.source === "reported" ? row.tokens : undefined);
+  let tokens = parseTranscript(b.transcript, reported);
   if (!isSessionLog(tokens)) {
     const report = tokens.log === "unknown" ? await reportHarness(b.transcript, { [kind === "return" ? "returnId" : "reviewId"]: id, uid, model: row.model ?? null } as any) : null;
     res.status(400).json({ error: tokens.log === "unknown" ? `this log is not recognised: your harness is not supported yet (harness report #${report?.id ?? "?"}). Support is added once a person has looked at it; resubmit then. Nothing was changed.` : `still not a session log (${tokens.log}). ${LOG_LOCATIONS} Attach that file's lines for this assignment, unchanged in format; nothing was changed.`, log: tokens.log, ...(report ? { harness_report: report.id } : {}) }); return;
@@ -1289,6 +1291,10 @@ async function resubmitTranscript(req: any, res: any, kind: "return" | "review")
   if (mismatch) { res.status(400).json({ error: `this log is not ${kind} #${id}'s: ${mismatch.reason}. Send the session log lines of assignment #${row.assignment_id}, from the GET /start that received it to the return; nothing was changed.`, mismatch }); return; }
   const observed = Object.keys(tokens.models ?? {}).filter((m) => m !== "codex" && m !== "copilot" && m !== "opencode");
   if (observed.length && row.model && !observed.some((m) => m.toLowerCase() === String(row.model).toLowerCase())) { res.status(400).json({ error: `this log records ${observed.join(", ")} but ${kind} #${id} is on the record as ${row.model}; nothing was changed.`, observed, recorded: row.model }); return; }
+  // Validation must finish before releasing any entries. A refused replacement keeps the old credit and deduplication record.
+  await q(`DELETE FROM counted_entries WHERE user_id = $1 AND source_type = $2 AND source_id = $3`, [uid, kind, id]);
+  const counted = await countOnce(uid, b.transcript, reported);
+  tokens = counted.tokens;
   if (tokens.models && (Object.keys(tokens.models).length === 0 || tokens.models.codex !== undefined || tokens.models.copilot !== undefined || tokens.models.opencode !== undefined) && row.model) { const n = tokens.models.codex ?? tokens.models.copilot ?? tokens.models.opencode ?? tokens.output; delete tokens.models.codex; delete tokens.models.copilot; delete tokens.models.opencode; if (n > 0) tokens.models[row.model] = (tokens.models[row.model] ?? 0) + n; }
   await registerEntries(uid, kind, id, counted.keys);
   const ttot = tokens.input + tokens.output + tokens.cache_read + tokens.cache_write;
@@ -1310,7 +1316,7 @@ async function resubmitTranscript(req: any, res: any, kind: "return" | "review")
   }
   res.json({ ok: true, [kind]: id, tokens, log: tokens.log, effort_evidence: effortEvidence, warnings: [...onceWarning(tokens), ...(homeWarning("transcript", b.transcript) ? [homeWarning("transcript", b.transcript)!] : [])], note: `${kind} #${id} now carries this log; ${ttot.toLocaleString("en-US")} tokens counted and credited to your person${kind === "return" ? "; the public transcript URL refreshes within an hour" : ""}.` });
 }
-job.post("/return/:id/transcript", bearer, project, (req: any, res) => resubmitTranscript(req, res, "return"));
+job.post("/return/:id/transcript", bearer, project, assignmentMutation((req: any, res) => resubmitTranscript(req, res, "return"), { commitErrors: true }));
 /**
  * The author attaches corrected copies of files the server flagged at submission (Chris, Sep 12 2026: detected at intake, fixed right then).
  * A new file with the same name as a flagged one marks that note fixed; when every note is fixed the queued fix job closes.
@@ -1339,7 +1345,7 @@ job.get("/harness-reports", project, async (_req: any, res) => {
   const rows = await q(`SELECT h.id, h.signature, h.head, h.first_return_id, h.first_review_id, u.handle, h.model, h.count, h.first_seen_at, h.last_seen_at, h.resolved_at, h.note FROM harness_reports h LEFT JOIN users u ON u.id = h.user_id ORDER BY h.resolved_at NULLS FIRST, h.last_seen_at DESC`);
   res.json({ reports: rows.map((r: any) => ({ ...r, id: Number(r.id), count: Number(r.count), first_return_id: r.first_return_id === null ? null : Number(r.first_return_id), first_review_id: r.first_review_id === null ? null : Number(r.first_review_id) })), supported: ["Claude Code", "Codex", "GitHub Copilot CLI", "OpenCode"] });
 });
-job.post("/review/:id/transcript", bearer, project, (req: any, res) => resubmitTranscript(req, res, "review"));
+job.post("/review/:id/transcript", bearer, project, assignmentMutation((req: any, res) => resubmitTranscript(req, res, "review"), { commitErrors: true }));
 
 job.get("/return/:id/transcript", project, async (req: any, res) => {
   const r = await one(`SELECT transcript FROM returns WHERE id = $1 AND problem_id = $2`, [req.params.id, req.project.id]);

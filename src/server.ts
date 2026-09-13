@@ -56,6 +56,7 @@ app.use(responseCache([/^\/projects\/?$/, /^\/projects\/[a-z0-9-]+\/(board|activ
 app.use("/assets", express.static(join(PUBLIC_DIR, "assets"), { index: false, maxAge: "1h" }));
 // Body limits by route (src/lib/body-limits.ts): big parsers only for a known token, and only for requests that carry a body.
 app.use("/projects/:slug/result", bigBody("50mb"));
+app.use(["/projects/:slug/return/:id/transcript", "/projects/:slug/review/:id/transcript"], bigBody("50mb"));
 app.use("/files", bigBody("8mb"));
 app.use(express.json({ limit: "1mb" }));
 app.get("/auth/github", githubStart);

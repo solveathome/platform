@@ -152,7 +152,17 @@ root.get("/@:handle", async (req, res) => {
   const u = await one(`SELECT u.id, u.handle, u.display_name, u.website, u.created_at, rp.score, rp.accepted, rp.rejected, rp.review_agree, rp.review_disagree, rp.cpu_hours, rp.directions_accepted
     FROM users u LEFT JOIN reputation rp ON rp.user_id = u.id WHERE lower(u.handle) = lower($1)`, [req.params.handle]);
   if (!u) { res.status(404).json({ error: "no such contributor" }); return; }
-  const recent = await q(`SELECT r.id, p.slug AS project, r.type, r.status, r.final_rung, r.created_at FROM returns r JOIN problems p ON p.id = r.problem_id WHERE r.user_id = $1 ORDER BY r.id DESC LIMIT 50`, [u.id]);
+  const recent = await q(`SELECT r.id, p.slug AS project, r.type, r.status, r.provisional, r.final_rung, r.tokens, r.created_at FROM returns r JOIN problems p ON p.id = r.problem_id WHERE r.user_id = $1 ORDER BY r.id DESC LIMIT 50`, [u.id]);
+  const work = await one(`SELECT count(*)::int AS submitted,
+      count(*) FILTER (WHERE status IN ('pending','contested') OR provisional)::int AS awaiting_review,
+      count(*) FILTER (WHERE status = 'recorded')::int AS recorded,
+      count(*) FILTER (WHERE tokens->>'log' = 'antigravity' AND tokens->>'source' = 'none')::int AS usage_missing
+    FROM returns WHERE user_id = $1`, [u.id]);
+  const released = await q(`SELECT DISTINCT ON (m.job_id) m.job_id, j.title, j.status, j.follow_up_of, p.slug AS project, m.body_md AS note, m.created_at
+    FROM messages m JOIN jobs j ON j.id = m.job_id JOIN problems p ON p.id = j.problem_id
+    WHERE m.user_id = $1 AND m.kind = 'done' AND m.body_md LIKE 'Released job #%'
+      AND NOT EXISTS (SELECT 1 FROM returns r WHERE r.job_id = m.job_id AND r.user_id = $1)
+    ORDER BY m.job_id DESC, m.id DESC LIMIT 20`, [u.id]);
   const lanes = await q(`SELECT p.slug AS project, l.slug, l.title FROM lanes l JOIN problems p ON p.id = l.problem_id WHERE l.origin_user_id = $1 ORDER BY l.id`, [u.id]);
   const ledger = await q(`SELECT c.kind, c.points, c.model, c.source_type, c.source_id, c.note, c.created_at, p.slug AS project,
       -- A review credit's source is the review job's id, or 'r<return id>' when the review was self-assigned (no job): never cast blind (a 500 on every profile with one such row, Sep 11).
@@ -165,7 +175,7 @@ root.get("/@:handle", async (req, res) => {
   const researcher_of = await q(`SELECT slug, name, researcher_role FROM problems WHERE researcher_user_id = $1`, [u.id]);
   const { id: _omit, ...pub } = u;
   res.json({ contributor: pub, researcher_of, provenance, credit: { total: totals.reduce((s: number, t: any) => s + Number(t.points), 0), by_kind: Object.fromEntries(totals.map((t: any) => [t.kind, Number(t.points)])), ledger }, agent_time: { accepted: u.accepted, rejected: u.rejected, review_agree: u.review_agree, review_disagree: u.review_disagree },
-             compute: { cpu_hours: u.cpu_hours }, research_input: { directions_accepted: u.directions_accepted, lanes }, recent });
+             compute: { cpu_hours: u.cpu_hours }, research_input: { directions_accepted: u.directions_accepted, lanes }, work, released, recent });
 });
 
 root.get("/my/jobs", bearer, async (req, res) => {

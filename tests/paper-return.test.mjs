@@ -16,7 +16,7 @@ const {migrate, q, one, pool} = await import('../src/db/index.ts');
 const {issueToken} = await import('../src/lib/auth.ts');
 const {TERMS_VERSION} = await import('../src/lib/terms.ts');
 const files = await import('../src/lib/files.ts');
-const {job} = await import('../src/routes/job.ts');
+const {job, spawnFileFixJob} = await import('../src/routes/job.ts');
 
 const tag = `paper-test-${Date.now().toString(36)}`;
 const slug = tag, handle = `${tag}-person`;
@@ -45,6 +45,7 @@ after(async () => {
   await q(`DELETE FROM channel_members WHERE user_id = $1`, [uid]);
   await q(`DELETE FROM credits WHERE user_id = $1`, [uid]);
   await q(`DELETE FROM reviews WHERE user_id = $1`, [uid]);
+  await q(`UPDATE jobs SET follow_up_of = NULL WHERE problem_id = $1`, [pid]);
   await q(`DELETE FROM returns WHERE problem_id = $1`, [pid]);
   await q(`DELETE FROM jobs WHERE problem_id = $1`, [pid]);
   await q(`DELETE FROM papers WHERE problem_id = $1`, [pid]);
@@ -105,4 +106,30 @@ test('issue #8: the pending-revisions block finds a mixed-case paper slug', asyn
   assert.match(s3.brief_md, /## Pending revisions of this paper/);
   assert.match(s3.brief_md, new RegExp(rsha.slice(0, 12)));
   await call('POST', `/sessions/${s3.session}/end`, {body: {note: 'test'}});
+});
+
+test('issue #57: file repairs submit as measure work with a recipe, including legacy paper and audit jobs', async () => {
+  for (const legacyType of ['paper', 'audit']) {
+  const original = await one(`SELECT id FROM returns WHERE problem_id = $1 AND paper_slug = 'exact-fold-L' ORDER BY id LIMIT 1`, [pid]);
+  const source = await one(`INSERT INTO returns (problem_id,type,user_id,model,provider,report_md,transcript) VALUES ($1,$2,$3,'claude-fable-5-1','anthropic','Original.','t') RETURNING id`, [pid, legacyType, uid]);
+  const fixId = await spawnFileFixJob({id: Number(source.id), type: legacyType, problem_id: pid, lane_id: null}, [{sha: 'c'.repeat(64), name: 'check.js', notes: ['timing on stdout']}]);
+  const queued = await one(`SELECT type, min_tier FROM jobs WHERE id = $1`, [fixId]);
+  assert.equal(queued.type, 'measure'); assert.equal(queued.min_tier, 99);
+  // Simulate the still-assigned jobs created by the old server. The author need not fake a manuscript or change their payload type.
+  await q(`UPDATE jobs SET type = $3, status = 'assigned', assigned_to = $2, assigned_at = now() WHERE id = $1`, [fixId, uid, legacyType]);
+  const fixed = (await files.store(uid, 'claude-fable-5-1', 'check.js', 'js', 'console.error("timing"); console.log(42);\n')).sha;
+  const beforePaper = await one(`SELECT status, current_file_sha FROM papers WHERE problem_id = $1`, [pid]);
+  const body = {job_id: fixId, report_md: 'Moved timing to stderr.', transcript: 't', transcript_approved: true, files: [fixed], author_rung: 'verified'};
+  const missing = await call('POST', '/result', {body});
+  assert.equal(missing.status, 400); assert.match((await missing.json()).error, /recipe_md is required/);
+  const response = await call('POST', '/result', {body: {...body, recipe_md: 'Run node check.js > out.txt twice from a fresh directory; stdout is 42 followed by a newline.'}});
+  const result = await response.json(); assert.equal(response.status, 200, JSON.stringify(result));
+  const ret = await one(`SELECT type, status, paper_slug, revision_sha, cites FROM returns WHERE id = $1`, [result.return_id]);
+  assert.equal(ret.type, 'measure'); assert.equal(ret.status, 'pending');
+  assert.equal(ret.paper_slug, null); assert.equal(ret.revision_sha, null);
+  assert.ok(ret.cites.returns.includes(Number(source.id)));
+  assert.deepEqual(await one(`SELECT status, current_file_sha FROM papers WHERE problem_id = $1`, [pid]), beforePaper);
+  const reviews = await q(`SELECT min_tier FROM jobs WHERE parent_return_id = $1`, [result.return_id]);
+  assert.ok(reviews.length); assert.ok(reviews.every(r => r.min_tier === 99), 'mechanical reviews, not manuscript reviews');
+  }
 });

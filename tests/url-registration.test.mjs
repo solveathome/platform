@@ -378,7 +378,34 @@ test('a usage entry counts once per person: the same session log on a second ret
   const paid2 = await q(`SELECT points FROM credits WHERE source_type = 'return' AND source_id = $1 AND kind = 'tokens'`, [String(r2.return_id)]);
   assert.equal(paid2.length, 1, 'one token row for the second return'); assert.ok(Math.abs(Number(paid2[0].points) - 140 / 1e6) < 1e-9, JSON.stringify(paid2));
   assert.equal(Number((await one(`SELECT count(*) AS c FROM counted_entries WHERE user_id = $1 AND key LIKE 'cc:' || $2 || '%'`, [uid, tag])).c), 3, 'three entries on record, each once');
+  const refused = await fetch(base + `/return/${r2.return_id}/transcript`, {method: 'POST', headers: H(a.session), body: JSON.stringify({transcript: 'not a session log'})});
+  assert.equal(refused.status, 400);
+  assert.equal(Number((await one(`SELECT count(*) AS c FROM counted_entries WHERE source_type = 'return' AND source_id = $1`, [r2.return_id])).c), 1, 'a refused replacement must keep the existing deduplication entries');
   await end(a.session);
+});
+
+test('Antigravity usage can be added on resubmission, corrected once, and preserved when only the log changes', async () => {
+  const transcript = JSON.stringify({step_index: 1, source: 'MODEL', type: 'PLANNER_RESPONSE', created_at: new Date().toISOString(), thinking: 'Checked the assignment.', tool_calls: []});
+  const ret = await one(`INSERT INTO returns (problem_id,type,user_id,model,provider,report_md,transcript,status,tokens) VALUES ($1,'explore',$2,'gemini-3.8-flash','google','Checked it.',$3,'recorded','{"input":0,"output":0,"cache_read":0,"cache_write":0,"log":"antigravity","source":"none"}') RETURNING id`, [pid, uid, transcript]);
+  const H = {authorization: `Bearer ${token}`, accept: 'application/json', 'content-type': 'application/json', 'x-model': 'gemini-3.8-flash'};
+  const resubmit = (body) => fetch(base + `/return/${ret.id}/transcript`, {method: 'POST', headers: H, body: JSON.stringify(body)});
+  const total = () => q(`SELECT points FROM credits WHERE source_type = 'return' AND source_id = $1 AND kind = 'tokens'`, [String(ret.id)]);
+  for (const usage of [{input: 1200, output: 300, cache_read: 500}, {input: 2400, output: 600, cache_read: 1000}]) {
+    const response = await resubmit({transcript, tokens: usage});
+    const result = await response.json(); assert.equal(response.status, 200, JSON.stringify(result));
+    assert.equal(result.tokens.source, 'reported'); assert.equal(result.tokens.input, usage.input);
+    const paid = await total(); assert.equal(paid.length, 1);
+    assert.equal(Number(paid[0].points), (usage.input + usage.output + usage.cache_read) / 1e6);
+  }
+  const response = await resubmit({transcript});
+  assert.equal(response.status, 200); assert.equal((await response.json()).tokens.input, 2400);
+  assert.equal(Number((await total())[0].points), 0.004);
+  // The logged usage still wins over a supplied fallback, and cannot leave the previously reported amount behind.
+  const native = JSON.stringify({type: 'assistant', message: {id: `${tag}-native-usage`, model: 'gemini-3.8-flash', usage: {input_tokens: 50, output_tokens: 10}}});
+  const parsed = await resubmit({transcript: native, tokens: {input: 1_000_000, output: 1_000_000}});
+  assert.equal(parsed.status, 200); assert.equal((await parsed.json()).tokens.source, 'claude-jsonl');
+  assert.equal(Number((await total())[0].points), 0.00006);
+  assert.equal((await one(`SELECT status FROM returns WHERE id = $1`, [ret.id])).status, 'recorded', 'usage never implies acceptance');
 });
 
 test('a script with a hard-coded home path or a progress line is never refused: the upload and the return warn, the page and the review brief carry the note; a home path in a text field warns too', async () => {

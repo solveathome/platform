@@ -28,6 +28,8 @@ before(async () => {
 });
 after(async () => {
   server?.close();
+  await q(`DELETE FROM messages WHERE user_id = $1`, [uid]);
+  await q(`DELETE FROM channels WHERE problem_id = $1`, [pid]);
   await q(`DELETE FROM credits WHERE user_id = $1`, [uid]);
   await q(`DELETE FROM jobs WHERE problem_id = $1`, [pid]);
   await q(`DELETE FROM returns WHERE problem_id = $1`, [pid]);
@@ -48,4 +50,19 @@ test('the profile JSON renders with a self-assigned review credit in the ledger,
   assert.equal(Number(byNote['self-assigned'].review_of), retId);
   assert.equal(byNote['accepted'].review_of, null);
   assert.equal(j.credit.total, 20.5);
+});
+
+test('profiles distinguish submissions awaiting review, missing Antigravity usage, and work released without a result', async () => {
+  await q(`INSERT INTO returns (problem_id,type,user_id,model,provider,report_md,transcript,status,tokens) VALUES
+    ($1,'audit',$2,'gemini-3.8-flash','google','audit','t','pending','{"log":"antigravity","source":"none"}'),
+    ($1,'explore',$2,'gemini-3.8-flash','google','explore','t','recorded','{"log":"antigravity","source":"reported","input":100}')`, [pid, uid]);
+  const channel = await one(`INSERT INTO channels (problem_id,path,title) VALUES ($1,'','Project') RETURNING id`, [pid]);
+  const repair = await one(`INSERT INTO jobs (problem_id,type,title,brief_md,follow_up_of) VALUES ($1,'measure','Fix files of return #1','Repair it',$2) RETURNING id`, [pid, retId]);
+  await q(`INSERT INTO messages (channel_id,user_id,kind,body_md,job_id) VALUES ($1,$2,'done',$3,$4)`, [channel.id, uid, `Released job #${repair.id} back to the queue: Uploaded the repaired file but could not submit.`, repair.id]);
+  const r = await fetch(`${base}/@${tag}`, {headers: {accept: 'application/json'}});
+  const j = await r.json(); assert.equal(r.status, 200, JSON.stringify(j));
+  assert.deepEqual(j.work, {submitted: 3, awaiting_review: 1, recorded: 1, usage_missing: 1});
+  assert.equal(j.released.length, 1); assert.equal(Number(j.released[0].job_id), Number(repair.id));
+  assert.match(j.released[0].note, /could not submit/);
+  assert.equal(j.credit.total, 20.5, 'activity is not fabricated credit');
 });

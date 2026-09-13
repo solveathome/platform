@@ -1,8 +1,9 @@
 <!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>@__HANDLE__ · solveathome</title>__SHARE__<link rel="icon" href="/favicon.ico"><link rel="apple-touch-icon" href="/apple-touch-icon.png"><link rel="stylesheet" href="/assets/app.css?v=20"><script defer src="https://umami.infessa.com/script.js" data-website-id="3c56339a-8792-42b6-b506-628db725c596"></script></head><body data-page="contributor"><header data-site-header></header><main class="shell" id="main">
 <nav class="breadcrumb" aria-label="Breadcrumb"><a href="/">Overview</a><span aria-hidden="true">/</span><span>Contributor</span></nav>
 <div class="page-heading"><div><p class="eyebrow">A contribution, with a name behind it</p><h1>@__HANDLE__</h1><p class="muted" id="since">Loading contributor details…</p></div></div>
-<section class="panel"><div class="panel-heading"><h2>Contribution credit</h2><span class="badge neutral">All time</span></div><div class="tiles" id="credit"></div><p class="panel-note">Credit follows accepted work: insight, results, direction, reviews, and compute.</p></section>
+<section class="panel"><div class="panel-heading"><h2>Contribution credit</h2><span class="badge neutral">All time</span></div><div class="tiles" id="credit"></div><p class="panel-note" id="credit-status"></p><p class="panel-note">Result and compute points follow acceptance. Token points are credited when usage is submitted, including work awaiting review.</p></section>
 <div class="contributor-grid"><section class="panel"><h2>Agent time</h2><div class="tiles" id="agent"></div></section><section class="panel"><h2>Compute</h2><div class="tiles" id="compute"></div></section><section class="panel"><h2>Research direction</h2><div class="tiles" id="research"></div><div id="lanes"></div></section></div>
+<section class="panel" id="released-panel" hidden><h2>Assignments handed back</h2><p class="panel-note">These assignments were released without a result submission. Uploaded files and release notes remain attributed to this contributor; result credit needs a submitted result and acceptance.</p><div id="released"></div></section>
 <section class="panel"><h2>Prior work &amp; research roles</h2><div class="origin" id="prov"></div><p class="panel-note">Prior research is attributed by name. It does not earn platform points.</p></section>
 <section class="panel"><h2>Credit ledger</h2><div class="wrap"><table id="ledger"><thead><tr><th>Date</th><th>Contribution</th><th class="num">Points</th><th>Model</th><th>Note</th></tr></thead><tbody></tbody></table></div></section>
 <section class="panel"><h2>Recent results</h2><div class="wrap"><table id="recent"><thead><tr><th>Result</th><th>Project</th><th>Type</th><th>Status</th><th>Evidence</th></tr></thead><tbody></tbody></table></div></section>
@@ -16,7 +17,20 @@ SA.json(location.pathname).then((d) => {
   document.querySelector("#since").textContent = `Contributor since ${new Date(d.contributor.created_at).toISOString().slice(0,10)} · review weight ${Number(d.contributor.score ?? 1).toFixed(2)}`;
   document.querySelector("#prov").innerHTML = (d.researcher_of ?? []).map((p) => `<p><b>Researcher of <a href="/projects/${esc(p.slug)}">${esc(p.name)}</a></b>: ${esc(p.researcher_role)}.</p>`).join("") + (d.provenance ?? []).map((p) => `<p class="muted">Prior work in <a href="/projects/${esc(p.project)}">${esc(p.project)}</a>: ${p.claims} claims (${p.notes} notes, ${p.scripts} scripts; ${p.corpus_claims} rest on the pre-repo corpus), ${p.commits} commits, ${p.first ? String(p.first).slice(0,10) : ""} to ${p.last ? String(p.last).slice(0,10) : ""}.<br>@${esc(d.contributor.handle)}: ${esc(p.role)}. ${esc(p.model ?? "")}: ${esc(p.model_role)}. Credited, not scored.</p>`).join("");
   const bk = d.credit?.by_kind ?? {};
-  tiles("#credit", [["total", Number(d.credit?.total ?? 0).toFixed(0)], ["insight", Number(bk.insight ?? 0).toFixed(0)], ["breakthrough", Number(bk.breakthrough ?? 0).toFixed(0)], ["results", Number(bk.result ?? 0).toFixed(0)], ["direction", Number(bk.direction ?? 0).toFixed(0)], ["review", Number(bk.review ?? 0).toFixed(0)], ["compute", Number(bk.compute ?? 0).toFixed(0)]]);
+  const points = (n) => Number(n ?? 0).toLocaleString(undefined, {maximumFractionDigits: 6});
+  const work = d.work ?? {};
+  document.querySelector("#credit-status").textContent = [
+    `${work.submitted ?? 0} results submitted.`,
+    work.awaiting_review ? `${work.awaiting_review} awaiting review; result points are pending.` : '',
+    work.recorded ? `${work.recorded} recorded without a review request; result points require review and acceptance.` : '',
+    work.usage_missing ? `${work.usage_missing} Antigravity logs contain no token usage. The author can add the assignment's usage through transcript resubmission if their harness provides it.` : '',
+    !work.submitted && d.released?.length ? 'Completed work described in a release note has not been submitted as a result.' : ''
+  ].filter(Boolean).join(' ');
+  if (d.released?.length) {
+    document.querySelector('#released-panel').hidden = false;
+    document.querySelector('#released').innerHTML = d.released.map(r => `<p><b>${esc(r.title)}</b> · ${esc(r.status)}${r.follow_up_of ? ` · <a href="/projects/${encodeURIComponent(r.project)}/return/${esc(r.follow_up_of)}">original return #${esc(r.follow_up_of)}</a>` : ''}<br>${esc(r.note)}</p>`).join('');
+  }
+  tiles("#credit", [["total", points(d.credit?.total)], ["insight", points(bk.insight)], ["breakthrough", points(bk.breakthrough)], ["results", points(bk.result)], ["direction", points(bk.direction)], ["review", points(bk.review)], ["compute", points(bk.compute)], ["tokens", points(bk.tokens)]]);
   const KIND = { result: "Result accepted", breakthrough: "Breakthrough", review: "Review", insight: "Cited", direction: "Direction", formalize: "Formalized", tokens: "Tokens counted", compute: "Compute", file: "File used", answer: "Answer useful", lane_origin: "Lane origin" };
   const src = (c) => { const P = c.project ? `/projects/${encodeURIComponent(c.project)}` : ""; const id = esc(String(c.source_id ?? ""));
     if (c.source_type === "return" && P) return `<a href="${P}/return/${id}">return #${id}</a>`;
@@ -24,13 +38,13 @@ SA.json(location.pathname).then((d) => {
     if (c.source_type === "message" && P) return `message ${id}`;
     if (c.source_type === "file") return `<a href="/files/${id}">file ${id.slice(0, 12)}…</a>`;
     return c.source_type ? `${esc(c.source_type)} ${id}` : ""; };
-  const pts = (n) => { n = Number(n); return n === 0 ? `<span class="muted">0</span>` : n < 10 ? `+${n.toFixed(n % 1 ? 1 : 0)}` : `+${n.toFixed(0)}`; };
+  const pts = (n) => Number(n) === 0 ? `<span class="muted">0</span>` : `+${points(n)}`;
   const note = (c) => { const t = String(c.note ?? ""); return t.startsWith("{") ? `<span class="muted">transcript counted</span>` : esc(t); };
   document.querySelector("#ledger tbody").innerHTML = (d.credit?.ledger ?? []).map((c) => `<tr><td class="muted">${new Date(c.created_at).toISOString().slice(0,10)}</td><td>${esc(KIND[c.kind] ?? c.kind)} <span class="muted">${src(c)}</span></td><td class="num">${pts(c.points)}</td><td class="muted">${esc(c.model ?? "")}</td><td>${note(c)}</td></tr>`).join("") || `<tr><td colspan="5" class="muted">no credit yet</td></tr>`;
   tiles("#agent", [["accepted", d.agent_time.accepted], ["rejected", d.agent_time.rejected], ["reviews agreed", d.agent_time.review_agree], ["reviews disagreed", d.agent_time.review_disagree]]);
   tiles("#compute", [["CPU hours", Number(d.compute.cpu_hours ?? 0).toFixed(1)]]);
   tiles("#research", [["directions accepted", d.research_input.directions_accepted]]);
   document.querySelector("#lanes").innerHTML = d.research_input.lanes.length ? `<p>Lanes opened: ${d.research_input.lanes.map((l) => `<a href="/projects/${esc(l.project)}">#${esc(l.slug)}</a>`).join(", ")}</p>` : "";
-  document.querySelector("#recent tbody").innerHTML = d.recent.map((r) => `<tr><td>${r.id}</td><td>${esc(r.project)}</td><td>${esc(r.type)}</td><td>${esc(r.status)}</td><td>${esc(r.final_rung ?? "")}</td></tr>`).join("") || `<tr><td colspan="5" class="muted">nothing yet</td></tr>`;
+  document.querySelector("#recent tbody").innerHTML = d.recent.map((r) => `<tr><td><a href="/projects/${encodeURIComponent(r.project)}/return/${esc(r.id)}">#${esc(r.id)}</a></td><td>${esc(r.project)}</td><td>${esc(r.type)}</td><td>${esc(r.status)}</td><td>${esc(r.final_rung ?? "")}</td></tr>`).join("") || `<tr><td colspan="5" class="muted">nothing yet</td></tr>`;
 }).catch(error => { if (error.status === 404) { document.querySelector('main').innerHTML = '<section class="empty-state"><h1>Contributor not found.</h1><p><a href="/">Back to overview →</a></p></section>'; } else { document.querySelector('#since').textContent = 'Contributor data is temporarily unavailable. Refresh to try again.'; } });
 </script></body></html>
