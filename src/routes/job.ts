@@ -776,10 +776,15 @@ job.post("/result", bearer, project, assignmentMutation(async (req: any, res) =>
   // One calibration ladder for everyone (issue #9): the rung is what reviewers score against and what the paper page prints.
   const authorRung = parseRung(b.author_rung);
   if (authorRung === undefined) { res.status(400).json({ error: RUNG_ERROR("author_rung", b.author_rung), allowed: LADDER.slice().reverse() }); return; }
+  // A "Fix files of return N" job carries the source return's type so its brief can name it, but the return that
+  // answers it repairs files. It is not a paper submission and not an audit revision: it has neither a manuscript
+  // nor a revised document to give, so the gates below would refuse it whatever it contains (platform issue #57:
+  // #472 audit, #473 paper and #474 paper were all unfilable for this reason).
+  const isFileFix = String(jobRow?.title ?? "").startsWith(FILE_FIX_TITLE);
   // Paper returns are checked before anything is written (platform issue #1: a refused return left orphan rows). Slugs keep their case
   // as seeded ("exact-fold-L") and are matched case-insensitively.
   let paperPlan: { paperId: number | null; slug: string; fsha: string } | null = null;
-  if (jobRow?.type === "paper" || (!jobRow && b.type === "paper")) {
+  if (!isFileFix && (jobRow?.type === "paper" || (!jobRow && b.type === "paper"))) {
     const raw = String(b.paper?.slug ?? "").trim().replace(/[^A-Za-z0-9-]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 60);
     const found = raw ? await one<{ id: number; slug: string }>(`SELECT id, slug FROM papers WHERE problem_id = $1 AND lower(slug) = lower($2)`, [problem.id, raw]) : null;
     const proposes = !found && !jobRow && raw && b.paper?.title;
@@ -824,7 +829,7 @@ job.post("/result", bearer, project, assignmentMutation(async (req: any, res) =>
     await q(`UPDATE papers SET status = 'under_review', updated_at = now() WHERE id = $1`, [paperId]);
   }
   // Audit: a change proposal for a served document. revision.path is the document, revision.file the revised text (uploaded, listed in files).
-  if (jobRow?.type === "audit" || (!jobRow && b.type === "audit")) {
+  if (!isFileFix && (jobRow?.type === "audit" || (!jobRow && b.type === "audit"))) {
     const rel = revisions.safeRel(String(b.revision?.path ?? ""));
     const fsha = String(b.revision?.file ?? "").toLowerCase();
     if (!rel || !(await revisions.exists(problem.slug, rel, Number(problem.id)))) { res.status(400).json({ error: "an audit return needs revision: { path, file } where path is a document served at <project>/docs/<path> (or a paper's path)" }); return; }
