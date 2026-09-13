@@ -1,7 +1,7 @@
 /**
  * Re-derive the token record of every stored return and review (Sep 12 2026); idempotent, run after a deploy that changes how transcripts
  * are read:  bash scripts/prod-exec.sh node dist/scripts/backfill-log-kind.js
- * - `tokens.log` (claude-code | codex | copilot | opencode | custom | withheld | summary | unknown) is stamped on every row.
+ * - `tokens.log` (claude-code | codex | copilot | opencode | antigravity | custom | withheld | summary | unknown) is stamped on every row.
  * - A transcript from another assignment (issue #55) is stamped `tokens.mismatch`, its count zeroed and its token credit row set to zero.
  * - A usage entry counts once per person (Chris: "clean up the highscore"): `counted_entries` is rebuilt in submission order, entries already
  *   on record for the handle are skipped (`tokens.already_counted`), and the count and the credit row follow.

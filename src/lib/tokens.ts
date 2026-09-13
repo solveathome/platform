@@ -5,6 +5,10 @@
  * GitHub Copilot CLI events.jsonl (Sep 12 2026): `model.model_call_success` lines carry data.responseUsage {prompt_tokens, completion_tokens,
  * prompt_tokens_details.cached_tokens}; the CLI does not write one for every turn, so the count is what the log has. `log` names the
  * kind of record a transcript is; a summary the agent wrote is accepted but is not a session log and counts nothing.
+ * Google Antigravity transcript.jsonl (Sep 13 2026, harness report #1, return #193): one step per line {step_index, source USER_EXPLICIT|MODEL|SYSTEM,
+ * type USER_INPUT|PLANNER_RESPONSE|GENERIC|SYSTEM_MESSAGE, status, created_at, content | thinking + tool_calls}. It carries no usage at all, so nothing is
+ * counted from it and the agent's stated `tokens` stand in (source "reported"); the model and the thinking level come from the harness's own
+ * `<USER_SETTINGS_CHANGE>` block ("`Model Selection` from None to Gemini 3.8 Flash (High)") in the user step.
  */
 import { createHash } from "node:crypto";
 import { canonicalModel, parseEffort } from "./model-id.js";
@@ -14,7 +18,7 @@ const lineKey = (s: string): string => "l:" + createHash("sha1").update(s).diges
 
 /** No single return spends more than this per field; anything above is a forged or broken transcript, not usage. */
 export const MAX_TOKENS_PER_FIELD = 50_000_000;
-export type LogKind = "claude-code" | "codex" | "copilot" | "opencode" | "custom" | "withheld" | "summary" | "unknown";
+export type LogKind = "claude-code" | "codex" | "copilot" | "opencode" | "antigravity" | "custom" | "withheld" | "summary" | "unknown";
 /** A transcript that is not the assignment's own (issue #55): what it names or when it ends, in words for the agent and the page. */
 export type Mismatch = { reason: string; job: number; jobs_named?: number[]; ends_at?: string };
 /** Usage entries of this transcript that were already counted on the person's earlier returns or reviews, and where. */
@@ -31,10 +35,10 @@ export function jobsNamed(text: string): number[] {
   for (const m of t.matchAll(/\\?"job_id\\?"\s*:\s*\\?"?(\d+)/g)) ids.add(Number(m[1]));
   return [...ids].sort((a, b) => a - b);
 }
-/** When the log ends: the latest ISO "timestamp" (Claude Code, Codex, Copilot) or millisecond "created" (OpenCode) it carries; null when it carries none. */
+/** When the log ends: the latest ISO "timestamp" (Claude Code, Codex, Copilot) or "created_at" (Antigravity), or millisecond "created" (OpenCode) it carries; null when it carries none. */
 export function logEndsAt(text: string): Date | null {
   let max = 0;
-  for (const m of String(text ?? "").matchAll(/"timestamp"\s*:\s*"(\d{4}-\d{2}-\d{2}T[^"]{5,40})"/g)) { const v = Date.parse(m[1]); if (Number.isFinite(v) && v > max) max = v; }
+  for (const m of String(text ?? "").matchAll(/"(?:timestamp|created_at)"\s*:\s*"(\d{4}-\d{2}-\d{2}T[^"]{5,40})"/g)) { const v = Date.parse(m[1]); if (Number.isFinite(v) && v > max) max = v; }
   for (const m of String(text ?? "").matchAll(/"created"\s*:\s*(1[5-9]\d{11})\b/g)) { const v = Number(m[1]); if (v > max) max = v; }
   return max ? new Date(max) : null;
 }
@@ -52,7 +56,7 @@ export function assignmentMismatch(text: string, jobId: number, assignedAt: Date
   return null;
 }
 /** Accepted as a transcript: a harness's own log, or one the agent wrote in the solveathome format (labelled agent-written, counts what it states). */
-export const SESSION_LOG_KINDS: LogKind[] = ["claude-code", "codex", "copilot", "opencode", "custom"];
+export const SESSION_LOG_KINDS: LogKind[] = ["claude-code", "codex", "copilot", "opencode", "antigravity", "custom"];
 /** The format an agent may write itself when its harness keeps no log (Chris, Sep 12 2026); spec in docs/transcript-format.md. */
 export const CUSTOM_FORMAT_URL = "https://github.com/solveathome/platform/blob/main/docs/transcript-format.md";
 export const isSessionLog = (t: { log?: LogKind } | null | undefined): boolean => !!t?.log && SESSION_LOG_KINDS.includes(t.log);
@@ -60,12 +64,14 @@ export const isSessionLog = (t: { log?: LogKind } | null | undefined): boolean =
 export const notSessionLog = (t: { log?: LogKind } | null | undefined): boolean => t?.log === "summary" || t?.log === "unknown";
 
 /**
- * What kind of record a transcript is, from the line shapes: a Claude Code session file, a Codex rollout, a Copilot CLI events log, or
- * neither: a summary the agent wrote (it usually says so: "activity_summary", "not a native transcript") or something unrecognised.
+ * What kind of record a transcript is, from the line shapes: a Claude Code session file, a Codex rollout, a Copilot CLI events log, an OpenCode
+ * export, an Antigravity transcript.jsonl, or neither: a summary the agent wrote (it usually says so: "activity_summary", "not a native transcript")
+ * or something unrecognised.
  */
 export function logKind(text: string): LogKind {
   const t = String(text ?? "");
   if (/"type":\s*"solveathome\.(?:transcript|turn)"/.test(t)) return "custom";
+  if (/"type":\s*"(?:PLANNER_RESPONSE|USER_INPUT|SYSTEM_MESSAGE)"/.test(t) && /"step_index"\s*:\s*\d/.test(t)) return "antigravity";
   if (/"type":\s*"(?:assistant\.message|assistant\.turn_start|tool\.execution_(?:start|complete)|model\.model_call_success)"/.test(t)) return "copilot";
   if (/"type":\s*"(?:token_count|token_usage_record|response_item|event_msg|session_meta|turn_context)"/.test(t) || /"(?:last_token_usage|total_token_usage|thread_token_usage)"/.test(t)) return "codex";
   if (/"type":\s*"(?:assistant|user)"\s*,/.test(t) && /"message"\s*:\s*\{/.test(t)) return "claude-code";
@@ -74,6 +80,18 @@ export function logKind(text: string): LogKind {
   if (/"type":\s*"activity_summary"|not a (?:native )?(?:conversation )?transcript|activity summary/i.test(t)) return "summary";
   const jsonLines = t.split("\n").filter((l) => l.trim().startsWith("{")).length;
   return jsonLines < 3 ? "summary" : "unknown";
+}
+
+/**
+ * Antigravity's own record of what the person selected, in the user step: "The user changed setting `Model Selection` from None to
+ * Gemini 3.8 Flash (High)." The name canonicalises to the model id (gemini-3.8-flash); the word in parentheses is the thinking level.
+ */
+export function antigravitySetting(content: unknown): { model: string; level: string | null } | null {
+  // The sentence ends with a full stop followed by space or end of text; "3.8" inside the name is not the end.
+  const m = /`Model Selection` from [^\n]*? to ([A-Za-z0-9][A-Za-z0-9 .\-]*?)(?:\s*\(([A-Za-z][A-Za-z \-]*)\))?\s*\.(?=\s|$)/.exec(String(content ?? ""));
+  if (!m) return null;
+  const model = canonicalModel(m[1]); if (!model || model === "none") return null;
+  return { model, level: m[2] ? m[2].trim().toLowerCase() : null };
 }
 
 /** The shape of an unrecognised log: the sorted top-level keys of its first JSON lines, so one harness is one report however many returns it sends. */
@@ -92,7 +110,7 @@ export function logHead(text: string, lines = 3, width = 400): string {
 }
 
 /** Where each harness keeps the session log, for the brief, the orientation and the intake warning. */
-export const LOG_LOCATIONS = "Claude Code: `~/.claude/projects/<encoded-cwd>/<session>.jsonl` (newest: `ls -t ~/.claude/projects/$(pwd | tr / -)/*.jsonl | head -1`). Codex: `~/.codex/sessions/<year>/<month>/<day>/rollout-*.jsonl`. GitHub Copilot CLI: `~/.copilot/session-state/<session-id>/events.jsonl` (under `$COPILOT_HOME` if you relocated it; newest: `ls -td ~/.copilot/session-state/*/ | head -1`). OpenCode: `opencode export <session-id>`, or the message files under `~/.local/share/opencode/storage/`, one JSON object per line. If your harness keeps no log at all, write one in the solveathome transcript format (" + CUSTOM_FORMAT_URL + "): one JSON line per turn with what was said, run and returned, and the usage you can read from your harness; it is accepted, counted as you state it, and labelled agent-written on the record.";
+export const LOG_LOCATIONS = "Claude Code: `~/.claude/projects/<encoded-cwd>/<session>.jsonl` (newest: `ls -t ~/.claude/projects/$(pwd | tr / -)/*.jsonl | head -1`). Codex: `~/.codex/sessions/<year>/<month>/<day>/rollout-*.jsonl`. GitHub Copilot CLI: `~/.copilot/session-state/<session-id>/events.jsonl` (under `$COPILOT_HOME` if you relocated it; newest: `ls -td ~/.copilot/session-state/*/ | head -1`). OpenCode: `opencode export <session-id>`, or the message files under `~/.local/share/opencode/storage/`, one JSON object per line. Google Antigravity: the conversation's `transcript.jsonl` under `~/.gemini/antigravity/` (newest: `ls -t $(find ~/.gemini/antigravity -name transcript.jsonl) | head -1`); it carries no usage, so send this session's tokens as `tokens` { input, output, cache_read } with the return if your harness shows them, and they are credited as you state them. If your harness keeps no log at all, write one in the solveathome transcript format (" + CUSTOM_FORMAT_URL + "): one JSON line per turn with what was said, run and returned, and the usage you can read from your harness; it is accepted, counted as you state it, and labelled agent-written on the record.";
 
 /** How much of a transcript's tool output was replaced by omission notes (issue #46): outputs counted by their JSONL types, omissions by bracketed notes saying "omitted". */
 export function omissionShare(text: string): { outputs: number; omitted: number; share: number } {
@@ -123,6 +141,8 @@ export function parseTranscriptWithKeys(text: string, reported?: any, exclude?: 
   for (const line of lines) {
     const s = line.trim(); if (!s.startsWith("{")) continue;
     let d: any; try { d = JSON.parse(s); } catch { continue; }
+    // Antigravity steps carry no usage; the user step names the model the person selected (kept so X-Model can be checked).
+    if (typeof d?.step_index === "number" && typeof d?.source === "string") { const st = typeof d.content === "string" && d.content.includes("Model Selection") ? antigravitySetting(d.content) : null; if (st) t.models![st.model] = t.models![st.model] ?? 0; continue; }
     const u = d?.message?.usage;
     if (u && typeof u === "object" && (u.input_tokens !== undefined || u.output_tokens !== undefined)) {
       const id = d.message?.id ? String(d.message.id) : null;
@@ -218,14 +238,16 @@ export function total(t: Tokens): number { return t.input + t.output + t.cache_r
  * The thinking level a Claude Code session ran at, from its own record (Sep 12 2026): every assistant line of the session JSONL carries a
  * top-level `effort`. The last assistant line wins (a person can change it mid-session). The model itself does not know its level and
  * guesses when asked, so this is the evidence the server trusts over the declared X-Effort. OpenCode records it as `variant` on its assistant
- * messages. Codex and Copilot CLI logs carry none, and the agent-written solveathome format is not evidence: null.
+ * messages. Antigravity writes the level in parentheses after the model the person selected, in the user step's `<USER_SETTINGS_CHANGE>` block.
+ * Codex and Copilot CLI logs carry none, and the agent-written solveathome format is not evidence: null.
  */
 export function effortFromTranscript(text: string): string | null {
   let last: string | null = null;
   for (const line of String(text ?? "").split("\n")) {
-    const s = line.trim(); if (!s.startsWith("{") || !(s.includes('"effort"') || s.includes('"variant"'))) continue;
+    const s = line.trim(); if (!s.startsWith("{") || !(s.includes('"effort"') || s.includes('"variant"') || s.includes("Model Selection"))) continue;
     let d: any; try { d = JSON.parse(s); } catch { continue; }
-    const raw = d?.type === "assistant" && typeof d.effort === "string" ? d.effort : d?.role === "assistant" && typeof d.variant === "string" && (d.modelID !== undefined || d.providerID !== undefined) ? d.variant : null;
+    const ag = typeof d?.step_index === "number" && typeof d?.content === "string" ? antigravitySetting(d.content) : null;
+    const raw = ag ? ag.level : d?.type === "assistant" && typeof d.effort === "string" ? d.effort : d?.role === "assistant" && typeof d.variant === "string" && (d.modelID !== undefined || d.providerID !== undefined) ? d.variant : null;
     if (!raw) continue;
     const e = parseEffort(raw); if (e) last = e;
   }

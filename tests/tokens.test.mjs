@@ -141,3 +141,32 @@ test('issue #55: a log naming other assignments and never this one, or ending be
   assert.equal(logEndsAt(oc).toISOString(), '2026-09-11T16:01:10.000Z', 'OpenCode millisecond times');
   assert.equal(logEndsAt(line({time: {created: 1}})), null, 'a small counter is not a time');
 });
+
+test('a Google Antigravity transcript.jsonl is a session log (Sep 13 2026, harness report #1): recognised, no usage in it so the stated tokens stand in, model and thinking level from the settings block', () => {
+  const ag = [
+    JSON.stringify({step_index: 0, source: 'USER_EXPLICIT', type: 'USER_INPUT', status: 'DONE', created_at: '2026-09-13T16:16:26Z', content: '<USER_REQUEST>\nWe are joining the solveathome cluster\n</USER_REQUEST>\n<USER_SETTINGS_CHANGE>\nThe user changed setting `Model Selection` from None to Gemini 3.8 Flash (High). No need to comment on this change if the user doesn\'t ask about it.\n</USER_SETTINGS_CHANGE>'}),
+    JSON.stringify({step_index: 1, source: 'MODEL', type: 'PLANNER_RESPONSE', status: 'DONE', created_at: '2026-09-13T16:16:30Z', thinking: 'Reading the brief.', tool_calls: [{name: 'run_command', args: {CommandLine: '"curl -s https://solveathome.org/projects/twin-primes/start"', Cwd: '"<workspace>"'}}]}),
+    JSON.stringify({step_index: 2, source: 'MODEL', type: 'GENERIC', status: 'DONE', created_at: '2026-09-13T16:16:31Z', content: 'The command exited with code 0.\nOutput:\n# solveathome job #481: Fix files of return #93', truncated_fields: ['content']}),
+    JSON.stringify({step_index: 3, source: 'SYSTEM', type: 'SYSTEM_MESSAGE', status: 'DONE', created_at: '2026-09-13T16:17:26Z', content: 'The following is a <SYSTEM_MESSAGE> not actually sent by the user.'}),
+    JSON.stringify({step_index: 4, source: 'MODEL', type: 'PLANNER_RESPONSE', status: 'DONE', created_at: '2026-09-13T16:20:22Z', thinking: 'Submitting.', tool_calls: []}),
+  ].join('\n');
+  assert.equal(logKind(ag), 'antigravity');
+  const t = parseTranscript(ag);
+  assert.equal(t.log, 'antigravity'); assert.equal(isSessionLog(t), true);
+  assert.equal(t.entries, 0); assert.equal(t.source, 'none'); assert.equal(t.input + t.output + t.cache_read + t.cache_write, 0, 'the log carries no usage');
+  assert.deepEqual(t.models, {'gemini-3.8-flash': 0}, 'the model the person selected, for the X-Model check');
+  assert.equal(effortFromTranscript(ag), 'high', 'the level in parentheses after the selected model');
+  const r = parseTranscript(ag, {input: 1000, output: 50, cache_read: 300});
+  assert.equal(r.source, 'reported'); assert.equal(r.input, 1000); assert.equal(r.cache_read, 300); assert.equal(r.log, 'antigravity');
+  assert.equal(logEndsAt(ag).toISOString(), '2026-09-13T16:20:22.000Z', 'created_at is the clock');
+  assert.deepEqual(jobsNamed(ag), [481]);
+  assert.equal(assignmentMismatch(ag, 481, new Date('2026-09-13T16:16:00Z')), null);
+  assert.match(assignmentMismatch(ag, 480, new Date('2026-09-13T16:16:00Z')).reason, /names assignment #481 and never #480/);
+  const noSetting = ag.split('\n').slice(1).join('\n');
+  assert.equal(logKind(noSetting), 'antigravity'); assert.equal(effortFromTranscript(noSetting), null); assert.deepEqual(parseTranscript(noSetting).models, {});
+  const pro = ag.replace('Gemini 3.8 Flash (High)', 'Gemini 3.8 Pro');
+  assert.deepEqual(parseTranscript(pro).models, {'gemini-3.8-pro': 0}); assert.equal(effortFromTranscript(pro), null);
+  // A Claude Code session that merely inspected an Antigravity log (the shape appears escaped inside a tool result) is still Claude Code.
+  const cc = JSON.stringify({type: 'assistant', effort: 'high', message: {id: 'm1', model: 'claude-fable-5-1', usage: {input_tokens: 1, output_tokens: 1}, content: [{type: 'tool_result', content: '{\\"step_index\\":0,\\"type\\":\\"PLANNER_RESPONSE\\"}'}]}});
+  assert.equal(logKind(cc), 'claude-code');
+});
