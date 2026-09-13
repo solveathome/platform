@@ -384,13 +384,25 @@ test('a usage entry counts once per person: the same session log on a second ret
   await end(a.session);
 });
 
-test('Antigravity usage can be added on resubmission, corrected once, and preserved when only the log changes', async () => {
-  const transcript = JSON.stringify({step_index: 1, source: 'MODEL', type: 'PLANNER_RESPONSE', created_at: new Date().toISOString(), thinking: 'Checked the assignment.', tool_calls: []});
-  const ret = await one(`INSERT INTO returns (problem_id,type,user_id,model,provider,report_md,transcript,status,tokens) VALUES ($1,'explore',$2,'gemini-3.8-flash','google','Checked it.',$3,'recorded','{"input":0,"output":0,"cache_read":0,"cache_write":0,"log":"antigravity","source":"none"}') RETURNING id`, [pid, uid, transcript]);
+for (const log of ['antigravity', 'custom']) test(`${log} usage can be added on resubmission, corrected once, and preserved when only the log changes`, async () => {
+  const transcript = log === 'custom' ? [
+    JSON.stringify({type: 'solveathome.transcript', version: 1, harness: 'database-backed harness', model: 'gemini-3.8-flash'}),
+    JSON.stringify({type: 'solveathome.turn', role: 'assistant', content: 'Checked the assignment.'}),
+  ].join('\n') : JSON.stringify({step_index: 1, source: 'MODEL', type: 'PLANNER_RESPONSE', created_at: new Date().toISOString(), thinking: 'Checked the assignment.', tool_calls: []});
+  const ret = await one(`INSERT INTO returns (problem_id,type,user_id,model,provider,report_md,transcript,status,tokens) VALUES ($1,'explore',$2,'gemini-3.8-flash','google','Checked it.',$3,'recorded',$4) RETURNING id`, [pid, uid, transcript, JSON.stringify({input: 0, output: 0, cache_read: 0, cache_write: 0, log, source: 'none'})]);
   const H = {authorization: `Bearer ${token}`, accept: 'application/json', 'content-type': 'application/json', 'x-model': 'gemini-3.8-flash'};
   const resubmit = (body) => fetch(base + `/return/${ret.id}/transcript`, {method: 'POST', headers: H, body: JSON.stringify(body)});
   const total = () => q(`SELECT points FROM credits WHERE source_type = 'return' AND source_id = $1 AND kind = 'tokens'`, [String(ret.id)]);
-  for (const usage of [{input: 1200, output: 300, cache_read: 500}, {input: 2400, output: 600, cache_read: 1000}]) {
+  const missing = await resubmit({transcript});
+  const missingResult = await missing.json(); assert.equal(missing.status, 200, JSON.stringify(missingResult));
+  assert.equal((await total()).length, 0, 'missing usage never fabricates a payment');
+  if (log === 'custom') {
+    const warning = missingResult.warnings.find(w => w.includes('no token usage was supplied'));
+    assert.ok(warning, JSON.stringify(missingResult));
+    assert.ok(warning.includes(`/return/${ret.id}/transcript`));
+    assert.match(warning, /Claim the usage once/);
+  }
+  for (const usage of [{input: 1200, output: 300, cache_read: 500}, {input: 2400, output: 600, cache_read: 1000}, {input: 2400, output: 600, cache_read: 1000}]) {
     const response = await resubmit({transcript, tokens: usage});
     const result = await response.json(); assert.equal(response.status, 200, JSON.stringify(result));
     assert.equal(result.tokens.source, 'reported'); assert.equal(result.tokens.input, usage.input);
@@ -401,7 +413,7 @@ test('Antigravity usage can be added on resubmission, corrected once, and preser
   assert.equal(response.status, 200); assert.equal((await response.json()).tokens.input, 2400);
   assert.equal(Number((await total())[0].points), 0.004);
   // The logged usage still wins over a supplied fallback, and cannot leave the previously reported amount behind.
-  const native = JSON.stringify({type: 'assistant', message: {id: `${tag}-native-usage`, model: 'gemini-3.8-flash', usage: {input_tokens: 50, output_tokens: 10}}});
+  const native = JSON.stringify({type: 'assistant', message: {id: `${tag}-${log}-native-usage`, model: 'gemini-3.8-flash', usage: {input_tokens: 50, output_tokens: 10}}});
   const parsed = await resubmit({transcript: native, tokens: {input: 1_000_000, output: 1_000_000}});
   assert.equal(parsed.status, 200); assert.equal((await parsed.json()).tokens.source, 'claude-jsonl');
   assert.equal(Number((await total())[0].points), 0.00006);

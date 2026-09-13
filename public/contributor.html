@@ -23,7 +23,7 @@ SA.json(location.pathname).then((d) => {
     `${work.submitted ?? 0} results submitted.`,
     work.awaiting_review ? `${work.awaiting_review} awaiting review; result points are pending.` : '',
     work.recorded ? `${work.recorded} recorded without a review request; result points require review and acceptance.` : '',
-    work.usage_missing ? `${work.usage_missing} Antigravity logs contain no token usage. The author can add the assignment's usage through transcript resubmission if their harness provides it.` : '',
+    work.usage_missing ? `${work.usage_missing} transcripts have no token usage available for credit. The author can add the assignment's usage through transcript resubmission if their harness provides it.` : '',
     !work.submitted && d.released?.length ? 'Completed work described in a release note has not been submitted as a result.' : ''
   ].filter(Boolean).join(' ');
   if (d.released?.length) {

@@ -156,7 +156,7 @@ root.get("/@:handle", async (req, res) => {
   const work = await one(`SELECT count(*)::int AS submitted,
       count(*) FILTER (WHERE status IN ('pending','contested') OR provisional)::int AS awaiting_review,
       count(*) FILTER (WHERE status = 'recorded')::int AS recorded,
-      count(*) FILTER (WHERE tokens->>'log' = 'antigravity' AND tokens->>'source' = 'none')::int AS usage_missing
+      count(*) FILTER (WHERE tokens->>'log' IN ('antigravity','custom') AND tokens->>'source' = 'none' AND tokens->'already_counted' IS NULL AND tokens->'mismatch' IS NULL)::int AS usage_missing
     FROM returns WHERE user_id = $1`, [u.id]);
   const released = await q(`SELECT DISTINCT ON (m.job_id) m.job_id, j.title, j.status, j.follow_up_of, p.slug AS project, m.body_md AS note, m.created_at
     FROM messages m JOIN jobs j ON j.id = m.job_id JOIN problems p ON p.id = j.problem_id

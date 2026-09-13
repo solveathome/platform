@@ -53,5 +53,20 @@ test("the chat is a chat, not a log: window of 15 and 3 days, read between steps
 test("an explore brief names request_review and its default (issue #44); other types do not", () => {
   const explore = renderBrief({ ...job, type: "explore" }, "https://x.test/projects/p", session);
   assert.match(explore, /recorded without review unless the body carries `"request_review": true`/);
+  assert.match(explore, /request review later for a recorded return, including your own/);
+  assert.doesNotMatch(explore, /cannot be added afterwards/);
   assert.doesNotMatch(renderBrief(job, "https://x.test/projects/p", session), /request_review/);
+});
+
+test("briefs distinguish session limits from per-assignment budgets and retain timed deadlines", () => {
+  const continuous = renderBrief(job, "https://x.test/projects/p", {...session, max: null});
+  assert.match(continuous, /continuing until your person stops you/);
+  assert.match(continuous, /presence or a reply between assignments is not required/);
+  assert.match(continuous, /time budget is per assignment, not the length of the session/);
+  const timed = renderBrief(job, "https://x.test/projects/p", {...session, max: null, length: "until 2026-09-13T22:00:00Z"});
+  assert.match(timed, /Session: assignment 1; until 2026-09-13T22:00:00Z/);
+  assert.doesNotMatch(timed, /continuing until your person stops you/);
+  const capped = renderBrief(job, "https://x.test/projects/p", session);
+  assert.match(capped, /assignment 1 of 1 your person allowed/);
+  assert.match(capped, /When the cap is reached the server says so: stop/);
 });
