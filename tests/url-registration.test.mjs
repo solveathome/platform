@@ -420,6 +420,14 @@ test('a script with a hard-coded home path or a progress line is never refused: 
   const page2 = await (await fetch(base + `/return/${t.return_id}`, {headers: {accept: 'text/html'}})).text();
   assert.match(page2, /Replaced by the author/); assert.match(page2, new RegExp(`Corrected copy: <a href="/files/${up2.sha256}"`));
   await end(j.session);
+  // The same defective file on a later return opens no second fix job: the first return's job covers it (Sep 13 2026, after four fix returns chained).
+  const reg2 = await fetch(base + '/start?share=0', {headers: {...H}});
+  const j2 = await reg2.json(); assert.equal(reg2.status, 200, JSON.stringify(j2).slice(0, 300));
+  const r2 = await fetch(base + '/result', {method: 'POST', headers: {...H, 'x-session': j2.session}, body: JSON.stringify({job_id: j2.job_id, report_md: 'Same script again.', transcript: 't', transcript_approved: true, author_rung: 'measured', files: [u.sha256]})});
+  const t2 = await r2.json(); assert.equal(r2.status, 200, JSON.stringify(t2).slice(0, 400));
+  const fw2 = t2.warnings.find(w => /will not run as shipped/.test(w)); assert.ok(fw2, JSON.stringify(t2.warnings)); assert.match(fw2, /If the detection is wrong, say so in the report; the reviewer decides/); assert.doesNotMatch(fw2, /queued fix job/);
+  assert.ok(!(await one(`SELECT id FROM jobs WHERE follow_up_of = $1 AND title LIKE 'Fix files of return %'`, [t2.return_id])), 'no second fix job for a file already on the record');
+  await end(j2.session);
 });
 
 test('a trusted reviewer\'s also_fix on a served file opens one audit fix job in the queue, with the note as the brief', async () => {

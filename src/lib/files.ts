@@ -193,11 +193,16 @@ export async function applyCuration(returnId: number, byUserId: number, decision
 /** File types that run: a hard-coded path or a progress line in one of these is a defect the reviewer will meet. */
 const SCRIPT_EXT = new Set(["js", "mjs", "cjs", "ts", "py", "sh", "c", "h", "cpp", "rs", "go", "java", "jl", "r", "sql", "lean"]);
 const STDOUT_PRINT = /(console\.log|process\.stdout\.write|\bprint\s*\(|\bprintf?\b|\becho\b|\bputs\b|println!?\s*\(|System\.out\.print|fmt\.Print|@printf|\bcat\b)/;
-const PROGRESS_WORDS = /(elapsed|\beta\b|progress|per second|\/s\b|%\s*(done|complete|of)|\btick|remaining|throughput|rate:)/i;
+// A clock or timer read, or a progress figure with a number next to it. Bare words are not enough: in this corpus "eta", "rate:",
+// "remaining" and "/s" are mathematics ("(L_0 eta/64)", "The growth rate: is", "The remaining exact relations", "{Bd/s}*delta"), and
+// Sep 12–13 2026 the word list alone flagged seven section headers for one real timing print, each opening a fix job.
+const PROGRESS_WORDS = /(elapsed|\btook\b|time\.time\(|perf_counter|monotonic\(|Date\.now|performance\.now|hrtime|Instant::now|time\.Now\(|datetime\.now|wall[- ]?clock|\bprogress[:=]|per second|\bit\/s\b|[\d}]\s*\/s(?=[\s"'`)\],]|$)|%\s*(done|complete)|\btick(s|ing)?\b|throughput|\brate[:=]\s*[\d{$(]|\bremaining[:=]?\s*[\d{$(])/i;
+const ETA = /\bETA\b/; // upper case only: lower-case eta is a Greek letter in every script seen so far
 /**
  * Why a file will not run, or not reproduce, on another machine (Chris, Sep 12 2026: never refuse, tell the author and the reviewer):
  * a home directory hard-coded in a script, or a progress, timing or rate line printed to stdout, whose embedded hash then depends on the
- * machine. Documents and logs are only checked for the home path. Heuristics, worded as such.
+ * machine. Documents and logs are only checked for the home path. Heuristics, worded as such; a miss costs nothing (the reviewer reruns),
+ * a false flag opens a fix job somebody works, so the stdout check errs towards silence.
  */
 export function portabilityNotes(name: string, content: string): string[] {
   const ext = (String(name ?? "").split(".").pop() ?? "").toLowerCase();
@@ -208,7 +213,7 @@ export function portabilityNotes(name: string, content: string): string[] {
   const lines = String(content ?? "").split("\n");
   for (let i = 0; i < lines.length; i++) {
     const l = lines[i];
-    if (STDOUT_PRINT.test(l) && PROGRESS_WORDS.test(l) && !/stderr|console\.error|>&2|file=sys\.stderr|eprint/.test(l)) {
+    if (STDOUT_PRINT.test(l) && (PROGRESS_WORDS.test(l) || ETA.test(l)) && !/stderr|console\.error|>&2|file=sys\.stderr|eprint/.test(l)) {
       notes.push(`prints what looks like progress or timing to stdout on line ${i + 1} ("${l.trim().slice(0, 80)}"): stdout is the artifact and must reproduce byte for byte elsewhere; send progress, timing and rates to stderr.`);
       break;
     }

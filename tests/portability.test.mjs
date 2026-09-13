@@ -19,3 +19,26 @@ test('documents and logs are checked for the home path only', () => {
   assert.equal(portabilityNotes('notes.md', 'See /Users/bob/notes/x.md for the table.\nprogress: 50% done, elapsed 3s\n').length, 1);
   assert.deepEqual(portabilityNotes('run.log', 'progress: 50% done, elapsed 3s\n'), []);
 });
+
+test('mathematics printed to stdout is not progress: eta, rate:, remaining and {x/s} in section headers are silent; a clock read or a timing figure is not', () => {
+  // Real lines from served scripts (Sep 12–13 2026), each of which opened a fix job under the word-list heuristic.
+  for (const l of [
+    "console.log('\\n=== 4. The growth rate: is |F_r| >= 2^{0.92 r} the right constant? ===');",
+    "console.log('  ||T_L|| ||T_R|| >= (L_0 eta/64) * sqrt(w_L w_R) * x log^2 x');",
+    "console.log('\\n=== 5. The remaining exact relations in the verdict ===');",
+    "console.log('  \"8 of 14 enumerable steps starting at s = 9\": 8/14 = '+f(8/14*100,1)+' % of the steps');",
+    "console.log(`heuristic K = ${fmt(rich.K)}; heuristic slack of that one-sided target at eta=0: ${x}`);",
+    "console.log(`${label}: embedded ${embLines.length} lines (${E.length} after dropping progress lines), run ${run}`);",
+    "process.stdout.write('PASS: timing/progress variation leaves stdout unchanged; changed data remains visible.\\n');",
+  ]) assert.deepEqual(portabilityNotes('audit.js', l + '\n'), [], l);
+  assert.deepEqual(portabilityNotes('regions.py', 's = max(abs(Bd), abs(Bn)); print(f"  {side:5} {name:15}: {Bd/s}*delta + {Bn/s}*nu < {(1-B0)/s}")\n'), []);
+  for (const [name, l] of [
+    ['job68-check.py', 'print(f"[task 1 done at {elapsed():.1f} s]")'],
+    ['g2check.py', 'print(f"p_n={p:2d} P={P:>12d} census={census} G2={G2}  [{time.time()-t:.1f}s]")'],
+    ['walk.py', 't=time.time(); check(x,p); print(f"   ({time.time()-t:.1f}s)")'],
+    ['transport.js', "console.log('total ' + ((Date.now() - T0) / 1000).toFixed(1) + ' s');"],
+    ['pairs.js', 'console.log(`@${x}: W=${W}  (${((Date.now() - t0) / 1000).toFixed(1)} s)`);'],
+    ['sweep.py', 'print(f"{i}/{n} done, ETA {eta:.0f}s")'],
+    ['sweep.py', 'print(f"rate: {n/dt:.0f}/s")'],
+  ]) { const n = portabilityNotes(name, 'x\n' + l + '\n'); assert.equal(n.length, 1, `${name}: ${l}`); assert.match(n[0], /stdout on line 2/); }
+});

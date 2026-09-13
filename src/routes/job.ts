@@ -842,8 +842,8 @@ job.post("/result", bearer, project, assignmentMutation(async (req: any, res) =>
   const fileNotes = await fileNotesFor(attached);
   if (fileNotes.length) await q(`UPDATE returns SET file_notes = $2 WHERE id = $1`, [ret!.id, JSON.stringify(fileNotes)]);
   // Detected now, so the agent is asked to fix it now; and a fix job is queued at once for anyone, closed if the author gets there first.
-  const fileFixJob = fileNotes.length ? await spawnFileFixJob({ id: Number(ret!.id), type: rtype, problem_id: Number(problem.id), lane_id: laneId === null || laneId === undefined ? null : Number(laneId), job_id: jobRow?.id ?? null }, fileNotes) : null;
-  const fileWarn = fileNotes.map((f) => `file ${f.name} (${f.sha.slice(0, 12)}…) will not run as shipped: it ${f.notes.join(" It also ")} The return is accepted with the file as sent. Fix it now: upload a corrected copy under the same name (POST ${BASE()}/files) and attach it with POST ${BASE()}/projects/${req.project.slug}/return/${ret!.id}/files { "files": ["<sha256>"] }; the note clears and the queued fix job${fileFixJob ? ` (#${fileFixJob})` : ""} closes. If you do not, that job goes to whoever comes next.`);
+  const fileFixJob = fileNotes.length ? await spawnFileFixJob({ id: Number(ret!.id), type: rtype, problem_id: Number(problem.id), lane_id: laneId === null || laneId === undefined ? null : Number(laneId), job_id: jobRow?.id ?? null, job_title: jobRow?.title ?? null }, fileNotes) : null;
+  const fileWarn = fileNotes.map((f) => `file ${f.name} (${f.sha.slice(0, 12)}…) will not run as shipped: it ${f.notes.join(" It also ")} The return is accepted with the file as sent. Fix it now: upload a corrected copy under the same name (POST ${BASE()}/files) and attach it with POST ${BASE()}/projects/${req.project.slug}/return/${ret!.id}/files { "files": ["<sha256>"] }; the note clears${fileFixJob ? ` and the queued fix job (#${fileFixJob}) closes. If you do not, that job goes to whoever comes next` : ". If the detection is wrong, say so in the report; the reviewer decides"}.`);
   // The same change submitted twice is one change (issue #51, Chris: detect and fold). A duplicate of an accepted return is superseded on
   // the spot, unpaid, linked both ways, no review slot; a duplicate of a pending one is labelled and folded when that one is accepted.
   const ph = patchHash(b.patch); const revSha = rtype === "audit" ? String(b.revision?.file ?? "").toLowerCase() || null : null; const revPath = rtype === "audit" ? revisions.safeRel(String(b.revision?.path ?? "")) : null;
@@ -1090,8 +1090,19 @@ Fetch the current file (GET ${P}/docs/${rel}), make the change, check it still r
   const j = await one<{ id: string }>(`INSERT INTO jobs (problem_id, lane_id, type, title, brief_md, git_ref, compute_hint, budget_hours, min_tier, quorum) VALUES ($1,$2,'audit',$3,$4,'main','{}',1,99,1) RETURNING id`, [problemId, laneId, title, brief]);
   return j ? Number(j.id) : null;
 }
-/** Files detected at intake that will not run as shipped: a fix job for anyone, queued at once; closed when the author replaces the files (POST /return/:id/files). */
-async function spawnFileFixJob(ret: { id: number; type: string; problem_id: number; lane_id: number | null; job_id?: number | null }, notes: { sha: string; name: string; notes: string[] }[]): Promise<number | null> {
+export const FILE_FIX_TITLE = "Fix files of return ";
+/**
+ * Files detected at intake that will not run as shipped: a fix job for anyone, queued at once; closed when the author replaces the files
+ * (POST /return/:id/files). Never from a return that answers a fix job (Sep 13 2026: four fix returns that kept the file and argued the
+ * detection was wrong each opened another fix job for the same file; the reviewer of the fix return decides, not the detector), and never
+ * for a file already noted on an earlier return: that return's fix job covers it.
+ */
+export async function spawnFileFixJob(ret: { id: number; type: string; problem_id: number; lane_id: number | null; job_id?: number | null; job_title?: string | null }, notes: { sha: string; name: string; notes: string[] }[]): Promise<number | null> {
+  if (String(ret.job_title ?? "").startsWith(FILE_FIX_TITLE)) return null;
+  const fresh: typeof notes = [];
+  for (const f of notes) if (!(await one(`SELECT 1 FROM returns WHERE id <> $1 AND file_notes @> $2::jsonb`, [ret.id, JSON.stringify([{ sha: f.sha }])]))) fresh.push(f);
+  if (!fresh.length) return null;
+  notes = fresh;
   const open = await one<{ id: string }>(`SELECT id FROM jobs WHERE follow_up_of = $1 AND title LIKE 'Fix files of return %' AND status IN ('queued','assigned')`, [ret.id]);
   if (open) return Number(open.id);
   const orig = ret.job_id ? await one<{ budget_hours: string | null }>(`SELECT budget_hours FROM jobs WHERE id = $1`, [ret.job_id]) : null;
