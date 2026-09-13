@@ -120,7 +120,7 @@ async function serve(req: any, res: any, edition: Edition): Promise<void> {
     return publishedDocument(root, path, publication);
   };
   const browser = wantsHtml(req) && !req.query.raw;
-  const pid = seed ? undefined : (await one<{ id: number }>(`SELECT id FROM problems WHERE slug = $1`, [slug]))?.id;
+  const pid = (await one<{ id: number }>(`SELECT id FROM problems WHERE slug = $1`, [slug]))?.id;
   if (st.isDirectory() && !browser) {
     const entries = readdirSync(abs).filter((n) => !n.startsWith(".") && visible(n)).sort();
     res.type("text/plain").send(entries.map((n) => statSync(join(abs, n)).isDirectory() ? `${n}/` : n).join("\n") + "\n"); return;

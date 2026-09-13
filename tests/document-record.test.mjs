@@ -64,6 +64,12 @@ test('all published artifacts are recorded with server time; identical imports n
   const dates = documentDates(manifest, path, records.get(path));
   assert.equal(dates.created_at, source.created_at); assert.equal(dates.modified_at, source.modified_at);
   assert.equal(dates.first_recorded_at, originalRecorded);
+  const legacySeed = structuredClone(manifest); delete legacySeed.files[path].source;
+  const seedDates = documentDates(legacySeed, path, records.get(path), undefined, true);
+  assert.equal(seedDates.created_at, source.created_at); assert.equal(seedDates.modified_at, source.modified_at);
+  assert.equal(seedDates.prepared_at, manifest.generated_at); assert.equal(seedDates.recorded_at, null);
+  legacySeed.files[path].sha256 = 'f'.repeat(64);
+  assert.equal(documentDates(legacySeed, path, records.get(path), undefined, true).created_at, null);
 });
 
 test('changes and reversions append history, while changed bytes outside the manifest are rejected', async () => {

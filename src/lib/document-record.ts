@@ -52,7 +52,9 @@ export function documentDates(publication: Publication | null, path: string, rec
   const pub = pubs.filter(p => p.sha256 === sha).at(-1);
   const version = seed ? undefined : versions.filter(v => v.content_sha === sha).at(-1);
   const source = (mirrored ? entry?.source : undefined) ?? pub?.source;
-  const originalSource = entry?.source ?? pubs.find(p => p.source?.created_at)?.source;
+  // A seed can borrow source evidence only from an identical published hash. Its frozen
+  // preparation date never becomes the observation time of a later, living edition.
+  const originalSource = entry?.source ?? (seed ? pub?.source : pubs.find(p => p.source?.created_at)?.source);
   const recorded = [pub?.recorded_at, version?.created_at].map(isoTime).filter((d): d is string => !!d).sort().at(-1) ?? null;
   const first = [...pubs.map(p => p.recorded_at), ...versions.map(v => v.created_at)].map(isoTime).filter((d): d is string => !!d).sort()[0] ?? null;
   return {
@@ -65,7 +67,7 @@ export function documentDates(publication: Publication | null, path: string, rec
 }
 
 export async function datesForDocument(problemId: number | undefined, publication: Publication | null, path: string, sha?: string, seed = false): Promise<DocumentDates> {
-  const records = problemId && !seed ? await documentRecords(problemId, path) : new Map();
+  const records = problemId ? await documentRecords(problemId, path) : new Map();
   return documentDates(publication, path, records.get(path), sha, seed);
 }
 
