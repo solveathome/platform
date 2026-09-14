@@ -572,6 +572,10 @@ test('an uncorrected legacy persona session can still release work and end', asy
 });
 
 test('a model correction on result rolls back on rejection and preserves its successful retry receipt', async () => {
+  // Earlier cases leave audit/fix jobs queued. This test needs a source return so
+  // its result validation depends only on identity, not a revision artifact.
+  await q(`UPDATE jobs SET status='expired' WHERE problem_id=$1 AND status='queued'`, [pid]);
+  await mkJob('source', 'Identity correction source', {});
   const headers = {authorization: `Bearer ${token}`, accept: 'application/json', 'content-type': 'application/json', 'x-model': 'deepseek-v4.1-flash', 'x-effort': 'unmeasured', 'x-launch-id': `${tag}-result-identity`};
   const reg = await (await fetch(base + '/start?share=0', {headers})).json();
   assert.ok(reg.attempt_id, JSON.stringify(reg));
