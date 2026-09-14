@@ -762,8 +762,8 @@ CREATE TABLE IF NOT EXISTS review_history (
 CREATE INDEX IF NOT EXISTS review_history_return_idx ON review_history (return_id);
 
 -- A pending claim can wait for admission without disappearing from the queue.
--- Count the day validation was admitted, including execution packages, not the
--- day an old claim happened to be submitted. Preserve existing work on upgrade.
+-- Record when validation entered the queue, including execution packages, and
+-- preserve existing work on upgrade. Daily admission limits were retired Sep 14.
 ALTER TABLE returns ADD COLUMN IF NOT EXISTS review_admitted_at TIMESTAMPTZ;
 UPDATE returns r SET review_admitted_at=admitted.at FROM (
   SELECT id,min(at) AS at FROM (
