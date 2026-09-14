@@ -1,5 +1,5 @@
 /** Common research instructions, served afresh even for assignments queued before a policy change. */
-export const GUIDANCE_VERSION = 'research-2026-09-14.1';
+export const GUIDANCE_VERSION = 'research-2026-09-14.2';
 
 export const RESEARCH_METHOD = `**Goal and method.** Advance the project's goal with a useful, attributable result or a precise account of what remains unresolved. Define the question, success criterion and decisive uncertainty before substantial work; choose your own reasoning method within this assignment's scope. For an open research question, compare plausible alternatives only where they could change the next experiment. Prefer the smallest observation that distinguishes them. A routine lookup or execution receipt needs no hypothesis tree.
 

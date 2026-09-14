@@ -2,7 +2,7 @@
 import { createHash, randomBytes } from "node:crypto";
 import type { RequestHandler } from "express";
 import { one, q, projectTransaction } from "../db/index.js";
-import { canonicalModel, parseEffort, providerFromModel } from "./model-id.js";
+import { canonicalModel, parseEffort, providerFromModel, isHarnessModel, modelIdentityError } from "./model-id.js";
 import { stageOf } from './research-format.js';
 
 class Refused extends Error {}
@@ -24,8 +24,20 @@ export function assignmentMutation(handler: (req: any, res: any) => Promise<void
           if (xs) {
             const s = await one(`SELECT * FROM sessions WHERE id = $1 AND user_id = $2 AND problem_id = $3`, [xs, req.user.id, req.project.id]);
             if (!s) { res.status(403).json({ error: "unknown session for this owner and project" }); throw new Refused(); }
+            // Repair only an old app/persona label or unknown, never switch a real model's session.
+            // The existing assignment, limits and sibling sessions keep their ownership.
+            if ((isHarnessModel(s.model) || s.model === "unknown") && req.model && req.model !== s.model && !isHarnessModel(req.model) && !s.ended_at) {
+              const from = s.model;
+              req.modelCorrection = { from, to: req.model, note: "Corrected this session's model declaration. Keep this X-Model on subsequent requests; earlier returns are unchanged." };
+              await q(`UPDATE sessions SET model = $2 WHERE id = $1`, [xs, req.model]);
+              await q(`UPDATE assignment_attempts SET model = $2, reason = reason || jsonb_build_object('model_correction', $3::jsonb) WHERE session_id = $1 AND status = 'assigned'`, [xs, req.model, JSON.stringify(req.modelCorrection)]);
+              s.model = req.model;
+            }
             if (req.model && s.model && canonicalModel(req.model) !== s.model) { res.status(409).json({ error: `session was registered for model ${s.model}`, session_model: s.model }); throw new Refused(); }
             req.model = s.model ?? req.model;
+            const identityError = modelIdentityError(req.model);
+            const ending = options.completion === "release" || (req.method === "POST" && /\/sessions\/[^/]+\/end$/.test(req.path));
+            if (identityError && !ending) { res.status(400).json({ error: identityError, code: "model_identity_required" }); throw new Refused(); }
             req.provider = req.model ? (await one(`SELECT provider FROM model_tiers WHERE model = $1`, [req.model]))?.provider ?? providerFromModel(req.model) : undefined;
             req.effort = parseEffort(s.effort_evidence) ?? req.effort ?? parseEffort(s.effort);
             req.agentSession = s;
@@ -67,11 +79,14 @@ export function assignmentMutation(handler: (req: any, res: any) => Promise<void
           await handler(req, res);
           if (res.statusCode >= 400 && !options.commitErrors) throw new Refused();
           if (attempt && res.statusCode < 400 && response?.kind === "json") {
+            if (req.modelCorrection) response.body = { ...response.body, model_correction: req.modelCorrection };
             await q(`UPDATE assignment_attempts SET receipt = $2, request_hash = $3 WHERE id = $1`, [attempt.id, JSON.stringify(response.body), hash]);
           }
         });
-      } catch (error) { if (!(error instanceof Refused)) throw error; }
+      } catch (error) { if (!(error instanceof Refused)) throw error; delete req.modelCorrection; }
       res.json = json; res.send = send;
+      if (req.modelCorrection && response?.kind === "json") response.body = { ...response.body, model_correction: req.modelCorrection };
+      if (req.modelCorrection && response?.kind === "send") response.body += `\n\nModel declaration corrected from ${req.modelCorrection.from} to ${req.modelCorrection.to}. Keep the corrected X-Model on subsequent requests.\n`;
       if (response) { if (response.kind === "json") res.json(response.body); else res.send(response.body); }
       else next();
     } catch (error) { res.json = json; res.send = send; next(error); }

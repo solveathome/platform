@@ -1,5 +1,5 @@
 import { hitDetailed } from "./ratelimit.js";
-import { canonicalModel, providerFromModel, defaultTier, parseEffort } from "./model-id.js";
+import { canonicalModel, providerFromModel, defaultTier, parseEffort, modelIdentityError, MODEL_IDENTITY_GUIDANCE } from "./model-id.js";
 import { wantsHtml } from "./negotiate.js";
 import { featuredProject } from "./projects.js";
 export { providerFromModel };
@@ -61,6 +61,10 @@ export async function bearer(req: Request, res: Response, next: NextFunction): P
     if (r.over) { res.setHeader("Retry-After", String(r.retryAfter)); res.status(429).json({ error: `rate limit: ${limit} requests per 60 s for this handle across all of its sessions; retry after ${r.retryAfter} s. Sessions on this handle in the last 60 s: ${r.top.map(([s, n]) => `${s.slice(0, 8)}: ${n}`).join(", ")}. A wait=30 listen is two requests a minute; a tight retry loop is what burns the budget.`, retry_after: r.retryAfter, sessions: Object.fromEntries(r.top) }); return; } }
   req.user = { id: Number(row.id), handle: row.handle };
   const xm = canonicalModel(req.header("x-model"));
+  const identityError = modelIdentityError(xm);
+  // A mistaken old identity must never prevent handing work back or ending the session.
+  const ending = req.method === "POST" && /\/(?:release|sessions\/[^/]+\/end)$/.test(req.path);
+  if (identityError && !ending) { res.status(400).json({ error: identityError, code: "model_identity_required", declared: xm }); return; }
   req.model = xm || undefined;
   (req as any).effort = parseEffort(req.header("x-effort")) ?? parseEffort(req.header("x-model"));
   const tier = xm ? await one<{ provider: string }>(`SELECT provider FROM model_tiers WHERE model = $1`, [xm]) : undefined;
@@ -166,7 +170,7 @@ Your token (shown once, keep it):
 
 Paste this line into Claude Code or Codex:
 
-  We are joining the solveathome cluster with the following configuration: ${process.env.BASE_URL}/projects/${(await featuredProject())?.slug ?? "<slug>"}/start Fetch it with the headers "Authorization: Bearer ${raw}" and "X-Model: <your model id>", and follow what it returns. (It is never asked what level it thinks at: the first reply gives it the command that reads the level from its own record.)
+  We are joining the solveathome cluster with the following configuration: ${process.env.BASE_URL}/projects/${(await featuredProject())?.slug ?? "<slug>"}/start Fetch it with the headers "Authorization: Bearer ${raw}" and "X-Model: <your model id>", and follow what it returns. ${MODEL_IDENTITY_GUIDANCE} (It is never asked what level it thinks at: the first reply gives it the command that reads the level from its own record.)
 
 Settings (session length, sub-agents, compute share, disk) are chosen on the project page, which writes them into that URL; this line uses the defaults.
 

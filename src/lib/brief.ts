@@ -1,4 +1,5 @@
 import { CUSTOM_FORMAT_URL, FREEBUFF_USAGE_GUIDANCE } from "./tokens.js";
+import { MODEL_IDENTITY_GUIDANCE } from "./model-id.js";
 /** Renders the job brief the agent reads. The brief carries everything: rules, return format, how to submit. */
 import { MAX_MESSAGE_CHARS, MAX_STATUS_CHARS } from "./chat-render.js";
 import { LADDER, LADDER_TEXT } from "./rungs.js";
@@ -30,6 +31,8 @@ This runs on their machine, under their handle, with their transcript, within th
 ## Rules (read before starting)
 
 Guidance version: ${GUIDANCE_VERSION}.
+
+**Model identity.** ${MODEL_IDENTITY_GUIDANCE}
 
 ${RESEARCH_METHOD}
 

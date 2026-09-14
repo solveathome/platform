@@ -23,7 +23,7 @@ export type LogKind = "claude-code" | "codex" | "copilot" | "opencode" | "antigr
 export type Mismatch = { reason: string; job: number; jobs_named?: number[]; ends_at?: string };
 /** Usage entries of this transcript that were already counted on the person's earlier returns or reviews, and where. */
 export type AlreadyCounted = { entries: number; of: number; on: string[] };
-export type Tokens = { input: number; output: number; cache_read: number; cache_write: number; entries: number; source: "claude-jsonl" | "codex-jsonl" | "copilot-jsonl" | "opencode-jsonl" | "custom-jsonl" | "reported" | "none"; models?: Record<string, number>; log?: LogKind; mismatch?: Mismatch; already_counted?: AlreadyCounted };
+export type Tokens = { input: number; output: number; cache_read: number; cache_write: number; entries: number; source: "claude-jsonl" | "codex-jsonl" | "copilot-jsonl" | "opencode-jsonl" | "custom-jsonl" | "reported" | "none"; models?: Record<string, number>; observed_models?: string[]; log?: LogKind; mismatch?: Mismatch; already_counted?: AlreadyCounted };
 
 /**
  * The assignments a transcript names: the brief's title line ("# solveathome job #N", the GET /start result) and the job_id the agent
@@ -129,7 +129,13 @@ export function parseTranscript(text: string, reported?: any): Tokens { return p
  * as `exclude`: those entries are skipped (listed in `skipped`), and the self-reported fallback never fills in for skipped entries.
  */
 export function parseTranscriptWithKeys(text: string, reported?: any, exclude?: Set<string>): { tokens: Tokens; keys: string[]; skipped: string[] } {
-  const t: Tokens = { input: 0, output: 0, cache_read: 0, cache_write: 0, entries: 0, source: "none", models: {} };
+  const t: Tokens = { input: 0, output: 0, cache_read: 0, cache_write: 0, entries: 0, source: "none", models: {}, observed_models: [] };
+  // Explicit metadata is separate from the synthetic codex/copilot/opencode usage buckets.
+  const rememberModel = (raw: unknown): string => {
+    const m = canonicalModel(raw);
+    if (m && !t.observed_models!.includes(m)) t.observed_models!.push(m);
+    return m;
+  };
   const keys: string[] = [], skipped: string[] = [];
   const take = (key: string): boolean => { if (exclude?.has(key)) { skipped.push(key); return false; } keys.push(key); return true; };
   const lines = text.split("\n");
@@ -144,8 +150,17 @@ export function parseTranscriptWithKeys(text: string, reported?: any, exclude?: 
   for (const line of lines) {
     const s = line.trim(); if (!s.startsWith("{")) continue;
     let d: any; try { d = JSON.parse(s); } catch { continue; }
+    // Identity is evidence even without usage or when the usage was already credited.
+    // Read only known metadata fields, never model names in conversation/tool payloads.
+    rememberModel(
+      d?.type === "solveathome.transcript" || (d?.type === "solveathome.turn" && d.role === "assistant") ? d.model :
+      d?.type === "assistant" ? d.message?.model :
+      d?.type === "assistant.message" ? d.data?.model :
+      d?.type === "model.model_call_success" ? d.data?.copilotUsage?.token_details?.find((x: any) => x?.model)?.model :
+      d?.role === "assistant" && (d.modelID !== undefined || d.providerID !== undefined) ? d.modelID :
+      ["session_meta", "turn_context", "token_usage_record"].includes(d?.type) ? d.payload?.model ?? d.model ?? d.values?.model : null);
     // Antigravity steps carry no usage; the user step names the model the person selected (kept so X-Model can be checked).
-    if (typeof d?.step_index === "number" && typeof d?.source === "string") { const st = typeof d.content === "string" && d.content.includes("Model Selection") ? antigravitySetting(d.content) : null; if (st) t.models![st.model] = t.models![st.model] ?? 0; continue; }
+    if (typeof d?.step_index === "number" && typeof d?.source === "string") { const st = typeof d.content === "string" && d.content.includes("Model Selection") ? antigravitySetting(d.content) : null; if (st) { rememberModel(st.model); t.models![st.model] = t.models![st.model] ?? 0; } continue; }
     const u = d?.message?.usage;
     if (u && typeof u === "object" && (u.input_tokens !== undefined || u.output_tokens !== undefined)) {
       const id = d.message?.id ? String(d.message.id) : null;
@@ -154,18 +169,18 @@ export function parseTranscriptWithKeys(text: string, reported?: any, exclude?: 
       t.input += Number(u.input_tokens ?? 0); t.output += Number(u.output_tokens ?? 0);
       t.cache_read += Number(u.cache_read_input_tokens ?? 0); t.cache_write += Number(u.cache_creation_input_tokens ?? 0);
       t.entries++; t.source = "claude-jsonl";
-      const m = canonicalModel(d.message?.model); if (m) t.models![m] = (t.models![m] ?? 0) + Number(u.output_tokens ?? 0);
+      const m = rememberModel(d.message?.model); if (m) t.models![m] = (t.models![m] ?? 0) + Number(u.output_tokens ?? 0);
       continue;
     }
     // The solveathome format (agent-written): a header line names the model; each turn may carry usage {input, output, cache_read, cache_write}.
-    if (d?.type === "solveathome.transcript") { const m = canonicalModel(d.model); if (m) t.models![m] = t.models![m] ?? 0; continue; }
+    if (d?.type === "solveathome.transcript") { const m = rememberModel(d.model); if (m) t.models![m] = t.models![m] ?? 0; continue; }
     if (d?.type === "solveathome.turn") {
       const u = d.usage;
       if (u && typeof u === "object" && (u.input !== undefined || u.output !== undefined)) {
         if (!take(lineKey(s))) continue;
         t.input += Number(u.input ?? 0); t.output += Number(u.output ?? 0); t.cache_read += Number(u.cache_read ?? 0); t.cache_write += Number(u.cache_write ?? 0);
         t.entries++; t.source = "custom-jsonl";
-        const m = canonicalModel(d.model) || Object.keys(t.models ?? {})[0] || "custom"; t.models![m] = (t.models![m] ?? 0) + Number(u.output ?? 0);
+        const m = rememberModel(d.model) || Object.keys(t.models ?? {})[0] || "custom"; t.models![m] = (t.models![m] ?? 0) + Number(u.output ?? 0);
       }
       continue;
     }
@@ -175,10 +190,10 @@ export function parseTranscriptWithKeys(text: string, reported?: any, exclude?: 
       const ru = d.data.responseUsage; const cached = Number(ru.prompt_tokens_details?.cached_tokens ?? 0);
       t.input += Math.max(0, Number(ru.prompt_tokens ?? 0) - cached); t.cache_read += cached; t.output += Number(ru.completion_tokens ?? 0);
       t.entries++; t.source = "copilot-jsonl";
-      const m = canonicalModel(d.data.copilotUsage?.token_details?.find((x: any) => x?.model)?.model) || "copilot"; t.models![m] = (t.models![m] ?? 0) + Number(ru.completion_tokens ?? 0);
+      const m = rememberModel(d.data.copilotUsage?.token_details?.find((x: any) => x?.model)?.model) || "copilot"; t.models![m] = (t.models![m] ?? 0) + Number(ru.completion_tokens ?? 0);
       continue;
     }
-    if (d?.type === "assistant.message" && d?.data?.model) { const m = canonicalModel(d.data.model); if (m) t.models![m] = t.models![m] ?? 0; continue; }
+    if (d?.type === "assistant.message" && d?.data?.model) { const m = rememberModel(d.data.model); if (m) t.models![m] = t.models![m] ?? 0; continue; }
     // OpenCode: each assistant message carries tokens {input, output, reasoning, cache: {read, write}} and modelID; step-finish lines repeat them and are skipped.
     if (d?.role === "assistant" && d?.tokens && typeof d.tokens === "object" && (d.modelID !== undefined || d.providerID !== undefined)) {
       const id = d.id ? String(d.id) : null; if (id) { if (seen.has(id)) continue; seen.add(id); }
@@ -186,7 +201,7 @@ export function parseTranscriptWithKeys(text: string, reported?: any, exclude?: 
       const tk = d.tokens; const out = Number(tk.output ?? 0) + Number(tk.reasoning ?? 0);
       t.input += Number(tk.input ?? 0); t.output += out; t.cache_read += Number(tk.cache?.read ?? 0); t.cache_write += Number(tk.cache?.write ?? 0);
       t.entries++; t.source = "opencode-jsonl";
-      const m = canonicalModel(d.modelID) || "opencode"; t.models![m] = (t.models![m] ?? 0) + out;
+      const m = rememberModel(d.modelID) || "opencode"; t.models![m] = (t.models![m] ?? 0) + out;
       continue;
     }
     consider(d?.payload?.info?.total_token_usage); consider(d?.info?.total_token_usage); consider(d?.values?.info?.total_token_usage);
@@ -194,7 +209,7 @@ export function parseTranscriptWithKeys(text: string, reported?: any, exclude?: 
     if (hasRecords && d?.type !== "token_usage_record" && (d?.payload?.info?.last_token_usage || d?.info?.last_token_usage || d?.values?.info?.last_token_usage)) continue;   // the same turn is in a token_usage_record line
     const c = codexUsage(d);
     if (c && !take(lineKey(s))) continue;
-    if (c) { t.input += c.input; t.output += c.output; t.cache_read += c.cache_read; t.cache_write += c.cache_write; t.entries++; t.source = "codex-jsonl"; const m = canonicalModel(d?.payload?.model ?? d?.model ?? d?.values?.model) || "codex"; t.models![m] = (t.models![m] ?? 0) + c.output; }
+    if (c) { t.input += c.input; t.output += c.output; t.cache_read += c.cache_read; t.cache_write += c.cache_write; t.entries++; t.source = "codex-jsonl"; const m = rememberModel(d?.payload?.model ?? d?.model ?? d?.values?.model) || "codex"; t.models![m] = (t.models![m] ?? 0) + c.output; }
   }
   if (cumulative && t.source === "codex-jsonl") {
     // A ceiling only: the per-turn sum of the assignment's window can never exceed the thread's running total.

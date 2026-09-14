@@ -40,7 +40,7 @@ import { parseTranscript } from "../lib/tokens.js";
 import { needsSourceReview, SOURCE_REVIEW_MESSAGE, sourceReviewHit, readPublication } from "../lib/document-publication.js";
 import { randomBytes } from "node:crypto";
 import { isTrusted, isGrantedTrusted, TRUSTED_MODEL_FAMILIES } from "../lib/roles.js";
-import { tierForEffort } from "../lib/model-id.js";
+import { tierForEffort, MODEL_IDENTITY_GUIDANCE, isHarnessModel } from "../lib/model-id.js";
 import { parseRung, RUNG_ERROR, LADDER } from "../lib/rungs.js";
 import { postRateOk, RATE_MESSAGE } from "../lib/messages.js";
 import { parseTangent, parseTarget, tangentJob, challengesFor, challengeBanner, targetUrl, targetLabel, FINDINGS, type Tangent } from "../lib/tangent.js";
@@ -141,9 +141,14 @@ async function start(req: any, res: any): Promise<void> {
   }
   const held = await one(`SELECT j.*, l.slug AS lane_slug FROM jobs j LEFT JOIN lanes l ON l.id = j.lane_id WHERE j.problem_id = $1 AND assigned_session = $2 AND j.status = 'assigned' ORDER BY j.assigned_at DESC LIMIT 1`, [req.project.id, session.id]);
   if (held && session.launch_key) {
-    const a = await one(`SELECT assignment_payload FROM assignment_attempts WHERE id = $1`, [held.attempt_id]);
+    const a = await one(`SELECT assignment_payload, reason FROM assignment_attempts WHERE id = $1`, [held.attempt_id]);
     if (a?.assignment_payload) {
-      if (wantsJson) res.json(a.assignment_payload); else res.type("text/markdown").send(a.assignment_payload.brief_md);
+      // Keep the issued payload for the record, but make an old persona declaration's
+      // correction visible on every retry so it cannot re-enter compacted context.
+      const correction = a.reason?.model_correction;
+      const payload = correction ? { ...a.assignment_payload, model_correction: correction,
+        brief_md: `Model declaration corrected: use X-Model: ${correction.to}. This supersedes the ${correction.from} model label in the original brief below.\n\n${a.assignment_payload.brief_md}` } : a.assignment_payload;
+      if (wantsJson) res.json(payload); else res.type("text/markdown").send(payload.brief_md);
       return;
     }
   }
@@ -538,6 +543,8 @@ export function measureMd(projectName: string, base: string, slug: string): stri
 
 You have no session yet and nothing is held for you. The model cannot see its own thinking level, so do not answer this from memory: read it from your harness's record and fetch the same URL again, with the same headers, adding \`X-Effort\` set to exactly what the command prints.
 
+${MODEL_IDENTITY_GUIDANCE}
+
 - Claude Code: \`${EFFORT_COMMANDS["Claude Code"]}\` (your session file already carries it on its first assistant line).
 - Codex: \`${EFFORT_COMMANDS.Codex}\`
 - OpenCode: \`${EFFORT_COMMANDS.OpenCode}\` (the \`variant\` on your assistant messages).
@@ -761,7 +768,7 @@ job.post("/result", bearer, project, assignmentMutation(async (req: any, res) =>
   const mismatch = jobRow ? assignmentMismatch(String(b.transcript), Number(jobRow.id), jobRow.assigned_at ? new Date(jobRow.assigned_at) : null) : null;
   const counted = mismatch ? { tokens: parseTranscript(String(b.transcript), b.tokens), keys: [] as string[] } : await countOnce(uid, String(b.transcript), b.tokens);
   const tokens = counted.tokens; const entryKeys = counted.keys;
-  if (mismatch) { tokens.mismatch = mismatch; tokens.input = tokens.output = tokens.cache_read = tokens.cache_write = tokens.entries = 0; tokens.models = {}; }
+  if (mismatch) { tokens.mismatch = mismatch; tokens.input = tokens.output = tokens.cache_read = tokens.cache_write = tokens.entries = 0; tokens.models = {}; tokens.observed_models = []; }
   // The thinking level from the transcript itself (Sep 12 2026): a Claude Code session file records it on every assistant line, and the
   // model's own declaration is a guess. Evidence corrects the session for the rest of its life and is what the tier and trust use here.
   const effortEvidence = mismatch ? null : effortFromTranscript(String(b.transcript));
@@ -769,7 +776,9 @@ job.post("/result", bearer, project, assignmentMutation(async (req: any, res) =>
   if (effortEvidence && xs) await q(`UPDATE sessions SET effort_evidence = $2, effort = $2 WHERE id = $1 AND user_id = $3`, [xs, effortEvidence, uid]);
   const effortEff = effortEvidence ?? req.effort ?? null;
   // The model an agent declares (X-Model) decides its tier. The transcript is the evidence: when it names models, the declared one must be among them.
-  const observed = Object.keys(tokens.models ?? {}).filter((m) => m !== "codex" && m !== "copilot" && m !== "opencode");
+  const observed = [...new Set([...(tokens.observed_models ?? []), ...Object.keys(tokens.models ?? {}).filter((m) => m !== "codex" && m !== "copilot" && m !== "opencode")])];
+  const identityError = transcriptIdentityError(observed);
+  if (identityError) { res.status(400).json(identityError); return; }
   if (observed.length && req.model && !observed.some((m) => m.toLowerCase() === String(req.model).toLowerCase())) {
     res.status(400).json({ error: `your transcript records ${observed.join(", ")} but you declared X-Model: ${req.model}. Declare the model that did the work; the tier comes from it.`, observed, declared: req.model }); return;
   }
@@ -1469,6 +1478,12 @@ job.post("/return/:id/request-review", bearer, project, assignmentMutation(async
   res.json({ ok: true, return_id: Number(ret.id), status: "pending", elevated_by: req.user!.handle, note, check_requested: checking, reviews_requested: checking ? 0 : reviewCount });
 }));
 
+function transcriptIdentityError(observed: string[]) {
+  const invalid = observed.filter(isHarnessModel);
+  return invalid.length ? { code: "transcript_model_identity_required", observed, error: `Transcript model metadata names a harness or persona: ${invalid.join(", ")}. For an agent-written export, correct its model fields from the session's record and retry; preserve the actual conversation and usage. ${MODEL_IDENTITY_GUIDANCE}` } : null;
+}
+
+
 /**
  * Resubmit the transcript of a return or a review (Chris, Sep 12 2026): a summary was accepted at intake with a warning; the author sends the
  * harness's own session log here and the record, the token count and the token credit are corrected. Same scrub gates as intake; the new
@@ -1495,7 +1510,9 @@ async function resubmitTranscript(req: any, res: any, kind: "return" | "review")
   // The lines must be this assignment's (issue #55); a self-assigned return has no assignment to check against.
   const mismatch = row.assignment_id ? assignmentMismatch(b.transcript, Number(row.assignment_id), row.assigned_at ? new Date(row.assigned_at) : null) : null;
   if (mismatch) { res.status(400).json({ error: `this log is not ${kind} #${id}'s: ${mismatch.reason}. Send the session log lines of assignment #${row.assignment_id}, from the GET /start that received it to the return; nothing was changed.`, mismatch }); return; }
-  const observed = Object.keys(tokens.models ?? {}).filter((m) => m !== "codex" && m !== "copilot" && m !== "opencode");
+  const observed = [...new Set([...(tokens.observed_models ?? []), ...Object.keys(tokens.models ?? {}).filter((m) => m !== "codex" && m !== "copilot" && m !== "opencode")])];
+  const identityError = transcriptIdentityError(observed);
+  if (identityError) { res.status(400).json(identityError); return; }
   if (observed.length && row.model && !observed.some((m) => m.toLowerCase() === String(row.model).toLowerCase())) { res.status(400).json({ error: `this log records ${observed.join(", ")} but ${kind} #${id} is on the record as ${row.model}; nothing was changed.`, observed, recorded: row.model }); return; }
   // Validation must finish before releasing any entries. A refused replacement keeps the old credit and deduplication record.
   await q(`DELETE FROM counted_entries WHERE user_id = $1 AND source_type = $2 AND source_id = $3`, [uid, kind, id]);

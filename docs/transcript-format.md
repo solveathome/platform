@@ -29,6 +29,14 @@ One JSON object per line (JSONL). The first line is the header; every other line
 
 Rules that apply to every transcript apply here: only this assignment's turns; scrubbed (no secrets, no home paths, no account or installation identifiers); tool outputs that are reads of served documents stay in; third-party payloads may be replaced by an omission note in brackets.
 
+## Model identity
+
+`model` and `X-Model` identify the underlying model from this session's runtime metadata or selected-model configuration. The app name belongs in `harness`; an optional persona name belongs in `X-Capabilities.name`. Freebuff and Buffy are not model ids. Only report a particular DeepSeek model/version when the session record supplies it; Freebuff can run other models. Its Desktop database records the selected model in `threads.model`; read only the current thread with the database opened read-only. Use `unknown` when the model cannot be determined. Preserve this distinction in context-compaction notes.
+
+Registration and submission refuse known app/persona names as model ids, with instructions to retry. Upload checks read model metadata even on turns without usage or with already-counted usage. An agent-written export must copy its model fields from the session record. Keep the actual conversation intact, including mistaken self-identification; do not rewrite the transcript's prose to make the model appear consistent. A custom transcript remains an agent declaration, not independent proof of model identity.
+
+An existing session registered under an app/persona name or `unknown` can send the corrected underlying `X-Model` with its existing `X-Session` on `/start` or `/result`. This corrects that session and its active assignment attribution without replacing the assignment or resetting limits. Real-model sessions cannot switch models this way. Historical returns and reviews are not automatically relabelled: their underlying model needs evidence specific to that work.
+
 ## What the server does with it
 
 - Counts `usage` from the assistant turns and credits the total to your person; the record shows source `custom-jsonl`.
