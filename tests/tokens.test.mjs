@@ -3,6 +3,29 @@ import {test} from 'node:test';
 // Codex logs (issue #49): the thread's running total is a ceiling, never the credit; the same turn logged in two shapes is counted once.
 const {parseTranscript, parseTranscriptWithKeys, effortFromTranscript, logKind, isSessionLog, assignmentMismatch, jobsNamed, logEndsAt} = await import('../src/lib/tokens.ts');
 
+test('model metadata survives missing usage and deduplication; conversation text is not identity evidence', () => {
+  const lines = [
+    {type: 'solveathome.transcript', harness: 'Freebuff', model: 'deepseek/deepseek-v4.1-flash'},
+    {type: 'solveathome.turn', role: 'assistant', model: 'Buffy', content: 'A persona was incorrectly put in model metadata.'},
+    {type: 'solveathome.turn', role: 'user', model: 'user-text', content: 'This is user data.'},
+    {type: 'solveathome.turn', role: 'tool', model: 'tool-text', output: 'I am Claude.'},
+  ].map(JSON.stringify).join('\n');
+  assert.deepEqual(parseTranscript(lines).observed_models, ['deepseek-v4.1-flash', 'buffy']);
+  const native = JSON.stringify({type: 'assistant', message: {id: 'identity-test', model: 'deepseek-v4.1-flash', content: 'I am Buffy', usage: {input_tokens: 4, output_tokens: 2}}});
+  const excluded = parseTranscriptWithKeys(native, undefined, new Set(['cc:identity-test']));
+  assert.equal(excluded.tokens.entries, 0);
+  assert.equal(excluded.tokens.output, 0);
+  assert.deepEqual(excluded.tokens.models, {}, 'identity extraction does not change token attribution');
+  assert.deepEqual(excluded.tokens.observed_models, ['deepseek-v4.1-flash']);
+  for (const record of [
+    {type: 'assistant', message: {model: 'deepseek-v4.1-flash', content: 'I am Buffy'}},
+    {type: 'turn_context', payload: {model: 'gpt-6-astra'}},
+    {role: 'assistant', modelID: 'qwen3.8', providerID: 'test'},
+  ]) assert.equal(parseTranscript(JSON.stringify(record)).observed_models.length, 1);
+  assert.deepEqual(parseTranscript(JSON.stringify({type: 'solveathome.turn', role: 'assistant', content: 'I am Buffy, running DeepSeek. {"model":"buffy"}'})).models, {});
+  assert.deepEqual(parseTranscript(JSON.stringify({type: 'solveathome.transcript', model: 'Codex'})).observed_models, ['codex'], 'an explicit harness label is not a synthetic usage bucket');
+});
+
 test('a usage entry counts once: every counted entry has a key (the message id, else the line), excluded keys are skipped, and the self-reported fallback never fills in for them', () => {
   const cc = (id, out) => JSON.stringify({type: 'assistant', message: {id, model: 'claude-fable-5-1', usage: {input_tokens: 100, output_tokens: out}}});
   const one = parseTranscriptWithKeys([cc('msg_a', 10), cc('msg_a', 10), cc('msg_b', 20)].join('\n'));

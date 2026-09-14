@@ -1,6 +1,19 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { canonicalModel } from "../src/lib/model-id.ts";
+import { canonicalModel, isHarnessModel, modelIdentityError } from "../src/lib/model-id.ts";
+
+test("harness/persona names require a real model declaration without guessing the provider", () => {
+  for (const name of ['Buffy', 'freebuff/Buffy', 'Freebuff Desktop', 'freebuff-desktop', 'Codebuff', 'Claude Code', 'Codex', 'GitHub Copilot CLI', 'OpenCode', 'Google Antigravity']) {
+    assert.equal(isHarnessModel(name), true, name);
+    assert.match(modelIdentityError(name), /session's request\/response metadata/);
+    assert.match(modelIdentityError(name), /X-Model: unknown/);
+  }
+  for (const name of ['deepseek/deepseek-v4.1-flash', 'gpt-5-codex', 'claude-opus-5', 'new-family-2', 'unknown', '']) {
+    assert.equal(isHarnessModel(name), false, name);
+    assert.equal(modelIdentityError(name), null, name);
+  }
+  assert.equal(canonicalModel('Buffy'), 'buffy', 'a persona never aliases to an invented DeepSeek version');
+});
 
 test("variants of one model collapse to one id", () => {
   const cases = {

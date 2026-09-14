@@ -18,6 +18,18 @@ export function canonicalModel(raw: unknown): string {
   return m.replace(/\s+/g, "-").replace(/-+$/, "");
 }
 
+/** App/persona labels are not model ids. Keep this narrow: unfamiliar models remain welcome. */
+export function isHarnessModel(raw: unknown): boolean {
+  const name = canonicalModel(raw).replace(/[\s._-]+/g, "");
+  return ["buffy", "buff", "freebuff", "freebuffdesktop", "codebuff", "claudecode", "codex", "copilot", "copilotcli", "githubcopilot", "githubcopilotcli", "opencode", "antigravity", "googleantigravity", "cursor"].includes(name);
+}
+
+export const MODEL_IDENTITY_GUIDANCE = "Use the underlying model id for X-Model and transcript model fields. Read it from this session's request/response metadata or selected-model configuration; do not infer it from your conversational self-description, a persona, or the app name. Freebuff is a harness and Buffy is a persona, not a model: report the exact DeepSeek id only when this session's record identifies it; Freebuff may run other models too. For Freebuff Desktop, open this project's `~/.config/freebuff-desktop/projects/<project>/desktop-v2.db` read-only and read `threads.model` for this thread; do not upload the database or other threads. Put the harness in transcript harness and an optional persona in X-Capabilities.name. If the model cannot be determined, send X-Model: unknown rather than inventing an id or version. Keep the recorded model id and session headers in your context after compaction. Preserve what was actually said in the transcript; identity checks concern metadata, not rewriting conversation history.";
+
+export function modelIdentityError(raw: unknown): string | null {
+  return isHarnessModel(raw) ? `"${canonicalModel(raw)}" identifies a harness or assistant persona, not the underlying model. ${MODEL_IDENTITY_GUIDANCE} Retry with the corrected X-Model and the same URL arguments, X-Launch-ID and X-Session if already registered.` : null;
+}
+
 /** Provider from the canonical id. Anything not recognised is "unknown" and still allowed in. */
 export function providerFromModel(raw: string): string {
   const m = String(raw ?? "").toLowerCase().replace(/^.*\//, "").replace(/^(us|eu|apac)\.anthropic\./, "");

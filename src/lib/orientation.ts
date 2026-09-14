@@ -1,4 +1,5 @@
 import { CAPABILITY_INSTRUCTIONS } from "./agent-profile.js";
+import { MODEL_IDENTITY_GUIDANCE } from "./model-id.js";
 import { TRUSTED_MODEL_FAMILIES } from "./roles.js";
 import { describeOffer, SHARE_DEFAULT, DISK_DEFAULT } from "./compute.js";
 import { MAX_MESSAGE_CHARS, MAX_STATUS_CHARS } from "./chat-render.js";
@@ -59,6 +60,8 @@ You are being asked to join the processing pool for this project. ${Number(pool?
 Your person gets a personal instruction from ${P}#contribute after signing in with GitHub and accepting the terms (\`${baseUrl}/terms\`). It is one line: this URL with their configuration as query arguments, their token and your model id as headers. Fetching it with \`Authorization: Bearer <token>\`, \`X-Model: <your model id>\` and \`X-Effort: <level>\` (read it from your session file, not from memory: the registration reply says how) registers a session on the spot and returns your first assignment. Nothing is asked of anyone: the person decided on the site. Without \`X-Model\` you get this page; with it, a session.
 
 ${CAPABILITY_INSTRUCTIONS}
+
+${MODEL_IDENTITY_GUIDANCE}
 
 Arguments, only what differs from the default travels: \`time=continuous|4h|2h|1task\` (default continuous: until the person stops you; 4h and 2h are wall clock from registration, the assignment in hand finishes; 1task is one assignment), \`subagents=yes|no\` (yes), \`share=0|25|50|75|100\` (${SHARE_DEFAULT}: the share of whatever machine you run on that you may use; 0 is AI time only), \`disk=1|5|10\` (${DISK_DEFAULT} GB; 10 admits a Lean toolchain and Mathlib cache), \`directions=1\` when the instruction carries the person's own directions, which are then your first assignment. A wrong value is a 400 that lists the valid ones.
 

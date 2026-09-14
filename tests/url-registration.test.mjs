@@ -485,3 +485,108 @@ test('a trusted reviewer\'s also_fix on a served file opens one audit fix job in
   assert.equal(rv2.status, 200, await rv2.text());
   assert.equal((await q(`SELECT id FROM jobs WHERE problem_id = $1 AND title = 'Fix research/tool.js'`, [pid])).length, 1);
 });
+
+test('registration rejects app/persona model names, while a persona capability and unknown model remain valid', async () => {
+  const before = await sessions();
+  for (const model of ['Buffy', 'Freebuff Desktop', 'Codex']) for (const method of ['GET', 'POST']) {
+    const r = await fetch(base + '/start?share=0', {method, headers: {authorization: `Bearer ${token}`, accept: 'application/json', 'content-type': 'application/json', 'x-model': model, 'x-effort': 'unmeasured'}, ...(method === 'POST' ? {body: JSON.stringify({agreed: true})} : {})});
+    const body = await r.json();
+    assert.equal(r.status, 400, JSON.stringify(body));
+    assert.equal(body.code, 'model_identity_required');
+    assert.match(body.error, /same URL arguments, X-Launch-ID and X-Session/);
+  }
+  assert.equal(await sessions(), before);
+  for (const model of ['deepseek-v4.1-flash', 'unknown']) {
+    const r = await fetch(base + '/start?share=0', {headers: {authorization: `Bearer ${token}`, accept: 'application/json', 'x-model': model, 'x-effort': 'unmeasured', 'x-capabilities': JSON.stringify({name: 'Buffy'})}});
+    const body = await r.json(); assert.equal(r.status, 200, JSON.stringify(body));
+    const row = await one(`SELECT model, capabilities FROM sessions WHERE id=$1`, [body.session]);
+    assert.equal(row.model, model); assert.equal(row.capabilities.name, 'Buffy');
+    assert.match(body.brief_md, /Keep the recorded model id and session headers in your context after compaction/);
+    await end(body.session);
+  }
+});
+
+test('legacy persona sessions correct only themselves, keep held work and limits, and repeat the correction on cached briefs', async () => {
+  const headers = {authorization: `Bearer ${token}`, accept: 'application/json', 'x-model': 'deepseek-v4.1-flash', 'x-effort': 'unmeasured', 'x-launch-id': `${tag}-identity`};
+  const issued = await (await fetch(base + '/start?share=0&time=4h', {headers})).json();
+  assert.ok(issued.session && issued.attempt_id, JSON.stringify(issued));
+  const sibling = await (await get('?share=0', {model: 'deepseek-v4.1-flash'})).json();
+  const before = await one(`SELECT jobs, ai, compute, ends_at, launch_key FROM sessions WHERE id=$1`, [issued.session]);
+  // Reproduce a session and cached brief issued by the previous server version.
+  await q(`UPDATE sessions SET model='buffy' WHERE id=$1`, [issued.session]);
+  await q(`UPDATE assignment_attempts SET model='buffy' WHERE id=$1`, [issued.attempt_id]);
+  const retry = () => fetch(base + '/start', {headers: {...headers, 'x-session': issued.session}});
+  const corrected = await retry(); const body = await corrected.json();
+  assert.equal(corrected.status, 200, JSON.stringify(body));
+  assert.equal(body.session, issued.session); assert.equal(body.job_id, issued.job_id); assert.equal(body.attempt_id, issued.attempt_id);
+  assert.equal(body.model_correction.from, 'buffy'); assert.equal(body.model_correction.to, 'deepseek-v4.1-flash');
+  assert.match(body.brief_md, /^Model declaration corrected: use X-Model: deepseek-v4\.1-flash/);
+  const after = await one(`SELECT jobs, ai, compute, ends_at, launch_key FROM sessions WHERE id=$1`, [issued.session]);
+  assert.deepEqual(after, before);
+  assert.equal((await one(`SELECT model FROM sessions WHERE id=$1`, [sibling.session])).model, 'deepseek-v4.1-flash');
+  const attempt = await one(`SELECT model, reason, assignment_payload FROM assignment_attempts WHERE id=$1`, [issued.attempt_id]);
+  assert.equal(attempt.model, 'deepseek-v4.1-flash'); assert.equal(attempt.reason.model_correction.from, 'buffy');
+  assert.deepEqual(attempt.assignment_payload, issued, 'original issued payload is preserved');
+  assert.deepEqual(await (await retry()).json(), body, 'future retries retain the correction');
+  const wrong = await fetch(base + '/start', {headers: {...headers, 'x-session': issued.session, 'x-model': 'claude-opus-5'}});
+  assert.equal(wrong.status, 409, 'a real model cannot switch this session');
+  await end(issued.session); await end(sibling.session);
+});
+
+test('result and replacement uploads validate model metadata without erasing mistaken self-identification', async () => {
+  const reg = await (await get('?share=0', {model: 'deepseek-v4.1-flash'})).json();
+  assert.ok(reg.session && reg.job_id, JSON.stringify(reg));
+  const headers = {authorization: `Bearer ${token}`, accept: 'application/json', 'content-type': 'application/json', 'x-model': 'deepseek-v4.1-flash', 'x-session': reg.session};
+  const log = (model) => [
+    {type: 'solveathome.transcript', version: 1, harness: 'Freebuff', model: 'deepseek-v4.1-flash'},
+    {type: 'solveathome.turn', role: 'assistant', model, content: "I'm Buffy. I checked the cited source."},
+  ].map(JSON.stringify).join('\n');
+  const submit = (transcript) => fetch(base + '/result', {method: 'POST', headers, body: JSON.stringify({job_id: reg.job_id, report_md: 'Checked the cited source.', transcript, transcript_approved: true})});
+  for (const name of ['Buffy', 'Freebuff', 'Codex']) {
+    const invalid = await submit(log(name));
+    assert.equal(invalid.status, 400); assert.equal((await invalid.json()).code, 'transcript_model_identity_required');
+  }
+  assert.equal((await one(`SELECT status FROM jobs WHERE id=$1`, [reg.job_id])).status, 'assigned');
+  const valid = await submit(log('deepseek-v4.1-flash')); const body = await valid.json();
+  assert.equal(valid.status, 200, JSON.stringify(body)); assert.ok(body.return_id);
+  const stored = await one(`SELECT transcript, model FROM returns WHERE id=$1`, [body.return_id]);
+  assert.equal(stored.model, 'deepseek-v4.1-flash'); assert.equal(stored.transcript, log('deepseek-v4.1-flash'));
+  const review = await one(`INSERT INTO reviews (return_id,user_id,model,provider,verdict,rung,notes_md,weight,transcript,tokens,trusted) VALUES ($1,$2,'deepseek-v4.1-flash','deepseek','accept','measured','fixture',1,$3,'{}',false) RETURNING id`, [body.return_id, uid, stored.transcript]);
+  for (const [kind, id] of [['return', body.return_id], ['review', review.id]]) {
+    const replacement = await fetch(base + `/${kind}/${id}/transcript`, {method: 'POST', headers, body: JSON.stringify({transcript: log('Buffy')})});
+    assert.equal(replacement.status, 400); assert.equal((await replacement.json()).code, 'transcript_model_identity_required');
+    assert.equal((await one(`SELECT transcript FROM ${kind === 'return' ? 'returns' : 'reviews'} WHERE id=$1`, [id])).transcript, stored.transcript);
+  }
+  await end(reg.session);
+});
+
+test('an uncorrected legacy persona session can still release work and end', async () => {
+  const reg = await (await get('?share=0', {model: 'deepseek-v4.1-flash'})).json();
+  await q(`UPDATE sessions SET model='buffy' WHERE id=$1`, [reg.session]);
+  const headers = {authorization: `Bearer ${token}`, accept: 'application/json', 'content-type': 'application/json', 'x-model': 'Buffy', 'x-session': reg.session};
+  const release = await fetch(base + '/release', {method: 'POST', headers, body: JSON.stringify({job_id: reg.job_id, note: 'stopped'})});
+  assert.equal(release.status, 200, await release.text());
+  const ended = await fetch(base + `/sessions/${reg.session}/end`, {method: 'POST', headers, body: '{}'});
+  assert.equal(ended.status, 200, await ended.text());
+  assert.ok((await one(`SELECT ended_at FROM sessions WHERE id=$1`, [reg.session])).ended_at);
+});
+
+test('a model correction on result rolls back on rejection and preserves its successful retry receipt', async () => {
+  const headers = {authorization: `Bearer ${token}`, accept: 'application/json', 'content-type': 'application/json', 'x-model': 'deepseek-v4.1-flash', 'x-effort': 'unmeasured', 'x-launch-id': `${tag}-result-identity`};
+  const reg = await (await fetch(base + '/start?share=0', {headers})).json();
+  assert.ok(reg.attempt_id, JSON.stringify(reg));
+  await q(`UPDATE sessions SET model='buffy' WHERE id=$1`, [reg.session]);
+  await q(`UPDATE assignment_attempts SET model='buffy' WHERE id=$1`, [reg.attempt_id]);
+  const submit = (model) => fetch(base + '/result', {method: 'POST', headers: {...headers, 'x-session': reg.session}, body: JSON.stringify({job_id: reg.job_id, attempt_id: reg.attempt_id, report_md: 'Checked the source.', transcript_approved: true, transcript: JSON.stringify({type: 'solveathome.transcript', version: 1, harness: 'Freebuff', model})})});
+  const failed = await submit('claude-opus-5'); const error = await failed.json();
+  assert.equal(failed.status, 400); assert.equal(error.model_correction, undefined);
+  assert.equal((await one(`SELECT model FROM sessions WHERE id=$1`, [reg.session])).model, 'buffy');
+  const unchanged = await one(`SELECT model, reason FROM assignment_attempts WHERE id=$1`, [reg.attempt_id]);
+  assert.equal(unchanged.model, 'buffy'); assert.equal(unchanged.reason.model_correction, undefined);
+  const success = await submit('deepseek-v4.1-flash'); const receipt = await success.json();
+  assert.equal(success.status, 200, JSON.stringify(receipt));
+  assert.equal(receipt.model_correction.from, 'buffy'); assert.equal(receipt.model_correction.to, 'deepseek-v4.1-flash');
+  assert.deepEqual(await (await submit('deepseek-v4.1-flash')).json(), receipt);
+  assert.equal((await one(`SELECT model FROM returns WHERE id=$1`, [receipt.return_id])).model, 'deepseek-v4.1-flash');
+  await end(reg.session);
+});
