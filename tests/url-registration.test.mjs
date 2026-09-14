@@ -207,6 +207,59 @@ test('an ended session\'s page says a new instruction starts a new session, not 
   const r = await get('', {session: j.session}); const t = await r.json();
   assert.equal(r.status, 409); assert.equal(t.error, 'session ended');
   assert.match(t.orientation_md, /A new instruction from them starts a new session/); assert.doesNotMatch(t.orientation_md, /full body|agreed/);
+  assert.match(t.orientation_md, /If your person has already supplied a new joining instruction/);
+  assert.match(t.orientation_md, /an ended session alone is not permission to register again/);
+});
+
+test('a new bare instruction cannot inherit an old URL cap, session or launch ID; exact retries stay idempotent', async () => {
+  const instruction = base + '/start';
+  const oldInstruction = instruction + '?time=1task&subagents=no&share=25&disk=1';
+  const oldLaunch = `${tag}-old-paste`, freshLaunch = `${tag}-new-paste`;
+  const call = (url, source, launch, session) => fetch(url, {headers: {
+    authorization: `Bearer ${token}`, accept: 'application/json', 'x-model': 'claude-opus-5', 'x-effort': 'high',
+    'x-instruction-url': source, 'x-launch-id': launch, ...(session ? {'x-session': session} : {}),
+  }});
+  const initial = await call(oldInstruction, oldInstruction, oldLaunch);
+  const first = await initial.json(); assert.equal(initial.status, 200, JSON.stringify(first).slice(0, 300));
+  assert.equal(first.session_max_jobs, 1);
+  const stored = () => one(`SELECT * FROM sessions WHERE id = $1`, [first.session]);
+  const before = await stored(), count = await sessions();
+  let second;
+  try {
+    for (const [url, source, launch, session, message] of [
+      [oldInstruction, instruction, freshLaunch, undefined, /differs from X-Instruction-URL/],
+      [instruction, instruction, freshLaunch, first.session, /must not carry X-Session/],
+      [instruction, instruction, oldLaunch, undefined, /different settings/],
+      [instruction, instruction, '', undefined, /Generate a random X-Launch-ID/],
+      [instruction, '/relative/start', freshLaunch, undefined, /absolute HTTP/],
+    ]) {
+      const r = await call(url, source, launch, session), body = await r.json();
+      assert.equal(r.status, 409); assert.match(body.error, message);
+      assert.equal(await sessions(), count, 'a rejected registration creates no session');
+      assert.deepEqual(await stored(), before, 'the old session and its settings stay unchanged');
+      assert.equal((await one(`SELECT assigned_session FROM jobs WHERE id=$1`, [first.job_id])).assigned_session, first.session);
+    }
+    // Finish the old one-assignment session, then register from the new uncapped instruction.
+    await end(first.session);
+    const ended = await stored();
+    const stopped = await get('', {session: first.session});
+    assert.equal(stopped.status, 409); assert.equal((await stopped.json()).error, 'session cap reached');
+    const r = await call(instruction, instruction, freshLaunch);
+    second = await r.json(); assert.equal(r.status, 200, JSON.stringify(second).slice(0, 300));
+    assert.notEqual(second.session, first.session); assert.equal(second.session_max_jobs, null);
+    const fresh = await one(`SELECT * FROM sessions WHERE id=$1`, [second.session]);
+    assert.equal(fresh.ends_at, null); assert.equal(fresh.ai.subagents.allowed, true);
+    assert.equal(fresh.compute.share, 0.75); assert.equal(fresh.compute.disk_gb, 5);
+    assert.deepEqual(await stored(), ended, 'new authorization does not reopen the old session');
+    assert.match(second.brief_md, /Check the registration before working/);
+    assert.ok(second.brief_md.includes(`.solveathome/${slug}/${second.session}/notebook.md`));
+    assert.deepEqual(await (await call(instruction, instruction, freshLaunch)).json(), second, 'registration retry replays the same assignment');
+    assert.deepEqual(await (await get('', {session: second.session})).json(), second, 'later session requests omit the registration header');
+    assert.equal(await sessions(), count + 1);
+  } finally {
+    await end(first.session);
+    if (second?.session) await end(second.session);
+  }
 });
 
 test('directions=1 makes the person\'s directions the first assignment', async () => {
