@@ -1,6 +1,34 @@
 import { q, one } from "../db/index.js";
 import { readProjectConfig } from "./projects.js";
 import type { Capabilities } from "./agent-profile.js";
+import { stageOf } from './research-format.js';
+
+export const RESEARCH_BUCKETS = ['discover', 'pursue', 'rescue', 'consolidate'] as const;
+export type ResearchBucket = typeof RESEARCH_BUCKETS[number];
+export type ResearchAllocation = Record<ResearchBucket, number>;
+export const INITIAL_RESEARCH_ALLOCATION: ResearchAllocation = { discover: 0.3, pursue: 0.4, rescue: 0.15, consolidate: 0.15 };
+export function researchPolicy(slug: string, override?: unknown): ResearchAllocation | null {
+  const raw = override ?? readProjectConfig(slug)?.scheduler?.research_allocation;
+  if (raw === undefined || raw === null) return null; // existing instances retain their explicit discovery policy
+  if (typeof raw !== 'object' || Array.isArray(raw) || RESEARCH_BUCKETS.some(k => typeof (raw as any)[k] !== 'number' || !Number.isFinite((raw as any)[k]) || (raw as any)[k] < 0)
+      || Math.abs(RESEARCH_BUCKETS.reduce((n, k) => n + (raw as any)[k], 0) - 1) > 1e-6) throw new Error('research_allocation needs discover, pursue, rescue, consolidate fractions summing to one');
+  return Object.fromEntries(RESEARCH_BUCKETS.map(k => [k, (raw as any)[k]])) as ResearchAllocation;
+}
+export function researchBucket(row: Parameters<typeof stageOf>[0]): ResearchBucket { const s = stageOf(row); return s === 'triage' ? 'pursue' : s; }
+export const STAGE_SQL = `coalesce(j.research_stage,CASE WHEN j.purpose='discovery' THEN CASE WHEN j.type IN ('explore','direction') THEN 'discover' ELSE 'pursue' END ELSE 'consolidate' END)`;
+export function portfolioOrder(policy: ResearchAllocation, used: Record<string, number>): ResearchBucket[] {
+  return RESEARCH_BUCKETS.filter(k => policy[k] > 0).sort((a, b) => (policy[b] * (used.total + 1) - (used[b] ?? 0)) - (policy[a] * (used.total + 1) - (used[a] ?? 0)));
+}
+// Each tier has its own research budget: plentiful models must not consume another
+// tier's discovery reserve, nor need that tier online to advance their own routes.
+export async function researchAllocation(problemId: number, tier = 1): Promise<Record<string, number>> {
+  const rows = await q(`SELECT coalesce(a.research_stage,CASE WHEN a.purpose='discovery' THEN 'discover' ELSE 'consolidate' END) AS stage,
+    sum(a.budget_hours) AS hours,sum(a.budget_hours) FILTER (WHERE a.status IN ('released','cancelled')) AS abandoned
+    FROM assignment_attempts a WHERE a.problem_id=$1 AND a.tier=$2 AND a.scheduled AND (a.started_at>now()-interval '7 days' OR a.status='assigned') GROUP BY 1`, [problemId, tier]);
+  const used: Record<string, number> = { total: 0, abandoned: 0, discover: 0, pursue: 0, rescue: 0, consolidate: 0 };
+  for (const r of rows) { const key = r.stage === 'triage' ? 'pursue' : r.stage; used[key] = (used[key] ?? 0) + Number(r.hours); used.total += Number(r.hours); used.abandoned += Number(r.abandoned ?? 0); }
+  return used;
+}
 
 export type SchedulingAgent = {
   problemId: number; slug: string; sessionId: string; uid: number; tier: number; model: string | null;
@@ -19,11 +47,15 @@ function eligibility(a: SchedulingAgent, omitCompute = false) {
     `j.last_released_session IS DISTINCT FROM ${sid}::text`,
     `NOT EXISTS (SELECT 1 FROM assignment_attempts old WHERE old.job_id = j.id AND old.session_id = ${sid} AND old.status IN ('released','cancelled'))`,
     `(${p(a.lane)}::text IS NULL OR l.slug = $${values.length})`,
+    `(j.avoid_model IS NULL OR j.avoid_model IS DISTINCT FROM ${model}::text)`,
+    `(er.id IS NULL OR (er.user_id <> ${uid} AND er.model IS DISTINCT FROM ${model}::text))`,
+    `(j.type <> 'check' OR j.budget_hours <= ${p(a.maxHours)})`,
+    `(j.type <> 'check' OR NOT EXISTS (SELECT 1 FROM verification_runs v JOIN returns worker ON worker.id=v.result_return_id WHERE v.fingerprint=er.verification_fingerprint AND worker.problem_id=j.problem_id AND worker.user_id=${uid} AND v.outcome='unable'))`,
     `j.required_tools <@ ${p(a.capabilities.tools ?? [])}::text[]`,
     `j.required_sources <@ ${p(a.capabilities.sources ?? [])}::text[]`,
     `(pr.id IS NULL OR pr.user_id <> ${uid} OR ${p(a.granted)}::boolean)`,
     `(pr.id IS NULL OR ${p(a.trusted)}::boolean)`,
-    `NOT EXISTS (SELECT 1 FROM reviews rv WHERE rv.return_id = j.parent_return_id AND rv.user_id = ${uid})`,
+    `NOT EXISTS (SELECT 1 FROM reviews rv WHERE rv.return_id = j.parent_return_id AND rv.user_id = ${uid} AND NOT rv.needs_reassessment)`,
     `NOT EXISTS (SELECT 1 FROM jobs j2 WHERE j2.parent_return_id = j.parent_return_id AND j2.id <> j.id AND j2.assigned_to = ${uid} AND j2.status = 'assigned')`,
     `(pr.id IS NULL OR pr.model IS DISTINCT FROM ${model}::text)`,
     `(pr.id IS NULL OR j.min_tier >= 99 OR ${tier} <= coalesce(amt.tier, 99))`,
@@ -35,7 +67,7 @@ function eligibility(a: SchedulingAgent, omitCompute = false) {
     `(coalesce(j.compute_hint->>'mathlib_cache','false') IN ('false','0','') OR ${p(a.disk)} >= 10)`,
     `coalesce((j.compute_hint->>'disk_gb')::numeric,0) <= ${p(a.disk)}`,
   );
-  return { values, p, where: clauses.join("\n AND "), joins: `FROM jobs j LEFT JOIN lanes l ON l.id = j.lane_id LEFT JOIN returns pr ON pr.id = j.parent_return_id LEFT JOIN model_tiers amt ON amt.model = pr.model` };
+  return { values, p, where: clauses.join("\n AND "), joins: `FROM jobs j LEFT JOIN lanes l ON l.id = j.lane_id LEFT JOIN returns pr ON pr.id = j.parent_return_id LEFT JOIN returns er ON er.id=j.evidence_return_id LEFT JOIN model_tiers amt ON amt.model = pr.model` };
 }
 
 export async function backlogFor(a: SchedulingAgent) {
@@ -46,7 +78,7 @@ export async function backlogFor(a: SchedulingAgent) {
 }
 
 const DEFAULT_SKILLS = `CASE j.type WHEN 'formalize' THEN ARRAY['lean','formalize'] WHEN 'measure' THEN ARRAY['python','computation'] WHEN 'source' THEN ARRAY['literature-search'] WHEN 'break' THEN ARRAY['proof-analysis','counterexamples'] WHEN 'review' THEN ARRAY['verification','proof-analysis'] WHEN 'explore' THEN ARRAY['proof-analysis','research'] ELSE ARRAY[]::text[] END`;
-export async function selectJob(a: SchedulingAgent, preferResearch: boolean, discoveryOnly = false): Promise<any> {
+export async function selectJob(a: SchedulingAgent, preferResearch: boolean, discoveryOnly = false, bucket?: ResearchBucket): Promise<any> {
   const e = eligibility(a);
   const skills = e.p(a.capabilities.skills ?? []), provider = e.p(a.provider), uid = e.p(a.uid);
   const typeOrder = a.tier === 1
@@ -54,14 +86,28 @@ export async function selectJob(a: SchedulingAgent, preferResearch: boolean, dis
       ? ["paper", "explore", "direction", "break", "audit", "review", "curate", "source", "formalize", "measure"]
       : ["review", "audit", "paper", "explore", "direction", "curate", "source", "formalize", "break", "measure"]
     : ["break", "measure", "formalize", "review", "source", "curate", "paper", "explore", "direction", "audit"];
+  if (bucket === 'consolidate') typeOrder.unshift('check');
+  else if (a.tier !== 1) typeOrder.unshift('check');
   const order = e.p(typeOrder);
+  const bucketFilter = bucket ? `AND CASE WHEN ${STAGE_SQL}='triage' THEN 'pursue' ELSE ${STAGE_SQL} END=${e.p(bucket)}` : '';
+  // Prioritize judgments that further research already relies on, without changing trust or eligibility.
   // Every non-age term is bounded; one point per waiting day eventually lifts older work.
   return one(`SELECT j.*, l.slug AS lane_slug,
     (SELECT count(*) FROM unnest(CASE WHEN cardinality(j.preferred_skills) > 0 THEN j.preferred_skills ELSE ${DEFAULT_SKILLS} END) tag WHERE tag = ANY(${skills}::text[])) AS skill_matches
-    ${e.joins} WHERE ${e.where} ${discoveryOnly ? "AND j.purpose = 'discovery' AND j.type IN ('explore','direction','break','measure','formalize','source')" : ""}
+    ${e.joins} WHERE ${e.where} ${bucketFilter} ${discoveryOnly ? "AND j.purpose = 'discovery' AND j.type IN ('explore','direction','break','measure','formalize','source')" : ""}
     ORDER BY CASE WHEN pr.id IS NOT NULL AND pr.user_id = ${uid} THEN 1 ELSE 0 END,
+    CASE WHEN j.research_stage='triage' AND (
+      j.created_at < now()-interval '1 hour' OR
+      (SELECT count(*) FROM (SELECT research_stage FROM assignment_attempts
+        WHERE problem_id=j.problem_id AND scheduled AND research_stage IN ('triage','pursue')
+        ORDER BY started_at DESC,id DESC LIMIT 3) recent WHERE recent.research_stage='pursue')=3
+    ) THEN 0 ELSE 1 END,
     (
       j.priority * 10 + extract(epoch FROM (now() - j.created_at)) / 86400
+      + CASE WHEN pr.id IS NOT NULL AND (
+          EXISTS (SELECT 1 FROM research_dependencies d WHERE d.return_id=pr.id)
+          OR EXISTS (SELECT 1 FROM jobs next WHERE next.research_source_return_id=pr.id AND next.research_stage='pursue')
+        ) THEN 8 ELSE 0 END
       + LEAST(3, (SELECT count(*) FROM unnest(CASE WHEN cardinality(j.preferred_skills) > 0 THEN j.preferred_skills ELSE ${DEFAULT_SKILLS} END) tag WHERE tag = ANY(${skills}::text[]))) * 12
       + LEAST(3, cardinality(j.required_sources)) * 12
       - coalesce(array_position(${order}::text[], j.type), 10) * 4

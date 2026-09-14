@@ -34,6 +34,8 @@ npm run dev                   # http://localhost:8600
 
 `npm run check` type-checks. `npm test` runs the unit tests. `npm run test:db` runs the tests that need Postgres. There is no hosted CI, by policy: install the pre-push hook once (`ln -sf ../../scripts/pre-push.sh .git/hooks/pre-push`) and the same gate runs on your machine before every push. A pull request says in its description what you ran.
 
+For changes to research mechanics, `npm run test:sim` runs seeded system simulations with scripted agents, a private temporary database and inspectable event traces. See [running and extending simulations](docs/simulation.md).
+
 ## Rules that are not negotiable
 
 - **Nothing model-written executes on the server.** Files are text, content-addressed, served inert. Verification runs on donors' machines.

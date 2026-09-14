@@ -72,11 +72,11 @@ They said (verbatim, keep it that way in \`human_md\`):
 
 Target: ${where}.
 
-Do this, in order, within ${hours} h:
+Success criteria within ${hours} h; choose the reasoning method that best resolves the question:
 
 1. **Read the target** and what it rests on: the document or manuscript, its history (\`${P}/history/<path>\`), the claims it cites, the returns that cite it. If the target is a return, read its reviews.
-2. **State the objection precisely.** Which claim, which step, which assumption; quote the line. If their words are vague, ask them (you are their agent; one question is cheaper than a wrong reconstruction).
-3. **Rescue the target first.** The strongest reading under which it stands. Only then attack it. A reviewer will do the same to you.
+2. **State the objection precisely.** Which claim, which step, which assumption; quote the line. If their words are ambiguous, state the most defensible bounded interpretation and the unresolved part. Do not turn that uncertainty into a claimed refutation or pause the configured session to ask.
+3. **Compare the objection with the strongest supported reading of the target.** Inspect the relevant source or assumption; neither the author nor the objection is presumed correct.
 4. **Produce the decisive thing:** a counterexample with a validator, a derivation of the gap, a source that contradicts it (exact page), or a measurement. Upload files with \`POST /files\`.
 5. **Say whether the objection holds:** \`"holds"\` (the target is wrong as stated), \`"partial"\` (a weaker statement survives; say which), or \`"does-not-hold"\` (the target stands; say what convinced you). Nobody's reputation is at stake here; the record is. A challenge that does not hold, honestly reported, is a useful return.
 6. **Assign the rung** to your own finding on the ladder (Proven > Measured > Heuristic > Conjectured > Refuted).
@@ -107,11 +107,11 @@ They said (verbatim, keep it that way in \`human_md\`):
 
 > ${t.says.replace(/\n/g, "\n> ")}
 ${t.about ? `\nAbout: "${t.about}".\n` : ""}
-Do this, in order, within ${hours} h:
+Success criteria within ${hours} h; choose the reasoning method that best resolves the question:
 
-1. **Read the router** (\`research/README.md\`) and the **refuted registry** before anything: "novel to us" is not "novel". If their idea is already there, say where, and what is different this time (or that nothing is).
+1. **Search prior work first.** Read the router (\`research/README.md\`), the closed-routes register (\`research/OUTCOMES.md\`) and the existing search record, then search online for equivalent methods and earlier attempts. Cite what covers the idea and the exact uncovered difference, if any.
 2. **State the route as a claim** with its rung and what would falsify it. One paragraph a reviewer can check.
-3. **Take the first concrete step:** a lemma to attack, a measurement to run, a source to find. Do that step if it fits the budget; otherwise specify it so a queued job can.
+3. **Choose the smallest useful next step** on the uncovered uncertainty. Use published numbers with citations; numerical reproduction belongs in selected later validation. An uncovered route should include \`research.proposal\`, evidence and a bounded next_step per GET ${P}/research-protocol so triage can continue it. A known match or access gap is a useful finding; do not invent novelty to fill the proposal schema.
 4. **If their words admit two readings**, take the more literal one, say so in the report, and note the other reading. Do not stop to ask; they configured this session to run without questions.
 
 Return with this job:
@@ -120,7 +120,7 @@ Return with this job:
 POST ${P}/result
 { "job_id": <this job>, "type": "direction",
   "human_md": "<their words, verbatim>",
-  "report_md": "<the route as a claim, what the registry says, the first step and its result>",
+  "report_md": "<the scoped route, inspected prior work, exact remaining gap and next step or observed result>",
   "files": [...], "cites": {...}, "transcript": "...", "transcript_approved": true }
 \`\`\`
 

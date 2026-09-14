@@ -4,7 +4,12 @@ import { wantsHtml } from "../lib/negotiate.js";
 import { q, one, projectTransaction } from "../db/index.js";
 import { assignmentMutation, claimAssignment, releaseAssignment } from "../lib/assignments.js";
 import { parseCapabilities, researchContact, CAPABILITY_INSTRUCTIONS } from "../lib/agent-profile.js";
-import { backlogFor, selectJob, computeBlocked, discoveryShare, discoveryDue, allocation, type SchedulingAgent } from "../lib/scheduler.js";
+import { backlogFor, selectJob, computeBlocked, discoveryShare, discoveryDue, allocation, researchPolicy, researchAllocation, portfolioOrder, researchBucket, type SchedulingAgent } from "../lib/scheduler.js";
+import { parseResearch, stageOf } from '../lib/research-format.js';
+import { recordResearch, prepareRescue, researchBrief, routeContext, reconsiderDependents } from '../lib/research.js';
+import { parseVerificationPlan, saveVerificationPlan, queueCheck, saveCheckReceipt, verificationRuns, verificationState, verificationBrief, judgmentBudget, validateReceiptUse, isCompletedCheck, expireWaitingChecks, checkWaitExpired, identicalClaim } from '../lib/verification.js';
+import { readFileSync } from 'node:fs';
+import { ROOT } from '../lib/paths.js';
 import { bearer, optionalAuth, modelTier } from "../lib/auth.js";
 import { marked } from "marked";
 import { protectMath } from "../lib/math.js";
@@ -20,6 +25,7 @@ import type { Tokens } from "../lib/tokens.js";
 /** Why a review rejected (Chris, Sep 11 2026). Overclaimed work should be accepted at the lower rung; the class exists so the record says which it was. */
 export const REJECT_REASONS = ["refuted", "overclaimed", "unsourced", "unverifiable"] as const;
 import { renderBrief } from "../lib/brief.js";
+import { GUIDANCE_VERSION } from "../lib/research-guidance.js";
 import { decide, MAX_REVIEWS, MIN_REVIEWS } from "../lib/consensus.js";
 import * as reputation from "../lib/reputation.js";
 import * as files from "../lib/files.js";
@@ -81,6 +87,9 @@ async function sweepExpired(problemId: number): Promise<void> {
 
 async function start(req: any, res: any): Promise<void> {
   await sweepExpired(req.project.id);
+  // Released or timed-out work may have been invalidated while held. Retire the stale
+  // queued assignment before selecting a current investigation of the route.
+  await q(`UPDATE jobs j SET status='expired' FROM research_routes rr WHERE j.problem_id=$1 AND j.research_route_id=rr.id AND j.status='queued' AND j.research_revision<>rr.revision`, [req.project.id]);
   const root = await one(`SELECT id FROM channels WHERE problem_id = $1 AND path = ''`, [req.project.id]);
   if (root) await q(`INSERT INTO channel_members (channel_id, user_id, model) VALUES ($1,$2,$3) ON CONFLICT (channel_id, user_id) DO UPDATE SET model = EXCLUDED.model`, [root.id, req.user!.id, req.model ?? null]);
   let member: any = await one(`SELECT * FROM pool WHERE problem_id = $1 AND user_id = $2`, [req.project.id, req.user!.id]);
@@ -194,24 +203,42 @@ Your person allowed ${session.max_jobs} assignment(s) in the instruction they ga
     tier, model: req.model ?? null, provider: req.provider ?? null, trusted, granted, lane, cpuHours: maxHours,
     ramGb: prefs.ramGb, hasGpu: prefs.hasGpu, disk, maxHours: Number(settings.ai?.max_hours_per_assignment ?? 2),
     reviewStreak: Number(session.review_streak ?? 0), capabilities: session.capabilities ?? {} };
+  for (const waiting of await expireWaitingChecks(agent.problemId)) {
+    if (!await one(`SELECT 1 FROM jobs WHERE parent_return_id=$1 AND type='review' AND status IN ('queued','assigned')`, [waiting.id]))
+      await spawnReviews(Number(waiting.id), agent.problemId, waiting.lane_id, 1, { judgmentOnly: true });
+  }
   const tangentFirst = Number(session.jobs) === 0 && settings.input?.tangent ? await synthesizeTangent(req, session, settings.input.tangent as Tangent) : null;
   const need = tier === 1 ? await backlogFor(agent) : { reviews: 0, research: 0 };
   const runOfReviews = Math.min(4, Math.max(1, Math.ceil(need.reviews / Math.max(1, need.research))));
   const preferResearch = tier === 1 && agent.reviewStreak >= runOfReviews;
   const share = discoveryShare(req.project.slug, req.project.discovery_share);
   const used = tier === 1 ? await allocation(Number(req.project.id)) : { total: 0, discovery: 0 };
-  let row: any = tangentFirst ?? await selectJob(agent, preferResearch);
-  const reserveDiscovery = !tangentFirst && tier === 1 && discoveryDue(share, used, Math.min(agent.maxHours, Number(row?.budget_hours ?? agent.maxHours)));
+  const portfolio = researchPolicy(req.project.slug, req.project.research_allocation);
+  const portfolioUsed = portfolio ? await researchAllocation(Number(req.project.id), tier) : null;
+  let row: any = tangentFirst;
+  if (!row && portfolio && portfolioUsed) {
+    for (const bucket of portfolioOrder(portfolio, portfolioUsed)) {
+      if (bucket === 'rescue') await prepareRescue(agent.problemId, agent.model, lane);
+      row = await selectJob(agent, true, false, bucket);
+      if (!row && bucket === 'discover') row = await synthesizeExplore(req, session, lane, maxHours, null, true);
+      if (row) break;
+    }
+  }
+  row ??= await selectJob(agent, preferResearch);
+  const reserveDiscovery = !portfolio && !tangentFirst && tier === 1 && discoveryDue(share, used, Math.min(agent.maxHours, Number(row?.budget_hours ?? agent.maxHours)));
   if (reserveDiscovery) row = await selectJob(agent, preferResearch, true)
     ?? await synthesizeExplore(req, session, lane, maxHours, null, true);
   if (!row) row = await synthesizeExplore(req, session, lane, maxHours, await computeBlocked(agent));
-  const reason = { policy: tangentFirst ? "person's tangent" : reserveDiscovery ? "reserved tier-1 discovery" : "eligible work by need and capability",
-    tier, discovery_share: share, discovery_allocation: used, eligible_backlog: need, prefer_research: preferResearch,
+  const reason = { policy: tangentFirst ? "person's tangent" : portfolio ? "research portfolio" : reserveDiscovery ? "reserved tier-1 discovery" : "eligible work by need and capability",
+    tier, guidance_version: GUIDANCE_VERSION, discovery_share: share, discovery_allocation: used, eligible_backlog: need, prefer_research: preferResearch,
+    research_allocation: portfolio, research_hours: portfolioUsed, research_bucket: researchBucket(row),
     skill_matches: Number(row.skill_matches ?? 0), purpose: row.purpose ?? 'work' };
   row = await claimAssignment(row, session, uid, tier, reason, !tangentFirst);
   row.repo_url = req.project.repo_url;
   const sess = { id: String(session.id), jobs: Number(session.jobs), max: session.max_jobs === null ? null : Number(session.max_jobs), length: lengthWords(session), disk, abandonAfterMin: ABANDON_AFTER_MIN, maxHours: agent.maxHours, compute: describeOffer(offer), transcriptPreapproved: settings.ai?.transcript_preapproved === true, subagents: settings.ai?.subagents?.allowed === false ? "not allowed" : settings.ai?.subagents?.max_parallel ? `allowed, up to ${settings.ai.subagents.max_parallel} at a time` : "allowed", files: await files.quota(uid).then((f) => ({ left: f.files_left, bytes_left: f.bytes_left, per_day: f.files_per_day })) };
   if (Number(row.release_count ?? 0) > 0) row.prior_claims = await q(`SELECT m.id, u.handle, m.model, m.created_at FROM messages m JOIN users u ON u.id = m.user_id WHERE m.job_id = $1 AND m.kind = 'claim' ORDER BY m.id`, [row.id]);
+  if (row.research_route_id) row.brief_md += await researchBrief(Number(row.research_route_id));
+  if (row.evidence_return_id || row.parent_return_id) row.brief_md += await verificationBrief(Number(row.evidence_return_id ?? row.parent_return_id));
   let md = renderBrief(row, `${BASE()}/projects/${req.project.slug}`, sess);
   { const note = unservedNote(String(row.brief_md ?? ""), req.project.slug, `${BASE()}/projects/${req.project.slug}`); if (note) md = md.replace(/\n## /, () => `\n${note}## `); }
   // Reviews this handle cannot take with this model (a model never reviews its own kind) wait for its other agents: say so, or the handle stacks returns nobody reviews.
@@ -251,7 +278,7 @@ Your person allowed ${session.max_jobs} assignment(s) in the instruction they ga
   if (settings.input?.direction && !tangentFirst && row.type !== "direction") md += `\n\n## Your person's direction\n\nThey said: "${String(settings.input.direction).slice(0, 2000)}"\n\nIf this assignment does not serve that, you may set it aside: pursue their idea and submit it as type \`direction\` with their words in the report and their handle in \`cites.handles\`. Their name goes on the lane if it is accepted.\n`;
   if (inboxMd) md = md.replace(/\n## /, () => `\n${inboxMd}## `);   // after the title block, before the first section
   if (ib.max_message_id > Number(session.inbox_seen_message_id ?? 0)) await q(`UPDATE sessions SET inbox_seen_message_id = $2 WHERE id = $1`, [session.id, ib.max_message_id]);
-  const payload = { job_id: row.id, attempt_id: row.attempt_id, type: row.type, purpose: row.purpose, session: sess.id, session_jobs: sess.jobs, session_max_jobs: sess.max, inbox: ib, assignment_reason: reason, contact_id: session.contact_id, brief_md: md };
+  const payload = { job_id: row.id, attempt_id: row.attempt_id, guidance_version: GUIDANCE_VERSION, type: row.type, purpose: row.purpose, research_stage: stageOf(row), research_route_id: row.research_route_id ?? null, session: sess.id, session_jobs: sess.jobs, session_max_jobs: sess.max, inbox: ib, assignment_reason: reason, contact_id: session.contact_id, brief_md: md };
   await q(`UPDATE assignment_attempts SET assignment_payload = $2 WHERE id = $1`, [row.attempt_id, JSON.stringify(payload)]);
   if (wantsJson) res.json(payload);
   else res.type("text/markdown").send(md);
@@ -293,7 +320,7 @@ async function synthesizeExplore(req: any, session: any, laneSlug: string | null
   const pick = openQuestions(req.project.slug, 1000).find((x) => !served.has(x.id)) ?? null;
   const offered = session.compute?.usable ? `${Number(session.compute.usable.ram_gb ?? 0)} GB and ${Number(session.compute.usable.cpu_hours ?? 0)} CPU hours` : "no compute";
   const blockedNote = blocked ? `**Typed work is waiting for your tier: ${blocked.n} assignment(s) (${blocked.types}) need up to ${blocked.ram} GB RAM and ${blocked.hours} CPU hours, and this session offers ${offered}.** If your person can spare more, they raise Max compute share or Max disk usage in the instruction on the site and start an agent with it; that agent gets one of them. Until then, this is what fits.\n\n` : "";
-  const tail = `\n\n**Return** as this job (type explore): a report with what you did, the rung of each claim, and the gap that remains, plus any files. If your work amounts to a new route, submit a second return of type \`direction\` with the route in your person's words or yours; if it finds a served document wrong, an \`audit\` return with the revised file. Then call \`GET ${P}/start\` once. Do not poll.`;
+  const tail = `\n\n**Return** as this job (type explore): a report with what you did, the rung of each claim, and the gap that remains, plus any files. If your work amounts to a new route, include \`research.proposal\` and its cheapest next experiment in this return (GET ${P}/research-protocol); if it finds a served document wrong, an \`audit\` return with the revised file. Then call \`GET ${P}/start\` once. Do not poll.`;
   let title: string; let brief: string; let originKey: string; let isDiscovery = true;
   if (pick) {
     originKey = `question:${pick.id}`;
@@ -304,10 +331,10 @@ async function synthesizeExplore(req: any, session: any, laneSlug: string | null
 
 - \`${pick.id}\` (${pick.status}): ${pick.text}${pick.verdict ? `\n  Record so far: ${pick.verdict}` : ""}
 
-**Do this, in order.** Read \`research/README.md\` (the router) and the rows of \`research/QUESTIONS.md\` and \`research/OUTCOMES.md\` that name this question. Then work it in lane **${lane?.slug ?? "any"}** for up to ${hours} h: read the records it names, check the claims at their stated calibration, try to break the standing verdict, and write down what you established, at which rung, and what would falsify it. If the record already answers the question and the registry row is stale, say so in one paragraph, return, and add an \`audit\` return on \`research/QUESTIONS.md\` with the corrected row; do not re-derive an answer that is on the record.` + tail;
+**Do this, in order.** Read \`research/README.md\` (the router) and the rows of \`research/QUESTIONS.md\` and \`research/OUTCOMES.md\` that name this question. Next search online for existing attempts, published results and computations for this question; inspect the closest sources and record the exact uncovered step. Use published numbers with their stated scope, without reproducing them here. Then work the uncovered question in lane **${lane?.slug ?? "any"}** for up to ${hours} h: read the records it names, check the claims at their stated calibration, try to break the standing verdict, and write down what you established, at which rung, and what would falsify it. If the record already answers the question and the registry row is stale, say so in one paragraph, return, and add an \`audit\` return on \`research/QUESTIONS.md\` with the corrected row; do not re-derive an answer that is on the record.` + tail;
   } else {
     const n = Number((await one<{ c: string }>(`SELECT count(*) AS c FROM jobs WHERE problem_id = $1 AND type = 'explore' AND (origin_key LIKE 'lead:%' OR title LIKE 'Leads: %') AND created_at > now() - interval '${SERVED_WINDOW}'`, [req.project.id]))?.c ?? 0);
-    const menu = discovery ? (["prior-art", "break", "synthesis", "route", "statistic"] as const) : LEAD_KINDS;
+    const menu = discovery && researchPolicy(req.project.slug, req.project.research_allocation) ? (["route", "synthesis", "route", "statistic", "prior-art"] as const) : discovery ? (["prior-art", "break", "synthesis", "route", "statistic"] as const) : LEAD_KINDS;
     const kind = menu[n % menu.length];
     const recent = await q<{ id: number; type: string; handle: string; final_rung: string | null; head: string }>(`SELECT r.id, r.type, u.handle, r.final_rung, left(regexp_replace(r.report_md, E'\\n[\\\\s\\\\S]*$', ''), 140) AS head FROM returns r JOIN users u ON u.id = r.user_id WHERE r.problem_id = $1 AND r.status = 'accepted' AND r.type <> 'explore' AND r.user_id <> $2 ORDER BY r.id DESC LIMIT 12`, [req.project.id, req.user!.id]);
     const target = recent.length ? recent[(Math.floor(n / LEAD_KINDS.length)) % recent.length] : null;
@@ -316,13 +343,13 @@ async function synthesizeExplore(req: any, session: any, laneSlug: string | null
     const tline = target ? `return #${target.id} (${target.type}${target.final_rung ? `, ${target.final_rung}` : ""}, by @${target.handle}): "${target.head}", at \`GET ${P}/return/${target.id}\`` : "the document the router names as the current bound (\`research/README.md\`, section Status)";
     const list = recent.slice(0, 8).map((r) => `- #${r.id} (${r.type}${r.final_rung ? `, ${r.final_rung}` : ""}, @${r.handle}): ${r.head}`).join("\n") || "- (no accepted returns yet; start from the router)";
     const hunts: Record<typeof LEAD_KINDS[number], [string, string]> = {
-      "elevate": [rec ? `elevate or refute return #${rec.id}` : "elevate or refute a recorded return", rec ? `**Elevate or refute.** Return #${rec.id} by @${rec.handle}${rec.lane ? ` in ${rec.lane}` : ""} is recorded and unverified: "${rec.head}" (\`GET ${P}/return/${rec.id}\`). Read it against the record. If a claim in it holds at a rung others should build on, elevate it: \`POST ${P}/return/${rec.id}/request-review\` with \`{ "note": "<what you checked and why it deserves verification>" }\`, and it goes before reviewers with your name on the elevation. If it fails, say exactly where in the lane channel (kind \`challenge\`, with the return linked) and in your report. Either outcome is the work of this assignment; ${recorded.length} recorded returns wait for a reader (\`GET ${P}/board\`, \`recorded\`).` : `**Elevate or refute.** Every recorded return has been read; take the newest explore return on the board (\`GET ${P}/board\`, \`recent\`) and check its claims against the record.`],
-      "prior-art": [`prior art for ${target ? `return #${target.id}` : "the current bound"}`, `**Prior-art hunt.** Take the central object of ${tline}. Search the literature for it (per \`research/SEARCH-CONVENTIONS.md\`: name the convention it belongs to, then look for the verbatim statement). Report one of: novel, novel to us (the record already names an owner), or owned (author, venue, year, theorem or equation number, page), with the source link and how far the published statement covers what the return claims. A finding of "owned" is a lead for \`research/IMPORT-MAP.md\`: add an \`audit\` return with the row.`],
-      "break": [`break ${target ? `return #${target.id}` : "the current bound"}`, `**Adversarial re-check.** Take ${tline}. Try to break it at its stated rung: a hypothesis it does not satisfy, a step that does not follow, a computation that does not reproduce from the recipe, a constant mis-transcribed. Read first; rerun only what the reading makes suspect and say why. If the objection holds, send \`"request_review": true\` on your return and post the return link in the lane channel so a trusted reviewer can reopen the target; if it stands, say what you tried and what would have broken it.`],
+      "elevate": [rec ? `elevate or refute return #${rec.id}` : "elevate or refute a recorded return", rec ? `**Elevate or refute.** Return #${rec.id} by @${rec.handle}${rec.lane ? ` in ${rec.lane}` : ""} is recorded and unverified: "${rec.head}" (\`GET ${P}/return/${rec.id}\`). Read it against the record. If the supplied evidence makes a claim useful enough for targeted validation, elevate it: \`POST ${P}/return/${rec.id}/request-review\` with \`{ "note": "<what you checked and why it deserves verification>" }\`, and it goes before reviewers with your name on the elevation. If it fails, say exactly where in the lane channel (kind \`challenge\`, with the return linked) and in your report. If neither conclusion is supported, record the precise gap and stop. These are useful outcomes of the assignment; ${recorded.length} recorded returns wait for a reader (\`GET ${P}/board\`, \`recorded\`).` : `**Elevate or refute.** Every recorded return has been read; take the newest explore return on the board (\`GET ${P}/board\`, \`recent\`) and check its claims against the record.`],
+      "prior-art": [`prior art for ${target ? `return #${target.id}` : "the current bound"}`, `**Prior-art hunt.** Take the central object of ${tline}. Search the literature for it (per \`research/SEARCH-CONVENTIONS.md\`: name the convention it belongs to, then look for the verbatim statement). Report a known match, an exact difference from the closest result, or no match found within the stated search. Record conventional terminology, sources actually inspected and inaccessible sources; an unsuccessful search does not establish novelty. For matches record author, venue, year, theorem or equation number and page, with the source link and how far the published statement covers what the return claims. A finding of "owned" is a lead for \`research/IMPORT-MAP.md\`: add an \`audit\` return with the row.`],
+      "break": [`break ${target ? `return #${target.id}` : "the current bound"}`, `**Adversarial re-check.** Take ${tline}. Try to break it at its stated rung: a hypothesis it does not satisfy, a step that does not follow, a computation that does not reproduce from the recipe, a constant mis-transcribed. Read the source and search for published corrections first. For a suspected numerical discrepancy, record the precise evidence and the smallest check needed in later validation; do not rerun the published computation during this discovery assignment. If the objection holds, send \`"request_review": true\` on your return and post the return link in the lane channel so a trusted reviewer can reopen the target; if it stands, say what you tried and what would have broken it.`],
       "registry": [`registry sweep`, `**Registry sweep.** Take ${Math.min(15, openQuestions(req.project.slug, 1000).length)} rows of \`research/QUESTIONS.md\` starting at row ${(Math.floor(n / LEAD_KINDS.length) * 15) % Math.max(1, openQuestions(req.project.slug, 1000).length) + 1} of the open and partial ones (\`GET ${P}/questions\`). For each, find where the record answers it (\`research/OUTCOMES.md\`, the returns at \`GET ${P}/board\`, the lane channels) and say whether the row's status and verdict are current. Return the table of what is stale, and an \`audit\` return on \`research/QUESTIONS.md\` with the corrected rows.`],
-      "synthesis": [`cross-lane synthesis`, `**Cross-lane synthesis.** Read the latest accepted returns across lanes:\n${list}\nFind two results that bear on one another: one that sharpens, bounds, contradicts or makes redundant another, or two that together imply something neither states. Write the connection with each claim at its rung and what a reviewer would need to check. A connection that is a new route is a \`direction\` return.`],
-      "route": [`new route`, `**New route.** Read the closed-routes register (\`research/OUTCOMES.md\`, section "Closed routes") and the open questions (\`GET ${P}/questions\`). Draft one route to the target exponent or to the infinitude statement that is not on the record and not a closed route restated: the object, the step that would have to hold, the first check that could refute it cheaply, and what it would cost to run. Return it as \`direction\` (your words, or your person's verbatim if they gave it) with this job's explore report as the reasoning.`],
-      "statistic": [`new statistic`, `**New statistic with a falsifier.** Design one finite statistic a run could actually decide something about, where the retained censuses could not: the decision it informs, a pre-registered falsifier written before any run, a matched control (random-sign, permutation or independent thinning, as the repo uses), and the scale at which the effect would be visible if present. If the run fits the compute your person offered, run it in the house format (question in comments, then code) and report; otherwise return the design with the cost, so a session with the compute can run it.`],
+      "synthesis": [`cross-lane synthesis`, `**Cross-lane synthesis.** Read the latest accepted returns across lanes:\n${list}\nSearch the wider literature for the proposed connection before deriving it. Find two results that bear on one another: one that sharpens, bounds, contradicts or makes redundant another, or two that together imply something neither states. Write the connection with each claim at its rung and what a reviewer would need to check. A connection that is a new route belongs in \`research.proposal\` with a bounded next experiment in this explore return.`],
+      "route": [`new route`, `**New route.** Read the closed-routes register (\`research/OUTCOMES.md\`, section "Closed routes") and the open questions (\`GET ${P}/questions\`). Search online for the route, equivalent formulations, previous attempts and published computations before proposing to try it. Draft one route to the target exponent or to the infinitude statement that adds something to the record, or changes a specific assumption or ingredient in a previously blocked route: the object, the step that would have to hold, the first check that could refute it cheaply, and what it would cost to run. Include it as \`research.proposal\` in this explore return, with the nearest prior work, exact difference and bounded next experiment.`],
+      "statistic": [`new statistic`, `**New statistic with a falsifier.** Design one finite statistic a run could actually decide something about, where the retained censuses could not: the decision it informs, a pre-registered falsifier written before any run, a matched control (random-sign, permutation or independent thinning, as the repo uses), and the scale at which the effect would be visible if present. Search online for existing statistics, datasets and computed ranges first. Reuse and cite any numbers already published. Only if the experiment answers an uncovered question and fits the compute your person offered, run the missing part in the house format (question in comments, then code) and report; otherwise return the design with the cost, so a session with the compute can run it.`],
     };
     originKey = `lead:${kind}:${Date.now()}:${n}`;
     isDiscovery = kind !== "elevate" && kind !== "registry";
@@ -334,7 +361,7 @@ ${body}
 
 Read \`research/README.md\` (the router) first if this is your first assignment here; cite every message, return, file and person you build on.` + tail;
   }
-  if (discovery) brief = brief.replace(/Nothing typed[^\n]+/, "This assignment uses the project's reserved tier-1 discovery capacity, even while other jobs are queued. Find something new: a route, connection, counterexample, or testable hypothesis. Record what you tried and learned, including negative findings.");
+  if (discovery) brief = brief.replace(/Nothing typed[^\n]+/, "This assignment uses the project's reserved discovery capacity for your tier, even while other jobs are queued. Find something new: a route, connection, counterexample, or testable hypothesis. Record what you tried and learned, including negative findings.");
   const j = await one(`INSERT INTO jobs (problem_id, lane_id, type, title, brief_md, git_ref, compute_hint, budget_hours, min_tier, quorum, status, assigned_to, assigned_session, assigned_at, expires_at)
                        VALUES ($1,$2,'explore',$3,$4,'main','{}',$5,99,1,'queued',NULL,NULL,NULL,NULL) RETURNING *`,
     [req.project.id, lane?.id ?? null, title.slice(0, 200), brief, hours]);
@@ -382,10 +409,65 @@ job.post("/sessions/:id/capabilities", bearer, project, assignmentMutation(async
 
 /** Scheduler allocation is operational context, not a claim that allocated hours were actually used. */
 job.get("/scheduler", bearer, project, async (req: any, res) => {
-  res.json({ discovery_share: discoveryShare(req.project.slug, req.project.discovery_share), window_days: 7, unit: "budgeted agent hours", tier1: await allocation(Number(req.project.id)) });
+  res.json({ discovery_share: discoveryShare(req.project.slug, req.project.discovery_share), research_allocation: researchPolicy(req.project.slug, req.project.research_allocation), research_hours: await researchAllocation(Number(req.project.id)), window_days: 7, unit: "budgeted agent hours", tier1: await allocation(Number(req.project.id)) });
 });
 
 /** POST /sessions/:id/end { note? } : end one of this handle's sessions; its held assignment returns to the queue. */
+job.get('/research-protocol', project, (req: any, res) => {
+  res.type('text/markdown').send(readFileSync(join(ROOT, 'docs', 'research-process.md'), 'utf8'));
+});
+job.get('/research-routes', project, async (req: any, res) => {
+  const rows = await q(`SELECT id,title,state,contribution_md,uncertainty_md,next_step,obstacle,origin_return_id,parent_route_id,last_return_id,revision,updated_at FROM research_routes WHERE problem_id=$1 ORDER BY updated_at DESC,id DESC LIMIT 100`, [req.project.id]);
+  if ((req.header('accept') ?? '').includes('application/json')) { res.json({ routes: rows }); return; }
+  const P = `/projects/${req.project.slug}`;
+  const text = `# Research routes\n\nInvestment states describe what to investigate, not what has been proved.\n\n${rows.map(r => `- [${r.title}](${P}/research-routes/${r.id}): ${r.state}. ${r.uncertainty_md}`).join('\n') || 'No routes proposed yet.'}`;
+  if (wantsHtml(req)) res.type('text/html').send(page({ title: 'Research routes', heading: 'Research routes', crumbs: `<a href="${P}">${escHtml(req.project.name)}</a>`, body: (() => { const m = protectMath(text.replace(/</g, '&lt;').replace(/>/g, '&gt;')); return m.restore(marked.parse(m.text) as string); })() }));
+  else res.type('text/markdown').send(text);
+});
+job.get('/research-routes/:id', project, async (req: any, res) => {
+  const id = Number(req.params.id);
+  if (!Number.isSafeInteger(id) || id < 1) { res.status(400).json({ error: 'invalid route id' }); return; }
+  const route = await routeContext(id);
+  if (!route || Number(route.problem_id) !== Number(req.project.id)) { res.status(404).json({ error: 'no such research route in this project' }); return; }
+  if ((req.header('accept') ?? '').includes('application/json')) { res.json(route); return; }
+  const P = `/projects/${req.project.slug}`;
+  const step = route.next_step, obstacle = route.obstacle;
+  const text = `Investment state: **${route.state}**. This describes research progress; claims have separate evidence grades.
+
+## Contribution to the goal
+
+${route.contribution_md}
+
+## Prior work and proposed difference
+
+${route.prior_art_md}
+
+## Central uncertainty
+
+${route.uncertainty_md}
+
+${step ? `## Next experiment\n\n${step.question}\n\n${step.method}\n\n- Continue if: ${step.success}\n- Stop this attempt if: ${step.failure}\n- Budget: ${step.budget_hours} agent hours.` : ''}
+
+${obstacle ? `## Current obstacle\n\n**${String(obstacle.kind).replaceAll('_', ' ')}:** ${obstacle.statement}\n\nAssumptions: ${obstacle.assumptions}\n\nEvidence: ${obstacle.evidence}\n\nReconsider when: ${obstacle.revisit_when}` : ''}
+
+## Required evidence
+
+${route.dependencies.length ? route.dependencies.map((d: any) => `- [Return #${d.id}](${P}/return/${d.id}): ${d.status}${d.final_rung ? `, ${d.final_rung}` : ''}${d.provisional ? ' (provisional)' : ''}`).join('\n') + '\n\nUnaccepted premises remain conditional.' : 'No required returns declared.'}
+
+## Evidence behind continued investment
+
+${route.basis.map((d: any) => `- [Return #${d.id}](${P}/return/${d.id}): ${d.status}${d.final_rung ? `, ${d.final_rung}` : ''}${d.provisional ? ' (provisional)' : ''}`).join('\n')}
+
+These investigations led to the current experiment. Their claims retain their own evidence grades.
+
+## Investigation history
+
+${route.events.map((e: any) => `- ${e.return_id ? `[Return #${e.return_id}](${P}/return/${e.return_id})` : 'Premise reassessment'}: ${String(e.outcome).replaceAll('_', ' ')}. ${e.evidence_md}`).join('\n')}
+`;
+  if (wantsHtml(req)) res.type('text/html').send(page({ title: route.title, heading: route.title, crumbs: `<a href="${P}">${escHtml(req.project.name)}</a> / <a href="${P}/research-routes">Research routes</a>`, body: (() => { const m = protectMath(text.replace(/</g, '&lt;').replace(/>/g, '&gt;')); return m.restore(marked.parse(m.text) as string); })() }));
+  else res.type('text/markdown').send(text);
+});
+
 job.post("/sessions/:id/end", bearer, project, assignmentMutation(async (req: any, res: any) => {
   const id = String(req.params.id ?? "").trim();
   const ok = await endSession(id, req.user!.id, req.project.id, req.model ?? null, String(req.body?.note ?? "ended by the agent").slice(0, 200));
@@ -436,7 +518,7 @@ export function parseInstruction(qs: Record<string, unknown>): { ai: any; maxJob
     if (typeof v !== "string") return { error: v.bad, valid: INSTRUCTION_ARGS };
     got[k] = v;
   }
-  const ai = { max_hours_per_assignment: 2, subagents: got.subagents === "no" ? { allowed: false, max_parallel: null } : { allowed: true, max_parallel: null }, transcript_preapproved: true };
+  const ai = { max_hours_per_assignment: got.time === '4h' ? 4 : 2, subagents: got.subagents === "no" ? { allowed: false, max_parallel: null } : { allowed: true, max_parallel: null }, transcript_preapproved: true };
   return {
     ai, maxJobs: got.time === "1task" ? 1 : null, endsIn: got.time === "4h" ? "4 hours" : got.time === "2h" ? "2 hours" : null,
     compute: shareOffer(Number(got.share), Number(got.disk)),
@@ -635,16 +717,24 @@ job.post("/result", bearer, project, assignmentMutation(async (req: any, res) =>
   }
   if (!b.report_md && !b.verdict) { res.status(400).json({ error: "report_md is required" }); return; }
   const scrubWarnings: string[] = [];
-  for (const field of ["report_md", "notes_md", "transcript", "patch", "human_md", "recipe_md", "needs_md"]) {
+  for (const field of ["report_md", "notes_md", "transcript", "patch", "human_md", "recipe_md", "needs_md", "verification_sufficiency_md", "verification_conflict_resolution_md"]) {
     if (typeof b[field] !== "string") continue;
     // Harness metadata identifies the installation or account, not the work (issue #28): a transcript that still carries one is not scrubbed.
     const bad = scrubError(field, b[field]); if (bad) { res.status(400).json(bad); return; }
     const home = homeWarning(field, b[field]); if (home) scrubWarnings.push(home);
   }
-  for (const field of ["report_md", "notes_md", "transcript", "patch"]) {
+  for (const field of ["report_md", "notes_md", "transcript", "patch", "verification_sufficiency_md", "verification_conflict_resolution_md"]) {
     if (typeof b[field] === "string" && needsSourceReview(b[field])) { res.status(400).json({ error: `${SOURCE_REVIEW_MESSAGE} The check tripped in "${field}" on this line: "${sourceReviewHit(b[field]) ?? "?"}". Paraphrase with a locator (page, theorem number) instead of transcribing.`, field, at: sourceReviewHit(b[field]) }); return; }
   }
+  // Structured public text has the same publication and secret rules as ordinary reports.
+  for (const field of ['research', 'verification_plan', 'check_receipt']) if (b[field] !== undefined) {
+    const value = JSON.stringify(b[field]);
+    const bad = scrubError(field, value); if (bad) { res.status(400).json(bad); return; }
+    if (needsSourceReview(value)) { res.status(400).json({ error: SOURCE_REVIEW_MESSAGE, field }); return; }
+    const warning = homeWarning(field, value); if (warning) scrubWarnings.push(warning);
+  }
 
+  const researchReport = parseResearch(b.research);
   let jobRow: any = null;
   if (b.job_id) {
     jobRow = await one(`SELECT * FROM jobs WHERE id = $1`, [b.job_id]);
@@ -655,10 +745,11 @@ job.post("/result", bearer, project, assignmentMutation(async (req: any, res) =>
     if (xs && jobRow.assigned_session && xs !== jobRow.assigned_session) { res.status(403).json({ error: `job ${jobRow.id} is held by another of your sessions (${jobRow.assigned_session}); this session's assignment is at GET /start`, held_by_session: jobRow.assigned_session }); return; }
   } else {
     if (!["direction", "paper", "audit", "challenge", "review"].includes(b.type)) { res.status(400).json({ error: "without job_id only type 'direction', 'challenge' (your person thinks something here is wrong: target + human_md + finding), 'review' (an advisory review of any return: return_id + verdict), 'paper' (a new paper) or 'audit' (a change proposal for any served document) is accepted" }); return; }
-    // Self-assigned work is welcome and unbounded over time, not at once: each one asks for reviews from the top tier. A self-assigned
-    // review of someone else's return asks for nothing and counts for nothing here (an Astra's review was refused for its handle's pending audits, Sep 11).
-    // Audits are the record-fix path every brief asks for (issue #40), reviews ask for nothing: neither counts against the cap.
-    const open = b.type === "review" || b.type === "audit" ? null : await one<{ c: string }>(`SELECT count(*) AS c FROM returns WHERE user_id = $1 AND problem_id = $2 AND job_id IS NULL AND status = 'pending'`, [uid, req.project.id]);
+    // Cap requests for judgment, not recorded ideas. Route proposals have their own
+    // daily limit and can proceed while this contributor's earlier claims await review.
+    // Audits remain the uncapped record-fix path (issue #40); advisory reviews ask for no new review.
+    const recordedProposal = b.type === 'direction' && researchReport?.proposal && b.request_review !== true;
+    const open = b.type === "review" || b.type === "audit" || recordedProposal ? null : await one<{ c: string }>(`SELECT count(*) AS c FROM returns WHERE user_id = $1 AND problem_id = $2 AND job_id IS NULL AND status = 'pending'`, [uid, req.project.id]);
     if (Number(open?.c ?? 0) >= MAX_OPEN_SELF_ASSIGNED) { res.status(429).json({ error: `you already have ${open!.c} self-assigned returns under review in this project; wait for a decision before proposing more (limit ${MAX_OPEN_SELF_ASSIGNED})` }); return; }
   }
   const hourly = await one<{ c: string }>(`SELECT count(*) AS c FROM returns WHERE user_id = $1 AND created_at > now() - interval '1 hour'`, [uid]);
@@ -699,9 +790,13 @@ job.post("/result", bearer, project, assignmentMutation(async (req: any, res) =>
       if (!["pending", "accepted", "rejected", "contested", "recorded"].includes(target.status)) { res.status(409).json({ error: `return #${target.id} is ${target.status}` }); return; }
       const prior = await one<{ id: number; scored_at: string | null }>(`SELECT id, scored_at FROM reviews WHERE return_id = $1 AND user_id = $2`, [target.id, uid]);
       if (prior && !(reviewerTrusted && target.status === "pending")) { res.status(409).json({ error: `you already reviewed return #${target.id}` }); return; }
-      if (prior) { await q(`DELETE FROM reviews WHERE id = $1`, [prior.id]); priorScoredAt = prior.scored_at; }   // a reopened return: the trusted reviewer's new verdict replaces their old one, and is not scored twice
+      if (prior) { await archiveReview(Number(prior.id)); priorScoredAt = prior.scored_at; }
       if (!reviewerTrusted && target.status !== "pending" && !(await one(`SELECT 1 FROM returns WHERE id = $1 AND provisional`, [target.id]))) { res.status(409).json({ error: `return #${target.id} is decided (${target.status}); an advisory review changes nothing now. If you think the decision is wrong, submit a challenge.` }); return; }
       reviewOf = Number(target.id);
+    }
+    if (jobRow) {
+      const prior = await one(`SELECT id,scored_at FROM reviews WHERE return_id=$1 AND user_id=$2 AND needs_reassessment`, [reviewOf,uid]);
+      if (prior) { await archiveReview(Number(prior.id)); priorScoredAt = prior.scored_at; }
     }
     const w = await reputation.score(uid);
     const reviewRung = parseRung(b.rung);
@@ -715,6 +810,12 @@ job.post("/result", bearer, project, assignmentMutation(async (req: any, res) =>
     const verification = ["read", "spot", "rerun"].includes(b.verification) ? b.verification : "read";
     const rerunReason = String(b.rerun_reason ?? "").trim().slice(0, 2000);
     if (verification !== "read" && !rerunReason) { res.status(400).json({ error: `verification "${verification}" needs rerun_reason: what made rerunning worth it (an output missing or not matching the code, a bug you found, a claim the captured output does not show). If none, the review is "read".` }); return; }
+    await validateReceiptUse(reviewOf, b.verification_receipt_id);
+    const reviewed = await one(`SELECT verification_plan,duplicate_of FROM returns WHERE id=$1`, [reviewOf]);
+    if (reviewed?.verification_plan && reviewed.duplicate_of) { res.status(409).json({ error: `This exact contribution shares the decision on return #${reviewed.duplicate_of}; review that canonical return.`, canonical_return_id: Number(reviewed.duplicate_of) }); return; }
+    if (reviewed?.verification_plan && b.verdict === 'accept' && !String(b.verification_sufficiency_md ?? '').trim()) { res.status(400).json({ error: 'verification_sufficiency_md is required: explain what the check establishes at this rung and which assumptions remain' }); return; }
+    const executionState = reviewed?.verification_plan ? await verificationState(reviewOf) : null;
+    if (b.verdict === 'accept' && executionState?.unresolved_conflict && (!reviewerTrusted || !String(b.verification_conflict_resolution_md ?? '').trim())) { res.status(409).json({ error: 'conflicting execution receipts require a trusted verification_conflict_resolution_md explaining the discrepancy before acceptance' }); return; }
     await q(`INSERT INTO reviews (return_id, review_job_id, user_id, model, provider, verdict, rung, notes_md, weight, also_credit, transcript, tokens, unverifiable, needs_md, verification, rerun_reason, trusted, effort, reject_reason)
              VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19)`,
       [reviewOf, jobRow?.id ?? null, uid, req.model ?? "unknown", req.provider ?? "unknown", b.verdict, reviewRung, b.notes_md ?? b.report_md ?? "", w, b.also_credit && typeof b.also_credit === "object" ? JSON.stringify(b.also_credit) : null, String(b.transcript), JSON.stringify(tokens), unverifiable, unverifiable ? String(b.needs_md).slice(0, 4000) : null, verification, verification === "read" ? null : rerunReason, reviewerTrusted, req.effort ?? null, rejectReason]);
@@ -723,6 +824,11 @@ job.post("/result", bearer, project, assignmentMutation(async (req: any, res) =>
     const parentRow = jobRow ?? await one(`SELECT problem_id, lane_id FROM returns WHERE id = $1`, [reviewOf]);
     await q(`INSERT INTO credits (user_id, model, provider, problem_id, lane_id, kind, points, source_type, source_id, note) SELECT $1,$2,$3,$4,$5,'tokens',0,'review',$6,$7 WHERE $8::numeric > 0`,
       [uid, req.model ?? null, req.provider ?? null, parentRow.problem_id, parentRow.lane_id, String(jobRow?.id ?? `r${reviewOf}`) /* no job: 'r<return id>'; the profile ledger reads both forms */, `${(tokens.input + tokens.output + tokens.cache_read + tokens.cache_write).toLocaleString("en-US")} tokens (${tokens.output.toLocaleString("en-US")} output), ${tokens.source}, review of return #${reviewOf}`, tokens.input + tokens.output + tokens.cache_read + tokens.cache_write]);
+    await q(`UPDATE reviews SET verification_receipt_id=$3,verification_sufficiency_md=$4,verification_conflict_resolution_md=$5,verification_conflict_through=$6 WHERE return_id=$1 AND user_id=$2`,
+      [reviewOf, uid, b.verification_receipt_id ?? null, b.verification_sufficiency_md ? String(b.verification_sufficiency_md).slice(0, 8000) : null,
+        reviewerTrusted && b.verification_conflict_resolution_md ? String(b.verification_conflict_resolution_md).slice(0, 8000) : null,
+        reviewerTrusted && b.verification_conflict_resolution_md ? executionState?.latest_receipt_id ?? null : null]);
+    if (reviewerTrusted && b.verification_conflict_resolution_md) await q(`UPDATE jobs j SET status='expired' FROM returns r WHERE r.id=$1 AND j.problem_id=r.problem_id AND j.origin_key LIKE 'check-conflict:'||r.verification_fingerprint||':%' AND j.status='queued'`, [reviewOf]);
     const outcome = await resolveReturn(reviewOf);
     // A reviewer who finds the same defect in another document routes it like an audit does (issue #36): shown on that document once the reviewed return is accepted.
     if (Array.isArray(b.also_fix)) {
@@ -750,9 +856,11 @@ job.post("/result", bearer, project, assignmentMutation(async (req: any, res) =>
   // A file repair is mechanical work, even when its source was a paper, audit or direction (issue #57).
   // Recognise jobs already handed out before the fix as well as newly generated measure jobs.
   const rtype = jobRow?.follow_up_of && String(jobRow.title).startsWith(FILE_FIX_TITLE) ? "measure" : jobRow?.type ?? b.type ?? "direction";
+  const verificationPlan = parseVerificationPlan(b.verification_plan);
+  if (b.check_receipt !== undefined && rtype !== 'check') { res.status(400).json({ error: 'check_receipt answers a check assignment only' }); return; }
   // Checkable work carries its own verification recipe, so the reviewer runs it instead of redoing the job.
   const recipe = typeof b.recipe_md === "string" ? b.recipe_md.trim() : "";
-  if (["break", "measure", "formalize"].includes(rtype) && recipe.length < 40) { res.status(400).json({ error: "recipe_md is required for break, measure and formalize returns: the exact commands (served script paths, inputs, parameters), the expected outputs and their sha256, and how long they take. A reviewer runs the recipe; they do not redo your work." }); return; }
+  if (["break", "measure", "formalize"].includes(rtype) && recipe.length < 40 && !verificationPlan) { res.status(400).json({ error: "recipe_md is required for break, measure and formalize returns, or provide verification_plan: exact commands, inputs, expected outputs and checking cost. Do not repeat discovery." }); return; }
 
   // Challenge (Sep 10): what is challenged, in the person's words, and whether the objection held. Checked before anything is written.
   let target: any = null, finding: string | null = null;
@@ -847,6 +955,7 @@ job.post("/result", bearer, project, assignmentMutation(async (req: any, res) =>
   if (jobRow?.assigned_session) await q(`UPDATE sessions SET ended_at = COALESCE(ended_at, now()) WHERE id = $1 AND max_jobs IS NOT NULL AND jobs >= max_jobs AND NOT EXISTS (SELECT 1 FROM jobs WHERE assigned_session = $1 AND status = 'assigned')`, [jobRow.assigned_session]);
   let attached: string[] = [];
   try { attached = await files.attach(b.files, "return", Number(ret!.id)); } catch (e: any) { res.status(e.status ?? 400).json({ error: e.message, return_id: ret!.id }); return; }
+  if (verificationPlan) await saveVerificationPlan(Number(ret!.id), verificationPlan);
   // Files that will not run or reproduce as shipped (Chris, Sep 12 2026): never refused; on the record, told to the author, and to the reviewer in the brief.
   const fileNotes = await fileNotesFor(attached);
   if (fileNotes.length) await q(`UPDATE returns SET file_notes = $2 WHERE id = $1`, [ret!.id, JSON.stringify(fileNotes)]);
@@ -857,7 +966,7 @@ job.post("/result", bearer, project, assignmentMutation(async (req: any, res) =>
   // the spot, unpaid, linked both ways, no review slot; a duplicate of a pending one is labelled and folded when that one is accepted.
   const ph = patchHash(b.patch); const revSha = rtype === "audit" ? String(b.revision?.file ?? "").toLowerCase() || null : null; const revPath = rtype === "audit" ? revisions.safeRel(String(b.revision?.path ?? "")) : null;
   if (ph) await q(`UPDATE returns SET patch_hash = $2 WHERE id = $1`, [ret!.id, ph]);
-  const twin = ph || revSha ? await one<{ id: string; status: string }>(`SELECT id, status FROM returns WHERE problem_id = $1 AND id <> $2 AND status IN ('accepted','pending') AND NOT provisional
+  const twin = !researchReport && !verificationPlan && (ph || revSha) ? await one<{ id: string; status: string }>(`SELECT id, status FROM returns WHERE problem_id = $1 AND id <> $2 AND status IN ('accepted','pending') AND NOT provisional
       AND (($3::text IS NOT NULL AND patch_hash = $3) OR ($4::text IS NOT NULL AND revision_sha = $4 AND revision_path = $5)) ORDER BY (status = 'accepted') DESC, id LIMIT 1`, [problem.id, ret!.id, ph, revSha, revPath]) : null;
   if (twin && twin.status === "accepted") {
     await q(`UPDATE returns SET status = 'superseded', superseded_by = $2, final_rung = NULL WHERE id = $1`, [ret!.id, twin.id]);
@@ -869,15 +978,45 @@ job.post("/result", bearer, project, assignmentMutation(async (req: any, res) =>
   if (twin) await q(`UPDATE returns SET duplicate_of = $2 WHERE id = $1`, [ret!.id, twin.id]);
   if (cpuHours > 0) await reputation.addCpuHours(uid, cpuHours);
   // Exploration is recorded, not reviewed: it costs reviewer time only when something builds on it or the author asks for a rung.
-  const recordedExploration = rtype === "explore" && b.request_review !== true;
+  const researchProgress = await recordResearch(await one(`SELECT * FROM returns WHERE id=$1`, [ret!.id]), jobRow, researchReport);
+  if (jobRow?.research_source_return_id) {
+    const refs = Array.isArray(cites.returns) ? cites.returns : [];
+    cites.returns = [...new Set([...refs, Number(jobRow.research_source_return_id)])];
+    await q(`UPDATE returns SET cites=$2 WHERE id=$1`, [ret!.id, JSON.stringify(cites)]);
+  }
+  const recordedExploration = rtype === 'check' || ((rtype === 'explore' || (rtype === 'direction' && researchReport?.proposal)) && b.request_review !== true && researchReport?.outcome !== 'result');
   if (recordedExploration) await q(`UPDATE returns SET status = 'recorded', final_rung = 'recorded' WHERE id = $1`, [ret!.id]);
+  const canonicalClaim = !recordedExploration && verificationPlan ? await foldExactClaim(Number(ret!.id)) : null;
+  if (canonicalClaim?.status === 'rejected' && researchProgress) {
+    researchProgress.state = (await one(`SELECT state FROM research_routes WHERE id=$1`, [researchProgress.route_id])).state;
+    researchProgress.next_job_id = null;
+  }
   // Review jobs cost trusted reviewers' time. A handle without an accepted return here gets them ten times a day, for any return that asks
   // for review (until Sep 11 2026 its self-assigned and requested-review explore returns got none at all, so newcomers' work sat pending and
   // reviewers only ever saw the owner's returns).
   const standing = (await isTrusted(Number(problem.id), uid, req.user!.handle, { model: req.model, effort: req.effort })) || !!(await one(`SELECT 1 FROM returns WHERE user_id = $1 AND problem_id = $2 AND status = 'accepted' AND NOT provisional AND id <> $3`, [uid, problem.id, ret!.id]));
   const spawnedToday = await one<{ c: string }>(`SELECT count(DISTINCT j.parent_return_id) AS c FROM jobs j JOIN returns r ON r.id = j.parent_return_id WHERE r.user_id = $1 AND r.created_at > now() - interval '1 day'`, [uid]);
   const mayReview = standing || Number(spawnedToday?.c ?? 0) < MAX_REVIEW_SPAWNS_PER_DAY;
-  if (mayReview && !recordedExploration) await spawnReviews(ret!.id, problem.id, laneId, MIN_REVIEWS);
+  let requestedReviews = 0, checking = false;
+  if (rtype === 'check') {
+    const subjectId = await saveCheckReceipt(await one(`SELECT * FROM returns WHERE id=$1`, [ret!.id]), jobRow, b.check_receipt);
+    if ((await verificationState(subjectId)).unresolved_conflict) {
+      const subjects = await q(`SELECT r.id FROM returns r JOIN returns source ON source.id=$1
+        AND r.problem_id=source.problem_id AND r.verification_fingerprint=source.verification_fingerprint
+        WHERE r.status='accepted' AND r.duplicate_of IS NULL`, [subjectId]);
+      for (const subject of subjects) if ((await verificationState(Number(subject.id))).unresolved_conflict)
+        await reassessAffected(Number(subject.id), 'conflicting execution observations require trusted reassessment', true);
+    }
+    // One execution can unblock several identical packages. Only independently eligible receipts
+    // are reused, and an already open judgment does not acquire a duplicate reviewer assignment.
+    const pending = await q(`SELECT r.* FROM returns r JOIN returns subject ON subject.id=$1 AND r.problem_id=subject.problem_id AND r.verification_fingerprint=subject.verification_fingerprint WHERE r.status='pending' AND r.duplicate_of IS NULL`, [subjectId]);
+    for (const subject of pending) {
+      if (!(await queueCheck(subject)) && !(await one(`SELECT 1 FROM jobs WHERE parent_return_id=$1 AND type='review' AND status IN ('queued','assigned')`, [subject.id]))) await spawnReviews(Number(subject.id), Number(problem.id), subject.lane_id, 1);
+    }
+  } else if (mayReview && !recordedExploration && !canonicalClaim) {
+    checking = await queueCheck(await one(`SELECT * FROM returns WHERE id=$1`, [ret!.id]));
+    if (!checking) { requestedReviews = verificationPlan || researchReport ? 1 : MIN_REVIEWS; await spawnReviews(ret!.id, problem.id, laneId, requestedReviews); }
+  }
   // A sha named in the recipe should be one of the declared hashes or an uploaded file; a typo there costs a reviewer a rerun (agent feedback, Sep 10).
   // Known (issue #7): declared hashes, this return's files, cited files, anything in the file store (a cited return's file, a pinned version), and the served portfolio's own hashes.
   const known = new Set<string>([...attached, ...(Array.isArray(b.files) ? b.files.map((x: any) => String(x).toLowerCase()) : []), ...(Array.isArray(cites.files) ? cites.files.map((x: any) => String(x).toLowerCase()) : []), ...JSON.stringify(b.hashes ?? {}).match(/[0-9a-f]{64}/g) ?? []]);
@@ -906,20 +1045,20 @@ job.post("/result", bearer, project, assignmentMutation(async (req: any, res) =>
     }
   }
   if (recordedExploration) {
-    res.json({ ok: true, return_id: Number(ret!.id), status: "recorded", reviews_requested: 0, files: attached, tokens, warnings,
+    res.json({ ok: true, return_id: Number(ret!.id), status: "recorded", research: researchProgress, reviews_requested: 0, files: attached, tokens, warnings,
       note: `Exploration is recorded without review. Elevate a claim when it deserves verification: POST ${BASE()}/projects/${problem.slug}/return/${ret!.id}/request-review { "note": "<what deserves verification>" }.` });
     return;
   }
-  res.json({ ok: true, return_id: Number(ret!.id), status: "pending", reviews_requested: mayReview ? MIN_REVIEWS : 0, files: attached, tokens, warnings, note: mayReview ? undefined : "pending without review jobs: a trusted reviewer picks it up when they look; review jobs are spawned for assigned work, and for everything once you have an accepted return here" });
+  res.json({ ok: true, return_id: Number(ret!.id), status: canonicalClaim?.status ?? "pending", canonical_return_id: canonicalClaim?.id, research: researchProgress, check_requested: checking, reviews_requested: requestedReviews, files: attached, tokens, warnings, note: canonicalClaim ? `Exact duplicate: shares return #${canonicalClaim.id}'s decision and earns no duplicate result credit. Attribution and route progress are preserved.` : mayReview ? undefined : "pending without review jobs: a trusted reviewer picks it up when they look; review jobs are spawned for assigned work, and for everything once you have an accepted return here" });
 }, { completion: true }));
 
 /** Create review jobs for a return. Reviews require tier 1 (scope Q7/Q13). */
-export async function spawnReviews(returnId: number, problemId: number, laneId: number | null, n: number): Promise<void> {
-  const existing = await one<{ c: string }>(`SELECT count(*) AS c FROM jobs WHERE parent_return_id = $1`, [returnId]);
+export async function spawnReviews(returnId: number, problemId: number, laneId: number | null, n: number, options: { fresh?: boolean; judgmentOnly?: boolean } = {}): Promise<void> {
+  const existing = await one<{ c: string }>(`SELECT count(*) AS c FROM jobs WHERE parent_return_id = $1 AND (NOT $2::boolean OR status IN ('queued','assigned'))`, [returnId, !!options.fresh]);
   const have = Number(existing?.c ?? 0);
   const toMake = Math.max(0, Math.min(n, MAX_REVIEWS - have));   // n more, never past the cap
-  const parent = await one<{ type: string; paper_slug: string | null; revision_path: string | null; recipe_md: string | null; target: any; job_budget: string | null; job_compute: any; transcript_head?: string; model: string; handle: string; author_tier: number | null; problem_id: number; has_patch?: boolean; patch_scripts?: boolean; patch?: string | null; revision_sha?: string | null; transcript_omitted?: any; duplicate_of?: string | null; author_tokens?: any }>(
-    `SELECT r.type, r.paper_slug, r.revision_path, r.recipe_md, r.target, j.budget_hours AS job_budget, j.compute_hint AS job_compute, r.model, u.handle, mt.tier AS author_tier, r.problem_id, left(r.transcript, 24) AS transcript_head, r.patch, r.revision_sha, r.transcript_omitted, r.duplicate_of, r.tokens AS author_tokens, r.file_notes, (r.patch IS NOT NULL) AS has_patch, (r.patch ~ '(^|\\n)(\\+\\+\\+|---) [^\\n]*\\.(js|mjs|cjs|ts|py|sh|c|h|cpp|rs|go|jl|lean|sql)(\\s|$)') AS patch_scripts
+  const parent = await one<{ type: string; paper_slug: string | null; revision_path: string | null; recipe_md: string | null; target: any; job_budget: string | null; job_compute: any; transcript_head?: string; model: string; handle: string; author_tier: number | null; problem_id: number; has_patch?: boolean; patch_scripts?: boolean; patch?: string | null; revision_sha?: string | null; transcript_omitted?: any; duplicate_of?: string | null; author_tokens?: any; verification_plan?: any }>(
+    `SELECT r.verification_plan,r.type, r.paper_slug, r.revision_path, r.recipe_md, r.target, j.budget_hours AS job_budget, j.compute_hint AS job_compute, r.model, u.handle, mt.tier AS author_tier, r.problem_id, left(r.transcript, 24) AS transcript_head, r.patch, r.revision_sha, r.transcript_omitted, r.duplicate_of, r.tokens AS author_tokens, r.file_notes, (r.patch IS NOT NULL) AS has_patch, (r.patch ~ '(^|\\n)(\\+\\+\\+|---) [^\\n]*\\.(js|mjs|cjs|ts|py|sh|c|h|cpp|rs|go|jl|lean|sql)(\\s|$)') AS patch_scripts
      FROM returns r LEFT JOIN jobs j ON j.id = r.job_id JOIN users u ON u.id = r.user_id LEFT JOIN model_tiers mt ON mt.model = r.model WHERE r.id = $1`, [returnId]);
   // Provenance (Q68): the reviewer sees who made this and with what, and who last verified the document it touches, and is told to be a different pair of eyes.
   let provenance = parent ? `\n\nProvenance: authored by @${parent.handle} with ${parent.model}${parent.author_tier ? ` (tier ${parent.author_tier})` : ""}. If that is your own handle: a trusted reviewer may review their handle's return; the value is a second look by another model in a clean session, so declare it in the claim and the return and proceed, do not release. You are a different model, at least as capable for a judgment call; a model does not review its own kind because it shares its blind spots. Look for what that model would miss.` : "";
@@ -927,11 +1066,14 @@ export async function spawnReviews(returnId: number, problemId: number, laneId: 
     const lastV = await one<{ version: number; author: string | null; author_model: string | null; verified_models: any[] }>(`SELECT v.version, u.handle AS author, v.author_model, v.verified_models FROM document_versions v LEFT JOIN users u ON u.id = v.author_user_id WHERE v.problem_id = $1 AND v.path = $2 ORDER BY v.version DESC LIMIT 1`, [parent.problem_id, parent.revision_path]);
     if (lastV) provenance += ` The document \`${parent.revision_path}\` is at version ${lastV.version}${lastV.author ? `, last revised by @${lastV.author}${lastV.author_model ? ` (${lastV.author_model})` : ""}` : " (as mirrored)"}${Array.isArray(lastV.verified_models) && lastV.verified_models.length ? `, verified by ${lastV.verified_models.map((v: any) => `${v.model ?? v.handle}${v.verification ? `/${v.verification}` : ""}`).join(", ")}` : ""}.`;
   }
-  const verificationNote = `\n\nHow deep to go (verification): the author's captured outputs, hashes and transcript are the evidence. Read the code and the recipe against the claim, and check that the outputs are what that code would produce and that the claim follows from them; that is \`"verification": "read"\`, the default, and it is enough when code, outputs and claim agree. Rerun only with a reason: an output is missing or does not match the code, a bug you found changes the result, or the claim rests on something the captured output does not show. Then \`"verification": "spot"\` (one cheap piece rerun) or \`"rerun"\` (the whole recipe), with \`"rerun_reason"\`. Rerunning captured work without a reason wastes the CPU your person offered.`;
+  const verificationNote = `\n\nHow deep to go (verification): the author's captured outputs, hashes and transcript are the evidence. Read the code and the recipe against the claim, and check that the outputs are what that code would produce and that the claim follows from them; that is \`"verification": "read"\`, the default, and it is enough when code, outputs and claim agree. Rerun only with a reason: an output is missing or does not match the code, a bug you found changes the result, no independent execution of a cheap decisive check exists, or the claim rests on something the captured output does not show. Then \`"verification": "spot"\` (one cheap piece rerun) or \`"rerun"\` (the whole recipe), with \`"rerun_reason"\`. Rerunning captured work without a reason wastes the CPU your person offered.`;
   // Who checks what: mechanical checks (a counterexample runs, a hash reproduces, a proof compiles) go to any tier; a page check to tier 2 and up; judgment stays with the top tier.
-  const mechanical = ["break", "measure", "formalize"].includes(parent?.type ?? "");
-  const reviewTier = mechanical ? 99 : parent?.type === "source" ? 2 : 1;
-  const reviewBudget = Math.max(0.5, Math.round((Number(parent?.job_budget ?? 2) / 3) * 10) / 10);
+  const mechanical = !parent?.verification_plan && ["break", "measure", "formalize"].includes(parent?.type ?? "");
+  const reviewTier = parent?.verification_plan ? 1 : mechanical ? 99 : parent?.type === "source" ? 2 : 1;
+  const reviewBudget = judgmentBudget(parent?.verification_plan);
+  const judgmentOnly = options.judgmentOnly || await checkWaitExpired(returnId);
+  const packageNote = parent?.verification_plan ? '\n\nRead the exact verification package and current execution receipts at the return URL before judging. This budget covers scientific assessment separately from execution time; an unable receipt is not completed execution. If the reasoning needs more time, state the precise unresolved obligation and its estimated judgment_minutes in needs_md. Acceptance requires verification_sufficiency_md; a reused receipt is named by verification_receipt_id. Unresolved conflicts require explicit trusted verification_conflict_resolution_md.' : '';
+  const independentExecution = parent?.verification_plan && (await verificationRuns(returnId)).some(isCompletedCheck);
   const checkNote = mechanical
     ? `\n\nThis is a mechanical check, budget ${reviewBudget} h. The author's verification recipe is below with its captured outputs and hashes. Read the recipe and the code against the claim first; rerun it, exactly and in a fresh directory, only for a reason (see verification below), except a counterexample, which is cheap: run it against the validator when that takes minutes. ${parent?.type === "break" ? "Accept if the counterexample runs against the validator and refutes the claim as stated; reject if it does not run, does not refute, or refutes a weaker statement than claimed." : parent?.type === "measure" ? "Accept if your hashes match; reject on any mismatch, with your hashes." : "Accept if the Lean file compiles against the stated Mathlib commit with the stated lemma and no sorry; reject otherwise."} Do not redo the search. If the recipe cannot be run inside the budget, reject as unverifiable in budget and say what is missing.\n\n### Verification recipe\n\n${parent?.recipe_md ?? "(none given)"}`
     : `\n\nBudget ${reviewBudget} h. Verify what the author gives you to verify; do not redo the work. If the return cannot be checked inside the budget, reject as unverifiable in budget and say what a checkable return would need.`;
@@ -948,7 +1090,7 @@ export async function spawnReviews(returnId: number, problemId: number, laneId: 
   const noLogNote = parent && notSessionLog(parent.author_tokens) ? `\n\nThis return's transcript is not a session log: the author sent ${parent.author_tokens.log === "summary" ? "a summary they wrote" : "something no harness writes"} instead of the harness's own record, so you cannot see what they read or ran, and no tokens are counted for it. Judge from the report, the files and the recipe; say in your notes that the transcript was not a session log. The author has been told how to resubmit it.` : "";
   // Portability (Chris, Sep 12 2026: never refuse, let reviewers fix): a hard-coded path or a progress line is a defect to fix in passing, not a reason to reject.
   const fileNotes: { sha: string; name: string; notes: string[] }[] = Array.isArray((parent as any)?.file_notes) ? (parent as any).file_notes : [];
-  const portabilityNote = `\n\nA script that fails only because of a hard-coded path, or whose output differs from the embedded hash only by progress, timing or rate lines: fix the path or strip those lines when you rerun, say so in your notes, and judge the result on its merits. That alone is not a rejection reason. A defect in a served file goes in also_fix with the path and what to change: a trusted reviewer's also_fix opens a fix job in the queue for whoever comes next.${fileNotes.length ? `\n\nFiles that will not run as shipped, as far as the server can tell (a fix job is queued; the author may have replaced them since, the return page says):\n${fileNotes.map((f) => `- ${f.name} (<base>/files/${f.sha}): ${f.notes.join(" ")}`).join("\n")}` : ""}`;
+  const portabilityNote = parent?.verification_plan ? `\n\nKeep this immutable package unchanged. A repair may inform your judgment but requires a new package and fingerprint; record the original failure separately. Do not attribute a repaired run to the original package.` : `\n\nA script that fails only because of a hard-coded path, or whose output differs from the embedded hash only by progress, timing or rate lines: fix the path or strip those lines when you rerun, say so in your notes, and judge the result on its merits. That alone is not a rejection reason. A defect in a served file goes in also_fix with the path and what to change: a trusted reviewer's also_fix opens a fix job in the queue for whoever comes next.${fileNotes.length ? `\n\nFiles that will not run as shipped, as far as the server can tell (a fix job is queued; the author may have replaced them since, the return page says):\n${fileNotes.map((f) => `- ${f.name} (<base>/files/${f.sha}): ${f.notes.join(" ")}`).join("\n")}` : ""}`;
   const mismatchNote = parent?.author_tokens?.mismatch ? `\n\nThis return's transcript belongs to another assignment (${parent.author_tokens.mismatch.reason}), so it does not show what the author read or ran for this one, and no tokens are counted for it. Judge from the report, the files and the recipe; say in your notes that the transcript was not this assignment's. The author has been told how to resubmit it.` : "";
   const twinNote = parent?.duplicate_of ? `\n\nThis return carries the same change as pending return #${parent.duplicate_of} (byte-identical patch or revised file): treat the two as one change. Your verdict on either decides that change; when one is decided the other is folded into it.` : "";
   const auditNote = parent?.type === "audit" ? `\n\nThis return is a change proposal for \`${parent.revision_path}\`. Fetch the current document (GET <project base>/docs/${parent.revision_path}) and the revised file; read the diff. For every issue the author raises, check that it is real; for every change, check that it fixes the issue without lowering rigour or overclaiming; check nothing else was altered silently. Accept means: integrate this revision as the document's next version, credited to the author and verified by you. Reject means: name the changes that must not go in.` : "";
@@ -956,9 +1098,34 @@ export async function spawnReviews(returnId: number, problemId: number, laneId: 
     await q(`INSERT INTO jobs (problem_id, lane_id, type, title, brief_md, min_tier, budget_hours, parent_return_id, compute_hint)
              VALUES ($1,$2,'review',$3,$4,$6,$7,$5,$8)`,
       [problemId, laneId, `Review return #${returnId}`,
-       `Review return #${returnId}. Fetch it at GET <project base>/return/${returnId} (same headers; the project base is the URL you fetched this assignment from, minus /start; the review brief above uses it). Read the brief it answered, the report, the patch and the transcript. A message it cites is at GET <project base>/chat/messages/<id>; the lane's recent messages at GET <project base>/chat/<lane>/messages?limit=50 (project-wide: GET <project base>/chat/messages?limit=50).${String(parent?.transcript_head ?? "").startsWith("[transcript withheld") ? " (This return's transcript is withheld: it was recorded before launch. Review the report, the files and the recipe; do not look for the transcript.)" : ""}\n\nYour job: verify it within the budget. Fetch the return's files (GET /files/<sha256>) and the served scripts it names (GET <project base>/docs/<path>), apply its patch if any, and read what the author gives you to run against what they say it produced; that is the author's evidence, and the author owes you a recipe with captured outputs. If it names a repo_url and commit, that commit is the same evidence in git form. Rerun only with a reason (verification, below). Check every claimed rung against the ladder; assign the rung you can defend, not the author's: work that is sound at a lower rung than it claims is an accept at that rung, not a reject. Reject with a reason class: refuted (the claim fails), unsourced (it hides what it built on), unverifiable (it cannot be checked in budget), or overclaimed only when nothing in it holds at any rung. Check the closed-routes register (\`research/OUTCOMES.md\`, section "Closed routes") for prior closures.\n\nCheck attribution too: did the author cite the messages, returns, files and people they built on? Add "also_credit" with anything missing; a return that hides its sources is a reject.\n\nReturn: { "job_id": <this job>, "verdict": "accept" | "reject", "reject_reason": "<on a reject: refuted | overclaimed | unsourced | unverifiable>", "rung": "<your rung>", "notes_md": "<what you checked, what failed, what would falsify>", "verification": "read" | "spot" | "rerun", "rerun_reason": "<when spot or rerun: what made it worth it>", "also_credit": { "messages": [], "returns": [], "files": [], "handles": [] }, "also_fix": [{ "path": "<another served document with the same defect>", "note": "<what to change there>" }], "transcript": "<scrubbed>" }` + provenance + paperNote + auditNote + patchNote + ledgerNote + omittedNote + noLogNote + mismatchNote + customNote + twinNote + portabilityNote + challengeNote + checkNote + verificationNote + unverifiableNote,
-       returnId, reviewTier, reviewBudget, JSON.stringify(mechanical ? (parent?.job_compute ?? {}) : {})]);   // a rerun needs the machine the recipe needed; a read does not
+       `Review return #${returnId}. Fetch it at GET <project base>/return/${returnId} (same headers; the project base is the URL you fetched this assignment from, minus /start; the review brief above uses it). Read the exact claim, its scope, the supplied check and recorded observations first. Consult the original brief, patch and transcript when needed to resolve a question. A message it cites is at GET <project base>/chat/messages/<id>; the lane's recent messages at GET <project base>/chat/<lane>/messages?limit=50 (project-wide: GET <project base>/chat/messages?limit=50).${String(parent?.transcript_head ?? "").startsWith("[transcript withheld") ? " (This return's transcript is withheld: it was recorded before launch. Review the report, the files and the recipe; do not look for the transcript.)" : ""}\n\nYour job: verify it within the budget. Fetch the return's files (GET /files/<sha256>) and the served scripts it names (GET <project base>/docs/<path>), apply its patch if any, and read what the author gives you to run against what they say it produced; that is the author's evidence, and the author owes you a recipe with captured outputs. If it names a repo_url and commit, that commit is the same evidence in git form. Reuse credible execution of an identical check package. Run the smallest decisive check only when missing execution matters to the assigned judgment and fits its compute budget (verification, below). Otherwise report that missing obligation; do not repeat discovery or claim an unperformed execution. Check every claimed rung against the ladder; assign the rung you can defend, not the author's: work that is sound at a lower rung than it claims is an accept at that rung, not a reject. Reject with a reason class: refuted (the claim fails), unsourced (it hides what it built on), unverifiable (it cannot be checked in budget), or overclaimed only when nothing in it holds at any rung. Check the closed-routes register (\`research/OUTCOMES.md\`, section "Closed routes") for prior closures.\n\nCheck attribution too: did the author cite the messages, returns, files and people they built on? Add "also_credit" with anything missing; a return that hides its sources is a reject.\n\nReturn: { "job_id": <this job>, "verdict": "accept" | "reject", "reject_reason": "<on a reject: refuted | overclaimed | unsourced | unverifiable>", "rung": "<your rung>", "notes_md": "<what you checked, what failed, what would falsify>", "verification": "read" | "spot" | "rerun", "rerun_reason": "<when spot or rerun: what made it worth it>", "also_credit": { "messages": [], "returns": [], "files": [], "handles": [] }, "also_fix": [{ "path": "<another served document with the same defect>", "note": "<what to change there>" }], "transcript": "<scrubbed>" }` + provenance + paperNote + auditNote + patchNote + ledgerNote + omittedNote + noLogNote + mismatchNote + customNote + twinNote + portabilityNote + challengeNote + checkNote + verificationNote + unverifiableNote + packageNote,
+       returnId, reviewTier, reviewBudget, JSON.stringify(independentExecution || judgmentOnly ? {} : parent?.verification_plan?.cost ?? (mechanical ? (parent?.job_compute ?? {}) : {}))]);
   }
+  if (judgmentOnly) await q(`UPDATE jobs SET brief_md=brief_md||$2 WHERE parent_return_id=$1 AND type='review' AND status='queued'`, [returnId,
+    '\n\nEvidence needs reassessment or execution could not find capacity within 24 hours. Assess the specific missing or changed evidence within the reasoning budget; execution is not included. Preserve existing observations. Do not report that a check ran. If new execution is necessary, name the smallest check and missing capability in needs_md; a repaired package is a new return.']);
+}
+
+async function foldExactClaim(returnId: number): Promise<{ id: number; status: string } | null> {
+  const ret = await one(`SELECT * FROM returns WHERE id=$1`, [returnId]);
+  const canonical = await identicalClaim(ret);
+  if (!canonical) return null;
+  const status = canonical.status === 'accepted' ? 'superseded' : canonical.status;
+  await q(`UPDATE returns SET duplicate_of=$2,status=$3,superseded_by=$4,final_rung=NULL WHERE id=$1`, [returnId,canonical.id,status,status === 'superseded' ? canonical.id : null]);
+  await q(`INSERT INTO return_decisions (return_id,status,final_rung,provisional,by,note) VALUES ($1,$2,NULL,false,'duplicate',$3)`, [returnId,status,`Exact contribution already recorded as return #${canonical.id}; one claim and decision, preserved attribution, no duplicate result credit.`]);
+  if (status === 'rejected') await reassessAffected(returnId, `canonical claim #${canonical.id} is rejected`);
+  return { id: Number(canonical.id), status };
+}
+
+async function reassessAffected(returnId: number, note: string, includeSource = false): Promise<void> {
+  const ids = await reconsiderDependents(returnId, note);
+  const claims = await q(`SELECT * FROM returns WHERE id=ANY($1::bigint[]) AND (id<>$2 OR $3::boolean)
+    AND status='accepted' AND NOT provisional AND duplicate_of IS NULL`, [ids,returnId,includeSource]);
+  for (const claim of claims) await reopen(claim, null, `Evidence return #${returnId} changed: ${note}. Reassess its use; this is not an automatic refutation.`, 'evidence', { propagate: false, judgmentOnly: true });
+}
+
+async function archiveReview(id: number): Promise<void> {
+  await q(`INSERT INTO review_history (return_id,review) SELECT return_id,to_jsonb(rv) FROM reviews rv WHERE id=$1`, [id]);
+  await q(`DELETE FROM reviews WHERE id=$1`, [id]);
 }
 
 /** Apply the consensus rule to a return; escalate or resolve. */
@@ -970,7 +1137,7 @@ async function resolveReturnLocked(returnId: number): Promise<string> {
   const ret = await one(`SELECT * FROM returns WHERE id = $1`, [returnId]);
   if (!ret) return "unknown";
   const votes = await q<{ id: number; verdict: "accept" | "reject"; weight: string; provider: string; rung: string | null; user_id: number; model: string; also_credit: any; unverifiable: boolean; needs_md: string | null; verification: string; trusted: boolean; scored_at: string | null; effort: string | null; reject_reason: string | null }>(
-    `SELECT id, verdict, weight, provider, rung, user_id, model, also_credit, unverifiable, needs_md, verification, trusted, scored_at, effort, reject_reason FROM reviews WHERE return_id = $1`, [returnId]);
+    `SELECT id, verdict, weight, provider, rung, user_id, model, also_credit, unverifiable, needs_md, verification, trusted, scored_at, effort, reject_reason FROM reviews WHERE return_id = $1 AND NOT needs_reassessment`, [returnId]);
   const d = decide(votes.map((v) => ({ ...v, weight: Number(v.weight) })));
   const isFinal = ret.status !== "pending" && !ret.provisional;
   // A final decision is the current state of the trusted record: only trusted votes move it (advisory ones never do), and only to something different.
@@ -999,6 +1166,9 @@ async function resolveReturnLocked(returnId: number): Promise<string> {
   await q(`UPDATE returns SET status = $2, final_rung = $3, verification = $4, provisional = false WHERE id = $1`, [returnId, d.status, rung, verification]);
   await q(`INSERT INTO return_decisions (return_id, status, final_rung, provisional, by, note) VALUES ($1,$2,$3,false,'trusted',$4)`,
     [returnId, d.status, rung, (changed ? `revisited: was ${ret.status}${ret.final_rung ? ` (${ret.final_rung})` : ""}; ${deciding.length} trusted vote(s) now ${deciding.filter((v) => v.verdict === "accept").length}-${deciding.filter((v) => v.verdict === "reject").length}` : `${deciding.length} trusted vote(s)`) + (d.status === "rejected" ? (() => { const why = [...new Set(deciding.filter((v) => v.verdict === "reject" && v.reject_reason).map((v) => v.reject_reason))]; return why.length ? `; ${why.join(", ")}` : ""; })() : "")]);
+  // First acceptance strengthens recorded evidence; it must not interrupt conditional research.
+  if (d.status === 'rejected' || (ret.status === 'accepted' && rung !== ret.final_rung))
+    await reassessAffected(returnId, `${d.status}${rung ? ` (${rung})` : ""}`);
   if (ret.job_id) await q(`UPDATE jobs SET status = $2 WHERE id = $1`, [ret.job_id, d.status]);
   if (d.status === "accepted" && ret.job_id) await markFixedByReturn(Number(ret.job_id), returnId);
   await q(`UPDATE jobs SET status = 'expired' WHERE parent_return_id = $1 AND status IN ('queued','assigned')`, [returnId]);
@@ -1060,11 +1230,20 @@ async function resolveReturnLocked(returnId: number): Promise<string> {
 }
 
 /** Put a decided return back before trusted reviewers, keeping the record. Fresh review jobs are spawned; the reopener's own later review replaces their earlier one. */
-export async function reopen(ret: any, userId: number | null, note: string, by: "reopen" | "challenge" | "trusted"): Promise<void> {
+export async function reopen(ret: any, userId: number | null, note: string, by: "reopen" | "challenge" | "trusted" | "evidence", options: { propagate?: boolean; judgmentOnly?: boolean } = {}): Promise<void> {
+  if (ret.verification_plan && ret.duplicate_of) {
+    const canonical = await one(`SELECT * FROM returns WHERE id=$1`, [ret.duplicate_of]);
+    if (canonical.status === 'pending') return;
+    return reopen(canonical, userId, `Via duplicate #${ret.id}: ${note}`, by, options);
+  }
   await q(`INSERT INTO return_decisions (return_id, status, final_rung, provisional, by, note, user_id) VALUES ($1,'pending',NULL,false,$2,$3,$4)`, [ret.id, by, note, userId]);
   await q(`UPDATE returns SET status = 'pending', provisional = false WHERE id = $1`, [ret.id]);
+  if (by === 'evidence') await q(`UPDATE reviews SET needs_reassessment=true WHERE return_id=$1`, [ret.id]);
+  if (options.propagate !== false) await reassessAffected(Number(ret.id), 'pending: ' + note);
   if (ret.job_id) await q(`UPDATE jobs SET status = 'returned' WHERE id = $1`, [ret.job_id]);
-  await spawnReviews(Number(ret.id), Number(ret.problem_id), ret.lane_id, MIN_REVIEWS);
+  const checking = !options.judgmentOnly && await queueCheck(ret);
+  const reviewCount = ret.verification_plan || ret.research ? 1 : MIN_REVIEWS;
+  if (!checking) await spawnReviews(Number(ret.id), Number(ret.problem_id), ret.lane_id, reviewCount, { fresh: true, judgmentOnly: options.judgmentOnly });
   const ch = ret.lane_id ? await one(`SELECT id FROM channels WHERE lane_id = $1 AND parent_id IS NOT NULL ORDER BY id LIMIT 1`, [ret.lane_id]) : await one(`SELECT id FROM channels WHERE problem_id = $1 AND path = ''`, [ret.problem_id]);
   if (ch && userId) await q(`INSERT INTO messages (channel_id, user_id, kind, body_md, return_id) VALUES ($1,$2,'challenge',$3,$4)`, [ch.id, userId, `Return #${ret.id} reopened: ${note}. Trusted reviewers, look again.`, ret.id]);
 }
@@ -1149,7 +1328,7 @@ async function spawnFollowUp(ret: any, needs: string[]): Promise<void> {
 What the reviewer said a checkable return needs:
 ${needs.map((n) => `> ${n.replace(/\n/g, "\n> ")}`).join("\n\n") || "> (no detail given; make the recipe runnable end to end)"}
 
-Start from the original: its report and files are at ${P}/return/${ret.id}${files.length ? ` (files: ${files.map((f: any) => `${f.name} = ${f.sha256.slice(0, 12)}…`).join(", ")}, each at GET /files/<sha256>)` : ""}. Reproduce what it claims with a recipe a stranger can run in a third of this budget: exact commands, served script paths, inputs, expected outputs and their sha256, run time. Where the original claim does not survive, say so at the rung you can defend.
+Start from the original: its report and files are at ${P}/return/${ret.id}${files.length ? ` (files: ${files.map((f: any) => `${f.name} = ${f.sha256.slice(0, 12)}…`).join(", ")}, each at GET /files/<sha256>)` : ""}. Reproduce what it claims with the cheapest credible recipe a stranger can run without repeating discovery: exact commands, served script paths, inputs, expected outputs and their sha256, run time. Where the original claim does not survive, say so at the rung you can defend.
 
 Return as this job with \`"recipe_md"\` filled in and \`"cites": { "returns": [${ret.id}] }\` so the original author is credited on acceptance.
 
@@ -1173,9 +1352,15 @@ async function openLaneFromDirection(ret: any): Promise<void> {
 
 job.get("/return/:id", optionalAuth, project, async (req: any, res) => {
   if (wantsHtml(req) && !req.query.json) { await returnPage(req, res); return; }
-  const r = await one(`SELECT r.*, u.handle, j.brief_md AS job_brief FROM returns r JOIN users u ON u.id = r.user_id LEFT JOIN jobs j ON j.id = r.job_id WHERE r.id = $1`, [req.params.id]);
+  const r = await one(`SELECT r.*, u.handle, j.brief_md AS job_brief FROM returns r JOIN users u ON u.id = r.user_id LEFT JOIN jobs j ON j.id = r.job_id WHERE r.id = $1 AND r.problem_id=$2`, [req.params.id, req.project.id]);
   if (!r) { res.status(404).json({ error: `no such return #${String(req.params.id).slice(0, 20)}: it never existed, or it was removed (removals are announced in the lane channel and on the job's hand-back note)` }); return; }
   delete r.session;   // an agent's session id is its own
+  r.verification_runs = await verificationRuns(Number(r.id));
+  r.verification_state = r.verification_plan ? await verificationState(Number(r.id)) : null;
+  r.canonical_return = r.verification_plan && r.duplicate_of ? await one(`SELECT id,status,final_rung,provisional FROM returns WHERE id=$1`, [r.duplicate_of]) : null;
+  r.review_history = await q(`SELECT h.review-'transcript'||jsonb_build_object('handle',u.handle) AS review,h.archived_at FROM review_history h LEFT JOIN users u ON u.id=(h.review->>'user_id')::bigint WHERE h.return_id=$1 ORDER BY h.id`, [r.id]);
+  r.dependencies = await q(`SELECT source.id,source.status,source.final_rung,source.duplicate_of AS canonical_return_id FROM return_dependencies d JOIN returns source ON source.id=d.depends_on_id WHERE d.return_id=$1 ORDER BY source.id`, [r.id]);
+  r.research_url = r.research_route_id ? `/projects/${req.project.slug}/research-routes/${r.research_route_id}` : null;
   r.transcript_url = `/projects/${req.project.slug}/return/${r.id}/transcript`; delete r.transcript;   // the transcript is its own resource (cached at the edge)
   r.files = (await q(`SELECT f.sha256, f.name, f.bytes FROM file_refs x JOIN files f ON f.sha256 = x.file_sha WHERE x.ref_type = 'return' AND x.ref_id = $1 AND f.deleted_at IS NULL`, [r.id])).map((f: any) => ({ ...f, bytes: Number(f.bytes) }));
   // Integration is manual and separate from acceptance (issue #21): say where the patch stands. Decision by the author's own trusted handle is on the record (issue #23).
@@ -1184,10 +1369,11 @@ job.get("/return/:id", optionalAuth, project, async (req: any, res) => {
   // The reviews and the decision record travel with the return (issue #29). `returns.decision` is a curate return's own input, so it is `curation` here;
   // `decision` is the latest decision row (null while nothing has been decided) with the reviews that carried it, and `decisions` the whole record, oldest first.
   if (r.type === "curate") r.curation = r.decision; delete r.decision;
-  r.reviews = (await q(`SELECT rv.id, u.handle, rv.model, rv.verdict, rv.rung, rv.reject_reason, rv.verification, rv.rerun_reason, rv.trusted, rv.weight, rv.notes_md, rv.also_fix, rv.created_at FROM reviews rv JOIN users u ON u.id = rv.user_id WHERE rv.return_id = $1 ORDER BY rv.id`, [r.id])).map((v: any) => ({ ...v, id: Number(v.id), weight: Number(v.weight) }));
+  r.reviews = (await q(`SELECT rv.id, u.handle, rv.model, rv.verdict, rv.rung, rv.reject_reason, rv.verification, rv.rerun_reason, rv.verification_receipt_id, rv.verification_sufficiency_md, rv.verification_conflict_resolution_md, rv.trusted, rv.weight, rv.notes_md, rv.also_fix, rv.needs_reassessment, rv.created_at FROM reviews rv JOIN users u ON u.id = rv.user_id WHERE rv.return_id = $1 ORDER BY rv.id`, [r.id])).map((v: any) => ({ ...v, id: Number(v.id), weight: Number(v.weight) }));
   // Each decision row names who decided (issue #31): the reviewers whose verdicts carried it, or the person who reopened or challenged; and whether the author's own trusted handle was among them.
+  const historicalReviews = [...r.reviews.map((v: any) => ({ ...v, archived_at: null })), ...r.review_history.map((h: any) => ({ ...h.review, archived_at: h.archived_at }))];
   r.decisions = (await q(`SELECT d.status, d.final_rung, d.provisional, d.by, d.note, d.decided_at, u.handle AS actor FROM return_decisions d LEFT JOIN users u ON u.id = d.user_id WHERE d.return_id = $1 ORDER BY d.id`, [r.id])).map((d: any) => {
-    const carried = d.status === "pending" || !["trusted", "advisory"].includes(d.by) ? [] : r.reviews.filter((v: any) => v.trusted === (d.by === "trusted") && (v.verdict === "accept") === (d.status === "accepted"));
+    const carried = d.status === "pending" || !["trusted", "advisory"].includes(d.by) ? [] : historicalReviews.filter((v: any) => new Date(v.created_at) <= new Date(d.decided_at) && (!v.archived_at || new Date(v.archived_at) > new Date(d.decided_at)) && v.trusted === (d.by === "trusted") && (v.verdict === "accept") === (d.status === "accepted"));
     const decided_by = carried.length ? [...new Set(carried.map((v: any) => String(v.handle)))] : d.actor ? [String(d.actor)] : [];
     const { actor, ...rest } = d;
     return { ...rest, decided_by, decided_by_author_handle: d.by === "trusted" && decided_by.includes(String(r.handle)), review_ids: carried.map((v: any) => v.id) };
@@ -1208,7 +1394,7 @@ async function returnPage(req: any, res: any): Promise<void> {
   const r = await one(`SELECT r.*, u.handle, u.display_name, j.title AS job_title, j.type AS job_type, l.slug AS lane FROM returns r JOIN users u ON u.id = r.user_id LEFT JOIN jobs j ON j.id = r.job_id LEFT JOIN lanes l ON l.id = r.lane_id WHERE r.id = $1 AND r.problem_id = $2`, [req.params.id, req.project.id]);
   if (!r) { res.status(404).type("text/plain").send("no such return"); return; }
   const files = await q(`SELECT f.sha256, f.name, f.ext, f.bytes FROM file_refs x JOIN files f ON f.sha256 = x.file_sha WHERE x.ref_type = 'return' AND x.ref_id = $1 AND f.deleted_at IS NULL ORDER BY f.name`, [r.id]);
-  const reviews = await q(`SELECT rv.id, rv.verdict, rv.rung, rv.reject_reason, rv.notes_md, rv.also_fix, rv.weight, rv.created_at, u.handle, rv.model, rv.verification, rv.rerun_reason, rv.trusted, rv.tokens, rv.transcript_resubmitted_at FROM reviews rv JOIN users u ON u.id = rv.user_id WHERE rv.return_id = $1 ORDER BY rv.id`, [r.id]);
+  const reviews = await q(`SELECT rv.id, rv.verdict, rv.rung, rv.reject_reason, rv.notes_md, rv.also_fix, rv.weight, rv.created_at, u.handle, rv.model, rv.verification, rv.rerun_reason, rv.trusted, rv.tokens, rv.transcript_resubmitted_at, rv.needs_reassessment FROM reviews rv JOIN users u ON u.id = rv.user_id WHERE rv.return_id = $1 ORDER BY rv.id`, [r.id]);
   const patchIntegrated = r.patch ? !!(await one(`SELECT 1 FROM document_versions WHERE return_id = $1`, [r.id])) : false;
   const ownHandleDecided = !!(await one(`SELECT 1 FROM reviews WHERE return_id = $1 AND trusted AND user_id = $2 AND verdict = CASE WHEN $3 = 'accepted' THEN 'accept' ELSE 'reject' END`, [r.id, r.user_id, r.status]));
   const pages = await paperPages(req.project.slug);
@@ -1217,7 +1403,7 @@ async function returnPage(req: any, res: any): Promise<void> {
   const meta = `<p class="doc-meta"><span class="tag">${escHtml(r.status)}${r.provisional ? " (provisional: advisory reviews only, awaiting a trusted reviewer)" : ""}${r.final_rung ? `, ${escHtml(r.final_rung)}` : r.author_rung ? `, claims ${escHtml(r.author_rung)}` : ""}${r.verification ? `, verified by ${escHtml(r.verification === "read" ? "reading" : r.verification === "spot" ? "spot rerun" : "full rerun")}` : ""}</span><span>${escHtml(r.type)}${r.lane ? ` in <a href="${P}#discussion">${escHtml(r.lane)}</a>` : ""}</span><span>by <a href="/@${escHtml(r.handle)}">${escHtml(r.display_name || "@" + r.handle)}</a> (${escHtml(r.model)})</span><span>Submitted: ${timeHtml(r.created_at)}</span>${r.job_id ? `<span>answers assignment #${r.job_id}${r.job_title ? `: ${escHtml(r.job_title)}` : ""}</span>` : ""}${r.paper_slug ? `<span>revision of <a href="${P}/papers/${escHtml(r.paper_slug)}">${escHtml(r.paper_slug)}</a></span>` : ""}${Number(r.cpu_hours) > 0 ? `<span>${escHtml(r.cpu_hours)} CPU h</span>` : ""}${r.patch ? `<span>patch ${patchIntegrated ? "integrated" : "pending integration (applied to the research repository by hand)"}</span>` : ""}${ownHandleDecided ? `<span>decided by the author's own handle, as a trusted reviewer on a second model</span>` : ""}${r.superseded_by ? `<span class="tag">superseded by <a href="${P}/return/${escHtml(String(r.superseded_by))}">#${escHtml(String(r.superseded_by))}</a>: the same change, folded into it</span>` : ""}${r.duplicate_of && r.status === "pending" ? `<span class="tag">same change as pending <a href="${P}/return/${escHtml(String(r.duplicate_of))}">#${escHtml(String(r.duplicate_of))}</a></span>` : ""}${r.transcript_omitted && Number(r.transcript_omitted.omitted) >= 3 && Number(r.transcript_omitted.share) >= 0.5 ? `<span class="tag" title="${escHtml(String(r.transcript_omitted.omitted))} of ${escHtml(String(r.transcript_omitted.outputs))} tool outputs replaced by omission notes">transcript mostly omitted</span>` : ""}</p>`;
   const fileNoteBy: Record<string, { notes: string[]; fixed_by?: string }> = {}; for (const f of Array.isArray(r.file_notes) ? r.file_notes : []) fileNoteBy[f.sha] = { notes: f.notes, fixed_by: f.fixed_by };
   const flist = files.map((f: any) => `<li><a href="/files/${f.sha256}">${escHtml(f.name)}</a> <span class="muted">${Number(f.bytes).toLocaleString("en")} bytes</span>${fileNoteBy[f.sha256] ? `<br><span class="muted"><b>${fileNoteBy[f.sha256].fixed_by ? "Replaced" : "Will not run as shipped"}</b>: ${escHtml(fileNoteBy[f.sha256].notes.join(" "))}${fileNoteBy[f.sha256].fixed_by ? ` Corrected copy: <a href="/files/${fileNoteBy[f.sha256].fixed_by}">${escHtml(f.name)}</a>.` : ""}</span>` : ""}</li>`).join("") || `<li class="muted">No files.</li>`;
-  const rlist = (await Promise.all(reviews.map(async (v: any) => `<li><span class="tag">${escHtml(v.verdict)}${v.reject_reason ? `: ${escHtml(v.reject_reason)}` : ""}${v.rung ? `, ${escHtml(v.rung)}` : ""}</span> <span class="tag">${v.trusted ? "trusted" : "advisory"}</span>${v.tokens?.log === "custom" ? ` <span class="tag" title="Written by the agent in the solveathome transcript format; the token counts are its own statement">agent-written transcript</span>` : ""}${notSessionLog(v.tokens) ? ` <span class="tag" title="${v.tokens.log === "summary" ? "The reviewer sent a summary instead of the harness's own session log" : "No known harness wrote this transcript"}; no tokens are counted for it">no session log</span>` : ""}${v.tokens?.mismatch ? ` <span class="tag" title="${escHtml(v.tokens.mismatch.reason)}; no tokens are counted for it">transcript from another assignment</span>` : ""}${v.tokens?.already_counted ? ` <span class="tag" title="${v.tokens.already_counted.entries} of ${v.tokens.already_counted.of} usage entries were already counted on ${escHtml(v.tokens.already_counted.on.join(", "))}; a usage entry counts once per person">counted once</span>` : ""}${v.transcript_resubmitted_at ? ` <span class="tag">transcript resubmitted ${timeHtml(v.transcript_resubmitted_at)}</span>` : ""} by <a href="/@${escHtml(v.handle)}">@${escHtml(v.handle)}</a> (${escHtml(v.model)}), ${escHtml(v.verification ?? "read")}${v.rerun_reason ? `: ${escHtml(v.rerun_reason)}` : ""}, weight ${escHtml(v.weight)}, ${timeHtml(v.created_at)}<div class="document" style="padding-block:.75rem;border:0">${await md(v.notes_md)}</div>${Array.isArray(v.also_fix) && v.also_fix.length ? `<p class="muted" style="margin:.25rem 0 0">Also fix: ${v.also_fix.map((f: any) => `<a href="${P}/docs/${escHtml(f.path)}">${escHtml(f.path)}</a>: ${escHtml(f.note)}`).join("; ")}</p>` : ""}</li>`))).join("") || `<li class="muted">No verdicts yet.</li>`;
+  const rlist = (await Promise.all(reviews.map(async (v: any) => `<li><span class="tag">${escHtml(v.verdict)}${v.reject_reason ? `: ${escHtml(v.reject_reason)}` : ""}${v.rung ? `, ${escHtml(v.rung)}` : ""}</span> <span class="tag">${v.trusted ? "trusted" : "advisory"}</span>${v.needs_reassessment ? ' <span class="tag">awaiting reassessment</span>' : ''}${v.tokens?.log === "custom" ? ` <span class="tag" title="Written by the agent in the solveathome transcript format; the token counts are its own statement">agent-written transcript</span>` : ""}${notSessionLog(v.tokens) ? ` <span class="tag" title="${v.tokens.log === "summary" ? "The reviewer sent a summary instead of the harness's own session log" : "No known harness wrote this transcript"}; no tokens are counted for it">no session log</span>` : ""}${v.tokens?.mismatch ? ` <span class="tag" title="${escHtml(v.tokens.mismatch.reason)}; no tokens are counted for it">transcript from another assignment</span>` : ""}${v.tokens?.already_counted ? ` <span class="tag" title="${v.tokens.already_counted.entries} of ${v.tokens.already_counted.of} usage entries were already counted on ${escHtml(v.tokens.already_counted.on.join(", "))}; a usage entry counts once per person">counted once</span>` : ""}${v.transcript_resubmitted_at ? ` <span class="tag">transcript resubmitted ${timeHtml(v.transcript_resubmitted_at)}</span>` : ""} by <a href="/@${escHtml(v.handle)}">@${escHtml(v.handle)}</a> (${escHtml(v.model)}), ${escHtml(v.verification ?? "read")}${v.rerun_reason ? `: ${escHtml(v.rerun_reason)}` : ""}, weight ${escHtml(v.weight)}, ${timeHtml(v.created_at)}<div class="document" style="padding-block:.75rem;border:0">${await md(v.notes_md)}${v.verification_sufficiency_md ? `<p><b>Evidence sufficiency:</b> ${escHtml(v.verification_sufficiency_md)}</p>` : ""}${v.verification_receipt_id ? `<p class="muted">Uses execution receipt #${Number(v.verification_receipt_id)}.</p>` : ""}${v.verification_conflict_resolution_md ? `<p><b>Conflict reconciliation:</b> ${escHtml(v.verification_conflict_resolution_md)}</p>` : ""}</div>${Array.isArray(v.also_fix) && v.also_fix.length ? `<p class="muted" style="margin:.25rem 0 0">Also fix: ${v.also_fix.map((f: any) => `<a href="${P}/docs/${escHtml(f.path)}">${escHtml(f.path)}</a>: ${escHtml(f.note)}`).join("; ")}</p>` : ""}</li>`))).join("") || `<li class="muted">No verdicts yet.</li>`;
   const aside = `<div class="doc-side"><div><h3>Files</h3><ul>${flist}</ul>${r.patch ? `<p class="panel-note">Includes a patch against served scripts (below).</p>` : ""}<p class="panel-note"><a href="${P}/return/${r.id}/transcript">Scrubbed transcript</a> (${(Number(r.transcript?.length ?? 0) / 1000).toFixed(0)}k chars${r.tokens?.log === "custom" ? `; agent-written in the solveathome format, counts as stated by the agent` : ""}${notSessionLog(r.tokens) ? `; <b>not a session log</b>: ${r.tokens.log === "summary" ? "the author sent a summary" : "no known harness wrote it"}, no tokens counted` : ""}${r.tokens?.mismatch ? `; <b>from another assignment</b>: ${escHtml(r.tokens.mismatch.reason)}, no tokens counted` : ""}${r.tokens?.already_counted ? `; <b>counted once</b>: ${r.tokens.already_counted.entries} of ${r.tokens.already_counted.of} usage entries were already counted on ${escHtml(r.tokens.already_counted.on.join(", "))}` : ""}${r.transcript_resubmitted_at ? `; resubmitted ${escHtml(new Date(r.transcript_resubmitted_at).toISOString().slice(0, 10))}` : ""}) · <a href="${P}/return/${r.id}?json=1">JSON</a></p></div><div><h3>Verdicts</h3><ul>${rlist}</ul></div></div>`;
   const challenged = challengeBanner(await challengesFor(Number(req.project.id), "return", String(r.id)), P);
   const decisions = await q(`SELECT d.status, d.final_rung, d.provisional, d.by, d.note, d.decided_at, u.handle FROM return_decisions d LEFT JOIN users u ON u.id = d.user_id WHERE d.return_id = $1 ORDER BY d.id`, [r.id]);
@@ -1227,7 +1413,12 @@ async function returnPage(req: any, res: any): Promise<void> {
   const dupRows = await q<{ id: string; status: string; handle: string }>(`SELECT x.id, x.status, u.handle FROM returns x JOIN users u ON u.id = x.user_id WHERE x.superseded_by = $1 OR x.duplicate_of = $1 ORDER BY x.id`, [r.id]);
   const dupList = dupRows.length ? `<p class="muted">Also submitted as ${dupRows.map((x) => `<a href="${P}/return/${x.id}">#${x.id}</a> by @${escHtml(x.handle)} (${escHtml(x.status)})`).join(", ")}: the same change.</p>` : "";
   const fixList = Array.isArray(r.also_fix) && r.also_fix.length ? `<h3>Corrections routed to other documents</h3><ul>${r.also_fix.map((f: any) => `<li><a href="${P}/docs/${escHtml(f.path)}">${escHtml(f.path)}</a>: ${escHtml(f.note)}</li>`).join("")}</ul>` : "";
-  const body = challenged + targetLine + human + dupList + (await md(r.report_md)) + fixList + (r.patch ? `<h2>Patch</h2><pre><code>${escHtml(r.patch)}</code></pre>` : "") + dlist;
+  const researchRecord = r.research_route_id ? `<p><a href="${P}/research-routes/${r.research_route_id}">Research route #${r.research_route_id}</a> · investment progress is separate from claim verification.</p>` : "";
+  const canonical = r.verification_plan && r.duplicate_of ? await one(`SELECT id,status,final_rung FROM returns WHERE id=$1`, [r.duplicate_of]) : null;
+  const history = await q(`SELECT review,archived_at FROM review_history WHERE return_id=$1 ORDER BY id`, [r.id]);
+  const premises = await q(`SELECT source.id,source.status FROM return_dependencies d JOIN returns source ON source.id=d.depends_on_id WHERE d.return_id=$1 ORDER BY source.id`, [r.id]);
+  const evidenceRecord = (canonical ? `\n\nShared claim decision: [return #${canonical.id}](${P}/return/${canonical.id}), currently ${canonical.status}${canonical.final_rung ? ` (${canonical.final_rung})` : ''}. This duplicate preserves attribution and earns no additional result credit.\n` : '') + await verificationBrief(Number(r.id)) + (premises.length ? `\n\nDeclared premises of this result: ${premises.map(p => `[return #${p.id}](${P}/return/${p.id}) (${p.status})`).join(', ')}.\n` : '') + (history.length ? `\n\n### Previous judgments\n\n${history.map(h => `- ${h.review.model}: ${h.review.verdict}${h.review.rung ? ` (${h.review.rung})` : ''}. ${h.review.notes_md}`).join('\n')}\n` : '');
+  const body = challenged + targetLine + human + dupList + researchRecord + (await md(r.report_md)) + (evidenceRecord ? await md(evidenceRecord) : "") + fixList + (r.patch ? `<h2>Patch</h2><pre><code>${escHtml(r.patch)}</code></pre>` : "") + dlist;
   const firstLine = String(r.report_md ?? "").split("\n").map((l: string) => l.replace(/^[#>*\s-]+/, "").trim()).find((l: string) => l.length > 20) ?? "";
   res.type("text/html").send(page({ title: `Return #${r.id}`, dataPage: "return", description: `${r.type} by ${r.display_name || "@" + r.handle} (${r.model}), ${r.status}${r.final_rung ? `, ${r.final_rung}` : ""}. ${firstLine}`, path: `${P}/return/${r.id}`, crumbs: `<a href="${P}">${escHtml(req.project.name)}</a><span>/ results /</span>#${r.id}`, eyebrow: "Result", heading: r.job_title ?? `${r.type} return #${r.id}`, meta, aside, body }));
 }
@@ -1260,10 +1451,14 @@ job.post("/return/:id/request-review", bearer, project, assignmentMutation(async
   }
   await q(`INSERT INTO return_decisions (return_id, status, final_rung, provisional, by, note, user_id) VALUES ($1,'pending',NULL,false,'elevate',$2,$3)`, [ret.id, note, uid]);
   await q(`UPDATE returns SET status = 'pending', final_rung = NULL, provisional = false WHERE id = $1`, [ret.id]);
-  await spawnReviews(Number(ret.id), Number(ret.problem_id), ret.lane_id, MIN_REVIEWS);
+  const folded = await foldExactClaim(Number(ret.id));
+  if (folded) { res.json({ ok: true, return_id: Number(ret.id), status: folded.status, canonical_return_id: folded.id, check_requested: false, reviews_requested: 0 }); return; }
+  const checking = await queueCheck(ret);
+  const reviewCount = ret.verification_plan || ret.research ? 1 : MIN_REVIEWS;
+  if (!checking) await spawnReviews(Number(ret.id), Number(ret.problem_id), ret.lane_id, reviewCount);
   const ch = ret.lane_id ? await one(`SELECT id FROM channels WHERE lane_id = $1 AND parent_id IS NOT NULL ORDER BY id LIMIT 1`, [ret.lane_id]) : await one(`SELECT id FROM channels WHERE problem_id = $1 AND path = ''`, [ret.problem_id]);
   if (ch) await q(`INSERT INTO messages (channel_id, user_id, model, kind, body_md, return_id, session) VALUES ($1,$2,$3,'challenge',$4,$5,$6)`, [ch.id, uid, req.model ?? null, `Return #${ret.id} elevated for review by @${req.user!.handle}: ${note}. Reviewers, verify it.`, ret.id, String(req.header("x-session") ?? "").trim().slice(0, 64) || null]);
-  res.json({ ok: true, return_id: Number(ret.id), status: "pending", elevated_by: req.user!.handle, note, reviews_requested: MIN_REVIEWS });
+  res.json({ ok: true, return_id: Number(ret.id), status: "pending", elevated_by: req.user!.handle, note, check_requested: checking, reviews_requested: checking ? 0 : reviewCount });
 }));
 
 /**

@@ -658,3 +658,105 @@ CREATE TABLE IF NOT EXISTS document_publications (
   recorded_at TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp()
 );
 CREATE INDEX IF NOT EXISTS document_publications_path_idx ON document_publications (problem_id, path, id);
+-- Research-first process (maintainer, Sep 14). Investment decisions remain separate from trusted claim decisions.
+CREATE TABLE IF NOT EXISTS research_routes (
+  id BIGSERIAL PRIMARY KEY,
+  problem_id BIGINT NOT NULL REFERENCES problems(id) ON DELETE CASCADE,
+  lane_id BIGINT REFERENCES lanes(id) ON DELETE SET NULL,
+  origin_return_id BIGINT NOT NULL REFERENCES returns(id) ON DELETE CASCADE,
+  parent_route_id BIGINT REFERENCES research_routes(id) ON DELETE SET NULL,
+  title TEXT NOT NULL,
+  contribution_md TEXT NOT NULL,
+  prior_art_md TEXT NOT NULL,
+  uncertainty_md TEXT NOT NULL,
+  state TEXT NOT NULL DEFAULT 'proposed' CHECK (state IN ('proposed','active','blocked','paused','known','result')),
+  next_step JSONB,
+  obstacle JSONB,
+  revision INTEGER NOT NULL DEFAULT 1,
+  last_return_id BIGINT REFERENCES returns(id) ON DELETE SET NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+ALTER TABLE research_routes DROP CONSTRAINT IF EXISTS research_routes_state_check;
+ALTER TABLE research_routes ADD CONSTRAINT research_routes_state_check CHECK (state IN ('proposed','active','blocked','paused','known','result'));
+CREATE TABLE IF NOT EXISTS research_events (
+  id BIGSERIAL PRIMARY KEY,
+  route_id BIGINT NOT NULL REFERENCES research_routes(id) ON DELETE CASCADE,
+  return_id BIGINT REFERENCES returns(id) ON DELETE CASCADE,
+  outcome TEXT NOT NULL,
+  evidence_md TEXT NOT NULL,
+  detail JSONB NOT NULL DEFAULT '{}',
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE TABLE IF NOT EXISTS research_dependencies (
+  route_id BIGINT NOT NULL REFERENCES research_routes(id) ON DELETE CASCADE,
+  return_id BIGINT NOT NULL REFERENCES returns(id) ON DELETE CASCADE,
+  PRIMARY KEY (route_id, return_id)
+);
+ALTER TABLE returns ADD COLUMN IF NOT EXISTS research JSONB;
+ALTER TABLE returns ADD COLUMN IF NOT EXISTS research_route_id BIGINT REFERENCES research_routes(id) ON DELETE SET NULL;
+ALTER TABLE returns ADD COLUMN IF NOT EXISTS verification_plan JSONB;
+ALTER TABLE returns ADD COLUMN IF NOT EXISTS verification_fingerprint TEXT;
+CREATE INDEX IF NOT EXISTS returns_verification_fingerprint_idx ON returns (problem_id, verification_fingerprint) WHERE verification_fingerprint IS NOT NULL;
+ALTER TABLE jobs ADD COLUMN IF NOT EXISTS research_route_id BIGINT REFERENCES research_routes(id) ON DELETE SET NULL;
+ALTER TABLE jobs ADD COLUMN IF NOT EXISTS research_stage TEXT CHECK (research_stage IN ('discover','triage','pursue','rescue','consolidate'));
+-- Generated rescue is exploratory work for any capable tier; keep held/custom jobs intact.
+UPDATE jobs SET min_tier=99 WHERE research_stage='rescue' AND type='explore' AND status='queued' AND min_tier=1
+  AND (origin_key LIKE 'rescue:%' OR origin_key LIKE 'rescue-sample:%');
+ALTER TABLE jobs ADD COLUMN IF NOT EXISTS research_source_return_id BIGINT REFERENCES returns(id) ON DELETE SET NULL;
+ALTER TABLE jobs ADD COLUMN IF NOT EXISTS avoid_model TEXT;
+ALTER TABLE jobs ADD COLUMN IF NOT EXISTS evidence_return_id BIGINT REFERENCES returns(id) ON DELETE CASCADE;
+ALTER TABLE assignment_attempts ADD COLUMN IF NOT EXISTS research_stage TEXT;
+CREATE TABLE IF NOT EXISTS verification_runs (
+  id BIGSERIAL PRIMARY KEY,
+  subject_return_id BIGINT NOT NULL REFERENCES returns(id) ON DELETE CASCADE,
+  result_return_id BIGINT NOT NULL UNIQUE REFERENCES returns(id) ON DELETE CASCADE,
+  fingerprint TEXT NOT NULL,
+  outcome TEXT NOT NULL CHECK (outcome IN ('pass','fail','unable')),
+  observed TEXT NOT NULL,
+  elapsed_seconds NUMERIC NOT NULL CHECK (elapsed_seconds >= 0),
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS verification_runs_fingerprint_idx ON verification_runs (fingerprint);
+ALTER TABLE problems ADD COLUMN IF NOT EXISTS research_allocation JSONB;
+ALTER TABLE reviews ADD COLUMN IF NOT EXISTS verification_receipt_id BIGINT REFERENCES verification_runs(id) ON DELETE SET NULL;
+ALTER TABLE reviews ADD COLUMN IF NOT EXISTS verification_sufficiency_md TEXT;
+ALTER TABLE verification_runs ADD COLUMN IF NOT EXISTS details JSONB;
+ALTER TABLE jobs ADD COLUMN IF NOT EXISTS research_revision INTEGER;
+ALTER TABLE reviews ADD COLUMN IF NOT EXISTS verification_conflict_through BIGINT;
+ALTER TABLE reviews ADD COLUMN IF NOT EXISTS verification_conflict_resolution_md TEXT;
+CREATE UNIQUE INDEX IF NOT EXISTS jobs_one_route_investigation_idx ON jobs (research_route_id) WHERE research_route_id IS NOT NULL AND research_stage IN ('triage','pursue','rescue') AND status IN ('queued','assigned');
+CREATE INDEX IF NOT EXISTS jobs_research_source_idx ON jobs (research_source_return_id) WHERE research_source_return_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS returns_job_idx ON returns (job_id) WHERE job_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS research_dependencies_return_idx ON research_dependencies (return_id);
+-- Preserve declared premises on the result that used them, even after its route is rescued.
+CREATE TABLE IF NOT EXISTS return_dependencies (
+  return_id BIGINT NOT NULL REFERENCES returns(id) ON DELETE CASCADE,
+  depends_on_id BIGINT NOT NULL REFERENCES returns(id) ON DELETE CASCADE,
+  PRIMARY KEY (return_id, depends_on_id)
+);
+CREATE INDEX IF NOT EXISTS return_dependencies_source_idx ON return_dependencies (depends_on_id);
+CREATE INDEX IF NOT EXISTS research_events_route_idx ON research_events (route_id,id);
+-- Recover only declared, recorded premises and their documented inheritance; no mathematical inference.
+INSERT INTO return_dependencies (return_id,depends_on_id)
+  SELECT r.id,source.id FROM returns r
+  CROSS JOIN LATERAL (SELECT e.detail->'depends_on' AS premises FROM research_events e
+    WHERE e.route_id=r.research_route_id AND e.return_id<=r.id AND e.outcome<>'stale_progress'
+      AND jsonb_typeof(e.detail->'depends_on')='array' ORDER BY e.id DESC LIMIT 1) declared
+  CROSS JOIN LATERAL jsonb_array_elements_text(declared.premises) dep(value)
+  JOIN returns source ON source.id::text=dep.value AND source.problem_id=r.problem_id
+  WHERE NOT EXISTS (SELECT 1 FROM research_events e WHERE e.return_id=r.id AND e.outcome='stale_progress')
+  ON CONFLICT DO NOTHING;
+INSERT INTO return_dependencies (return_id,depends_on_id)
+  SELECT rr.last_return_id,d.return_id FROM research_dependencies d JOIN research_routes rr ON rr.id=d.route_id
+  WHERE rr.last_return_id IS NOT NULL ON CONFLICT DO NOTHING;
+ALTER TABLE jobs ADD COLUMN IF NOT EXISTS check_wait_expired_at TIMESTAMPTZ;
+CREATE INDEX IF NOT EXISTS reviews_receipt_idx ON reviews (verification_receipt_id) WHERE verification_receipt_id IS NOT NULL;
+ALTER TABLE reviews ADD COLUMN IF NOT EXISTS needs_reassessment BOOLEAN NOT NULL DEFAULT false;
+CREATE TABLE IF NOT EXISTS review_history (
+  id BIGSERIAL PRIMARY KEY,
+  return_id BIGINT NOT NULL REFERENCES returns(id) ON DELETE CASCADE,
+  review JSONB NOT NULL,
+  archived_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS review_history_return_idx ON review_history (return_id);

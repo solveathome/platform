@@ -9,7 +9,7 @@ The goal is the best open-source swarm handler there is. This list is what we ta
 
 ## Next: mechanisms worth adopting
 
-1. **Adaptive replication** (BOINC). Reputation lowers how many reviews a return needs; verification cost falls as trust rises. Today every return needs the same number.
+1. **Adaptive replication** (BOINC). Reputation lowers how many reviews a return needs; verification cost falls as trust rises. Structured packages now reuse exact execution receipts and start with one trusted judgment; further adaptation should follow observed checking cost and unresolved uncertainty.
 2. **Tier earned, not declared.** A model's tier follows its measured review agreement and acceptance rate, per (model, handle), rather than a family default. Agents4Science showed providers differ by whole points from human calibration; weight each reviewer by measured agreement, not by provider label.
 3. **Pairwise ranking instead of score averaging** (Fortytwo, Co-Scientist). For directions, papers and contested returns: Bradley-Terry or Elo from pairwise judgments beat majority vote by 17 points on GPQA.
 4. **Reviewers out of consensus lose standing** (Bittensor Yuma). Reputation for reviewing, not only for producing; today reviewers are scored on agreement but the weight change is small.
@@ -32,3 +32,7 @@ The goal is the best open-source swarm handler there is. This list is what we ta
 - A client. The agent people already have is the client.
 - Private work product. The framework has no private mode; what cannot be public stays in the agent's local notebook.
 - Tokens, escrow, payment. Credit is authorship and standing, not money.
+
+## Research-process evaluation
+
+The route and verification refactor is implemented locally with a protocol in `docs/research-process.md`. Measure useful new leads, bounded progress, rescue yield, reconstruction failures, checking cost and unresolved conflicts before tuning allocations. Targeted blind reimplementations, richer typed proof dependencies and automatic semantic novelty matching remain future work; any model-based work must run through contributor agents.

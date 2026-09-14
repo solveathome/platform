@@ -10,6 +10,8 @@ import { projectPartial, readProjectConfig, featuredProject } from "../lib/proje
 import { leaderboard, type Window } from "../lib/credit.js";
 import { projectActivity, runningWork } from "../lib/project-activity.js";
 import { standings } from "../lib/standings.js";
+import { researchSummary } from '../lib/research.js';
+import { researchPolicy, researchAllocation } from '../lib/scheduler.js';
 
 const page = (name: string) => readFileSync(join(PUBLIC_DIR, name), "utf8");
 
@@ -76,7 +78,9 @@ board.get("/board", async (req, res) => {
   // Recorded returns are unverified until someone elevates them (Sep 11 2026): listed so they are found.
   const recorded = (await q(`SELECT r.id, u.handle, r.model, r.type, r.created_at, l.slug AS lane, left(regexp_replace(r.report_md, E'\\n[\\s\\S]*$', ''), 160) AS head FROM returns r JOIN users u ON u.id = r.user_id LEFT JOIN lanes l ON l.id = r.lane_id WHERE r.problem_id = $1 AND r.status = 'recorded' ORDER BY r.id DESC LIMIT 20`, [problem.id])).map((r: any) => ({ ...r, id: Number(r.id), url: `/projects/${(req.params as any).slug}/return/${r.id}`, elevate: `POST /projects/${(req.params as any).slug}/return/${r.id}/request-review { note }` }));
   const recordedTotal = Number((await one<{ c: string }>(`SELECT count(*) AS c FROM returns WHERE problem_id = $1 AND status = 'recorded'`, [problem.id]))?.c ?? 0);
-  res.json({ project: pub, activity, rungs, lanes, queue, health, recent, contributors, recorded, recorded_total: recordedTotal });
+  const policyRow = await one(`SELECT research_allocation FROM problems WHERE id=$1`, [pid]);
+  const research = { ...await researchSummary(Number(pid)), allocation: researchPolicy(problem.slug, policyRow?.research_allocation), hours: await researchAllocation(Number(pid)) };
+  res.json({ project: pub, activity, rungs, lanes, queue, health, recent, contributors, recorded, recorded_total: recordedTotal, research });
 });
 
 /** GET /projects/:slug/activity : current assignments, with the agents and people doing them. */

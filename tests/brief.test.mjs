@@ -1,9 +1,64 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { renderBrief } from "../src/lib/brief.ts";
+import { GUIDANCE_VERSION, taskGuidance } from "../src/lib/research-guidance.ts";
+import { tangentJob } from "../src/lib/tangent.ts";
+import { readdirSync, readFileSync } from "node:fs";
 
 const job = { id: 78, type: "audit", title: "Audit: beta2-note", brief_md: "paper.slug: beta2-note\n\nAudit it.", git_ref: "main", compute_hint: {}, budget_hours: 3, release_count: 1, last_release_note: "expired: the agent did not return or release it", lane_slug: null, repo_url: "https://example.org/r", expires_at: null };
 const session = { id: "s1", jobs: 1, max: 1, maxHours: 2, compute: "not offered", transcriptPreapproved: true };
+
+test('all imported project briefs receive current task guidance before operational reference material',()=>{
+  const directory=new URL('../projects/twin-primes/briefs/',import.meta.url);
+  const names=readdirSync(directory).filter(name=>name.endsWith('.md'));assert.ok(names.length>30);
+  for(const name of names) {
+    const body=readFileSync(new URL(name,directory),'utf8'),type=/^type: (\w+)$/m.exec(body)[1];
+    const md=renderBrief({...job,type,brief_md:body},'https://x.test/projects/p',session);
+    assert.ok(md.includes(`Guidance version: ${GUIDANCE_VERSION}`),name);
+    assert.ok(md.includes(taskGuidance({type})),name);
+    assert.ok(md.indexOf('## The task')<md.indexOf('## Hand documents to other agents'),name);
+    assert.ok(md.indexOf('### Success criteria for this assignment')>md.indexOf(body),name);
+    assert.doesNotMatch(md,/think step by step|one sub-agent per hypothesis|ensure we get the right answer/i,name);
+  }
+});
+
+test('research, conflict resolution, execution and judgment have distinct success and stop criteria',()=>{
+  for(const stage of ['discover','triage','pursue','rescue']) {
+    const focus=taskGuidance({type:'explore',research_stage:stage});
+    assert.match(focus,/prior.work|prior work|Search|search/);
+    assert.match(focus,/next|experiment|test|uncertainty/);
+  }
+  assert.match(taskGuidance({type:'check'}),/pass, fail or unable/);
+  assert.match(taskGuidance({type:'check',research_stage:'discover'}),/Complete this check once/);
+  assert.match(taskGuidance({type:'review'}),/Reuse eligible receipts/);
+  assert.match(taskGuidance({type:'explore',research_stage:'consolidate',evidence_return_id:1}),/Reconcile the supplied conflicting observations/);
+  assert.match(taskGuidance({type:'source'}),/Stop once the bounded lookup is resolved/);
+  assert.match(taskGuidance({type:'formalize'}),/a changed theorem is a separate proposal/i);
+  assert.match(taskGuidance({type:'explore',purpose:'work'}),/specified evidence or integration obligation/);
+  assert.match(taskGuidance({type:'direction',purpose:'work'}),/Find an uncovered contribution/);
+  const followUp=renderBrief({...job,type:'explore',follow_up_of:1,brief_md:'Make the existing claim checkable.'},'https://x.test/projects/p',session);
+  assert.match(followUp,/Resolve the stated follow-up obligation/);
+  assert.doesNotMatch(followUp,/Find an uncovered contribution/);
+});
+
+test('donor tangents use source-first research and resolve ambiguity without a new approval loop',()=>{
+  const challenge=tangentJob({kind:'challenge',about:'return:1',says:'This bound needs another assumption.'},'https://x.test/projects/p','donor',1);
+  assert.match(challenge.brief_md,/bounded interpretation/);assert.doesNotMatch(challenge.brief_md,/ask them/);
+  const direction=tangentJob({kind:'direction',says:'Try a new source-field connection.'},'https://x.test/projects/p','donor',1);
+  assert.match(direction.brief_md,/search online/i);assert.match(direction.brief_md,/research.proposal/);
+  assert.doesNotMatch(direction.brief_md,/refuted registry|before anything/);
+});
+
+test('every served assignment puts global prior work before older task instructions and defers numerical reproduction',()=>{
+  for(const type of ['explore','direction','source','break','measure','formalize','paper','audit','review','check']) {
+    const task='Older queued task: regenerate the published table.';
+    const md=renderBrief({...job,type,brief_md:task},'https://x.test/projects/p',session);
+    assert.ok(md.indexOf('Search the global body of work first')>=0&&md.indexOf('Search the global body of work first')<md.indexOf(task),type);
+    assert.match(md,/Do not regenerate published counts/);
+    assert.match(md,/An assigned validation check executes that scope and reuses the search record/);
+    assert.match(md,/If online access is unavailable/);
+  }
+});
 
 test("issue #4: one time budget, the person's cap wins and the brief says so; an empty compute hint reads as none", () => {
   const md = renderBrief(job, "https://x.test/projects/p", session);

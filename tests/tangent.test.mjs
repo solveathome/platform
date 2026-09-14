@@ -115,5 +115,7 @@ test('a direction tangent is a direction job with the words in the brief', async
   assert.equal(d.type, 'direction');
   const j = await one(`SELECT brief_md FROM jobs WHERE id = $1`, [d.job_id]);
   assert.match(j.brief_md, /moving cutoff/);
-  assert.match(j.brief_md, /refuted registry/);
+  assert.match(j.brief_md, /closed-routes register/);
+  assert.match(j.brief_md, /search online/);
+  assert.match(d.brief_md, /Find an uncovered contribution/);
 });

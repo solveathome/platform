@@ -3,6 +3,7 @@ import { createHash, randomBytes } from "node:crypto";
 import type { RequestHandler } from "express";
 import { one, q, projectTransaction } from "../db/index.js";
 import { canonicalModel, parseEffort, providerFromModel } from "./model-id.js";
+import { stageOf } from './research-format.js';
 
 class Refused extends Error {}
 const canonical = (v: any): any => Array.isArray(v) ? v.map(canonical) : v && typeof v === "object"
@@ -84,9 +85,9 @@ export async function claimAssignment(row: any, session: any, userId: number, ti
     expires_at = now() + ($4::numeric * interval '2 hours'), attempt_id = $5 WHERE id = $1 AND status = 'queued' RETURNING *`,
     [row.id, userId, session.id, Math.max(0.25, hours), id]);
   if (!assigned) throw new Error("assignment candidate was no longer queued");
-  await q(`INSERT INTO assignment_attempts (id, job_id, problem_id, session_id, user_id, model, tier, purpose, scheduled, budget_hours, reason)
-    VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`,
-    [id, row.id, row.problem_id, session.id, userId, session.model, tier, row.purpose ?? "work", scheduled, hours, JSON.stringify(reason)]);
+  await q(`INSERT INTO assignment_attempts (id, job_id, problem_id, session_id, user_id, model, tier, purpose, scheduled, budget_hours, reason,research_stage)
+    VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)`,
+    [id, row.id, row.problem_id, session.id, userId, session.model, tier, row.purpose ?? "work", scheduled, hours, JSON.stringify(reason), stageOf(row)]);
   const updated = await one(`UPDATE sessions SET jobs = jobs + 1, last_seen = now(), last_type = $2,
     review_streak = CASE WHEN $2 IN ('review','audit') THEN review_streak + 1 ELSE 0 END WHERE id = $1 RETURNING jobs`, [session.id, row.type]);
   session.jobs = Number(updated!.jobs);
