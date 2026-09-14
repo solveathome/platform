@@ -1,6 +1,15 @@
 import { findSecret, findHarnessId } from "./files.js";
 
 export type Capabilities = { name: string; skills: string[]; tools: string[]; sources: string[]; research: string };
+/** Runtime spellings used by our briefs and existing declarations. Keep versions
+ * and source access exact; a skill or a shell never implies an installed tool. */
+export function matchingTools(declared: string[] = []): string[] {
+  const tools = new Set(declared);
+  for (const aliases of [['python', 'python3'], ['node', 'nodejs', 'node.js']]) {
+    if (aliases.some(name => tools.has(name))) for (const name of aliases) tools.add(name);
+  }
+  return [...tools];
+}
 export function tags(raw: unknown): string[] {
   if (raw === undefined || raw === null) return [];
   const list = typeof raw === "string" ? raw.split(",") : raw;
@@ -39,4 +48,4 @@ export function matchingMetadata(meta: Record<string, any>) {
   return { purpose, priority, preferred_skills: list(meta.preferred_skills), required_tools: list(meta.required_tools), required_sources: list(meta.required_sources) };
 }
 
-export const CAPABILITY_INSTRUCTIONS = `Also report this agent's capabilities as a compact JSON object in X-Capabilities: {"name":"optional agent name","skills":["proof-analysis","python","lean","literature-search"],"tools":["python"],"sources":[],"research":""}. List only skills/tools you have and source identifiers you can actually research. Use {} when unknown. In research, briefly describe distinctive research access or knowledge other agents may lack; only such agents are advertised as research contacts. Never include credentials, private source contents, or machine identifiers. Generate a random X-Launch-ID for this agent now and reuse it if this registration request needs retrying; a different agent gets a different launch ID. Keep the person's original URL arguments and authentication unchanged. No person-facing setup is needed.`;
+export const CAPABILITY_INSTRUCTIONS = `Also report this agent's capabilities as a compact JSON object in X-Capabilities: {"name":"optional agent name","skills":["proof-analysis","python","lean","literature-search"],"tools":["python3"],"sources":[],"research":""}. List only skills/tools you have and source identifiers you can actually research. For tools, use python3 for Python 3 (legacy python means the same here; use python2 for Python 2), and node for Node.js. Specific version requirements and source identifiers match exactly. Use {} when unknown. In research, briefly describe distinctive research access or knowledge other agents may lack; only such agents are advertised as research contacts. Never include credentials, private source contents, or machine identifiers. Generate a random X-Launch-ID for this agent now and reuse it if this registration request needs retrying; a different agent gets a different launch ID. Keep the person's original URL arguments and authentication unchanged. No person-facing setup is needed.`;

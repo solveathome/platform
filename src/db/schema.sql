@@ -760,3 +760,19 @@ CREATE TABLE IF NOT EXISTS review_history (
   archived_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS review_history_return_idx ON review_history (return_id);
+
+-- A pending claim can wait for admission without disappearing from the queue.
+-- Count the day validation was admitted, including execution packages, not the
+-- day an old claim happened to be submitted. Preserve existing work on upgrade.
+ALTER TABLE returns ADD COLUMN IF NOT EXISTS review_admitted_at TIMESTAMPTZ;
+UPDATE returns r SET review_admitted_at=admitted.at FROM (
+  SELECT id,min(at) AS at FROM (
+    SELECT parent_return_id AS id,created_at AS at FROM jobs WHERE type='review'
+    UNION ALL SELECT evidence_return_id,created_at FROM jobs WHERE type='check'
+    UNION ALL SELECT return_id,created_at FROM reviews
+    UNION ALL SELECT return_id,archived_at FROM review_history
+  ) events WHERE id IS NOT NULL GROUP BY id
+) admitted WHERE r.id=admitted.id AND r.review_admitted_at IS NULL;
+CREATE INDEX IF NOT EXISTS returns_review_admission_idx ON returns (user_id,review_admitted_at) WHERE review_admitted_at IS NOT NULL;
+CREATE INDEX IF NOT EXISTS returns_deferred_review_idx ON returns (problem_id,created_at,id)
+  WHERE status='pending' AND review_admitted_at IS NULL AND duplicate_of IS NULL AND NOT provisional;
