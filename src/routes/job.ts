@@ -4,6 +4,8 @@ import { wantsHtml } from "../lib/negotiate.js";
 import { q, one, projectTransaction } from "../db/index.js";
 import { assignmentMutation, claimAssignment, releaseAssignment } from "../lib/assignments.js";
 import { parseCapabilities, researchContact, CAPABILITY_INSTRUCTIONS } from "../lib/agent-profile.js";
+import { checkInstruction, ENDED_LAUNCH_GUIDANCE } from "../lib/launch.js";
+import { isDeepStrictEqual } from "node:util";
 import { backlogFor, selectJob, computeBlocked, discoveryShare, discoveryDue, allocation, researchPolicy, researchAllocation, portfolioOrder, researchBucket, type SchedulingAgent } from "../lib/scheduler.js";
 import { parseResearch, stageOf } from '../lib/research-format.js';
 import { recordResearch, prepareRescue, researchBrief, routeContext, reconsiderDependents } from '../lib/research.js';
@@ -102,7 +104,7 @@ async function start(req: any, res: any): Promise<void> {
   if (session?.ended_at) {
     // The session is over (cap reached, ended, or replaced): say so (issue #6). The join page would invite a second registration the person did not allow.
     const capped = session.max_jobs !== null && Number(session.jobs) >= Number(session.max_jobs);
-    const md = `# solveathome / ${req.project.name}: this session has ended\n\n${capped ? `Your person allowed ${session.max_jobs} assignment(s) this session and you took ${session.jobs}: the cap is reached.` : `Session ${session.id} ended at ${String(session.ended_at).slice(0, 19).replace("T", " ")} UTC.`} Stop here and tell your person where things stand (\`${BASE()}/@${req.user!.handle}\`). A new instruction from them starts a new session.\n`;
+    const md = `# solveathome / ${req.project.name}: this session has ended\n\n${capped ? `Your person allowed ${session.max_jobs} assignment(s) this session and you took ${session.jobs}: the cap is reached.` : `Session ${session.id} ended at ${String(session.ended_at).slice(0, 19).replace("T", " ")} UTC.`} Stop here and tell your person where things stand (\`${BASE()}/@${req.user!.handle}\`). A new instruction from them starts a new session.\n\n${ENDED_LAUNCH_GUIDANCE}\n`;
     if (wantsJson) res.status(409).json({ error: capped ? "session cap reached" : "session ended", session: session.id, session_jobs: session.jobs, session_max_jobs: session.max_jobs, ended_at: session.ended_at, orientation_md: md });
     else res.status(409).type("text/markdown").send(md);
     return;
@@ -131,7 +133,7 @@ async function start(req: any, res: any): Promise<void> {
     const opened = await openSession(req, { via: "url", ...opts });
     if ("error" in opened) { if (wantsJson) res.status(opened.status).json({ error: opened.error }); else res.status(opened.status).type("text/markdown").send(`# Cannot register\n\n${opened.error}\n`); return; }
     session = opened.session; member = opened.member; req.session = session; req.justRegistered = true;
-    if (session.ended_at) { res.status(409).json({ error: "this launch already ended; a new instruction starts a fresh agent", session: session.id }); return; }
+    if (session.ended_at) { res.status(409).json({ error: "this launch already ended; a new instruction starts a fresh agent", session: session.id, guidance: ENDED_LAUNCH_GUIDANCE }); return; }
   }
   // One model per session: the tier, the provider rules and the credit all follow the model the session registered with.
   if (req.model && session.model && req.model !== session.model) {
@@ -157,6 +159,8 @@ async function start(req: any, res: any): Promise<void> {
     const md = `# solveathome / ${req.project.name}: session cap reached
 
 Your person allowed ${session.max_jobs} assignment(s) in the instruction they gave you and you have taken ${session.jobs}. Stop here and tell them where things stand (\`${BASE()}/@${req.user!.handle}\`). A new instruction from them starts a new session.
+
+${ENDED_LAUNCH_GUIDANCE}
 `;
     if (wantsJson) res.status(409).json({ error: "session cap reached", session_jobs: session.jobs, session_max_jobs: session.max_jobs, orientation_md: md });
     else res.status(409).type("text/markdown").send(md);
@@ -180,7 +184,7 @@ Your person allowed ${session.max_jobs} assignment(s) in the instruction they ga
   // Session length (Chris, Sep 12): 4h or 2h is wall clock from registration; the assignment in hand finishes (the held check above), then this.
   if (session.ends_at && new Date(session.ends_at).getTime() <= Date.now()) {
     await q(`UPDATE sessions SET ended_at = COALESCE(ended_at, now()) WHERE id = $1`, [session.id]);
-    const md = `# solveathome / ${req.project.name}: session length reached\n\nYour person allowed ${lengthWords(session)} and that time is up. Stop here and tell them where things stand (\`${BASE()}/@${req.user!.handle}\`). A new instruction from them starts a new session.\n`;
+    const md = `# solveathome / ${req.project.name}: session length reached\n\nYour person allowed ${lengthWords(session)} and that time is up. Stop here and tell them where things stand (\`${BASE()}/@${req.user!.handle}\`). A new instruction from them starts a new session.\n\n${ENDED_LAUNCH_GUIDANCE}\n`;
     if (wantsJson) res.status(409).json({ error: "session length reached", session: session.id, ends_at: session.ends_at, orientation_md: md }); else res.status(409).type("text/markdown").send(md);
     return;
   }
@@ -289,8 +293,8 @@ Your person allowed ${session.max_jobs} assignment(s) in the instruction they ga
   if (wantsJson) res.json(payload);
   else res.type("text/markdown").send(md);
 }
-job.get("/start", bearer, project, assignmentMutation(start, { commitErrors: true }));
-job.get("/job", bearer, project, assignmentMutation(start, { commitErrors: true }));
+job.get("/start", checkInstruction, bearer, project, assignmentMutation(start, { commitErrors: true }));
+job.get("/job", checkInstruction, bearer, project, assignmentMutation(start, { commitErrors: true }));
 
 /** The person's tangent as a job, assigned to this session on the spot. */
 async function synthesizeTangent(req: any, session: any, t: Tangent): Promise<any> {
@@ -576,6 +580,17 @@ async function openSession(req: any, o: OpenOpts): Promise<{ session: any; membe
     const existing = await one(`SELECT * FROM sessions WHERE problem_id = $1 AND user_id = $2 AND launch_key = $3`, [req.project.id, req.user.id, launchKey]);
     if (existing) {
       if (existing.model !== (req.model ?? null)) return { error: "this launch ID belongs to a different model; use a fresh ID for a different agent", status: 409 };
+      // A guarded registration with new choices is a new paste, not a retry.
+      // Legacy retries still replay their original limits; never silently lift a cap.
+      if (req.header("x-instruction-url")) {
+        const duration = existing.ends_at ? new Date(existing.ends_at).getTime() - new Date(existing.started_at).getTime() : null;
+        const wantedDuration = o.endsIn === "4 hours" ? 4 * 3600000 : o.endsIn === "2 hours" ? 2 * 3600000 : null;
+        if (existing.registered_via !== "url" || existing.max_jobs !== o.maxJobs || duration !== wantedDuration
+            || !isDeepStrictEqual(existing.ai, o.ai) || !isDeepStrictEqual(existing.compute, o.compute)
+            || !!existing.input?.tangent !== !!o.input?.tangent) {
+          return { error: "This X-Launch-ID belongs to a registration with different settings. Generate a fresh X-Launch-ID for the latest joining instruction and fetch its exact URL. The old session and its limits are unchanged.", status: 409 };
+        }
+      }
       return { session: existing, member: await one(`SELECT * FROM pool WHERE problem_id = $1 AND user_id = $2`, [req.project.id, req.user.id]) };
     }
   }

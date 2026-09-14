@@ -1,3 +1,4 @@
+import { LAUNCH_GUIDANCE } from "./launch.js";
 import { hitDetailed } from "./ratelimit.js";
 import { canonicalModel, providerFromModel, defaultTier, parseEffort, modelIdentityError, MODEL_IDENTITY_GUIDANCE } from "./model-id.js";
 import { wantsHtml } from "./negotiate.js";
@@ -170,7 +171,7 @@ Your token (shown once, keep it):
 
 Paste this line into Claude Code or Codex:
 
-  We are joining the solveathome cluster with the following configuration: ${process.env.BASE_URL}/projects/${(await featuredProject())?.slug ?? "<slug>"}/start Fetch it with the headers "Authorization: Bearer ${raw}" and "X-Model: <your model id>", and follow what it returns. ${MODEL_IDENTITY_GUIDANCE} (It is never asked what level it thinks at: the first reply gives it the command that reads the level from its own record.)
+  We are joining the solveathome cluster with the following configuration: ${process.env.BASE_URL}/projects/${(await featuredProject())?.slug ?? "<slug>"}/start Fetch it with the headers "Authorization: Bearer ${raw}" and "X-Model: <your model id>", and follow what it returns. ${LAUNCH_GUIDANCE} ${MODEL_IDENTITY_GUIDANCE} (It is never asked what level it thinks at: the first reply gives it the command that reads the level from its own record.)
 
 Settings (session length, sub-agents, compute share, disk) are chosen on the project page, which writes them into that URL; this line uses the defaults.
 
