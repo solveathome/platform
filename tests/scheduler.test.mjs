@@ -143,6 +143,36 @@ test('20% discovery continues while verification is busy and concurrent claims c
   assert.equal((await one(`SELECT count(*) AS n FROM jobs WHERE problem_id=$1 AND type='audit' AND status='queued'`,[pid])).n,'2');
 });
 
+test('runtime aliases match existing sessions without implying versions, source access or tools from skills',async()=>{
+  const legacy=await start({capabilities:{tools:['python'],skills:['python','lean']}});
+  ok(await release(legacy));
+  const pursuit=await queued({type:'explore',purpose:'discovery',tools:['python3']});
+  await q(`UPDATE jobs SET research_stage='pursue' WHERE id=$1`,[pursuit.id]);
+  const next=ok(await call('/start',{session:legacy.session}));
+  assert.equal(next.job_id,pursuit.id,'a pre-existing python declaration can advance a python3 pursuit');
+  assert.deepEqual((await one(`SELECT capabilities FROM sessions WHERE id=$1`,[legacy.session])).capabilities.tools,['python']);
+
+  const python=await queued({tools:['python']});
+  const node=await queued({tools:['nodejs']});
+  await queued({tools:['python2']});await queued({tools:['python3.12']});
+  await queued({tools:['lean']});await queued({tools:['bash']});
+  await queued({sources:['python3']});
+  const a={problemId:pid,slug,sessionId:legacy.session,uid,tier:3,model:'test-model',provider:'test',trusted:false,granted:false,lane:null,cpuHours:0,ramGb:0,hasGpu:false,disk:1,maxHours:2,reviewStreak:0,capabilities:{skills:['python','lean'],tools:['shell']}};
+  assert.deepEqual(await backlogFor(a),{reviews:0,research:0});
+  a.capabilities.tools=['python3'];assert.deepEqual(await backlogFor(a),{reviews:0,research:1});
+  assert.equal((await selectJob(a,false)).id,python.id);
+  a.capabilities.tools=['node'];assert.deepEqual(await backlogFor(a),{reviews:0,research:1});
+  assert.equal((await selectJob(a,false)).id,node.id);
+});
+
+test('JSON hash arrays remain JSON and do not become PostgreSQL array literals on submission',async()=>{
+  await queued();const a=await start();
+  const hashes=['a'.repeat(64),{stdout:'b'.repeat(64)}];
+  const returned=ok(await result(a,{hashes}));
+  assert.deepEqual((await one(`SELECT hashes FROM returns WHERE id=$1`,[returned.return_id])).hashes,hashes);
+  assert.deepEqual(ok(await result(a,{hashes})),returned,'retry preserves the completion receipt');
+});
+
 test('allocation uses bounded hours and keeps abandonment visible; routine work cannot masquerade as discovery',async()=>{
   await q(`UPDATE problems SET discovery_share=0.2 WHERE id=$1`,[pid]);
   await queued({type:'audit',hours:4});

@@ -86,7 +86,10 @@ export async function queueCheck(ret: any): Promise<boolean> {
   // Failure/conflict also goes to judgment; do not quietly rerun until a pass appears.
   if (runs.some(isCompletedCheck)) return false;
   if (await checkWaitExpired(Number(ret.id))) return false;
-  if (await one(`SELECT 1 FROM jobs j JOIN returns r ON r.id=j.evidence_return_id WHERE r.problem_id=$1 AND r.verification_fingerprint=$2 AND j.type='check' AND j.status IN ('queued','assigned')`, [ret.problem_id, ret.verification_fingerprint])) return true;
+  if (await one(`SELECT 1 FROM jobs j JOIN returns r ON r.id=j.evidence_return_id WHERE r.problem_id=$1 AND r.verification_fingerprint=$2 AND j.type='check' AND j.status IN ('queued','assigned')`, [ret.problem_id, ret.verification_fingerprint])) {
+    await q(`UPDATE returns SET review_admitted_at=coalesce(review_admitted_at,now()) WHERE id=$1`, [ret.id]);
+    return true;
+  }
   const unable = runs.filter(r => r.outcome === 'unable');
   // One targeted reassignment for a declared worker capability gap. Package defects,
   // unknown causes or two unable observations go to judgment with the missing execution visible.
@@ -100,6 +103,7 @@ export async function queueCheck(ret: any): Promise<boolean> {
       `Reconstruct the immutable package from GET <project base>/return/${ret.id} in a clean directory using ONLY its manifest and declared runtime/source requirements. Fetch each file by SHA from /files/<sha> to its relative manifest path. Inspect the checker before executing it within your person's limits. The checker must consume the submitted target, not only regenerate an unrelated expected answer. Check actual coverage and the comparison rule. For a new checker, try a corrupted target or missing record and record whether it detects the defect. Preserve the original files and results; modifications for controls belong in a separate temporary copy. Do not redo discovery. Return report_md, transcript, and check_receipt: {fingerprint: "${ret.verification_fingerprint}", outcome: "pass|fail|unable", observed: "actual output and differences", elapsed_seconds: <actual time>, stdout_sha256: "<uploaded actual output>", exit_code: <integer or null if unable>, environment: "observed versions", coverage_md: "exactly what ran, exclusions and seeds", method: "rerun|independent_implementation", shared_components_md: "shared algorithm, code, parser or library", controls_md: "negative controls and their observed outcomes"}. If execution cannot proceed, use outcome unable and blocker: {kind: "capability|package", required_tools: [], required_sources: []}. Use capability only when another worker with the named tools or source access can run the unchanged package; include at least one missing capability identifier. Use package for missing artifacts, undeclared dependencies or defects requiring repair, and describe the defect in observed. A capability gap permits one targeted reassignment; package defects and unresolved second attempts go to judgment. A repair requires a new package. Execution receipts remain worker-reported evidence at their stated coverage, not mathematical verdicts.`,
       Math.min(4, Math.max(0.1, plan.cost.minutes / 60 + 0.1)), JSON.stringify(plan.cost), ret.id, `check:${ret.id}:${ret.verification_fingerprint}:${unable.length + 1}`]);
   await q(`UPDATE jobs SET required_tools=$2,required_sources=$3 WHERE evidence_return_id=$1 AND type='check' AND status='queued'`, [ret.id, requiredTools, requiredSources]);
+  await q(`UPDATE returns SET review_admitted_at=coalesce(review_admitted_at,now()) WHERE id=$1`, [ret.id]);
   return true;
 }
 export async function checkWaitExpired(returnId: number): Promise<boolean> {

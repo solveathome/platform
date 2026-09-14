@@ -1,6 +1,6 @@
 import { q, one } from "../db/index.js";
 import { readProjectConfig } from "./projects.js";
-import type { Capabilities } from "./agent-profile.js";
+import { matchingTools, type Capabilities } from "./agent-profile.js";
 import { stageOf } from './research-format.js';
 
 export const RESEARCH_BUCKETS = ['discover', 'pursue', 'rescue', 'consolidate'] as const;
@@ -51,7 +51,7 @@ function eligibility(a: SchedulingAgent, omitCompute = false) {
     `(er.id IS NULL OR (er.user_id <> ${uid} AND er.model IS DISTINCT FROM ${model}::text))`,
     `(j.type <> 'check' OR j.budget_hours <= ${p(a.maxHours)})`,
     `(j.type <> 'check' OR NOT EXISTS (SELECT 1 FROM verification_runs v JOIN returns worker ON worker.id=v.result_return_id WHERE v.fingerprint=er.verification_fingerprint AND worker.problem_id=j.problem_id AND worker.user_id=${uid} AND v.outcome='unable'))`,
-    `j.required_tools <@ ${p(a.capabilities.tools ?? [])}::text[]`,
+    `j.required_tools <@ ${p(matchingTools(a.capabilities.tools))}::text[]`,
     `j.required_sources <@ ${p(a.capabilities.sources ?? [])}::text[]`,
     `(pr.id IS NULL OR pr.user_id <> ${uid} OR ${p(a.granted)}::boolean)`,
     `(pr.id IS NULL OR ${p(a.trusted)}::boolean)`,

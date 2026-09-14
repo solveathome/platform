@@ -21,6 +21,7 @@ const {filesRouter}=await import('../src/routes/files.ts');
 const files=await import('../src/lib/files.ts');
 const {prepareRescue,reconsiderDependents}=await import('../src/lib/research.ts');
 const {researchAllocation}=await import('../src/lib/scheduler.ts');
+const {admitReview}=await import('../src/lib/review-admission.ts');
 let server,pid,slug,base;
 const users={};
 const models={author:'claude-opus-5',astra:'gpt-6-astra',runner:'claude-sonnet-5',judge:'claude-fable-5-1'};
@@ -236,9 +237,79 @@ test('finite package reconstructs from served bytes, detects corruption, records
   const receiptId=Number(subject.verification_runs[0].id);
   ok(await submit('judge',{verdict:'accept',rung:'verified',notes_md:'All four terms checked; finite scope only.',verification_receipt_id:receiptId,verification_sufficiency_md:'The checker reads and validates the published four-term target.'},review));
   assert.equal(ok(await call(`/return/${r.return_id}`)).status,'accepted');
+  const page=ok(await call(`/return/${r.return_id}`,{accept:'text/html'}));
+  assert.ok(page.includes(`Uses execution receipt #${receiptId}.`));
+  assert.match(page,/The checker reads and validates the published four-term target/);
   const reused=await computation({...plan,cost:{...plan.cost,minutes:2}});assert.equal(reused.check_requested,false);assert.equal(reused.reviews_requested,0);assert.equal(reused.status,'superseded');assert.equal(reused.canonical_return_id,r.return_id);
   assert.equal(ok(await call('/board')).research.checks.reused_receipts,0);
   const changed=await computation({...plan,scope:'Terms one through ten.'});assert.equal(changed.check_requested,true);
+});
+
+test('daily admission defers packaged claims durably, retries old pending work once, and counts admission time',async()=>{
+  const spent=await q(`INSERT INTO returns (problem_id,user_id,type,model,provider,report_md,transcript,status,created_at,review_admitted_at)
+    SELECT $1,$2,'explore',$3,'anthropic','Earlier claim','t','pending',now()-interval '2 days',now()
+    FROM generate_series(1,10) RETURNING id`,[pid,users.author.id,models.author]);
+  const result=await computation(await packageFor());
+  assert.equal(result.review_deferred,true);assert.equal(result.check_requested,false);
+  assert.match(result.note,/queued automatically/);
+  assert.equal(ok(await call(`/return/${result.return_id}`)).review_deferred,true);
+  // A legacy pending claim without any child jobs is retried too; recorded leads are never elevated.
+  const old=await one(`INSERT INTO returns (problem_id,user_id,type,model,provider,report_md,transcript,status)
+    VALUES ($1,$2,'direction',$3,'anthropic','A legacy pending claim','t','pending') RETURNING id`,[pid,users.author.id,models.author]);
+  const lead=await proposed();
+  await start('runner');
+  assert.equal((await one(`SELECT count(*)::int AS n FROM jobs WHERE evidence_return_id=$1`,[result.return_id])).n,0);
+  await q(`UPDATE returns SET review_admitted_at=now()-interval '2 days' WHERE id=$1`,[spent[0].id]);
+  const starts=await Promise.all([start('runner'),start('runner')]);
+  const check=starts.find(a=>a.type==='check');assert.ok(check);
+  assert.equal((await one(`SELECT count(*)::int AS n FROM jobs WHERE evidence_return_id=$1`,[result.return_id])).n,1);
+  assert.equal(ok(await call(`/return/${result.return_id}`)).review_deferred,false);
+  assert.equal(ok(await call(`/return/${old.id}`)).review_deferred,true,'only the one newly available slot is spent');
+  assert.equal((await one(`SELECT count(*)::int AS n FROM returns WHERE user_id=$1 AND review_admitted_at>now()-interval '1 day'`,[users.author.id])).n,10);
+  ok(await submit('runner',await receipt(check,result.return_id),check));
+  await q(`UPDATE returns SET review_admitted_at=now()-interval '2 days' WHERE id=$1`,[spent[1].id]);
+  await start('judge');
+  assert.ok(ok(await call(`/return/${old.id}`)).review_admitted_at);
+  assert.equal(ok(await call(`/return/${lead.return_id}`)).status,'recorded');
+  assert.equal((await one(`SELECT count(*)::int AS n FROM jobs WHERE parent_return_id=$1`,[lead.return_id])).n,0);
+  const count=await one(`SELECT count(*)::int AS n FROM jobs WHERE parent_return_id=$1`,[old.id]);
+  await start('astra');
+  assert.equal((await one(`SELECT count(*)::int AS n FROM jobs WHERE parent_return_id=$1`,[old.id])).n,count.n);
+});
+
+test('a shared execution receipt cannot bypass a deferred claim’s daily admission limit',async()=>{
+  const plan=await packageFor(),first=await computation(plan);
+  const spent=await q(`INSERT INTO returns (problem_id,user_id,type,model,provider,report_md,transcript,status,review_admitted_at)
+    SELECT $1,$2,'explore',$3,'anthropic','Earlier claim','t','pending',now()
+    FROM generate_series(1,9) RETURNING id`,[pid,users.author.id,models.author]);
+  const second=await computation(plan,'A distinct interpretation using exactly the same finite evidence.');
+  assert.equal(second.review_deferred,true);
+  const check=await start('runner');assert.equal(check.type,'check');
+  ok(await submit('runner',await receipt(check,first.return_id),check));
+  assert.equal((await one(`SELECT count(*)::int AS n FROM jobs WHERE parent_return_id=$1`,[first.return_id])).n,1);
+  assert.equal((await one(`SELECT count(*)::int AS n FROM jobs WHERE parent_return_id=$1`,[second.return_id])).n,0);
+  await q(`UPDATE returns SET review_admitted_at=now()-interval '2 days' WHERE id=$1`,[spent[0].id]);
+  await start('judge');
+  assert.equal((await one(`SELECT count(*)::int AS n FROM jobs WHERE parent_return_id=$1`,[second.return_id])).n,1);
+  assert.equal((await one(`SELECT count(*)::int AS n FROM jobs WHERE problem_id=$1 AND type='check'`,[pid])).n,1,'the recorded execution is reused');
+});
+
+test('simultaneous admissions in different projects share the contributor’s remaining allowance',async()=>{
+  await q(`INSERT INTO returns (problem_id,user_id,type,model,provider,report_md,transcript,status,review_admitted_at)
+    SELECT $1,$2,'explore',$3,'anthropic','Earlier claim','t','pending',now()
+    FROM generate_series(1,9)`,[pid,users.author.id,models.author]);
+  const other=await one(`INSERT INTO problems (slug,name,repo_url) VALUES ($1,'Other project','https://example.org/r') RETURNING id`,[slug+'-other']);
+  try {
+    const candidates=[];
+    for(const projectId of [pid,other.id])candidates.push(await one(`INSERT INTO returns (problem_id,user_id,type,model,provider,report_md,transcript,status)
+      VALUES ($1,$2,'direction',$3,'anthropic','A pending claim','t','pending') RETURNING *`,[projectId,users.author.id,models.author]));
+    const attempts=await Promise.all(candidates.map(r=>projectTransaction(r.problem_id,()=>admitReview(r))));
+    assert.equal(attempts.filter(Boolean).length,1);
+    for(let i=0;i<candidates.length;i++)assert.equal(await projectTransaction(candidates[i].problem_id,()=>admitReview(candidates[i])),attempts[i]);
+  } finally {
+    await q(`DELETE FROM returns WHERE problem_id=$1`,[other.id]);
+    await q(`DELETE FROM problems WHERE id=$1`,[other.id]);
+  }
 });
 
 test('sample coverage and older contradictory receipts stay visible; acceptance requires explicit reconciliation',async()=>{

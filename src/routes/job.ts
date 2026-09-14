@@ -26,6 +26,7 @@ import type { Tokens } from "../lib/tokens.js";
 export const REJECT_REASONS = ["refuted", "overclaimed", "unsourced", "unverifiable"] as const;
 import { renderBrief } from "../lib/brief.js";
 import { GUIDANCE_VERSION } from "../lib/research-guidance.js";
+import { admitReview, MAX_REVIEW_SPAWNS_PER_DAY } from '../lib/review-admission.js';
 import { decide, MAX_REVIEWS, MIN_REVIEWS } from "../lib/consensus.js";
 import * as reputation from "../lib/reputation.js";
 import * as files from "../lib/files.js";
@@ -48,7 +49,7 @@ import { parseTangent, parseTarget, tangentJob, challengesFor, challengeBanner, 
 /** Caps on submission (Sep 10): pending self-assigned returns per handle per project, and returns per handle per hour. */
 const MAX_OPEN_SELF_ASSIGNED = Number(process.env.MAX_OPEN_SELF_ASSIGNED ?? 6), MAX_RETURNS_PER_HOUR = Number(process.env.MAX_RETURNS_PER_HOUR ?? 120);   // per handle; a person runs many agents (Chris, Sep 11 2026: 30 was too low)
 /** Per handle: live sessions (seen within a day), assignments held at once, and returns per day that may spawn review jobs before the handle has an accepted return. */
-const MAX_LIVE_SESSIONS = Number(process.env.MAX_LIVE_SESSIONS ?? 16), MAX_HELD_PER_HANDLE = Number(process.env.MAX_HELD_PER_HANDLE ?? 16), MAX_REVIEW_SPAWNS_PER_DAY = Number(process.env.MAX_REVIEW_SPAWNS_PER_DAY ?? 10);
+const MAX_LIVE_SESSIONS = Number(process.env.MAX_LIVE_SESSIONS ?? 16), MAX_HELD_PER_HANDLE = Number(process.env.MAX_HELD_PER_HANDLE ?? 16);
 export const job = Router({ mergeParams: true });
 const BASE = () => process.env.BASE_URL ?? "http://localhost:8600";
 
@@ -203,7 +204,9 @@ Your person allowed ${session.max_jobs} assignment(s) in the instruction they ga
     tier, model: req.model ?? null, provider: req.provider ?? null, trusted, granted, lane, cpuHours: maxHours,
     ramGb: prefs.ramGb, hasGpu: prefs.hasGpu, disk, maxHours: Number(settings.ai?.max_hours_per_assignment ?? 2),
     reviewStreak: Number(session.review_streak ?? 0), capabilities: session.capabilities ?? {} };
+  await resumeDeferredReviews(agent.problemId);
   for (const waiting of await expireWaitingChecks(agent.problemId)) {
+    if (!await admitReview(waiting, { model: waiting.model, effort: waiting.effort })) continue;
     if (!await one(`SELECT 1 FROM jobs WHERE parent_return_id=$1 AND type='review' AND status IN ('queued','assigned')`, [waiting.id]))
       await spawnReviews(Number(waiting.id), agent.problemId, waiting.lane_id, 1, { judgmentOnly: true });
   }
@@ -908,7 +911,7 @@ job.post("/result", bearer, project, assignmentMutation(async (req: any, res) =>
     `INSERT INTO returns (job_id, problem_id, lane_id, type, user_id, model, provider, report_md, patch, transcript, cpu_hours, hashes, author_rung, repo_url, commit, session, effort)
      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17) RETURNING id`,
     [jobRow?.id ?? null, problem.id, laneId, rtype, uid, req.model ?? "unknown", req.provider ?? "unknown",
-     b.report_md, b.patch ?? null, b.transcript, cpuHours, b.hashes ?? {}, authorRung, repoUrl, commit, jobRow?.assigned_session ?? xs, effortEff]);
+     b.report_md, b.patch ?? null, b.transcript, cpuHours, JSON.stringify(b.hashes ?? {}), authorRung, repoUrl, commit, jobRow?.assigned_session ?? xs, effortEff]);
   if (recipe) await q(`UPDATE returns SET recipe_md = $2 WHERE id = $1`, [ret!.id, recipe]);
   if (target || finding || humanMd) await q(`UPDATE returns SET target = $2, finding = $3, human_md = $4 WHERE id = $1`, [ret!.id, target ? JSON.stringify(target) : null, finding, humanMd]);
   // Source-level notes (agent feedback, Sep 10): an audit that finds a figure wrong in another document routes the note there.
@@ -991,12 +994,10 @@ job.post("/result", bearer, project, assignmentMutation(async (req: any, res) =>
     researchProgress.state = (await one(`SELECT state FROM research_routes WHERE id=$1`, [researchProgress.route_id])).state;
     researchProgress.next_job_id = null;
   }
-  // Review jobs cost trusted reviewers' time. A handle without an accepted return here gets them ten times a day, for any return that asks
-  // for review (until Sep 11 2026 its self-assigned and requested-review explore returns got none at all, so newcomers' work sat pending and
-  // reviewers only ever saw the owner's returns).
-  const standing = (await isTrusted(Number(problem.id), uid, req.user!.handle, { model: req.model, effort: req.effort })) || !!(await one(`SELECT 1 FROM returns WHERE user_id = $1 AND problem_id = $2 AND status = 'accepted' AND NOT provisional AND id <> $3`, [uid, problem.id, ret!.id]));
-  const spawnedToday = await one<{ c: string }>(`SELECT count(DISTINCT j.parent_return_id) AS c FROM jobs j JOIN returns r ON r.id = j.parent_return_id WHERE r.user_id = $1 AND r.created_at > now() - interval '1 day'`, [uid]);
-  const mayReview = standing || Number(spawnedToday?.c ?? 0) < MAX_REVIEW_SPAWNS_PER_DAY;
+  // Admission is durable: exhausted daily allowances defer validation until a
+  // later assignment request, including for checks that precede judgment.
+  const mayReview = !recordedExploration && !canonicalClaim
+    ? await admitReview(ret!, { model: req.model, effort: req.effort }) : true;
   let requestedReviews = 0, checking = false;
   if (rtype === 'check') {
     const subjectId = await saveCheckReceipt(await one(`SELECT * FROM returns WHERE id=$1`, [ret!.id]), jobRow, b.check_receipt);
@@ -1011,6 +1012,7 @@ job.post("/result", bearer, project, assignmentMutation(async (req: any, res) =>
     // are reused, and an already open judgment does not acquire a duplicate reviewer assignment.
     const pending = await q(`SELECT r.* FROM returns r JOIN returns subject ON subject.id=$1 AND r.problem_id=subject.problem_id AND r.verification_fingerprint=subject.verification_fingerprint WHERE r.status='pending' AND r.duplicate_of IS NULL`, [subjectId]);
     for (const subject of pending) {
+      if (!await admitReview(subject, { model: subject.model, effort: subject.effort })) continue;
       if (!(await queueCheck(subject)) && !(await one(`SELECT 1 FROM jobs WHERE parent_return_id=$1 AND type='review' AND status IN ('queued','assigned')`, [subject.id]))) await spawnReviews(Number(subject.id), Number(problem.id), subject.lane_id, 1);
     }
   } else if (mayReview && !recordedExploration && !canonicalClaim) {
@@ -1049,11 +1051,31 @@ job.post("/result", bearer, project, assignmentMutation(async (req: any, res) =>
       note: `Exploration is recorded without review. Elevate a claim when it deserves verification: POST ${BASE()}/projects/${problem.slug}/return/${ret!.id}/request-review { "note": "<what deserves verification>" }.` });
     return;
   }
-  res.json({ ok: true, return_id: Number(ret!.id), status: canonicalClaim?.status ?? "pending", canonical_return_id: canonicalClaim?.id, research: researchProgress, check_requested: checking, reviews_requested: requestedReviews, files: attached, tokens, warnings, note: canonicalClaim ? `Exact duplicate: shares return #${canonicalClaim.id}'s decision and earns no duplicate result credit. Attribution and route progress are preserved.` : mayReview ? undefined : "pending without review jobs: a trusted reviewer picks it up when they look; review jobs are spawned for assigned work, and for everything once you have an accepted return here" });
+  res.json({ ok: true, return_id: Number(ret!.id), status: canonicalClaim?.status ?? "pending", canonical_return_id: canonicalClaim?.id, research: researchProgress, check_requested: checking, reviews_requested: requestedReviews, review_deferred: !mayReview, files: attached, tokens, warnings, note: canonicalClaim ? `Exact duplicate: shares return #${canonicalClaim.id}'s decision and earns no duplicate result credit. Attribution and route progress are preserved.` : mayReview ? undefined : `Pending admission: the daily limit is ${MAX_REVIEW_SPAWNS_PER_DAY} claims before contributor standing. Validation will be queued automatically on an assignment request after allowance becomes available; do not resubmit the result.` });
 }, { completion: true }));
+
+/** Retry initial validation after allowance returns. Never reissue an expired or
+ * completed review/check, nor promote recorded exploration without a request. */
+async function resumeDeferredReviews(problemId: number): Promise<void> {
+  const blocked: number[] = [];
+  let admitted = 0;
+  for (let examined = 0; examined < 30 && admitted < 10; examined++) {
+    const ret = await one(`SELECT r.* FROM returns r
+      WHERE r.problem_id=$1 AND r.status='pending' AND NOT r.provisional AND r.duplicate_of IS NULL
+        AND r.review_admitted_at IS NULL AND r.type<>'check' AND NOT (r.user_id=ANY($2::bigint[]))
+        AND NOT EXISTS (SELECT 1 FROM jobs j WHERE j.parent_return_id=r.id OR j.evidence_return_id=r.id)
+        AND NOT EXISTS (SELECT 1 FROM reviews rv WHERE rv.return_id=r.id)
+      ORDER BY r.created_at,r.id LIMIT 1`, [problemId, blocked]);
+    if (!ret) break;
+    if (!await admitReview(ret, { model: ret.model, effort: ret.effort })) { blocked.push(Number(ret.user_id)); continue; }
+    if (!await queueCheck(ret)) await spawnReviews(Number(ret.id), problemId, ret.lane_id, ret.verification_plan || ret.research ? 1 : MIN_REVIEWS);
+    admitted++;
+  }
+}
 
 /** Create review jobs for a return. Reviews require tier 1 (scope Q7/Q13). */
 export async function spawnReviews(returnId: number, problemId: number, laneId: number | null, n: number, options: { fresh?: boolean; judgmentOnly?: boolean } = {}): Promise<void> {
+  await q(`UPDATE returns SET review_admitted_at=coalesce(review_admitted_at,now()) WHERE id=$1`, [returnId]);
   const existing = await one<{ c: string }>(`SELECT count(*) AS c FROM jobs WHERE parent_return_id = $1 AND (NOT $2::boolean OR status IN ('queued','assigned'))`, [returnId, !!options.fresh]);
   const have = Number(existing?.c ?? 0);
   const toMake = Math.max(0, Math.min(n, MAX_REVIEWS - have));   // n more, never past the cap
@@ -1355,6 +1377,7 @@ job.get("/return/:id", optionalAuth, project, async (req: any, res) => {
   const r = await one(`SELECT r.*, u.handle, j.brief_md AS job_brief FROM returns r JOIN users u ON u.id = r.user_id LEFT JOIN jobs j ON j.id = r.job_id WHERE r.id = $1 AND r.problem_id=$2`, [req.params.id, req.project.id]);
   if (!r) { res.status(404).json({ error: `no such return #${String(req.params.id).slice(0, 20)}: it never existed, or it was removed (removals are announced in the lane channel and on the job's hand-back note)` }); return; }
   delete r.session;   // an agent's session id is its own
+  r.review_deferred = r.status === 'pending' && !r.provisional && !r.duplicate_of && !r.review_admitted_at;
   r.verification_runs = await verificationRuns(Number(r.id));
   r.verification_state = r.verification_plan ? await verificationState(Number(r.id)) : null;
   r.canonical_return = r.verification_plan && r.duplicate_of ? await one(`SELECT id,status,final_rung,provisional FROM returns WHERE id=$1`, [r.duplicate_of]) : null;
@@ -1394,13 +1417,13 @@ async function returnPage(req: any, res: any): Promise<void> {
   const r = await one(`SELECT r.*, u.handle, u.display_name, j.title AS job_title, j.type AS job_type, l.slug AS lane FROM returns r JOIN users u ON u.id = r.user_id LEFT JOIN jobs j ON j.id = r.job_id LEFT JOIN lanes l ON l.id = r.lane_id WHERE r.id = $1 AND r.problem_id = $2`, [req.params.id, req.project.id]);
   if (!r) { res.status(404).type("text/plain").send("no such return"); return; }
   const files = await q(`SELECT f.sha256, f.name, f.ext, f.bytes FROM file_refs x JOIN files f ON f.sha256 = x.file_sha WHERE x.ref_type = 'return' AND x.ref_id = $1 AND f.deleted_at IS NULL ORDER BY f.name`, [r.id]);
-  const reviews = await q(`SELECT rv.id, rv.verdict, rv.rung, rv.reject_reason, rv.notes_md, rv.also_fix, rv.weight, rv.created_at, u.handle, rv.model, rv.verification, rv.rerun_reason, rv.trusted, rv.tokens, rv.transcript_resubmitted_at, rv.needs_reassessment FROM reviews rv JOIN users u ON u.id = rv.user_id WHERE rv.return_id = $1 ORDER BY rv.id`, [r.id]);
+  const reviews = await q(`SELECT rv.id, rv.verdict, rv.rung, rv.reject_reason, rv.notes_md, rv.also_fix, rv.weight, rv.created_at, u.handle, rv.model, rv.verification, rv.rerun_reason, rv.trusted, rv.tokens, rv.transcript_resubmitted_at, rv.needs_reassessment, rv.verification_sufficiency_md, rv.verification_receipt_id, rv.verification_conflict_resolution_md FROM reviews rv JOIN users u ON u.id = rv.user_id WHERE rv.return_id = $1 ORDER BY rv.id`, [r.id]);
   const patchIntegrated = r.patch ? !!(await one(`SELECT 1 FROM document_versions WHERE return_id = $1`, [r.id])) : false;
   const ownHandleDecided = !!(await one(`SELECT 1 FROM reviews WHERE return_id = $1 AND trusted AND user_id = $2 AND verdict = CASE WHEN $3 = 'accepted' THEN 'accept' ELSE 'reject' END`, [r.id, r.user_id, r.status]));
   const pages = await paperPages(req.project.slug);
   const md = async (t: string) => { const m = protectMath(String(t ?? "").replace(/<!--[\s\S]*?-->/g, "")); return linkPaths(await linkPeople(m.restore(marked.parse(m.text.replace(/</g, "&lt;").replace(/>/g, "&gt;"), { gfm: true }) as string)), req.project.slug, "", pages); };
   const P = `/projects/${req.project.slug}`;
-  const meta = `<p class="doc-meta"><span class="tag">${escHtml(r.status)}${r.provisional ? " (provisional: advisory reviews only, awaiting a trusted reviewer)" : ""}${r.final_rung ? `, ${escHtml(r.final_rung)}` : r.author_rung ? `, claims ${escHtml(r.author_rung)}` : ""}${r.verification ? `, verified by ${escHtml(r.verification === "read" ? "reading" : r.verification === "spot" ? "spot rerun" : "full rerun")}` : ""}</span><span>${escHtml(r.type)}${r.lane ? ` in <a href="${P}#discussion">${escHtml(r.lane)}</a>` : ""}</span><span>by <a href="/@${escHtml(r.handle)}">${escHtml(r.display_name || "@" + r.handle)}</a> (${escHtml(r.model)})</span><span>Submitted: ${timeHtml(r.created_at)}</span>${r.job_id ? `<span>answers assignment #${r.job_id}${r.job_title ? `: ${escHtml(r.job_title)}` : ""}</span>` : ""}${r.paper_slug ? `<span>revision of <a href="${P}/papers/${escHtml(r.paper_slug)}">${escHtml(r.paper_slug)}</a></span>` : ""}${Number(r.cpu_hours) > 0 ? `<span>${escHtml(r.cpu_hours)} CPU h</span>` : ""}${r.patch ? `<span>patch ${patchIntegrated ? "integrated" : "pending integration (applied to the research repository by hand)"}</span>` : ""}${ownHandleDecided ? `<span>decided by the author's own handle, as a trusted reviewer on a second model</span>` : ""}${r.superseded_by ? `<span class="tag">superseded by <a href="${P}/return/${escHtml(String(r.superseded_by))}">#${escHtml(String(r.superseded_by))}</a>: the same change, folded into it</span>` : ""}${r.duplicate_of && r.status === "pending" ? `<span class="tag">same change as pending <a href="${P}/return/${escHtml(String(r.duplicate_of))}">#${escHtml(String(r.duplicate_of))}</a></span>` : ""}${r.transcript_omitted && Number(r.transcript_omitted.omitted) >= 3 && Number(r.transcript_omitted.share) >= 0.5 ? `<span class="tag" title="${escHtml(String(r.transcript_omitted.omitted))} of ${escHtml(String(r.transcript_omitted.outputs))} tool outputs replaced by omission notes">transcript mostly omitted</span>` : ""}</p>`;
+  const meta = `<p class="doc-meta"><span class="tag">${escHtml(r.status)}${r.status === "pending" && !r.provisional && !r.duplicate_of && !r.review_admitted_at ? " (waiting for validation allowance; queued automatically when available)" : ""}${r.provisional ? " (provisional: advisory reviews only, awaiting a trusted reviewer)" : ""}${r.final_rung ? `, ${escHtml(r.final_rung)}` : r.author_rung ? `, claims ${escHtml(r.author_rung)}` : ""}${r.verification ? `, verified by ${escHtml(r.verification === "read" ? "reading" : r.verification === "spot" ? "spot rerun" : "full rerun")}` : ""}</span><span>${escHtml(r.type)}${r.lane ? ` in <a href="${P}#discussion">${escHtml(r.lane)}</a>` : ""}</span><span>by <a href="/@${escHtml(r.handle)}">${escHtml(r.display_name || "@" + r.handle)}</a> (${escHtml(r.model)})</span><span>Submitted: ${timeHtml(r.created_at)}</span>${r.job_id ? `<span>answers assignment #${r.job_id}${r.job_title ? `: ${escHtml(r.job_title)}` : ""}</span>` : ""}${r.paper_slug ? `<span>revision of <a href="${P}/papers/${escHtml(r.paper_slug)}">${escHtml(r.paper_slug)}</a></span>` : ""}${Number(r.cpu_hours) > 0 ? `<span>${escHtml(r.cpu_hours)} CPU h</span>` : ""}${r.patch ? `<span>patch ${patchIntegrated ? "integrated" : "pending integration (applied to the research repository by hand)"}</span>` : ""}${ownHandleDecided ? `<span>decided by the author's own handle, as a trusted reviewer on a second model</span>` : ""}${r.superseded_by ? `<span class="tag">superseded by <a href="${P}/return/${escHtml(String(r.superseded_by))}">#${escHtml(String(r.superseded_by))}</a>: the same change, folded into it</span>` : ""}${r.duplicate_of && r.status === "pending" ? `<span class="tag">same change as pending <a href="${P}/return/${escHtml(String(r.duplicate_of))}">#${escHtml(String(r.duplicate_of))}</a></span>` : ""}${r.transcript_omitted && Number(r.transcript_omitted.omitted) >= 3 && Number(r.transcript_omitted.share) >= 0.5 ? `<span class="tag" title="${escHtml(String(r.transcript_omitted.omitted))} of ${escHtml(String(r.transcript_omitted.outputs))} tool outputs replaced by omission notes">transcript mostly omitted</span>` : ""}</p>`;
   const fileNoteBy: Record<string, { notes: string[]; fixed_by?: string }> = {}; for (const f of Array.isArray(r.file_notes) ? r.file_notes : []) fileNoteBy[f.sha] = { notes: f.notes, fixed_by: f.fixed_by };
   const flist = files.map((f: any) => `<li><a href="/files/${f.sha256}">${escHtml(f.name)}</a> <span class="muted">${Number(f.bytes).toLocaleString("en")} bytes</span>${fileNoteBy[f.sha256] ? `<br><span class="muted"><b>${fileNoteBy[f.sha256].fixed_by ? "Replaced" : "Will not run as shipped"}</b>: ${escHtml(fileNoteBy[f.sha256].notes.join(" "))}${fileNoteBy[f.sha256].fixed_by ? ` Corrected copy: <a href="/files/${fileNoteBy[f.sha256].fixed_by}">${escHtml(f.name)}</a>.` : ""}</span>` : ""}</li>`).join("") || `<li class="muted">No files.</li>`;
   const rlist = (await Promise.all(reviews.map(async (v: any) => `<li><span class="tag">${escHtml(v.verdict)}${v.reject_reason ? `: ${escHtml(v.reject_reason)}` : ""}${v.rung ? `, ${escHtml(v.rung)}` : ""}</span> <span class="tag">${v.trusted ? "trusted" : "advisory"}</span>${v.needs_reassessment ? ' <span class="tag">awaiting reassessment</span>' : ''}${v.tokens?.log === "custom" ? ` <span class="tag" title="Written by the agent in the solveathome transcript format; the token counts are its own statement">agent-written transcript</span>` : ""}${notSessionLog(v.tokens) ? ` <span class="tag" title="${v.tokens.log === "summary" ? "The reviewer sent a summary instead of the harness's own session log" : "No known harness wrote this transcript"}; no tokens are counted for it">no session log</span>` : ""}${v.tokens?.mismatch ? ` <span class="tag" title="${escHtml(v.tokens.mismatch.reason)}; no tokens are counted for it">transcript from another assignment</span>` : ""}${v.tokens?.already_counted ? ` <span class="tag" title="${v.tokens.already_counted.entries} of ${v.tokens.already_counted.of} usage entries were already counted on ${escHtml(v.tokens.already_counted.on.join(", "))}; a usage entry counts once per person">counted once</span>` : ""}${v.transcript_resubmitted_at ? ` <span class="tag">transcript resubmitted ${timeHtml(v.transcript_resubmitted_at)}</span>` : ""} by <a href="/@${escHtml(v.handle)}">@${escHtml(v.handle)}</a> (${escHtml(v.model)}), ${escHtml(v.verification ?? "read")}${v.rerun_reason ? `: ${escHtml(v.rerun_reason)}` : ""}, weight ${escHtml(v.weight)}, ${timeHtml(v.created_at)}<div class="document" style="padding-block:.75rem;border:0">${await md(v.notes_md)}${v.verification_sufficiency_md ? `<p><b>Evidence sufficiency:</b> ${escHtml(v.verification_sufficiency_md)}</p>` : ""}${v.verification_receipt_id ? `<p class="muted">Uses execution receipt #${Number(v.verification_receipt_id)}.</p>` : ""}${v.verification_conflict_resolution_md ? `<p><b>Conflict reconciliation:</b> ${escHtml(v.verification_conflict_resolution_md)}</p>` : ""}</div>${Array.isArray(v.also_fix) && v.also_fix.length ? `<p class="muted" style="margin:.25rem 0 0">Also fix: ${v.also_fix.map((f: any) => `<a href="${P}/docs/${escHtml(f.path)}">${escHtml(f.path)}</a>: ${escHtml(f.note)}`).join("; ")}</p>` : ""}</li>`))).join("") || `<li class="muted">No verdicts yet.</li>`;
