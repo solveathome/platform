@@ -7,7 +7,7 @@ import { q, one } from "../db/index.js";
 import { POINTS, type Window } from "./credit.js";
 /** Base points a return pays on acceptance, as SQL (from the credit table): what a pending return is worth if it gets in. */
 const BASE_POINTS_SQL = `CASE type ${Object.entries(POINTS.result).map(([t, p]) => `WHEN '${t}' THEN ${Number(p)}`).join(" ")} ELSE 20 END`;
-const PENDING_POINTS_SQL = `coalesce(sum(CASE WHEN status = 'pending' OR provisional THEN ${BASE_POINTS_SQL} ELSE 0 END), 0) AS pending_points`;
+export const PENDING_POINTS_SQL = `coalesce(sum(CASE WHEN status = 'pending' OR provisional THEN ${BASE_POINTS_SQL} ELSE 0 END), 0) AS pending_points`;
 
 const since = (w: Window) => w === "7d" ? "now() - interval '7 days'" : w === "30d" ? "now() - interval '30 days'" : "'epoch'::timestamptz";
 

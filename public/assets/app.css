@@ -534,6 +534,7 @@ body[data-page=contributor] .breadcrumb { margin-bottom: 2.5rem; }
 .roles li.trusted { border-color: var(--brass); color: var(--brass); }
 .standing { display: grid; grid-template-columns: auto 1fr; gap: .25rem 1.5rem; align-items: baseline; }
 .standing .big { font: 3.4rem/1 Georgia, "Times New Roman", serif; letter-spacing: -.05em; font-variant-numeric: tabular-nums; }
+.standing .big .pending-points { font: .875rem -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif; letter-spacing: 0; color: var(--brass); margin-left: .6rem; white-space: nowrap; vertical-align: .35em; }
 .standing .big small { font: 1rem -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif; letter-spacing: 0; color: var(--mut); margin-left: .4rem; }
 .standing .rank { font-size: .9375rem; }
 .milestone { grid-column: 1 / -1; margin-top: .5rem; }

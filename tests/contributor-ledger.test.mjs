@@ -88,4 +88,12 @@ test('the profile carries standing, credit per day, rungs, work by kind, reviews
   assert.equal(j.highlights_kind, 'strongest'); assert.equal(Number(j.highlights[0].id), retId); assert.equal(j.highlights[0].title, 'x');
   assert.equal(j.recent.find(x => Number(x.id) === retId).title, 'x');
   assert.deepEqual(j.integrated_paths, []); assert.equal(j.cited.count, 0);
+  // Pending points (Chris, Sep 15 2026): what the work awaiting review is worth if it gets in, by the board's own definition,
+  // base result points and no bonuses. A contributor whose returns are queued has earned nothing yet and is not idle.
+  const before = Number(j.standing.pending_points);
+  assert.ok(Number.isFinite(before), 'pending points are a number');
+  await q(`INSERT INTO returns (problem_id,type,user_id,model,provider,report_md,transcript,status) VALUES ($1,'measure',$2,'m','p','x','t','pending')`, [pid, uid]);
+  const queued = await (await fetch(`${base}/@${tag}`, {headers: {accept: 'application/json'}})).json();
+  assert.ok(Number(queued.standing.pending_points) > before, `another pending return is worth more: ${before} -> ${queued.standing.pending_points}`);
+  assert.equal(Number(queued.standing.points), Number(j.standing.points), 'and none of it is added to the awarded total');
 });
