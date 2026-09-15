@@ -7,6 +7,24 @@ const REPOS = process.env.DOCS_DIR ?? join(ROOT, "data", "repos");
 export type Question = { id: string; text: string; status: string; verdict: string; item: string };
 let cache: { key: string; at: number; list: Question[] } | null = null;
 
+/**
+ * The cells of a Markdown table row. A bar with a backslash in front of it is content, not a separator: the questions in this
+ * table are mathematics, and `\|K\|/mass` and `sum \|G_L G_R\|=O(x)` are absolute values (platform issue #68). Splitting on
+ * every bar dropped three questions from the table outright and cut seven verdicts short of the 300 characters they are
+ * allowed, which took an open question out of the lead schedule and gave agents an estimate without its caveat.
+ */
+export function cells(line: string): string[] {
+  const out: string[] = []; let cur = "";
+  for (let i = 0; i < line.length; i++) {
+    const c = line[i];
+    if (c === "\\" && line[i + 1] === "|") { cur += "|"; i++; continue; }   // an escaped bar is one character of content
+    if (c === "|") { out.push(cur); cur = ""; continue; }
+    cur += c;
+  }
+  out.push(cur);
+  return out;
+}
+
 export function questions(slug: string): Question[] {
   const file = join(REPOS, slug, "research", "QUESTIONS.md");
   if (!existsSync(file)) return [];
@@ -14,9 +32,13 @@ export function questions(slug: string): Question[] {
   if (cache && cache.key === key) return cache.list;
   const seen = new Set<string>(); const list: Question[] = [];
   for (const line of readFileSync(file, "utf8").split("\n")) {
-    const m = /^\|\s*([^|]*?)\s*\|\s*`(Q-[A-Za-z0-9_-]+)`\s*([^|]*?)\s*\|\s*([A-Z][A-Z -]*?)\s*\|\s*([^|]*?)\s*\|/.exec(line);
-    if (!m || seen.has(m[2])) continue; seen.add(m[2]);
-    list.push({ item: m[1], id: m[2], text: m[3].trim(), status: m[4].trim(), verdict: m[5].trim().slice(0, 300) });
+    if (!line.trimStart().startsWith("|")) continue;
+    const c = cells(line);
+    if (c.length < 6) continue;                                   // item, question, status, verdict, and the bars around them
+    const m = /^`(Q-[A-Za-z0-9_-]+)`\s*([\s\S]*)$/.exec(c[2].trim());
+    const status = c[3].trim();
+    if (!m || !/^[A-Z][A-Z -]*$/.test(status) || seen.has(m[1])) continue; seen.add(m[1]);
+    list.push({ item: c[1].trim(), id: m[1], text: m[2].trim(), status, verdict: c[4].trim().slice(0, 300) });
   }
   const rank = (s: string) => s === "OPEN" ? 0 : s === "PARTIAL" ? 1 : 2;
   list.sort((a, b) => rank(a.status) - rank(b.status));
