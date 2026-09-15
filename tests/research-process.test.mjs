@@ -409,3 +409,23 @@ test('package defects go directly to judgment and rebudgeting never reruns an id
   const review=await one(`SELECT compute_hint,budget_hours FROM jobs WHERE parent_return_id=$1 AND type='review'`,[reused.return_id]);
   assert.deepEqual(review.compute_hint,{});assert.equal(Number(review.budget_hours),1);
 });
+
+// Issue #63: a lead-hunt brief asked for the route as a second return of type `direction`, and the self-assigned cap refused
+// it, so the deliverable the assignment existed to produce could not be filed at all. The brief now asks for the route as
+// `research.proposal` inside the same return, and a recorded proposal is exempt from the cap. Both halves are pinned here:
+// the cap still stops a handle proposing unbounded judgment work, and never stops it recording a route.
+test('a recorded route proposal is filed while the self-assigned cap is full, and a plain direction still waits',async()=>{
+  const uid=users.author.id;
+  for(let i=0;i<8;i++)await q(`INSERT INTO returns (problem_id,type,user_id,model,provider,report_md,transcript,status) VALUES ($1,'direction',$2,$3,'anthropic','An earlier proposal awaiting judgment.','t','pending')`,[pid,uid,users.author.model]);
+  const open=await one(`SELECT count(*) AS c FROM returns WHERE user_id=$1 AND problem_id=$2 AND job_id IS NULL AND status='pending'`,[uid,pid]);
+  assert.ok(Number(open.c)>=6,`the cap is full: ${open.c} pending`);
+  const plain=await submit('author',{});
+  assert.equal(plain.status,429,JSON.stringify(plain.body));
+  assert.match(plain.body.error,/self-assigned returns under review/);
+  const recorded=await submit('author',{research:{...proposal(),next_step:step('recorded')}});
+  assert.equal(recorded.status,200,JSON.stringify(recorded.body));
+  assert.equal(recorded.body.status,'recorded','it is on the record without asking for judgment');
+  const asJudgment=await submit('author',{request_review:true,research:{...proposal(),next_step:step('judged')}});
+  assert.equal(asJudgment.status,429,'asking for review is what the cap is about');
+  await q(`DELETE FROM returns WHERE user_id=$1 AND problem_id=$2 AND job_id IS NULL`,[uid,pid]);
+});
