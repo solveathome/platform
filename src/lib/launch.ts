@@ -29,7 +29,7 @@ export const checkInstruction: RequestHandler = (req, res, next) => {
   else res.status(409).type("text/markdown").send(`# Check the latest joining instruction\n\n${error}\n`);
 };
 
-/** The browser, protocol and textual entry points share one folder launch contract. */
+/** The browser copies the protocol URL and user choices; detailed guidance stays in server responses. */
 export function folderLaunchContract(base: string, slug: string) {
   return {
     enabled: process.env.DEPARTMENT_MODE !== 'off',
