@@ -9,7 +9,7 @@ import { PUBLIC_DIR } from "../lib/paths.js";
 import { projectPartial, readProjectConfig, featuredProject } from "../lib/projects.js";
 import { leaderboard, type Window } from "../lib/credit.js";
 import { projectActivity, runningWork } from "../lib/project-activity.js";
-import { standings } from "../lib/standings.js";
+import { standings, PENDING_POINTS_SQL } from "../lib/standings.js";
 import { researchSummary } from '../lib/research.js';
 import { researchPolicy, researchAllocation } from '../lib/scheduler.js';
 
@@ -207,6 +207,10 @@ root.get("/@:handle", async (req, res) => {
     FROM departments d LEFT JOIN sessions s ON s.department_id=d.id LEFT JOIN problems p ON p.id=s.problem_id WHERE d.user_id=$1 GROUP BY d.id ORDER BY d.created_at`,[u.id]);
   // The record as a person reads it (Sep 15 2026): standing among contributors, credit per day, the calibration rung of every
   // accepted result, work by kind, reviews given, the breakthroughs with their titles, and what each computer's agents are doing.
+  // What the work awaiting review is worth if it gets in, by the same definition the board uses: base result points only,
+  // no bonuses, nothing paid until a trusted verdict. Shown beside the total because a contributor whose returns are queued
+  // has earned nothing yet and is not idle, and the difference between those two is the whole story of a slow review queue.
+  const pending = await one<{ pending_points: string }>(`SELECT ${PENDING_POINTS_SQL} FROM returns WHERE user_id = $1`, [u.id]);
   const standing = await one(`WITH lifetime AS (SELECT user_id, sum(points) AS points FROM credits GROUP BY user_id)
     SELECT (SELECT count(*) FROM lifetime)::int AS contributors,
            (SELECT count(*) + 1 FROM lifetime WHERE points > coalesce((SELECT points FROM lifetime WHERE user_id = $1), 0))::int AS rank,
@@ -257,7 +261,7 @@ root.get("/@:handle", async (req, res) => {
   const { id: _omit, ...pub } = u;
   res.json({ departments: deptOut, contributor: pub, researcher_of, roles, provenance,
              credit: { total: totals.reduce((s: number, t: any) => s + Number(t.points), 0), by_kind: Object.fromEntries(totals.map((t: any) => [t.kind, Number(t.points)])), count_by_kind: Object.fromEntries(totals.map((t: any) => [t.kind, Number(t.n)])), by_day, ledger },
-             standing: { rank: standing?.rank ?? null, contributors: standing?.contributors ?? 0, points: Number(standing?.points ?? 0) },
+             standing: { rank: standing?.rank ?? null, contributors: standing?.contributors ?? 0, points: Number(standing?.points ?? 0), pending_points: Number(pending?.pending_points ?? 0) },
              rungs: { accepted: Object.fromEntries(rungRows.map((r: any) => [r.rung, r.n])), contributors_reached: Object.fromEntries(reachedRows.map((r: any) => [r.rung, r.n])) },
              kinds, reviews_given, days, models, highlights: highlights.length ? highlights : strongest, highlights_kind: highlights.length ? "breakthrough" : "strongest",
              integrated_paths: integratedPaths.map((r: any) => r.path), cited: { count: cited?.n ?? 0, most: cited?.most ?? null },

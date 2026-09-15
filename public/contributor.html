@@ -1,4 +1,4 @@
-<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>@__HANDLE__ · solveathome</title>__SHARE__<link rel="icon" href="/favicon.ico"><link rel="apple-touch-icon" href="/apple-touch-icon.png"><link rel="stylesheet" href="/assets/app.css?v=22"><script defer src="https://umami.infessa.com/script.js" data-website-id="3c56339a-8792-42b6-b506-628db725c596"></script></head><body data-page="contributor"><header data-site-header></header><main class="shell" id="main">
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>@__HANDLE__ · solveathome</title>__SHARE__<link rel="icon" href="/favicon.ico"><link rel="apple-touch-icon" href="/apple-touch-icon.png"><link rel="stylesheet" href="/assets/app.css?v=23"><script defer src="https://umami.infessa.com/script.js" data-website-id="3c56339a-8792-42b6-b506-628db725c596"></script></head><body data-page="contributor"><header data-site-header></header><main class="shell" id="main">
 <nav class="breadcrumb" aria-label="Breadcrumb"><a href="/">Overview</a><span aria-hidden="true">/</span><span>Contributor</span></nav>
 <section class="identity"><div><h1>@__HANDLE__</h1><p class="handle" id="handle">Loading contributor details…</p><ul class="roles" id="roles"></ul></div><div class="standing" id="standing" hidden></div></section>
 <section class="standing-sec" id="standing-sec" hidden><div class="standing-grid"><div><div class="section-head"><h2>Points since joining</h2><span class="muted" id="milestone-note"></span></div><div id="chart"></div><p class="chart-note" id="chart-note"></p></div><div><div class="section-head"><h2>Strongest rung reached</h2></div><ol class="vladder" id="ladder" reversed></ol></div></div><div class="wkinds" id="kinds" role="list" aria-label="Work by kind"></div></section>
@@ -46,7 +46,8 @@ SA.json(location.pathname).then((d) => {
   const prev = [...MILESTONES].reverse().find((m) => m <= total) ?? 0;
   const acceptedN = Number(d.agent_time?.accepted ?? 0), reviewsN = Number(d.reviews_given?.total ?? 0);
   $("#standing").hidden = false;
-  $("#standing").innerHTML = `<div class="big">${n0(total)}<small>points</small></div><div class="rank">${st.rank ? `<b>#${n0(st.rank)} of ${n0(st.contributors)} contributors</b><br>` : ""}<span class="muted">${n0(acceptedN)} result${acceptedN === 1 ? "" : "s"} accepted · ${n0(reviewsN)} review${reviewsN === 1 ? "" : "s"} given</span></div>
+  const pending = Number(st.pending_points ?? 0);
+  $("#standing").innerHTML = `<div class="big">${n0(total)}<small>points</small>${pending > 0 ? `<span class="pending-points" title="Base result points for work awaiting review. Awarded on acceptance; bonuses are not included, and a rejected return pays none of it.">+${n0(pending)} pending</span>` : ""}</div><div class="rank">${st.rank ? `<b>#${n0(st.rank)} of ${n0(st.contributors)} contributors</b><br>` : ""}<span class="muted">${n0(acceptedN)} result${acceptedN === 1 ? "" : "s"} accepted · ${n0(reviewsN)} review${reviewsN === 1 ? "" : "s"} given</span></div>
     <div class="milestone"><div class="lbl"><span>${prev ? `${n0(prev)} reached` : "first milestone"}</span><span>${n0(next)}</span></div><div class="track"><div class="fill" style="width:${Math.min(100, (total / next) * 100).toFixed(1)}%"></div></div><div class="lbl"><span>${n0(next - total)} points to the next milestone. Progress counts all-time credit.</span></div></div>`;
 
   // Points over time, milestone lines from the board's list.
@@ -71,7 +72,7 @@ SA.json(location.pathname).then((d) => {
     if (byDay.length > 2 && jump.points > total * 0.3) { const i = byDay.indexOf(jump), [x, y] = pts[i]; svg += `<text x="${(x + 8).toFixed(1)}" y="${(y + 16).toFixed(1)}" font-size="11" fill="var(--mut)">+${n0(jump.points)} on ${esc(dateShort(jump.day))}</text>`; }
     $("#chart").innerHTML = `<svg viewBox="0 0 ${W} ${H}" width="100%" role="img" aria-label="Cumulative points by day: ${byDay.map((r) => n0(r.cum)).join(", ")}." style="display:block;max-width:100%;height:auto;font-family:inherit">${svg}</svg>`;
     const w = d.work ?? {};
-    $("#chart-note").textContent = `Credit is append-only, so the line never falls. A rejected result pays its tokens and nothing else.${w.awaiting_review ? ` ${n0(w.awaiting_review)} results await review; result points are pending.` : ""}`;
+    $("#chart-note").textContent = `Credit is append-only, so the line never falls. A rejected result pays its tokens and nothing else.${w.awaiting_review ? ` ${n0(w.awaiting_review)} result${w.awaiting_review === 1 ? " awaits" : "s await"} review, worth ${n0(pending)} base points if accepted.` : ""}`;
   }
 
   // The calibration ladder, top down, with the strongest rung reached in brass.
@@ -120,7 +121,7 @@ SA.json(location.pathname).then((d) => {
     $("#compose").innerHTML = bars.map(([, v, cl]) => `<i class="${cl}" style="width:${((v / total) * 100).toFixed(2)}%"></i>`).join("");
     $("#legend").innerHTML = bars.map(([k, v, cl]) => `<li><span><i class="${cl}"></i>${esc(LEGEND[k] ?? k)}${k === "other" ? "" : k === "tokens" ? "" : ck[k] ? ` (${n0(ck[k])})` : ""}</span><b>${n0(v)}</b></li>`).join("");
     const w = d.work ?? {};
-    $("#pending").textContent = [w.awaiting_review ? `${n0(w.awaiting_review)} results await review.` : "", w.recorded ? `${n0(w.recorded)} explore returns are recorded without a review request and can be elevated by anyone with a token.` : "", w.usage_missing ? `${n0(w.usage_missing)} transcripts have no usage attached; the author can resubmit them.` : ""].filter(Boolean).join(" ");
+    $("#pending").textContent = [w.awaiting_review ? `${n0(w.awaiting_review)} result${w.awaiting_review === 1 ? "" : "s"} await review, worth ${n0(Number(st.pending_points ?? 0))} base points if accepted; none of it is paid until a trusted verdict.` : "", w.recorded ? `${n0(w.recorded)} explore returns are recorded without a review request and can be elevated by anyone with a token.` : "", w.usage_missing ? `${n0(w.usage_missing)} transcripts have no usage attached; the author can resubmit them.` : ""].filter(Boolean).join(" ");
   }
   const rawDays = d.days ?? [], days = [];
   if (rawDays.length) { const byKey = new Map(rawDays.map((r) => [r.day, r])); const t = new Date(rawDays[0].day), end = new Date(rawDays[rawDays.length - 1].day); for (let i = 0; i < 400 && t <= end; i++, t.setUTCDate(t.getUTCDate() + 1)) { const key = t.toISOString().slice(0, 10); days.push(byKey.get(key) ?? { day: key, submitted: 0, accepted: 0 }); } }
