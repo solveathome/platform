@@ -113,10 +113,60 @@ export function logHead(text: string, lines = 3, width = 400): string {
 export const LOG_LOCATIONS = "Identify this application session explicitly from its metadata; never choose a log by newest modification time. Research the installed application's supported APIs, exports, documentation or read-only records. Build or reuse a scoped reader with available native tools, verify its schema and bind records to this assignment. No JSONL file does not mean no usage; inspect database/export records when applicable. Keep private stores and unrelated sessions local. If no supported export exists, implement one in the solveathome transcript format (" + CUSTOM_FORMAT_URL + "): preserve what was said, run and returned, with only observed attributable usage. Validate the exporter before research, keep incomplete usage pending and reconcile it later. Optional application examples in that reference are starting points to verify locally, not requirements for a particular runtime.";
 
 /** How much of a transcript's tool output was replaced by omission notes (issue #46): outputs counted by their JSONL types, omissions by bracketed notes saying "omitted". */
+/**
+ * A note that stands in for content: the whole segment is the note, not a sentence that mentions one. A real note is long,
+ * because it says what was inspected instead ("[Third-party search/source payload omitted. Exact upper statement inspected:
+ * Klaus Dohmen, arXiv:1004.3416v2, section 1 Proposition 1.1 …]"), so length is not the test; being the whole segment is.
+ */
+function isOmissionNote(segment: string): boolean {
+  const s = segment.trim();
+  if (s.length < 12 || s.length > 4000) return false;
+  if (!s.startsWith("[") || !s.endsWith("]")) return false;
+  if (/^\[\s*[{"[]/.test(s) || s.includes("{")) return false;   // a JSON array of records is not a note
+  return /\bomitted\b/i.test(s);
+}
+const OUTPUT_TYPES = new Set(["custom_tool_call_output", "function_call_output", "tool_result"]);
+
+/** Every string a tool output carries, as separate segments: array elements and lines are each their own segment. */
+function outputSegments(value: unknown, into: string[] = [], depth = 0): string[] {
+  if (depth > 6 || into.length > 500) return into;
+  if (typeof value === "string") { for (const line of value.split("\n")) into.push(line.trim()); return into; }
+  if (Array.isArray(value)) { for (const v of value) outputSegments(v, into, depth + 1); return into; }
+  if (value && typeof value === "object") for (const k of ["output", "content", "text", "result"]) if (k in (value as any)) outputSegments((value as any)[k], into, depth + 1);
+  return into;
+}
+
+/** Walks a parsed JSONL line for tool-output records, whatever the harness nests them in. */
+function collectOutputs(node: unknown, into: unknown[], depth = 0): void {
+  if (depth > 8 || into.length > 2000 || !node || typeof node !== "object") return;
+  if (Array.isArray(node)) { for (const v of node) collectOutputs(v, into, depth + 1); return; }
+  const o = node as Record<string, unknown>;
+  if (typeof o.type === "string" && OUTPUT_TYPES.has(o.type)) into.push(o);
+  for (const v of Object.values(o)) if (v && typeof v === "object") collectOutputs(v, into, depth + 1);
+}
+
+/**
+ * How much of a transcript is omission notes standing in for tool output (issue #46). Counted from the decoded records, not
+ * from the raw text: an output is omitted when one of its own segments *is* a note, and it counts once however many notes it
+ * carries. Matching the marker anywhere in the file counted a scrubber's own template quoted in a displayed helper, a note
+ * about an omission written in the report, and the same native record echoed twice, and it mixed units, so a transcript could
+ * be told it had replaced 7 of 3 outputs or 8 of 13 that were all present (platform issues #62 and #70).
+ */
 export function omissionShare(text: string): { outputs: number; omitted: number; share: number } {
   const t = String(text ?? "");
-  const outputs = (t.match(/"type":\s*"(?:custom_tool_call_output|function_call_output|tool_result)"/g) ?? []).length;
-  const omitted = (t.match(/\[[^\]\n]{0,200}\bomitted\b[^\]\n]{0,200}\]/gi) ?? []).length;
+  let outputs = 0, omitted = 0;
+  for (const line of t.split("\n")) {
+    const s = line.trim();
+    if (!s.startsWith("{") && !s.startsWith("[")) continue;
+    let parsed: unknown;
+    try { parsed = JSON.parse(s); } catch { continue; }
+    const found: unknown[] = [];
+    collectOutputs(parsed, found);
+    for (const rec of found) {
+      outputs++;
+      if (outputSegments(rec).some(isOmissionNote)) omitted++;
+    }
+  }
   return { outputs, omitted, share: outputs ? Math.min(1, omitted / outputs) : 0 };
 }
 
