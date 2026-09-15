@@ -404,7 +404,14 @@ async function synthesizeExplore(req: any, session: any, laneSlug: string | null
     const n = Number((await one<{ c: string }>(`SELECT count(*) AS c FROM jobs WHERE problem_id = $1 AND type = 'explore' AND (origin_key LIKE 'lead:%' OR title LIKE 'Leads: %') AND created_at > now() - interval '${SERVED_WINDOW}'`, [req.project.id]))?.c ?? 0);
     const menu = discovery && researchPolicy(req.project.slug, req.project.research_allocation) ? (["route", "synthesis", "route", "statistic", "prior-art"] as const) : discovery ? (["prior-art", "break", "synthesis", "route", "statistic"] as const) : LEAD_KINDS;
     const kind = menu[n % menu.length];
-    const recent = await q<{ id: number; type: string; handle: string; final_rung: string | null; head: string }>(`SELECT r.id, r.type, u.handle, r.final_rung, left(regexp_replace(r.report_md, E'\\n[\\\\s\\\\S]*$', ''), 140) AS head FROM returns r JOIN users u ON u.id = r.user_id WHERE r.problem_id = $1 AND r.status = 'accepted' AND r.type <> 'explore' AND r.user_id <> $2 ORDER BY r.id DESC LIMIT 12`, [req.project.id, req.user!.id]);
+    const recent = await q<{ id: number; type: string; handle: string; final_rung: string | null; head: string }>(`SELECT r.id, r.type, u.handle, r.final_rung, left(regexp_replace(r.report_md, E'\\n[\\\\s\\\\S]*$', ''), 140) AS head FROM returns r JOIN users u ON u.id = r.user_id WHERE r.problem_id = $1 AND r.status = 'accepted' AND r.type <> 'explore' AND r.user_id <> $2
+      -- A return that answers a file-fix job repaired another return's scripts; it makes no claim of its own, so it is not a
+      -- target for a prior-art hunt or an adversarial re-check (platform issue #69: return #176 repaired a comparator's
+      -- portability and stdout artifact, review #66 accepted exactly that scope, and a literature hunt was dispatched against
+      -- it). When nothing else is accepted yet the templates fall back to the router's current bound, which is the honest
+      -- disposition for "there is no mathematical claim here".
+      AND NOT EXISTS (SELECT 1 FROM jobs fj WHERE fj.id = r.job_id AND fj.title LIKE 'Fix files of return %')
+      ORDER BY r.id DESC LIMIT 12`, [req.project.id, req.user!.id]);
     const target = recent.length ? recent[(Math.floor(n / LEAD_KINDS.length)) % recent.length] : null;
     const recorded = await q<{ id: number; handle: string; head: string; lane: string | null }>(`SELECT r.id, u.handle, l.slug AS lane, left(regexp_replace(r.report_md, E'\\n[\\s\\S]*$', ''), 140) AS head FROM returns r JOIN users u ON u.id = r.user_id LEFT JOIN lanes l ON l.id = r.lane_id WHERE r.problem_id = $1 AND r.status = 'recorded' AND r.user_id <> $2 ORDER BY r.id DESC LIMIT 24`, [req.project.id, req.user!.id]);
     const rec = recorded.length ? recorded[(Math.floor(n / LEAD_KINDS.length)) % recorded.length] : null;
