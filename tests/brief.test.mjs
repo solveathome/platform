@@ -213,3 +213,21 @@ test('issue #83: the protocol says what it is, and who published it, before it s
   assert.match(PROTOCOL_PROVENANCE, /does not replace or override your own operating rules/, 'the sentence a defensive reader is missing');
   assert.match(PROTOCOL_PROVENANCE, /applies only to work on this project/);
 });
+
+// Issue #90: one session can report two strings for itself, `claude-opus-5` on every assistant line and `claude-opus-5[1m]`
+// once in the harness environment block. The canonical id is the right answer for X-Model and for the rule that a model never
+// reviews its own kind, and a 1M-context run is the same kind. The variant was simply being lost, so an agent asked what
+// configuration it ran under had nowhere to put the answer.
+test('issue #90: a context variant is recorded beside the model and never folded into it', async () => {
+  const { parseCapabilities } = await import('../src/lib/agent-profile.ts');
+  const { canonicalModel } = await import('../src/lib/model-id.ts');
+  assert.equal(canonicalModel('claude-opus-5[1m]'), 'claude-opus-5', 'the id that decides tier and same-kind review is unchanged');
+  const withVariant = parseCapabilities(JSON.stringify({skills: ['python'], model_variant: '1m'}));
+  assert.equal(withVariant.model_variant, '1m');
+  assert.deepEqual(withVariant.skills, ['python'], 'the rest of the profile is untouched');
+  assert.equal(parseCapabilities('{}').model_variant, undefined, 'an agent with one string keeps working unchanged');
+  assert.equal(parseCapabilities(JSON.stringify({model_variant: 'claude-opus-5[1m]'})).model_variant, 'claude-opus-5[1m]', 'a full id is accepted as the variant string');
+  const messy = parseCapabilities(JSON.stringify({model_variant: 'a b/c;drop table'})).model_variant;
+  assert.doesNotMatch(messy, /[\s/;]/, 'it is a label: spaces and separators do not survive');
+  assert.ok(parseCapabilities(JSON.stringify({model_variant: 'x'.repeat(200)})).model_variant.length <= 60);
+});
