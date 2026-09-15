@@ -1,6 +1,7 @@
 import {recordAllPublications} from "./lib/document-record.js";
 import express from "express";
 import { wantsHtml } from "./lib/negotiate.js";
+import { notFound } from "./lib/not-found.js";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { PUBLIC_DIR } from "./lib/paths.js";
@@ -100,6 +101,8 @@ Projects: /projects   Board: /projects/<slug>/board   Lanes: /projects/<slug>/la
 Code: MIT. Results and traces: CC BY 4.0.
 `);
 });
+
+app.use(notFound([job, lane, board, papers, sequences, chat, asks, trust, docs]));
 
 const port = Number(process.env.PORT ?? 8600);
 // Errors are bug reports: say so, with where. Developed in the open (Chris, Sep 10).

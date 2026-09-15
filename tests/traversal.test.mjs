@@ -108,3 +108,4 @@ test('issue #11: reading a file needs no token; uploading without one is refused
     await q(`DELETE FROM file_refs WHERE file_sha = $1`, [sha]); await q(`DELETE FROM files WHERE sha256 = $1`, [sha]); await q(`DELETE FROM reputation WHERE user_id = $1`, [u.id]); await q(`DELETE FROM users WHERE id = $1`, [u.id]);
   }
 });
+
