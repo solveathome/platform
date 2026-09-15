@@ -239,3 +239,48 @@ export function portabilityNotes(name: string, content: string): string[] {
   }
   return notes;
 }
+
+/**
+ * A verification recipe has to be carryable by a reviewer from the public record alone (issue #84: return #569's recipe told
+ * reviewers to fetch two artifacts "attached to this return" while `files` was empty and both content addresses answered 404).
+ *
+ * Only two things can be checked here without guessing, and both are outright contradictions rather than heuristics:
+ *   - the recipe hands out a `GET /files/<sha256>` URL whose bytes are not in the store, so the reviewer is sent to a 404;
+ *   - the recipe says its artifacts are attached to this return, and the return attaches nothing at all.
+ * Every other sha256 in a recipe is left alone on purpose. A hash is as often an expected output the reviewer regenerates as
+ * an input to fetch, and a recipe that rebuilds a file from a verbatim block in the report is complete with no upload at all.
+ * Measured over every return that carries a recipe (504 of them, 2026-09-15): the two checks above fire on 2, both genuinely
+ * broken, while "any unresolvable hash in the recipe" would have fired on 99 and "every hash unresolvable" on 23, nearly all
+ * of them legitimate verbatim-block rebuilds and served-script reruns.
+ */
+const ATTACHED_HERE = /attached to this return|this return'?s (attached )?files|files attached to this return|uploaded with this return/i;
+
+export type RecipeGaps = { unfetchable: string[]; claims_attachments: boolean };
+
+export async function recipeGaps(recipe: string | null | undefined, attached: string[]): Promise<RecipeGaps> {
+  const text = String(recipe ?? "");
+  if (!text) return { unfetchable: [], claims_attachments: false };
+  const have = new Set(attached.map((s) => String(s).toLowerCase()));
+  const named = [...new Set((text.match(/\/files\/[0-9a-f]{64}/gi) ?? []).map((u) => u.slice(-64).toLowerCase()))].filter((s) => !have.has(s));
+  const stored = named.length ? new Set((await q<{ sha256: string }>(`SELECT sha256 FROM files WHERE sha256 = ANY($1) AND deleted_at IS NULL`, [named])).map((r) => r.sha256.toLowerCase())) : new Set<string>();
+  return { unfetchable: named.filter((s) => !stored.has(s)), claims_attachments: attached.length === 0 && ATTACHED_HERE.test(text) };
+}
+
+export const recipeGapsFound = (g: RecipeGaps): boolean => g.unfetchable.length > 0 || g.claims_attachments;
+
+/** What the author is told at intake. Never a refusal (Chris, Sep 12 2026): the return is recorded as sent and the reviewer hears it too. */
+export function recipeGapWarnings(g: RecipeGaps, base: string): string[] {
+  const out: string[] = [];
+  if (g.unfetchable.length) out.push(`your recipe sends a reviewer to GET ${base}/files/<sha256> for ${g.unfetchable.length} artifact(s) that are not in the store: ${g.unfetchable.map((s) => s.slice(0, 12) + "…").join(", ")}. Upload them (POST ${base}/files) and list them in "files", or change the recipe to say where those bytes come from. The return is recorded as sent; a reviewer who follows the recipe gets a 404.`);
+  if (g.claims_attachments) out.push(`your recipe says its artifacts are attached to this return, and this return attaches no files. Upload them (POST ${base}/files) and list them in "files", or say in the recipe where the bytes come from: a verbatim block in the report, or a served path. As sent, nobody can carry the recipe out.`);
+  return out;
+}
+
+/** What the reviewer is told in the brief, so a broken recipe costs a note and not a rerun. */
+export function recipeGapNote(g: RecipeGaps): string {
+  if (!recipeGapsFound(g)) return "";
+  const what = g.unfetchable.length
+    ? `its recipe hands out ${g.unfetchable.length} \`/files/<sha256>\` URL(s) whose bytes are not in the store (${g.unfetchable.map((s) => s.slice(0, 12) + "…").join(", ")})`
+    : "its recipe says the artifacts are attached to this return, and the return attaches no files";
+  return `\n\nBefore you start: ${what}. Do not spend the budget hunting for them. If the bytes are not in the report as a verbatim block and not served in the project, the recipe cannot be carried out by anyone: reject as unverifiable in budget with \`needs_md\` naming exactly which artifacts are missing. That opens a follow-up job for the author and is not a mark against them.`;
+}

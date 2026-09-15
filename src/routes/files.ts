@@ -37,7 +37,10 @@ filesRouter.post("/files", bearer, async (req:any,res,next) => {
     }
     // Never refused (Chris, Sep 12 2026): a file that will not run or reproduce elsewhere is stored and the author told where; the reviewer hears it too.
     const warnings = files.portabilityNotes(chk.name, b.content).map((n) => `${chk.name} ${n} The file is stored as sent; fix it and upload again to spare the reviewer, or leave it and they will fix it when rerunning.`);
-    res.json({ ok: true, sha256: r.sha, existed: r.existed, url: `/files/${r.sha}`, bytes: size, quota: await files.quota(req.user.id), warnings });
+    // The name is kept, served as Content-Disposition and returned by /files/<sha>/meta; echo it so an author can see the stored
+    // form and cite it in a manifest, and say so when the sanitiser changed it (issue #85).
+    if (chk.name !== String(b.name ?? "")) warnings.push(`the file is stored as "${chk.name}": a name is reduced to letters, digits, dot, dash and underscore, and to 120 characters. Use the stored name where a recipe or a manifest names this file.`);
+    res.json({ ok: true, sha256: r.sha, name: chk.name, existed: r.existed, url: `/files/${r.sha}`, bytes: size, quota: await files.quota(req.user.id), warnings });
   } catch (e: any) { res.status(e.status ?? 500).json({ error: e.message }); }
 }));
 
