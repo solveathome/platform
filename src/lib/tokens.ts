@@ -149,6 +149,52 @@ function collectOutputs(node: unknown, into: unknown[], depth = 0): void {
  * about an omission written in the report, and the same native record echoed twice, and it mixed units, so a transcript could
  * be told it had replaced 7 of 3 outputs or 8 of 13 that were all present (platform issues #62 and #70).
  */
+/**
+ * Sub-agent turns that never reached the transcript (platform issue #93). A brief that allows sub-agents says their tokens
+ * stay inside the same budget and tells the author to concatenate the children's JSONL, because a child runs in its own
+ * session file and the parent's log records only the call that started it. When that is not done the count is low by
+ * whatever the children spent, and nothing said so: the extraction is complete for the file it was given, and the person who
+ * lent the compute is credited for a fraction of it. One reported assignment credited 40,878 output tokens while a single
+ * prior-art child had reported 235,184.
+ *
+ * Both halves are in the transcript already. A launch is a tool call named Agent or Task; a child's turns arrive either as
+ * this harness marks them, `isSidechain: true`, or as lines carrying a different session id when a separate file is
+ * concatenated. Launches with no child turns anywhere is the gap, and it is a fact about the file rather than a guess.
+ */
+/**
+ * The same finding as a sentence for the agent, or nothing when there is no gap. One message, because all three intake paths
+ * (a return, a review, a resubmitted transcript) count tokens the same way and the fix is the same in each: concatenate the
+ * children's session files and send the whole thing again.
+ */
+export function subagentWarning(text: string, resubmitUrl: string): string[] {
+  const { launched, present } = subagentGap(text);
+  if (launched === 0 || present > 0) return [];
+  return [`this transcript starts ${launched} sub-agent${launched === 1 ? "" : "s"} and carries none of their turns, so the tokens counted here are only the main thread's and the rest of what your person paid for is uncounted. A sub-agent runs in its own session file: concatenate those files with this one and send it again (POST ${resubmitUrl}, same headers). Every message is counted once, so nothing is paid twice.`];
+}
+
+export function subagentGap(text: string): { launched: number; present: number } {
+  let launched = 0, present = 0;
+  const sessions = new Map<string, number>();
+  const lines: any[] = [];
+  for (const raw of String(text ?? "").split("\n")) {
+    const line = raw.trim();
+    if (!line.startsWith("{")) continue;
+    let d: any; try { d = JSON.parse(line); } catch { continue; }
+    lines.push(d);
+    const id = String(d.sessionId ?? d.session_id ?? "");
+    if (id) sessions.set(id, (sessions.get(id) ?? 0) + 1);
+  }
+  const main = [...sessions.entries()].sort((a, b) => b[1] - a[1])[0]?.[0] ?? "";
+  for (const d of lines) {
+    for (const block of ((d?.message?.content ?? []) as any[])) {
+      if (block && typeof block === "object" && block.type === "tool_use" && (block.name === "Agent" || block.name === "Task")) launched++;
+    }
+    const id = String(d.sessionId ?? d.session_id ?? "");
+    if (d.isSidechain === true || (main && id && id !== main)) present++;
+  }
+  return { launched, present };
+}
+
 export function omissionShare(text: string): { outputs: number; omitted: number; share: number } {
   const t = String(text ?? "");
   let outputs = 0, omitted = 0;

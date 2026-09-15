@@ -25,7 +25,7 @@ import * as revisions from "../lib/revisions.js";
 import { openQuestions, sweepWindow } from "../lib/questions.js";
 import { ledgerWarnings } from "../lib/ledger.js";
 import { patchHash } from "../lib/duplicates.js";
-import { omissionShare, effortFromTranscript, isSessionLog, notSessionLog, logSignature, logHead, assignmentMismatch, parseTranscriptWithKeys, LOG_LOCATIONS, CUSTOM_FORMAT_URL } from "../lib/tokens.js";
+import { omissionShare, subagentWarning, effortFromTranscript, isSessionLog, notSessionLog, logSignature, logHead, assignmentMismatch, parseTranscriptWithKeys, LOG_LOCATIONS, CUSTOM_FORMAT_URL } from "../lib/tokens.js";
 import type { Tokens } from "../lib/tokens.js";
 /** Why a review rejected (Chris, Sep 11 2026). Overclaimed work should be accepted at the lower rung; the class exists so the record says which it was. */
 export const REJECT_REASONS = ["refuted", "overclaimed", "unsourced", "unverifiable"] as const;
@@ -941,7 +941,7 @@ job.post("/result", bearer, project, assignmentMutation(async (req: any, res) =>
     await registerEntries(uid, "review", Number(myReview?.id ?? 0), entryKeys);
     const reviewReport = tokens.log === "unknown" ? await reportHarness(String(b.transcript), { reviewId: Number(myReview?.id ?? 0) || undefined, uid, model: req.model ?? null }) : null;
     const reviewLogWarn = logWarning(tokens, `POST ${BASE()}/projects/${req.project.slug}/review/${Number(myReview?.id ?? 0)}/transcript (same headers)`, reviewReport);
-    res.json({ ok: true, review_of: reviewOf, review_id: Number(myReview?.id ?? 0) || null, outcome, advisory: !reviewerTrusted, ...(effortNote ? { effort_note: effortNote } : {}), warnings: [...(effortNote ? [effortNote] : []), ...(reviewLogWarn ? [reviewLogWarn] : []), ...onceWarning(tokens), ...scrubWarnings], trusted_by: reviewerGranted ? "grant" : reviewerTrusted ? "model" : null, return_status: after?.status ?? null, final_rung: after?.final_rung ?? null, provisional: after?.provisional ?? null, effects_applied_at: after?.effects_applied_at ?? null, tokens });
+    res.json({ ok: true, review_of: reviewOf, review_id: Number(myReview?.id ?? 0) || null, outcome, advisory: !reviewerTrusted, ...(effortNote ? { effort_note: effortNote } : {}), warnings: [...(effortNote ? [effortNote] : []), ...(reviewLogWarn ? [reviewLogWarn] : []), ...onceWarning(tokens), ...scrubWarnings, ...subagentWarning(String(b.transcript ?? ""), `${BASE()}/projects/${req.project.slug}/review/${Number(myReview?.id ?? 0)}/transcript`)], trusted_by: reviewerGranted ? "grant" : reviewerTrusted ? "model" : null, return_status: after?.status ?? null, final_rung: after?.final_rung ?? null, provisional: after?.provisional ?? null, effects_applied_at: after?.effects_applied_at ?? null, tokens });
     return;
   }
 
@@ -1124,13 +1124,16 @@ job.post("/result", bearer, project, assignmentMutation(async (req: any, res) =>
   const recipeGap = await recipeGaps(recipe, attached);
   const ledgerWarn = await ledgerWarnings(req.project.slug, b.patch ?? null, rtype === "audit" && b.revision?.path && b.revision?.file ? { path: revisions.safeRel(String(b.revision.path)) ?? "", text: files.read(String(b.revision.file).toLowerCase()) ?? "" } : null);
   // Omission notes (issue #46): reads of served documents and of the author's own files are public and must stay; a transcript that is mostly notes is labelled.
+  // Sub-agent turns the transcript never carried (issue #93): the count is low by whatever the children spent, and the person
+  // who lent the compute is credited for a fraction of it. Warned, never refused, and the transcript can be resubmitted whole.
+  const subWarn = subagentWarning(String(b.transcript), `${BASE()}/projects/${req.project.slug}/return/${Number(ret!.id)}/transcript`);
   const om = omissionShare(String(b.transcript)); const mostlyOmitted = om.omitted >= 3 && om.share >= 0.5;
   await q(`UPDATE returns SET transcript_omitted = $2 WHERE id = $1`, [ret!.id, JSON.stringify(om)]);
   const omissionWarn = mostlyOmitted ? [`your transcript replaces ${om.omitted} of ${om.outputs} tool outputs with omission notes. Reads of served documents (<project base>/docs/…) and of your own files are public and must stay in the transcript; only third-party payloads are replaced. This return is labelled "transcript mostly omitted" for reviewers.`] : [];
   const twinWarn = twin ? [`this change is byte-identical to pending return #${twin.id}: the two are one change; when #${twin.id} is decided this return is folded into it (accepted: superseded; rejected: rejected with it; unpaid either way), and reviewers see both as one.`] : [];
   const returnReport = tokens.log === "unknown" ? await reportHarness(String(b.transcript), { returnId: Number(ret!.id), uid, model: req.model ?? null }) : null;
   const returnLogWarn = logWarning(tokens, `POST ${BASE()}/projects/${req.project.slug}/return/${Number(ret!.id)}/transcript (same headers)`, returnReport);
-  const warnings = [...(effortNote ? [effortNote] : []), ...(returnLogWarn ? [returnLogWarn] : []), ...onceWarning(tokens), ...scrubWarnings, ...fileWarn, ...patchWarning, ...ledgerWarn, ...omissionWarn, ...twinWarn, ...recipeGapWarnings(recipeGap, BASE()), ...(stray.length ? [`recipe_md names ${stray.length} sha256 value(s) that are neither in hashes, nor among your or cited files, nor a served document: ${stray.map((x: string) => x.slice(0, 12) + "…").join(", ")}. If one is an expected output hash, put it in hashes too; if it is a typo, a reviewer's rerun will not match.`] : [])];
+  const warnings = [...(effortNote ? [effortNote] : []), ...(returnLogWarn ? [returnLogWarn] : []), ...onceWarning(tokens), ...scrubWarnings, ...fileWarn, ...patchWarning, ...ledgerWarn, ...omissionWarn, ...subWarn, ...twinWarn, ...recipeGapWarnings(recipeGap, BASE()), ...(stray.length ? [`recipe_md names ${stray.length} sha256 value(s) that are neither in hashes, nor among your or cited files, nor a served document: ${stray.map((x: string) => x.slice(0, 12) + "…").join(", ")}. If one is an expected output hash, put it in hashes too; if it is a typo, a reviewer's rerun will not match.`] : [])];
   if (jobRow?.ask_id) {
     const ask = await one(`SELECT a.id, a.message_id, m.channel_id FROM asks a JOIN messages m ON m.id = a.message_id WHERE a.id = $1 AND a.status IN ('open','researching')`, [jobRow.ask_id]);
     if (ask) {
@@ -1642,7 +1645,7 @@ async function resubmitTranscript(req: any, res: any, kind: "return" | "review")
     if (had) await q(`UPDATE credits SET note = $3 WHERE source_type = 'review' AND source_id = $1 AND kind = 'tokens' AND user_id = $2`, [src, uid, note]);
     else if (ttot > 0) await q(`INSERT INTO credits (user_id, model, provider, problem_id, lane_id, kind, points, source_type, source_id, note) VALUES ($1,$2,$3,$4,$5,'tokens',0,'review',$6,$7)`, [uid, row.model, row.provider, row.problem_id, row.lane_id, src, note]);
   }
-  res.json({ ok: true, [kind]: id, tokens, log: tokens.log, effort_evidence: effortEvidence, warnings: [...onceWarning(tokens), ...[logWarning(tokens, `POST ${BASE()}/projects/${req.project.slug}/${kind}/${id}/transcript`)].filter(Boolean), ...(homeWarning("transcript", b.transcript) ? [homeWarning("transcript", b.transcript)!] : [])], note: `${kind} #${id} now carries this log; ${ttot.toLocaleString("en-US")} tokens counted and credited to your person${kind === "return" ? "; the public transcript URL refreshes within an hour" : ""}.` });
+  res.json({ ok: true, [kind]: id, tokens, log: tokens.log, effort_evidence: effortEvidence, warnings: [...onceWarning(tokens), ...[logWarning(tokens, `POST ${BASE()}/projects/${req.project.slug}/${kind}/${id}/transcript`)].filter(Boolean), ...subagentWarning(String(b.transcript ?? ""), `${BASE()}/projects/${req.project.slug}/${kind}/${id}/transcript`), ...(homeWarning("transcript", b.transcript) ? [homeWarning("transcript", b.transcript)!] : [])], note: `${kind} #${id} now carries this log; ${ttot.toLocaleString("en-US")} tokens counted and credited to your person${kind === "return" ? "; the public transcript URL refreshes within an hour" : ""}.` });
 }
 job.post("/return/:id/transcript", bearer, project, assignmentMutation((req: any, res) => resubmitTranscript(req, res, "return"), { commitErrors: true, historicalEvidence: true }));
 /**
