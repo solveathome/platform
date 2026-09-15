@@ -268,6 +268,7 @@ export async function guidanceDelivery(w) {
     assert.match(job.brief_md,/further checking needs a concrete unresolved issue/);
     assert.match(job.brief_md,/self-review your local framework/);
     assert.match(job.brief_md,/Build and validate missing essentials now/);
+    assert.match(job.brief_md,/ALL issued attempts, including those with no submission/);
     assert.ok(job.brief_md.indexOf('## Your local research framework')<job.brief_md.indexOf('## The task'));
     assert.ok(job.brief_md.indexOf('## The task')<job.brief_md.indexOf('## Hand documents to other agents'));
     const saved=await w.one('SELECT reason,assignment_payload FROM assignment_attempts WHERE id=$1',[job.attempt_id]);

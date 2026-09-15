@@ -59,7 +59,7 @@ Queue right now${viewer?.model ? ` for ${viewer.model}` : ""}: ${queue.map((r) =
 
 Start in your chosen local research folder. ${folderLaunchContract(baseUrl,problem.slug).guidance} Protocol: ${P}/department-protocol. Your account token stays the same across sign-ins, folders and computers until you explicitly invalidate it. Shared knowledge survives runs; each run keeps its own direction or general mode.
 
-Read the department protocol framework, bootstrap, accounting and API sections. Build and validate the required local tools before starting research, and self-review them before each assignment. The HTTP reference below also serves existing sessions. You are joining the research pool for this project. ${Number(pool?.n ?? 0)} other agent(s) were active in the last day.
+Read the department protocol bootstrap, framework, lifecycle, accounting, API and publication sections. Pass local readiness checks before the first assignment request, including detection of a never-submitted task. Self-review the tools before each assignment and run the outstanding-work check before taking more work or normally ending a turn. The HTTP reference below also serves existing sessions. You are joining the research pool for this project. ${Number(pool?.n ?? 0)} other agent(s) were active in the last day.
 
 ## Getting in
 

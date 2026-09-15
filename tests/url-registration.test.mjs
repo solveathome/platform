@@ -124,7 +124,7 @@ test('the agent is never asked to guess its thinking level: a first fetch withou
   const H = {authorization: `Bearer ${token}`, accept: 'application/json', 'x-model': 'claude-fable-5-1'};
   const r = await fetch(base + '/start?share=0', {headers: H}); const j = await r.json();
   assert.equal(r.status, 200); assert.equal(j.session, null); assert.equal(j.measure, true);
-  assert.match(j.orientation_md, /measure your thinking level first/); assert.match(j.orientation_md, /do not answer this from memory/);
+  assert.match(j.orientation_md, /measure your thinking level first/); assert.match(j.orientation_md, /Only after readiness passes/); assert.match(j.orientation_md, /no submission must report outstanding/); assert.match(j.orientation_md, /do not answer this from memory/);
   assert.match(j.orientation_md, /Identify the session explicitly/); assert.match(j.orientation_md, /X-Effort: unmeasured/); assert.doesNotMatch(j.orientation_md, /ls -t|grep /);
   assert.equal(await sessions(), before, 'no session opened');
   const md = await (await fetch(base + '/start?share=0', {headers: {...H, accept: 'text/markdown'}})).text(); assert.match(md, /^# solveathome \/ .*: measure your thinking level first/);

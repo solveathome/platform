@@ -177,7 +177,8 @@ test('guidance discovery supports API-only clients, a local handoff and a separa
   const {credential,id}=await account();
   const contract=await call('/joining-contract',{credential});
   assert.equal(contract.distribution,'guidance');assert.equal(contract.helper_url,undefined);
-  assert.match(contract.guidance,/Before research, build or repair and validate/);
+  assert.match(contract.guidance,/before requesting any assignment/);
+  assert.match(contract.guidance,/Do not call the joining URL.*until readiness passes/);
   assert.match(contract.guidance,/Before every assignment, self-review/);
   const response=await fetch(contract.protocol_url);assert.equal(response.status,200);
   const protocol=await response.json();assert.match(protocol.version,/^department-v2\./);
@@ -185,6 +186,11 @@ test('guidance discovery supports API-only clients, a local handoff and a separa
   assert.match(protocol.sections.bootstrap,/X-Instruction-URL/);assert.match(protocol.sections.api,/X-Request-ID/);
   assert.match(protocol.sections.publication,/Transcript \(required\)/);
   assert.match(protocol.sections.bootstrap,/Required before research/);
+  assert.ok(protocol.sections.bootstrap.indexOf('6. Implement and exercise')<protocol.sections.bootstrap.indexOf('7. Only after readiness passes'));
+  assert.match(protocol.sections.lifecycle,/no work and submit nothing/);
+  assert.match(protocol.sections.lifecycle,/nonzero exit status/);
+  assert.match(protocol.sections.lifecycle,/all-complete verification fails/);
+  assert.match(protocol.sections.accounting,/accepted does not prove token credit/);
   assert.match(protocol.sections.framework,/persist and reload task progress/);
   assert.match(protocol.sections.framework,/research completion, server submission and accounting completeness separately/);
   assert.match(protocol.sections.accounting,/Implement or reuse and validate/);
@@ -328,4 +334,28 @@ test('a recipient needs a current question claim to delegate substantial researc
   await call(`/asks/${ask.id}/research`,{run:general,body:{claim_generation:renewed.claim_generation-1},status:403});
   const research=await call(`/asks/${ask.id}/research`,{run:general,body:{claim_generation:renewed.claim_generation}});
   assert.ok(research.job_id);assert.equal((await call(`/asks/${ask.id}`)).ask.status,'researching');
+});
+
+test('reconciliation exposes a never-submitted attempt, its eventual receipt, and a distinct release outcome',async()=>{
+  const {credential}=await account(),did=(await bootstrap(random(),credential)).department_id;
+  const direction=await call(`/departments/${did}/directions`,{credential,body:{words:'Verify lifecycle evidence for a bounded task.'}});
+  const run=await launch(did,direction.direction_id,'',credential);
+  const outstanding=await call('/run/context',{credential,run});
+  assert.equal(outstanding.attempt.id,run.attempt_id);assert.equal(outstanding.attempt.status,'assigned');
+  assert.equal(outstanding.attempt.receipt,null);assert.equal(Number(outstanding.attempt.assignment_payload.job_id),Number(run.job_id));
+  const holds=async()=>((await call('/sessions',{credential,run})).sessions.find(s=>s.id===run.session)).holds;
+  assert.ok((await holds()).some(j=>Number(j.id)===Number(run.job_id)));
+  await call('/result',{credential,run,headers:{'x-attempt':run.attempt_id},body:{job_id:run.job_id},status:400});
+  assert.equal((await call('/run/context',{credential,run})).attempt.receipt,null,'validation refusal cannot supply completion evidence');
+  const receipt=await call('/result',{credential,run,headers:{'x-attempt':run.attempt_id,'x-request-id':random()},body:{job_id:run.job_id,report_md:'Lifecycle fixture: the bounded question remains unresolved.',transcript:'Scripted fixture with no model inference.',transcript_approved:true}});
+  const completed=await call('/run/context',{credential,run});
+  assert.equal(completed.attempt.status,'completed');assert.deepEqual(completed.attempt.receipt,receipt);
+  assert.equal((await holds()).length,0);
+  assert.equal(Number((await call(`/return/${receipt.return_id}`,{credential})).id),Number(receipt.return_id));
+  const next=await call('/run/next-step',{credential,run,body:{revision:1,title:'Lifecycle follow-up',question:'Record a bounded follow-up.',why:'Check its explicit release outcome.',stop_when:'One checkpoint.',budget_hours:.5}});
+  const assigned=await call('/start',{credential,run});assert.equal(assigned.job_id,next.job_id);
+  const released=await call('/release',{credential,run,headers:{'x-attempt':assigned.attempt_id},body:{job_id:assigned.job_id,note:'Stopped at the fixture boundary'}});
+  const ended=await call('/run/context',{credential,run});
+  assert.ok(['released','cancelled'].includes(ended.attempt.status));assert.deepEqual(ended.attempt.receipt,released);
+  assert.equal(ended.attempt.receipt.return_id,undefined,'release is not a submitted research result');
 });
