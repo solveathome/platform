@@ -24,7 +24,7 @@ writeFileSync(join(tmp, slug, "research", "QUESTIONS.md"), [
   "Prose about `Q-not-in-a-table` that is not a row at all.",
 ].join("\n"));
 
-const { questions, openQuestions, cells } = await import("../src/lib/questions.ts");
+const { questions, openQuestions, cells, sweepWindow } = await import("../src/lib/questions.ts");
 process.on("exit", () => rmSync(tmp, { recursive: true, force: true }));
 
 test("issue #68: an escaped bar is cell content, so the row is kept and the verdict is whole", () => {
@@ -51,3 +51,23 @@ test("cells splits a row on unescaped bars only", () => {
   assert.deepEqual(cells("| a \\| b | c |"), ["", " a | b ", " c ", ""]);
   assert.deepEqual(cells("no bars here"), ["no bars here"]);
 });
+
+// Issue #61: three consecutive sweeps of one handle advanced 23-37, 38-52, then asked for rows 53-67 of a list with 53 rows.
+// The cursor wrapped; the window did not stop at the end. Every lane's template carries the same counter, so once a backlog
+// was exhausted the queue kept dispatching sweeps that had one row or none in them.
+test("issue #61: a sweep window never runs past the end of the list it indexes", () => {
+  const rows = 53;
+  assert.deepEqual(sweepWindow(0, rows), { from: 1, take: 15 });
+  assert.deepEqual(sweepWindow(1, rows), { from: 16, take: 15 });
+  assert.deepEqual(sweepWindow(2, rows), { from: 31, take: 15 });
+  assert.deepEqual(sweepWindow(3, rows), { from: 46, take: 8 }, "the last window is the rows that exist, not fifteen");
+  assert.deepEqual(sweepWindow(4, rows), { from: 8, take: 15 }, "and the cursor wraps as before");
+  for (let i = 0; i < 40; i++) {
+    const w = sweepWindow(i, rows);
+    assert.ok(w.from >= 1 && w.from <= rows, `window ${i} starts inside the list`);
+    assert.ok(w.take >= 1 && w.from + w.take - 1 <= rows, `window ${i} ends inside the list`);
+  }
+  assert.deepEqual(sweepWindow(7, 1), { from: 1, take: 1 }, "a one-row list is swept one row at a time");
+  assert.deepEqual(sweepWindow(0, 0), { from: 1, take: 0 }, "an empty list asks for nothing");
+});
+
