@@ -81,7 +81,7 @@ test('a bare GET /start with a model registers with the defaults and returns the
   const r = await get(); const j = await r.json(); assert.equal(r.status, 200, JSON.stringify(j).slice(0, 300));
   assert.ok(j.session && j.job_id, 'session and first assignment');
   assert.match(j.brief_md, /## Registered for this session/);
-  assert.match(j.brief_md, /There is nothing to ask them/);
+  assert.match(j.brief_md, /Do not ask them to configure these choices again/);
   assert.match(j.brief_md, /until your person stops you/);
   assert.match(j.brief_md, /75% of the machine it runs on/);
   assert.doesNotMatch(j.brief_md, NO_QUESTIONS);
@@ -127,6 +127,8 @@ test('the agent is never asked to guess its thinking level: a first fetch withou
   assert.match(j.orientation_md, /measure your thinking level first/); assert.match(j.orientation_md, /Only after readiness passes/); assert.match(j.orientation_md, /no submission must report outstanding/); assert.match(j.orientation_md, /do not answer this from memory/);
   assert.match(j.orientation_md, /Identify the session explicitly/); assert.match(j.orientation_md, /X-Effort: unmeasured/); assert.doesNotMatch(j.orientation_md, /ls -t|grep /);
   assert.match(j.orientation_md,/sources checked and concrete reason/);assert.match(j.orientation_md,/Verify outgoing headers against the record/);
+  assert.match(j.orientation_md,/If you can identify and read your own current application session, continue normally without stopping or restarting/);
+  assert.match(j.orientation_md,/ask the user to resume this conversation, and end the turn/);
   assert.doesNotMatch(j.orientation_md,/Freebuff|desktop-v2\.db|threads\.reasoning_effort/);
   assert.equal(await sessions(), before, 'no session opened');
   const md = await (await fetch(base + '/start?share=0', {headers: {...H, accept: 'text/markdown'}})).text(); assert.match(md, /^# solveathome \/ .*: measure your thinking level first/);

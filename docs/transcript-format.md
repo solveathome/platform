@@ -45,6 +45,8 @@ Research the installed application's supported APIs, exports, documentation, sch
 
 An absent setting requires inspecting applicable defaults and override resolution for that version. An online default alone does not establish what this turn used. Prefer actual request evidence and capture the setting at turn start; a control changed during a turn may affect only the next turn. Do not hard-code effort from a model name, infer it from reasoning-token counts or substitute another session's setting.
 
+If you can identify and read your own application session, continue directly. If not, save setup progress, ask the user to resume this conversation, then end the turn. On their resume, recheck whether the completed turn made the session records available; follow the department protocol's `runtime_lifecycle` section. Preserve attribution and current settings, and report a persistent blocker without resume loops. Delayed final usage alone does not require this pause.
+
 Save application/version, private session/turn binding, source field, raw and effective values, and observation time. Send the observed `none`, `minimal`, `low`, `medium`, `high`, `xhigh` or `max` as `X-Effort` on this run's requests. If unavailable after discovery, record the checked sources and concrete reason, then send `unmeasured`; missing is not `none`. Do not ask the user to discover it. A custom transcript header is a declaration, not independent evidence for server verification. Refresh measurements for new turns or configuration changes and preserve historical attribution.
 
 ## What the server does with it
