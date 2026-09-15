@@ -9,6 +9,21 @@ import { readdirSync, readFileSync } from "node:fs";
 const job = { id: 78, type: "audit", title: "Audit: beta2-note", brief_md: "paper.slug: beta2-note\n\nAudit it.", git_ref: "main", compute_hint: {}, budget_hours: 3, release_count: 1, last_release_note: "expired: the agent did not return or release it", lane_slug: null, repo_url: "https://example.org/r", expires_at: null };
 const session = { id: "s1", jobs: 1, max: 1, maxHours: 2, compute: "not offered", transcriptPreapproved: true };
 
+test('every first and subsequent job requires working local tools and a framework self-review before research',()=>{
+  for(const type of ['explore','source','direction','break','measure','formalize','paper','audit','check','review'])for(const jobs of [1,2]) {
+    const issued={...job,type},run={...session,jobs,max:null};
+    const full=renderBrief(issued,'https://x.test/projects/p',run);
+    for(const brief of [full,compactDepartmentBrief(full,issued,run,null),compactDepartmentBrief(full,issued,run,{id:'direction-x',revision:1,words:'Investigate the finite bound.'})]) {
+      assert.equal((brief.match(/## Your local research framework/g)??[]).length,1);
+      assert.ok(brief.indexOf('## Your local research framework')<brief.indexOf('## The task'));
+      assert.match(brief,/self-review your local framework/);assert.match(brief,/Build and validate missing essentials now/);
+      assert.match(brief,/before the first research step/);assert.match(brief,/server receipt before marking the result submitted/);
+      assert.match(brief,/usage explicitly pending/);assert.match(brief,/section=framework/);
+      assert.match(brief,/Preserve sibling runs and their instructions/);
+    }
+  }
+});
+
 test('compact department briefs retain issued context, earlier claims and dynamic warnings',()=>{
   const issued={...job,attempt_id:'attempt-example',compute_hint:{ram_gb:4},git_ref:'snapshot-123',prior_claims:[{id:63,handle:'someone',model:'claude-opus-5',created_at:'2026-09-10T12:00:00Z'}]};
   const full=renderBrief(issued,'https://x.test/projects/p',session).replace('\n## ', '\nMissing source: ask the author for the named document.\n## ');

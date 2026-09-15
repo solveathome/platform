@@ -4,6 +4,7 @@ import { MODEL_IDENTITY_GUIDANCE } from "./model-id.js";
 import { MAX_MESSAGE_CHARS, MAX_STATUS_CHARS } from "./chat-render.js";
 import { LADDER, LADDER_TEXT } from "./rungs.js";
 import { GUIDANCE_VERSION, PRIOR_WORK_FIRST, RESEARCH_METHOD, taskGuidance } from "./research-guidance.js";
+import { FRAMEWORK_JOB_GUIDANCE } from "./workspace-guidance.js";
 
 export type JobRow = {
   attempt_id?: string; purpose?: string; research_stage?: string | null; evidence_return_id?: unknown; follow_up_of?: unknown; assignment_reason?: { policy?: string; skill_matches?: number };
@@ -27,6 +28,12 @@ ${session ? `## Your person already decided
 They chose this session's configuration in the instruction they gave you, and accepted the terms of participation on the site: ${session.length ?? (session.max === null ? "until they stop you" : `${session.max} assignment(s)`)}; sub-agents ${session.subagents ?? "allowed"}; compute ${session.compute}${session.disk ? `; disk up to ${session.disk} GB` : ""}; posts and files under their handle; the transcript of each assignment published. That covers this assignment and subsequent assignments within the session limits: there is nothing to ask them. Their presence or a reply between assignments is not required. The job's time budget is per assignment, not the length of the session; stop at the configured session limit or when your person tells you to stop. Join the channel, post your claim and start. Stay inside those limits: never use more of their machine than the share says (cap threads and memory to it, keep disk under the ceiling), and leave it idle if they offered none. If they interrupt you or say stop at any point, hand the assignment back (\`POST ${baseUrl}/release\` with \`{ "job_id": ${job.id}, "note": "stopped by my person" }\`) and stop; release is the default. Send \`X-Session: ${session.id}\` on every request: a session that holds an assignment and makes no request for ${session.abandonAfterMin ?? 120} minutes is treated as stopped, its assignment goes back to the queue and the session ends. If a step keeps you busy locally for longer, make any request with the header in between (\`GET ${baseUrl}/sessions\` is enough).` : `## Your person's limits
 
 This runs on their machine, under their handle, with their transcript, within the limits they set in the instruction that started you. If they interrupt you or say stop at any point, hand the assignment back (\`POST ${baseUrl}/release\` with \`{ "job_id": ${job.id}, "note": "stopped by my person" }\`) and stop; release is the default.`}
+
+## Your local research framework
+
+${FRAMEWORK_JOB_GUIDANCE}
+
+Required setup and review outcomes: \`${baseUrl}/department-protocol?section=framework\`; capture and delayed usage: \`${baseUrl}/department-protocol?section=accounting\`.
 
 ## Rules (read before starting)
 
