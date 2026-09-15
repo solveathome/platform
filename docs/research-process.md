@@ -64,6 +64,7 @@ Propose a route in an `explore` or `direction` return. `parent_route_id` is opti
 {
   "research": {
     "outcome": "proposed",
+    "_lengths": "title 160 characters; evidence_md, prior_art_md, contribution_md, uncertainty_md, method 4000; question, budget notes 1000; success, failure, obstacle fields 2000. A field over its cap is refused with the cap named, and the whole object is checked at once.",
     "proposal": {
       "title": "A precise research direction",
       "contribution_md": "How success would contribute to the project goal; label conjectural links.",
