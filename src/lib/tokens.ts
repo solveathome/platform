@@ -19,12 +19,12 @@ const lineKey = (s: string): string => "l:" + createHash("sha1").update(s).diges
 
 /** No single return spends more than this per field; anything above is a forged or broken transcript, not usage. */
 export const MAX_TOKENS_PER_FIELD = 50_000_000;
-export type LogKind = "claude-code" | "codex" | "copilot" | "opencode" | "antigravity" | "custom" | "withheld" | "summary" | "unknown";
+export type LogKind = "claude-code" | "codex" | "copilot" | "opencode" | "antigravity" | "freebuff" | "custom" | "withheld" | "summary" | "unknown";
 /** A transcript that is not the assignment's own (issue #55): what it names or when it ends, in words for the agent and the page. */
 export type Mismatch = { reason: string; job: number; jobs_named?: number[]; ends_at?: string };
 /** Usage entries of this transcript that were already counted on the person's earlier returns or reviews, and where. */
 export type AlreadyCounted = { entries: number; of: number; on: string[] };
-export type Tokens = { input: number; output: number; cache_read: number; cache_write: number; entries: number; source: "claude-jsonl" | "codex-jsonl" | "copilot-jsonl" | "opencode-jsonl" | "custom-jsonl" | "reported" | "none"; models?: Record<string, number>; observed_models?: string[]; log?: LogKind; mismatch?: Mismatch; already_counted?: AlreadyCounted };
+export type Tokens = { input: number; output: number; cache_read: number; cache_write: number; entries: number; source: "claude-jsonl" | "codex-jsonl" | "copilot-jsonl" | "opencode-jsonl" | "freebuff-jsonl" | "custom-jsonl" | "reported" | "none"; models?: Record<string, number>; observed_models?: string[]; log?: LogKind; mismatch?: Mismatch; already_counted?: AlreadyCounted };
 
 /**
  * The assignments a transcript names: the brief's title line ("# solveathome job #N", the GET /start result) and the job_id the agent
@@ -57,7 +57,7 @@ export function assignmentMismatch(text: string, jobId: number, assignedAt: Date
   return null;
 }
 /** Accepted as a transcript: a harness's own log, or one the agent wrote in the solveathome format (labelled agent-written, counts what it states). */
-export const SESSION_LOG_KINDS: LogKind[] = ["claude-code", "codex", "copilot", "opencode", "antigravity", "custom"];
+export const SESSION_LOG_KINDS: LogKind[] = ["claude-code", "codex", "copilot", "opencode", "antigravity", "freebuff", "custom"];
 /** The format an agent may write itself when its harness keeps no log (Chris, Sep 12 2026); spec in docs/transcript-format.md. */
 export const CUSTOM_FORMAT_URL = "https://github.com/solveathome/platform/blob/main/docs/transcript-format.md";
 export const isSessionLog = (t: { log?: LogKind } | null | undefined): boolean => !!t?.log && SESSION_LOG_KINDS.includes(t.log);
@@ -201,7 +201,9 @@ export function parseTranscriptWithKeys(text: string, reported?: any, exclude?: 
     if (typeof d?.step_index === "number" && typeof d?.source === "string") { const st = typeof d.content === "string" && d.content.includes("Model Selection") ? antigravitySetting(d.content) : null; if (st) { rememberModel(st.model); t.models![st.model] = t.models![st.model] ?? 0; } continue; }
     // A harness that reads usage off one line reads it here; the arithmetic lives beside the shape it reads (harnesses.ts).
     // The solveathome header line names the model for the turns that follow and carries no usage of its own.
-    if (d?.type === "solveathome.transcript") { const m = rememberModel(d.model); if (m) t.models![m] = t.models![m] ?? 0; continue; }
+    // A header line names the model for the turns that follow and carries no usage of its own: the solveathome format's
+    // transcript line, and Freebuff's thread row, whose message rows carry usage but never the model.
+    if (d?.type === "solveathome.transcript" || (d?.harness_id !== undefined && d?.model !== undefined)) { const m = rememberModel(d.model); if (m) t.models![m] = t.models![m] ?? 0; continue; }
     let handled = false;
     for (const h of HARNESSES) {
       const e = h.usage?.(d);

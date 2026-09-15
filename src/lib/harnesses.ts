@@ -14,8 +14,8 @@
  */
 import { canonicalModel } from "./model-id.js";
 
-export type HarnessId = "claude-code" | "codex" | "copilot" | "opencode" | "antigravity" | "custom";
-export type UsageSource = "claude-jsonl" | "codex-jsonl" | "copilot-jsonl" | "opencode-jsonl" | "custom-jsonl";
+export type HarnessId = "claude-code" | "codex" | "copilot" | "opencode" | "antigravity" | "freebuff" | "custom";
+export type UsageSource = "claude-jsonl" | "codex-jsonl" | "copilot-jsonl" | "opencode-jsonl" | "freebuff-jsonl" | "custom-jsonl";
 
 /** What one line of a log contributes: the four counters, the model that produced it, and the id that makes it count once. */
 export type Entry = { input?: number; output?: number; cache_read?: number; cache_write?: number; model?: unknown; id?: string | null; fallbackModel?: string };
@@ -78,6 +78,29 @@ export const HARNESSES: Harness[] = [
     model: (d) => ["session_meta", "turn_context", "token_usage_record"].includes(d?.type) ? (d.payload?.model ?? d.model ?? d.values?.model) : null,
     // Codex's counting is stateful (a cumulative thread total that is a ceiling, and the same turn logged in two shapes), so
     // it stays in tokens.ts where that state lives; `codexUsage` there reads the per-turn shapes.
+  },
+  {
+    id: "freebuff",
+    name: "Freebuff Desktop",
+    source: "freebuff-jsonl",
+    // Freebuff keeps its session in SQLite, not in a file the platform can read, so what is recognised is a faithful dump of
+    // the two tables it uses: one object per row, the column names unchanged (platform issue #74). Nothing is mapped in the
+    // export, so nothing can be mis-stated there; the arithmetic is here, where it is tested. Built against a real database:
+    // the mapping below reconciles to `totalTokens` exactly on all 39 turns that carry usage.
+    detect: [/"thread_id"\s*:/, /"parts_json"\s*:|"metrics_json"\s*:/],
+    model: (d) => d?.harness_id !== undefined || d?.reasoning_effort !== undefined ? d.model : null,
+    usage: (d) => {
+      if (d?.role !== "assistant" || d?.metrics_json === undefined) return null;
+      let metrics = d.metrics_json;
+      if (typeof metrics === "string") { try { metrics = JSON.parse(metrics); } catch { return null; } }
+      const u = metrics?.usage;
+      if (!u || typeof u !== "object" || (u.inputTokens === undefined && u.outputTokens === undefined)) return null;
+      // `inputTokens` is the whole prompt, cached part included, so the cached part is subtracted to leave what was read fresh.
+      // `reasoningOutputTokens` is already inside `outputTokens` here, unlike OpenCode, so adding it would count it twice.
+      const cached = Number(u.cachedInputTokens ?? 0);
+      return { input: Math.max(0, Number(u.inputTokens ?? 0) - cached), cache_read: cached, output: Number(u.outputTokens ?? 0),
+        id: d.seq !== undefined ? `fb:${d.thread_id ?? ""}:${d.seq}` : null, fallbackModel: "freebuff" };
+    },
   },
   {
     id: "claude-code",

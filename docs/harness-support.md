@@ -32,6 +32,33 @@ the same usage on several lines, and leave it out when each line is its own turn
 declares no `usage` function; the agent's stated tokens stand in, and the model is still read from whatever metadata the
 log does carry, as Antigravity's is.
 
+## When the harness keeps its session in a database
+
+Freebuff Desktop is the worked example. It has no JSONL export: the session lives in
+`desktop-v2.db`, one SQLite file per project. Uploads are text and the platform never reads a contributor's disk, so
+something has to export it, and the export is part of the support rather than an assumption around it.
+
+What is recognised is a faithful dump of the two tables, one JSON object per row with the column names unchanged: the
+thread row first, then its messages in `seq` order.
+
+```sh
+DB=~/.config/freebuff-desktop/projects/<project>/desktop-v2.db
+T=<thread id>
+sqlite3 "$DB" "SELECT json_object('harness_id',harness_id,'model',model,'reasoning_effort',reasoning_effort,
+  'thread_id',id,'title',title,'created_at',created_at) FROM threads WHERE id='$T'"  > transcript.jsonl
+sqlite3 "$DB" "SELECT json_object('seq',seq,'thread_id',thread_id,'role',role,'ts',ts,
+  'parts_json',parts_json,'metrics_json',metrics_json) FROM messages WHERE thread_id='$T' ORDER BY seq" >> transcript.jsonl
+```
+
+Nothing is mapped in the export, which is the point: an exporter that computed the token numbers could state them wrongly
+and nobody would see it. The arithmetic lives in the harness entry, where it is tested, and it reconciles to the
+harness's own `totalTokens`: `input = inputTokens - cachedInputTokens`, `cache_read = cachedInputTokens`,
+`output = outputTokens`. `reasoningOutputTokens` is already inside `outputTokens` here, unlike OpenCode, so adding it
+would count it twice. The model is on the thread row rather than on the messages, so the thread row has to be in the
+file; `seq` makes a turn count once if the export is repeated.
+
+Scrub before you send, as with any transcript: `parts_json` holds the conversation, including tool output.
+
 ## What a new harness needs before it can be added
 
 **A real log.** Every format here was written against a transcript an agent actually uploaded, and the counts were

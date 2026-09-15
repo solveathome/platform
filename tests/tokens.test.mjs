@@ -218,7 +218,7 @@ test('a Google Antigravity transcript.jsonl is a session log (Sep 13 2026, harne
 test('a harness is one entry: every registered harness is detectable, and its parts agree with what the counter does', async () => {
   const { HARNESSES, detectHarness, modelOnLine, harnessById } = await import('../src/lib/harnesses.ts');
   const ids = HARNESSES.map(h => h.id);
-  assert.deepEqual(ids, ['custom', 'antigravity', 'copilot', 'codex', 'claude-code', 'opencode'], 'order is the detection order: the most specific shapes first');
+  assert.deepEqual(ids, ['custom', 'antigravity', 'copilot', 'codex', 'freebuff', 'claude-code', 'opencode'], 'order is the detection order: the most specific shapes first');
   for (const h of HARNESSES) {
     assert.ok(h.name && h.source, `${h.id} says what it is and what source it credits`);
     assert.ok(h.detect.length, `${h.id} has at least one shape to recognise`);
@@ -231,6 +231,7 @@ test('a harness is one entry: every registered harness is detectable, and its pa
     'opencode': '{"role":"assistant","id":"a1","modelID":"gpt-6","providerID":"openai","tokens":{"input":10,"output":5}}',
     'antigravity': '{"step_index":0,"source":"USER_EXPLICIT","type":"USER_INPUT","content":"hello"}',
     'custom': '{"type":"solveathome.transcript","model":"claude-opus-5"}',
+    'freebuff': '{"seq":64,"thread_id":"76fb8157","role":"assistant","parts_json":"[]","metrics_json":"{}"}',
   };
   for (const [id, line] of Object.entries(samples)) {
     assert.equal(detectHarness(line)?.id, id, `${id} recognises its own line`);
@@ -247,3 +248,30 @@ test('a harness is one entry: every registered harness is detectable, and its pa
   assert.equal(oc.output, 5, 'reasoning is output the person paid for');
   assert.equal(harnessById('antigravity').usage, undefined, 'a log with no usage in it declares none');
 });
+
+// Issue #74: Freebuff Desktop keeps its session in SQLite, so what the platform recognises is a faithful dump of the two
+// tables it uses, column names unchanged. Nothing is mapped in the export, so nothing can be mis-stated there. These numbers
+// are from a real database: the mapping reconciles to the harness's own totalTokens exactly, on every turn that carries usage.
+test('a Freebuff Desktop export is a session log: usage per turn, the model from the thread row', () => {
+  const log = [
+    JSON.stringify({harness_id: 'codebuff', model: 'deepseek/deepseek-v4-flash', reasoning_effort: 'max', thread_id: 't1', created_at: 1789387563222}),
+    JSON.stringify({seq: 2, thread_id: 't1', role: 'user', ts: 1, parts_json: '[]', metrics_json: '{}'}),
+    JSON.stringify({seq: 3, thread_id: 't1', role: 'assistant', ts: 2, parts_json: '[]',
+      metrics_json: JSON.stringify({usage: {inputTokens: 2108034, cachedInputTokens: 2047488, outputTokens: 47778, reasoningOutputTokens: 25415, totalTokens: 2155812}})}),
+    JSON.stringify({seq: 4, thread_id: 't1', role: 'assistant', ts: 3, parts_json: '[]',
+      metrics_json: JSON.stringify({usage: {inputTokens: 100, cachedInputTokens: 40, outputTokens: 10, totalTokens: 110}})}),
+  ].join('\n');
+  assert.equal(logKind(log), 'freebuff');
+  const t = parseTranscript(log);
+  assert.equal(t.source, 'freebuff-jsonl');
+  assert.equal(t.entries, 2, 'one entry per assistant turn; the user turn carries no usage');
+  assert.equal(t.input, (2108034 - 2047488) + (100 - 40), 'the cached part is subtracted from the prompt, not counted twice');
+  assert.equal(t.cache_read, 2047488 + 40);
+  assert.equal(t.output, 47778 + 10, 'reasoning is already inside outputTokens here, unlike OpenCode');
+  assert.equal(t.input + t.cache_read + t.output, 2155812 + 110, "the sum is the harness's own totalTokens");
+  assert.deepEqual(t.models, {'deepseek-v4-flash': 47788}, 'the model comes from the thread row and is canonicalised');
+  assert.deepEqual(t.observed_models, ['deepseek-v4-flash']);
+  const twice = parseTranscript([log, log.split('\n')[2]].join('\n'));
+  assert.equal(twice.entries, 2, 'a turn repeated in the export counts once');
+});
+
