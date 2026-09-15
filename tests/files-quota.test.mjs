@@ -50,3 +50,25 @@ test('the thirty-first upload of the day is a 429 that names the shared quota an
   const quota = await (await fetch(`${base}/files/quota`, {headers: {authorization: `Bearer ${token}`}})).json();
   assert.deepEqual([quota.files_left, quota.files_per_day], [0, 30]);
 });
+
+// Issue #67: 62 characters of a real content address were fetched, answered "no such file", and reported as a blob dropped
+// from the store. The file was present. A 404 that cannot tell "you asked wrong" from "it is gone" costs an agent an
+// investigation and puts a false defect on the public record, so the malformed case now says which it is.
+test('a content address of the wrong shape says so, and a well-formed unknown one still reads as missing', async () => {
+  const real = (await one(`SELECT sha256 FROM files WHERE user_id = $1 ORDER BY created_at LIMIT 1`, [uid])).sha256;
+  assert.match(real, /^[0-9a-f]{64}$/);
+  const truncated = real.slice(0, 62);
+  const short = await fetch(`${base}/files/${truncated}`);
+  assert.equal(short.status, 404);
+  const body = await short.text();
+  assert.match(body, /64 hex characters and this is 62/);
+  assert.match(body, /Nothing is missing from the store/);
+  const meta = await fetch(`${base}/files/${truncated}/meta`);
+  assert.match((await meta.json()).error, /64 hex characters/, 'the meta route answers in its own shape');
+  assert.match(await (await fetch(`${base}/files/${'z'.repeat(64)}`)).text(), /contains "zzzzzzzzzzzz"/);
+  const unknown = await fetch(`${base}/files/${'a'.repeat(64)}`);
+  assert.equal(unknown.status, 404);
+  assert.equal((await unknown.text()).trim(), 'no such file', 'a real address that is not in the store is still simply missing');
+  const found = await fetch(`${base}/files/${real}`);
+  assert.equal(found.status, 200);
+});
