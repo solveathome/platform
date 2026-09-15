@@ -12,6 +12,7 @@
  */
 import { createHash } from "node:crypto";
 import { canonicalModel, parseEffort } from "./model-id.js";
+import { HARNESSES, detectHarness, modelOnLine } from "./harnesses.js";
 
 /** The key of a usage entry (Chris, Sep 12 2026: a usage entry counts once per person): the harness's message id when the line carries one, else the line itself. */
 const lineKey = (s: string): string => "l:" + createHash("sha1").update(s).digest("hex").slice(0, 16);
@@ -70,12 +71,8 @@ export const notSessionLog = (t: { log?: LogKind } | null | undefined): boolean 
  */
 export function logKind(text: string): LogKind {
   const t = String(text ?? "");
-  if (/"type":\s*"solveathome\.(?:transcript|turn)"/.test(t)) return "custom";
-  if (/"type":\s*"(?:PLANNER_RESPONSE|USER_INPUT|SYSTEM_MESSAGE)"/.test(t) && /"step_index"\s*:\s*\d/.test(t)) return "antigravity";
-  if (/"type":\s*"(?:assistant\.message|assistant\.turn_start|tool\.execution_(?:start|complete)|model\.model_call_success)"/.test(t)) return "copilot";
-  if (/"type":\s*"(?:token_count|token_usage_record|response_item|event_msg|session_meta|turn_context)"/.test(t) || /"(?:last_token_usage|total_token_usage|thread_token_usage)"/.test(t)) return "codex";
-  if (/"type":\s*"(?:assistant|user)"\s*,/.test(t) && /"message"\s*:\s*\{/.test(t)) return "claude-code";
-  if (/"role":\s*"assistant"/.test(t) && /"(?:providerID|modelID)"\s*:/.test(t)) return "opencode";
+  const harness = detectHarness(t);
+  if (harness) return harness.id;
   if (/^\s*\[transcript withheld/i.test(t)) return "withheld";
   if (/"type":\s*"activity_summary"|not a (?:native )?(?:conversation )?transcript|activity summary/i.test(t)) return "summary";
   const jsonLines = t.split("\n").filter((l) => l.trim().startsWith("{")).length;
@@ -199,58 +196,28 @@ export function parseTranscriptWithKeys(text: string, reported?: any, exclude?: 
     let d: any; try { d = JSON.parse(s); } catch { continue; }
     // Identity is evidence even without usage or when the usage was already credited.
     // Read only known metadata fields, never model names in conversation/tool payloads.
-    rememberModel(
-      d?.type === "solveathome.transcript" || (d?.type === "solveathome.turn" && d.role === "assistant") ? d.model :
-      d?.type === "assistant" ? d.message?.model :
-      d?.type === "assistant.message" ? d.data?.model :
-      d?.type === "model.model_call_success" ? d.data?.copilotUsage?.token_details?.find((x: any) => x?.model)?.model :
-      d?.role === "assistant" && (d.modelID !== undefined || d.providerID !== undefined) ? d.modelID :
-      ["session_meta", "turn_context", "token_usage_record"].includes(d?.type) ? d.payload?.model ?? d.model ?? d.values?.model : null);
+    rememberModel(modelOnLine(d));
     // Antigravity steps carry no usage; the user step names the model the person selected (kept so X-Model can be checked).
     if (typeof d?.step_index === "number" && typeof d?.source === "string") { const st = typeof d.content === "string" && d.content.includes("Model Selection") ? antigravitySetting(d.content) : null; if (st) { rememberModel(st.model); t.models![st.model] = t.models![st.model] ?? 0; } continue; }
-    const u = d?.message?.usage;
-    if (u && typeof u === "object" && (u.input_tokens !== undefined || u.output_tokens !== undefined)) {
-      const id = d.message?.id ? String(d.message.id) : null;
-      if (id) { if (seen.has(id)) continue; seen.add(id); }
-      if (!take(id ? "cc:" + id : lineKey(s))) continue;
-      t.input += Number(u.input_tokens ?? 0); t.output += Number(u.output_tokens ?? 0);
-      t.cache_read += Number(u.cache_read_input_tokens ?? 0); t.cache_write += Number(u.cache_creation_input_tokens ?? 0);
-      t.entries++; t.source = "claude-jsonl";
-      const m = rememberModel(d.message?.model); if (m) t.models![m] = (t.models![m] ?? 0) + Number(u.output_tokens ?? 0);
-      continue;
-    }
-    // The solveathome format (agent-written): a header line names the model; each turn may carry usage {input, output, cache_read, cache_write}.
+    // A harness that reads usage off one line reads it here; the arithmetic lives beside the shape it reads (harnesses.ts).
+    // The solveathome header line names the model for the turns that follow and carries no usage of its own.
     if (d?.type === "solveathome.transcript") { const m = rememberModel(d.model); if (m) t.models![m] = t.models![m] ?? 0; continue; }
-    if (d?.type === "solveathome.turn") {
-      const u = d.usage;
-      if (u && typeof u === "object" && (u.input !== undefined || u.output !== undefined)) {
-        if (!take(lineKey(s))) continue;
-        t.input += Number(u.input ?? 0); t.output += Number(u.output ?? 0); t.cache_read += Number(u.cache_read ?? 0); t.cache_write += Number(u.cache_write ?? 0);
-        t.entries++; t.source = "custom-jsonl";
-        const m = rememberModel(d.model) || Object.keys(t.models ?? {})[0] || "custom"; t.models![m] = (t.models![m] ?? 0) + Number(u.output ?? 0);
-      }
-      continue;
+    let handled = false;
+    for (const h of HARNESSES) {
+      const e = h.usage?.(d);
+      if (!e) continue;
+      handled = true;
+      if (e.id) { if (seen.has(e.id)) break; seen.add(e.id); }
+      if (!take(e.id ?? lineKey(s))) break;
+      t.input += e.input ?? 0; t.output += e.output ?? 0; t.cache_read += e.cache_read ?? 0; t.cache_write += e.cache_write ?? 0;
+      t.entries++; t.source = h.source;
+      const m = rememberModel(e.model) || (e.fallbackModel ? (Object.keys(t.models ?? {})[0] || e.fallbackModel) : "");
+      if (m) t.models![m] = (t.models![m] ?? 0) + (e.output ?? 0);
+      break;
     }
-    // Copilot CLI: usage sits on model.model_call_success lines; the model that answered is on assistant.message lines (kept so X-Model can be checked).
-    if (d?.type === "model.model_call_success" && d?.data?.responseUsage && typeof d.data.responseUsage === "object") {
-      if (!take(lineKey(s))) continue;
-      const ru = d.data.responseUsage; const cached = Number(ru.prompt_tokens_details?.cached_tokens ?? 0);
-      t.input += Math.max(0, Number(ru.prompt_tokens ?? 0) - cached); t.cache_read += cached; t.output += Number(ru.completion_tokens ?? 0);
-      t.entries++; t.source = "copilot-jsonl";
-      const m = rememberModel(d.data.copilotUsage?.token_details?.find((x: any) => x?.model)?.model) || "copilot"; t.models![m] = (t.models![m] ?? 0) + Number(ru.completion_tokens ?? 0);
-      continue;
-    }
+    if (handled || d?.type === "solveathome.turn") continue;
+    // A Copilot assistant.message names the model that answered but carries no usage; keep it so X-Model can be checked.
     if (d?.type === "assistant.message" && d?.data?.model) { const m = rememberModel(d.data.model); if (m) t.models![m] = t.models![m] ?? 0; continue; }
-    // OpenCode: each assistant message carries tokens {input, output, reasoning, cache: {read, write}} and modelID; step-finish lines repeat them and are skipped.
-    if (d?.role === "assistant" && d?.tokens && typeof d.tokens === "object" && (d.modelID !== undefined || d.providerID !== undefined)) {
-      const id = d.id ? String(d.id) : null; if (id) { if (seen.has(id)) continue; seen.add(id); }
-      if (!take(id ? "oc:" + id : lineKey(s))) continue;
-      const tk = d.tokens; const out = Number(tk.output ?? 0) + Number(tk.reasoning ?? 0);
-      t.input += Number(tk.input ?? 0); t.output += out; t.cache_read += Number(tk.cache?.read ?? 0); t.cache_write += Number(tk.cache?.write ?? 0);
-      t.entries++; t.source = "opencode-jsonl";
-      const m = rememberModel(d.modelID) || "opencode"; t.models![m] = (t.models![m] ?? 0) + out;
-      continue;
-    }
     consider(d?.payload?.info?.total_token_usage); consider(d?.info?.total_token_usage); consider(d?.values?.info?.total_token_usage);
     consider(d?.values?.thread_token_usage); consider(d?.thread_token_usage);
     if (hasRecords && d?.type !== "token_usage_record" && (d?.payload?.info?.last_token_usage || d?.info?.last_token_usage || d?.values?.info?.last_token_usage)) continue;   // the same turn is in a token_usage_record line

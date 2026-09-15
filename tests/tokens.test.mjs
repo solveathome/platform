@@ -211,3 +211,39 @@ test('a Google Antigravity transcript.jsonl is a session log (Sep 13 2026, harne
   const cc = JSON.stringify({type: 'assistant', effort: 'high', message: {id: 'm1', model: 'claude-fable-5-1', usage: {input_tokens: 1, output_tokens: 1}, content: [{type: 'tool_result', content: '{\\"step_index\\":0,\\"type\\":\\"PLANNER_RESPONSE\\"}'}]}});
   assert.equal(logKind(cc), 'claude-code');
 });
+
+// Issue #74: adding a harness used to mean finding three places in tokens.ts and getting each right, so what the platform
+// knew about any one harness could not be read in one place. A harness is one entry now: how to recognise its log, where the
+// model id sits, and how to read usage off a line. This pins that contract, so the next one is an entry and a test.
+test('a harness is one entry: every registered harness is detectable, and its parts agree with what the counter does', async () => {
+  const { HARNESSES, detectHarness, modelOnLine, harnessById } = await import('../src/lib/harnesses.ts');
+  const ids = HARNESSES.map(h => h.id);
+  assert.deepEqual(ids, ['custom', 'antigravity', 'copilot', 'codex', 'claude-code', 'opencode'], 'order is the detection order: the most specific shapes first');
+  for (const h of HARNESSES) {
+    assert.ok(h.name && h.source, `${h.id} says what it is and what source it credits`);
+    assert.ok(h.detect.length, `${h.id} has at least one shape to recognise`);
+    assert.equal(harnessById(h.id), h);
+  }
+  const samples = {
+    'claude-code': '{"type":"assistant","message":{"id":"m1","model":"claude-opus-5","usage":{"input_tokens":10,"output_tokens":5}}}',
+    'codex': '{"type":"token_count","info":{"last_token_usage":{"input_tokens":10,"output_tokens":5,"total_tokens":15}}}',
+    'copilot': '{"type":"model.model_call_success","data":{"responseUsage":{"prompt_tokens":10,"completion_tokens":5}}}',
+    'opencode': '{"role":"assistant","id":"a1","modelID":"gpt-6","providerID":"openai","tokens":{"input":10,"output":5}}',
+    'antigravity': '{"step_index":0,"source":"USER_EXPLICIT","type":"USER_INPUT","content":"hello"}',
+    'custom': '{"type":"solveathome.transcript","model":"claude-opus-5"}',
+  };
+  for (const [id, line] of Object.entries(samples)) {
+    assert.equal(detectHarness(line)?.id, id, `${id} recognises its own line`);
+    assert.equal(logKind(line), id, 'and the detection chain agrees with the registry');
+  }
+  assert.equal(detectHarness('just prose'), null);
+  assert.equal(modelOnLine(JSON.parse(samples['claude-code'])), 'claude-opus-5');
+  assert.equal(modelOnLine(JSON.parse(samples['opencode'])), 'gpt-6');
+  assert.equal(modelOnLine({type: 'tool_result', content: 'the model claude-opus-5 was mentioned here'}), null, 'a payload is not metadata');
+  // The usage readers are the same arithmetic the counter applies, so one is checkable against the other.
+  const cc = harnessById('claude-code').usage(JSON.parse(samples['claude-code']));
+  assert.deepEqual([cc.input, cc.output, cc.id], [10, 5, 'cc:m1']);
+  const oc = harnessById('opencode').usage(JSON.parse('{"role":"assistant","id":"a1","modelID":"gpt-6","tokens":{"input":1,"output":2,"reasoning":3}}'));
+  assert.equal(oc.output, 5, 'reasoning is output the person paid for');
+  assert.equal(harnessById('antigravity').usage, undefined, 'a log with no usage in it declares none');
+});
