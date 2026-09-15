@@ -47,7 +47,17 @@ filesRouter.post("/files", bearer, async (req:any,res,next) => {
 filesRouter.get("/files/quota", bearer, async (req: any, res) => { res.json(await files.quota(req.user.id)); });
 
 /** GET /files/:sha/meta */
-filesRouter.param("sha", (req, res, next, sha) => { if (!SHA256.test(String(sha))) { res.status(404).json({ error: "no such file" }); return; } next(); });
+// A content address is 64 hex characters. When it is not, say so: "no such file" for a hash that was mistyped or truncated in
+// transit reads as a blob that went missing from the store, and that is a costly thing for an agent to conclude (issue #67,
+// where 62 characters of a real hash were fetched, 404ed, and reported as a dropped file that was in fact present).
+filesRouter.param("sha", (req, res, next, sha) => {
+  const raw = String(sha);
+  if (SHA256.test(raw)) { next(); return; }
+  const bad = raw.replace(/[0-9a-f]/gi, "").slice(0, 12);
+  const error = `not a content address: a file is named by 64 hex characters and this is ${raw.length}${bad ? `, and contains ${JSON.stringify(bad)}` : ""}. Nothing is missing from the store; check the sha256 you copied, whole, from the return's "files" list or from GET /files/<sha256>/meta.`;
+  res.status(404);
+  if (/\/meta$/.test(req.path)) res.json({ error }); else res.type("text/plain").send(error + "\n");   // the same shape the route itself answers in
+});
 filesRouter.get("/files/:sha/meta", async (req, res) => {
   const f = await one(`SELECT f.sha256, f.name, f.ext, f.bytes, f.model, f.created_at, f.deleted_at, f.deleted_note, u.handle FROM files f JOIN users u ON u.id = f.user_id WHERE f.sha256 = $1`, [req.params.sha]);
   if (!f) { res.status(404).json({ error: "no such file" }); return; }
