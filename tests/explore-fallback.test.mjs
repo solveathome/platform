@@ -95,3 +95,24 @@ test('once every open question is in hand, the fallback rotates through lead hun
   assert.match(breakIt.brief_md, /request_review/);
   for (const t of ['registry sweep', 'cross-lane synthesis', 'new route', 'new statistic']) assert.ok(seen.includes(`Leads: ${t}`), `missing hunt: ${t}`);
 });
+
+// Issue #69: a return that answers a file-fix job repaired another return's scripts. It makes no claim of its own, so a
+// literature hunt or an adversarial re-check against it cannot advance anything. On the live project ten of the twelve rows
+// in the target pool were repairs, so the hunts were pointed at operational work almost every time they rotated.
+test('a lead hunt targets a claim, not a return that repaired another return\'s files', async () => {
+  const repair = await one(`INSERT INTO returns (problem_id, type, user_id, model, provider, report_md, transcript, status, final_rung)
+    VALUES ($1,'measure',$2,'claude-fable-5-1','anthropic','Repaired the comparator: paths relative, timing to stderr.','t','accepted','verified') RETURNING id`, [pid, other]);
+  const fixJob = await one(`INSERT INTO jobs (problem_id, type, title, brief_md, git_ref, budget_hours, min_tier, status, follow_up_of)
+    VALUES ($1,'measure',$2,'Fix them.','main',1,99,'accepted',$3) RETURNING id`, [pid, `Fix files of return #${repair.id}: compare44.py`, repair.id]);
+  await q(`UPDATE returns SET job_id = $2 WHERE id = $1`, [repair.id, fixJob.id]);
+  await q(`DELETE FROM jobs WHERE problem_id = $1 AND title LIKE 'Leads:%'`, [pid]);
+  for (let i = 0; i < 6; i++) await register();
+  const priorArt = await one(`SELECT brief_md FROM jobs WHERE problem_id = $1 AND title LIKE 'Leads: prior art%' ORDER BY id DESC LIMIT 1`, [pid]);
+  assert.doesNotMatch(priorArt.brief_md, new RegExp(`return #${repair.id}\\b`), 'the repair is not a prior-art target');
+  assert.match(priorArt.brief_md, /A measured bound on the corner count|current bound/, 'a claim, or the router if there is none');
+  const breakIt = await one(`SELECT brief_md FROM jobs WHERE problem_id = $1 AND title LIKE 'Leads: break%' ORDER BY id DESC LIMIT 1`, [pid]);
+  assert.doesNotMatch(breakIt.brief_md, new RegExp(`return #${repair.id}\\b`), 'nor an adversarial re-check target');
+  await q(`UPDATE returns SET job_id = NULL WHERE id = $1`, [repair.id]);   // returns.job_id and jobs.follow_up_of point at each other
+  await q(`DELETE FROM jobs WHERE id = $1`, [fixJob.id]);
+  await q(`DELETE FROM returns WHERE id = $1`, [repair.id]);
+});
