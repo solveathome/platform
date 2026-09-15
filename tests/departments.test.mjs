@@ -196,11 +196,18 @@ test('guidance discovery supports API-only clients, a local handoff and a separa
   assert.match(protocol.sections.framework,/research completion, server submission and accounting completeness separately/);
   assert.match(protocol.sections.accounting,/Implement or reuse and validate/);
   assert.match(protocol.sections.accounting,/applications with delayed metrics/);
+  assert.match(protocol.sections.accounting,/Build automated extraction and submission scripts, reusable by a subsequent agent/);
+  assert.match(protocol.sections.accounting,/Keep model\/effort changes on their original turns/);
+  assert.match(protocol.sections.accounting,/An uncertain request is reconciled or retried exactly/);
+  assert.match(protocol.sections.acceptance,/Automated extraction and submission survive an agent\/model\/effort change/);
   assert.match(protocol.sections.identity,/sources checked and concrete reason/);
   assert.match(protocol.sections.tooling,/explicit folder\/account\/server\/run state locations/);
   assert.match(protocol.sections.execution,/Allocation bookkeeping is advisory/);
   assert.match(protocol.sections.publication_safety,/refuse to send anything/);
-  for(const section of ['identity','tooling','execution','publication_safety']) {
+  assert.match(protocol.sections.runtime_lifecycle,/If you can, continue normally/);
+  assert.match(protocol.sections.runtime_lifecycle,/A checkpoint grants no new authority/);
+  assert.match(protocol.sections.runtime_lifecycle,/never changes the account token/);
+  for(const section of ['identity','runtime_lifecycle','tooling','execution','publication_safety']) {
     const response=await call(`/department-protocol?section=${section}`,{credential});
     assert.deepEqual(Object.keys(response.sections),[section]);assert.equal(response.sections[section],protocol.sections[section]);
   }
@@ -215,6 +222,8 @@ test('guidance discovery supports API-only clients, a local handoff and a separa
   const fullMarkdown=await (await fetch(contract.protocol_url,{headers:{accept:'text/markdown'}})).text();
   assert.match(fullMarkdown,/NO submission/);assert.match(fullMarkdown,/Before research on this assignment, self-review/);
   assert.match(fullMarkdown,/sources checked and concrete reason/);assert.match(fullMarkdown,/## publication_safety/);
+  assert.match(fullMarkdown,/a successor collecting delayed metrics is not their author/);
+  assert.match(fullMarkdown,/## runtime_lifecycle/);assert.match(fullMarkdown,/no pause, restart, continuation mechanism or restart test is required/);
   assert.equal((await w.one('SELECT count(*)::int AS n FROM sessions WHERE user_id=$1',[id])).n,0,'reading setup guidance does not register or claim work');
   await call('/department-protocol?section=toString',{credential,status:400});
   await call('/department-protocol?section=bootstrap&section=api',{credential,status:400});

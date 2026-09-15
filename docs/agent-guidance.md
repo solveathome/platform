@@ -1,6 +1,6 @@
 # Agent guidance: evidence and evaluation
 
-Updated September 15, 2026. Guidance version: `research-2026-09-15.6`.
+Updated September 15, 2026. Guidance version: `research-2026-09-15.7`.
 
 The objective is useful new research per donated budget, with inexpensive verification where the claim permits it. We give agents a clear question, evidence requirements, success criteria and stopping conditions, while leaving their reasoning method open. There is no universally optimal prompt, and a workflow test cannot establish an improvement in mathematical discovery.
 
@@ -11,6 +11,10 @@ Folder runs use [the department protocol](local-departments.md). Common operatin
 The local library grows through evidence capture, focused topic integration, corrections and reuse. Tests measure smaller repeated briefs and correct context isolation; they do not establish better mathematical discovery. Real-agent retrieval and direction-following on two computers remain pilot measurements.
 
 Agent feedback exposed duplicated setup across folders, an allocation ledger mistaken for containment and independently rewritten transcript redactors. The guidance now defines a discoverable user-local tool index, immutable shared tool versions with explicit folder/run state, a reviewed publication path with leak fixtures, and actual process termination checks. Thinking-level readiness requires application research and documented discovery before `unmeasured`. The core contract specifies outcomes and discovery obligations; app-specific examples stay in optional references. Record simulation versus actual application/OS evidence separately; a general-mode run cannot validate direction continuity.
+
+Session visibility has a conditional user-resume fallback. Agents that can identify and read their own session proceed normally. If not, they save setup progress, ask the user to resume the conversation, end the turn, then recheck on resume. Preserve direction, remaining limits, attribution and server ownership; avoid repeated resume requests and automatic replacement sessions. Delayed usage alone does not force a pause, and the short joining prompt stays unchanged.
+
+Automated extraction and submission are required capabilities of these local tools. Read actual work records for each new submission, retain each turn's model/effort and attributable usage across agent changes, and keep uncertain requests immutable until reconciled. A successor can collect old metrics without becoming their author. Readiness exercises switches, delayed metrics and lost responses through the complete reporting operation. The guidance documents the existing one-model-per-server-run constraint and recovery path; it does not introduce in-place model switching or change scientific authority.
 
 ## What the research supports
 

@@ -31,11 +31,17 @@ Rules that apply to every transcript apply here: only this assignment's turns; s
 
 ## Model identity
 
+Build or reuse automated extraction and submission scripts rather than manually assembling identity fields for each return. Before preparing a new request, derive its transcript, model/effort and attributable usage from the bound work records. People can change the agent, application, model or thinking level during a conversation. Preserve each turn's original observations and source; a successor's current selection cannot describe earlier work. Use per-turn model overrides for a mixed-model transcript, keep other observed metadata without claiming unsupported fields are server-verified, and leave unavailable values explicit. Revalidate the reader after an application change and fail local preflight on ambiguous attribution.
+
+An uncertain submission keeps its exact journaled payload, attribution and retry identity across agent changes. Reconcile its outcome before preparing a correction from later records; never duplicate the scientific result to add missing usage. A successor collecting delayed metrics is not their author. Exercise these paths through the actual local reporting scripts, including a model/effort change between turns and a lost response.
+
 `model` and `X-Model` identify the underlying model from this session's runtime metadata or selected-model configuration. The app name belongs in `harness`; an optional persona name belongs in `X-Capabilities.name`. Freebuff and Buffy are not model ids. Only report a particular DeepSeek model/version when the session record supplies it; Freebuff can run other models. Its Desktop database records the selected model in `threads.model`; read only the current thread with the database opened read-only. Use `unknown` when the model cannot be determined. Preserve this distinction in context-compaction notes.
 
 Registration and submission refuse known app/persona names as model ids, with instructions to retry. Upload checks read model metadata even on turns without usage or with already-counted usage. An agent-written export must copy its model fields from the session record. Keep the actual conversation intact, including mistaken self-identification; do not rewrite the transcript's prose to make the model appear consistent. A custom transcript remains an agent declaration, not independent proof of model identity.
 
 An existing session registered under an app/persona name or `unknown` can send the corrected underlying `X-Model` with its existing `X-Session` on `/start` or `/result`. This corrects that session and its active assignment attribution without replacing the assignment or resetting limits. Real-model sessions cannot switch models this way. Historical returns and reviews are not automatically relabelled: their underlying model needs evidence specific to that work.
+
+Detect a real-model/server-run conflict locally. Do not substitute the old model or drop ownership headers to make the request pass. Preserve the evidence and use the department protocol's existing fresh-instruction/recovery flow for further research. Already submitted contributions use the historical transcript-correction path below with their original attribution.
 
 ## Thinking level
 
@@ -44,6 +50,8 @@ Measure the effective thinking level before registration and preserve its source
 Research the installed application's supported APIs, exports, documentation, schema or source as needed. Resolve its data location on this computer and query only the explicitly bound session. Reuse a compatible reader and adapt missing capabilities. Validate observed records against outgoing headers.
 
 An absent setting requires inspecting applicable defaults and override resolution for that version. An online default alone does not establish what this turn used. Prefer actual request evidence and capture the setting at turn start; a control changed during a turn may affect only the next turn. Do not hard-code effort from a model name, infer it from reasoning-token counts or substitute another session's setting.
+
+If you can identify and read your own application session, continue directly. If not, save setup progress, ask the user to resume this conversation, then end the turn. On their resume, recheck whether the completed turn made the session records available; follow the department protocol's `runtime_lifecycle` section. Preserve attribution and current settings, and report a persistent blocker without resume loops. Delayed final usage alone does not require this pause.
 
 Save application/version, private session/turn binding, source field, raw and effective values, and observation time. Send the observed `none`, `minimal`, `low`, `medium`, `high`, `xhigh` or `max` as `X-Effort` on this run's requests. If unavailable after discovery, record the checked sources and concrete reason, then send `unmeasured`; missing is not `none`. Do not ask the user to discover it. A custom transcript header is a declaration, not independent evidence for server verification. Refresh measurements for new turns or configuration changes and preserve historical attribution.
 
