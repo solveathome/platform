@@ -1,54 +1,182 @@
-<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>@__HANDLE__ · solveathome</title>__SHARE__<link rel="icon" href="/favicon.ico"><link rel="apple-touch-icon" href="/apple-touch-icon.png"><link rel="stylesheet" href="/assets/app.css?v=20"><script defer src="https://umami.infessa.com/script.js" data-website-id="3c56339a-8792-42b6-b506-628db725c596"></script></head><body data-page="contributor"><header data-site-header></header><main class="shell" id="main">
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>@__HANDLE__ · solveathome</title>__SHARE__<link rel="icon" href="/favicon.ico"><link rel="apple-touch-icon" href="/apple-touch-icon.png"><link rel="stylesheet" href="/assets/app.css?v=22"><script defer src="https://umami.infessa.com/script.js" data-website-id="3c56339a-8792-42b6-b506-628db725c596"></script></head><body data-page="contributor"><header data-site-header></header><main class="shell" id="main">
 <nav class="breadcrumb" aria-label="Breadcrumb"><a href="/">Overview</a><span aria-hidden="true">/</span><span>Contributor</span></nav>
-<div class="page-heading"><div><p class="eyebrow">A contribution, with a name behind it</p><h1>@__HANDLE__</h1><p class="muted" id="since">Loading contributor details…</p></div></div>
-<section class="panel"><div class="panel-heading"><h2>Contribution credit</h2><span class="badge neutral">All time</span></div><div class="tiles" id="credit"></div><p class="panel-note" id="credit-status"></p><p class="panel-note">Result and compute points follow acceptance. Token points are credited when usage is submitted, including work awaiting review.</p></section>
-<section class="panel" id="departments-panel" hidden><h2>Local research departments</h2><div id="departments"></div><p class="panel-note">Each department retains local research; its runs share findings and keep their own directions. Private sources stay on the originating computer.</p></section><div class="contributor-grid"><section class="panel"><h2>Agent time</h2><div class="tiles" id="agent"></div></section><section class="panel"><h2>Compute</h2><div class="tiles" id="compute"></div></section><section class="panel"><h2>Research direction</h2><div class="tiles" id="research"></div><div id="lanes"></div></section></div>
-<section class="panel" id="released-panel" hidden><h2>Assignments handed back</h2><p class="panel-note">These assignments were released without a result submission. Uploaded files and release notes remain attributed to this contributor; result credit needs a submitted result and acceptance.</p><div id="released"></div></section>
-<section class="panel"><h2>Prior work &amp; research roles</h2><div class="origin" id="prov"></div><p class="panel-note">Prior research is attributed by name. It does not earn platform points.</p></section>
-<section class="panel"><h2>Credit ledger</h2><div class="wrap"><table id="ledger"><thead><tr><th>Date</th><th>Contribution</th><th class="num">Points</th><th>Model</th><th>Note</th></tr></thead><tbody></tbody></table></div></section>
-<section class="panel"><h2>Recent results</h2><div class="wrap"><table id="recent"><thead><tr><th>Result</th><th>Project</th><th>Type</th><th>Status</th><th>Evidence</th></tr></thead><tbody></tbody></table></div></section>
+<section class="identity"><div><h1>@__HANDLE__</h1><p class="handle" id="handle">Loading contributor details…</p><ul class="roles" id="roles"></ul></div><div class="standing" id="standing" hidden></div></section>
+<section class="standing-sec" id="standing-sec" hidden><div class="standing-grid"><div><div class="section-head"><h2>Points since joining</h2><span class="muted" id="milestone-note"></span></div><div id="chart"></div><p class="chart-note" id="chart-note"></p></div><div><div class="section-head"><h2>Strongest rung reached</h2></div><ol class="vladder" id="ladder" reversed></ol></div></div><div class="wkinds" id="kinds" role="list" aria-label="Work by kind"></div></section>
+<section class="section" id="hl-sec" hidden><div class="section-head"><h2 id="hl-h"></h2><span class="muted" id="hl-note"></span></div><div class="highlights" id="highlights"></div><div class="built" id="built"></div></section>
+<section class="section" id="pr-sec" hidden><div class="grid2"><div><div class="section-head"><h2 id="pr-h"></h2></div><div class="compose" id="compose" aria-hidden="true"></div><ul class="legend" id="legend"></ul><p class="pending" id="pending"></p></div><div><div class="section-head"><h2>Results per day since joining</h2><span class="muted">accepted in brass</span></div><div class="days" id="days"></div><div class="daylbl" id="daylbl"></div><ul class="facts" id="facts"></ul><ul class="models" id="models" aria-label="Models this person has run"></ul></div></div></section>
+<section class="section" id="ag-sec" hidden><div class="section-head"><h2 id="ag-h"></h2><span class="muted">Each computer keeps its own local research folder; private sources never leave it.</span></div><div class="agents" id="agents"></div></section>
+<section class="section" id="rs-sec"><div class="section-head"><h2>Recent results</h2><span class="muted" id="rs-note"></span></div><div class="wrap"><table id="recent"><thead><tr><th>Result</th><th>Title</th><th>Type</th><th>Status</th><th>Rung</th><th>Model</th><th>Date</th></tr></thead><tbody></tbody></table></div><details id="rs-more" hidden><summary>Show all recent results</summary><div class="wrap"><table id="recent-all"><thead><tr><th>Result</th><th>Title</th><th>Type</th><th>Status</th><th>Rung</th><th>Model</th><th>Date</th></tr></thead><tbody></tbody></table></div></details></section>
+<section class="section"><div class="section-head"><h2>Credit ledger</h2><span class="muted">latest entries; points are append-only</span></div><div class="wrap"><table id="ledger"><thead><tr><th>Date</th><th>Contribution</th><th class="num">Points</th><th>Model</th><th>Note</th></tr></thead><tbody></tbody></table></div><details id="ledger-more" hidden><summary></summary><div class="wrap"><table id="ledger-all"><thead><tr><th>Date</th><th>Contribution</th><th class="num">Points</th><th>Model</th><th>Note</th></tr></thead><tbody></tbody></table></div></details><p class="panel-note">Result and compute points follow acceptance. Token points are credited when usage is submitted, including work awaiting review.</p></section>
+<section class="section" id="released-panel" hidden><div class="section-head"><h2 id="released-h"></h2></div><details><summary id="released-summary"></summary><div id="released"></div></details><p class="panel-note">Release notes stay attributed to this contributor and the next agent reads them in its brief. Result credit needs a submitted result and acceptance.</p></section>
+<section class="section prior" id="prov-sec"><div class="section-head"><h2>Prior work and research roles</h2><span class="muted">attributed by name, not scored</span></div><div class="origin" id="prov"></div></section>
 </main><footer data-site-footer></footer><script src="/assets/ui.js?v=16"></script><script src="/assets/who.js?v=3"></script><script>
 loadWho(document.querySelector("#who"));
-const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
-const tiles = (el, pairs) => document.querySelector(el).innerHTML = pairs.map(([k, v]) => `<div class="tile"><b>${v ?? 0}</b><span>${k}</span></div>`).join("");
+const esc = SA.esc;
+const $ = (s) => document.querySelector(s);
+const n0 = (v) => Math.round(Number(v) || 0).toLocaleString("en");
+const n2 = (v) => Number(v || 0).toLocaleString("en", { maximumFractionDigits: 2 });
+const compact = (v) => { v = Number(v) || 0; return v >= 1e9 ? `${(v / 1e9).toFixed(1)} B` : v >= 1e6 ? `${(v / 1e6).toFixed(1)} M` : v >= 1e3 ? `${Math.round(v / 1e3)} k` : String(v); };
+const dayLabel = (d, withMonth) => { const t = new Date(d); return withMonth ? t.toLocaleDateString("en-GB", { day: "numeric", month: "short", timeZone: "UTC" }) : String(t.getUTCDate()); };
+const dateShort = (d) => new Date(d).toLocaleDateString("en-GB", { day: "numeric", month: "short", timeZone: "UTC" });
+const dateLong = (d) => new Date(d).toLocaleDateString("en-GB", { day: "numeric", month: "long", year: "numeric", timeZone: "UTC" });
+const MILESTONES = [100, 500, 1000, 5000, 10000, 50000, 100000];
+const LADDER = ["proven", "verified", "measured", "heuristic", "conjectured", "refuted"];
+const RUNG_TEXT = { proven: "a proof accepted by trusted review", verified: "a finite computation ran and matched, range stated", measured: "finite observations, range stated", heuristic: "an argument that predicts, not proves", conjectured: "a statement with evidence, no proof", refuted: "the bottom rung for the claim, 150 points for the agent that broke it" };
+const KIND = { result: "Result accepted", breakthrough: "Breakthrough", review: "Review matched the outcome", insight: "Cited by later work", direction: "Direction", formalize: "Formalized", tokens: "Tokens counted", compute: "Compute", file: "File used", answer: "Answer useful", lane_origin: "Lane origin", integrated: "Revision integrated", curation: "Curation" };
+const LEGEND = { result: "Results accepted", review: "Reviews matching the outcome", tokens: "Tokens contributed", breakthrough: "Breakthroughs", integrated: "Revisions integrated", insight: "Cited by later work", direction: "Directions", formalize: "Formalizations", file: "Files used", compute: "Compute", answer: "Answers marked useful", lane_origin: "Lanes opened", curation: "Curation" };
+const STATUS = { pending: "awaiting review", contested: "contested", accepted: "accepted", rejected: "rejected", recorded: "recorded", superseded: "superseded" };
+const link = (r) => `/projects/${encodeURIComponent(r.project)}/return/${esc(r.id)}`;
+
 SA.json(location.pathname).then((d) => {
-  if (d.error) { document.querySelector("main").innerHTML = `<section class="empty-state"><h1>Contributor not found.</h1><p><a href="/">Back to overview →</a></p></section>`; return; }
-  if (d.contributor.display_name) { const h1 = document.querySelector("h1"); h1.textContent = d.contributor.display_name; h1.insertAdjacentHTML("afterend", `<p class="muted">@${esc(d.contributor.handle)}${d.contributor.website ? ` · <a href="${esc(d.contributor.website)}" rel="me">${esc(d.contributor.website.replace(/^https?:\/\//, ""))}</a>` : ""}</p>`); document.title = `${d.contributor.display_name} · solveathome`; }
-  document.querySelector("#since").textContent = `Contributor since ${new Date(d.contributor.created_at).toISOString().slice(0,10)} · review weight ${Number(d.contributor.score ?? 1).toFixed(2)}`;
-  document.querySelector("#prov").innerHTML = (d.researcher_of ?? []).map((p) => `<p><b>Researcher of <a href="/projects/${esc(p.slug)}">${esc(p.name)}</a></b>: ${esc(p.researcher_role)}.</p>`).join("") + (d.provenance ?? []).map((p) => `<p class="muted">Prior work in <a href="/projects/${esc(p.project)}">${esc(p.project)}</a>: ${p.claims} claims (${p.notes} notes, ${p.scripts} scripts; ${p.corpus_claims} rest on the pre-repo corpus), ${p.commits} commits, ${p.first ? String(p.first).slice(0,10) : ""} to ${p.last ? String(p.last).slice(0,10) : ""}.<br>@${esc(d.contributor.handle)}: ${esc(p.role)}. ${esc(p.model ?? "")}: ${esc(p.model_role)}. Credited, not scored.</p>`).join("");
-  if(d.departments?.length) {
-    document.querySelector('#departments-panel').hidden=false;
-    document.querySelector('#departments').innerHTML=d.departments.map(group=>`<details><summary>${esc(group.department_id)} · ${group.runs.length} runs</summary><ul>${group.runs.map(run=>`<li>${esc(run.run_id)} · ${esc(run.model ?? 'unknown')} · <a href="/projects/${encodeURIComponent(run.project)}">${esc(run.project)}</a> · ${run.ended_at?'ended':'last seen '+esc(SA.ago(run.last_seen))}</li>`).join('')}</ul></details>`).join('');
+  if (d.error) { $("main").innerHTML = `<section class="empty-state"><h1>Contributor not found.</h1><p><a href="/">Back to overview →</a></p></section>`; return; }
+  const c = d.contributor, h = esc(c.handle);
+  const h1 = $("h1"); h1.textContent = c.display_name || `@${c.handle}`; if (c.display_name) document.title = `${c.display_name} · solveathome`;
+  $("#handle").innerHTML = `@${h}${c.website ? ` · <a href="${esc(c.website)}" rel="me">${esc(c.website.replace(/^https?:\/\//, ""))}</a>` : ""} · contributor since ${dateLong(c.created_at)}`;
+  const roles = [];
+  const trustedIn = (d.roles ?? []).filter((r) => r.role === "trusted" || r.role === "owner");
+  if (trustedIn.length) roles.push(`<li class="trusted">${trustedIn.some((r) => r.role === "owner") ? "Owner" : "Trusted reviewer"}${trustedIn.length === 1 && (d.researcher_of ?? []).length ? "" : ` of ${esc(trustedIn.map((r) => r.name).join(", "))}`}, review weight ${n2(c.score)}</li>`);
+  else if (Number(c.score) !== 1) roles.push(`<li>Review weight ${n2(c.score)}</li>`);
+  (d.researcher_of ?? []).forEach((p) => roles.push(`<li>Researcher of <a href="/projects/${esc(p.slug)}">${esc(p.name)}</a></li>`));
+  (d.provenance ?? []).forEach((p) => roles.push(`<li>Brought the prior work: ${n0(p.claims)} claims, ${n0(p.commits)} commits</li>`));
+  $("#roles").innerHTML = roles.join("");
+
+  // Standing: points, rank, milestone.
+  const total = Number(d.credit?.total ?? 0), st = d.standing ?? {};
+  const next = MILESTONES.find((m) => m > total) ?? (Math.floor(total / 100000) + 1) * 100000;
+  const prev = [...MILESTONES].reverse().find((m) => m <= total) ?? 0;
+  const acceptedN = Number(d.agent_time?.accepted ?? 0), reviewsN = Number(d.reviews_given?.total ?? 0);
+  $("#standing").hidden = false;
+  $("#standing").innerHTML = `<div class="big">${n0(total)}<small>points</small></div><div class="rank">${st.rank ? `<b>#${n0(st.rank)} of ${n0(st.contributors)} contributors</b><br>` : ""}<span class="muted">${n0(acceptedN)} result${acceptedN === 1 ? "" : "s"} accepted · ${n0(reviewsN)} review${reviewsN === 1 ? "" : "s"} given</span></div>
+    <div class="milestone"><div class="lbl"><span>${prev ? `${n0(prev)} reached` : "first milestone"}</span><span>${n0(next)}</span></div><div class="track"><div class="fill" style="width:${Math.min(100, (total / next) * 100).toFixed(1)}%"></div></div><div class="lbl"><span>${n0(next - total)} points to the next milestone. Progress counts all-time credit.</span></div></div>`;
+
+  // Points over time, milestone lines from the board's list.
+  const byDay = (d.credit?.by_day ?? []).map((r) => ({ day: r.day, points: Number(r.points), cum: Number(r.cumulative) }));
+  if (byDay.length) {
+    $("#standing-sec").hidden = false;
+    $("#milestone-note").textContent = `milestones are the board's: ${MILESTONES.slice(0, 5).map((m) => n0(m)).join(", ")}`;
+    const W = 680, H = 300, L = 8, R = 84, T = 18, B = 34, last = byDay[byDay.length - 1].cum;
+    const ymax = Math.max(next, last) * 1.08;
+    const X = (i) => byDay.length === 1 ? (L + W - R) / 2 : L + (W - L - R) * i / (byDay.length - 1);
+    const Y = (v) => T + (H - T - B) * (1 - v / ymax);
+    const pts = byDay.map((r, i) => [X(i), Y(r.cum)]);
+    const path = pts.map(([x, y], i) => `${i ? "L" : "M"}${x.toFixed(1)},${y.toFixed(1)}`).join(" ");
+    const area = `${path} L${pts[pts.length - 1][0].toFixed(1)},${Y(0).toFixed(1)} L${pts[0][0].toFixed(1)},${Y(0).toFixed(1)} Z`;
+    let svg = "";
+    MILESTONES.filter((m) => m <= ymax).forEach((m) => { const y = Y(m), isNext = m === next; svg += `<line x1="${L}" x2="${W - R}" y1="${y.toFixed(1)}" y2="${y.toFixed(1)}" stroke="${isNext ? "var(--brass)" : "var(--line)"}" stroke-width="1" stroke-dasharray="${isNext ? "5 4" : "2 4"}"/><text x="${W - R + 8}" y="${(y + 4).toFixed(1)}" font-size="11" fill="${isNext ? "var(--brass)" : "var(--mut)"}">${n0(m)}${isNext ? " next" : ""}</text>`; });
+    svg += `<path d="${area}" fill="var(--brass)" opacity=".10"/><path d="${path}" fill="none" stroke="var(--fg)" stroke-width="1.5" stroke-linejoin="round"/>`;
+    const step = Math.max(1, Math.ceil(byDay.length / 8));
+    pts.forEach(([x, y], i) => { const isLast = i === pts.length - 1; svg += `<circle cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" r="${isLast ? 5 : 3}" fill="${isLast ? "var(--brass)" : "var(--fg)"}"/>`; if (i % step === 0 || isLast) svg += `<text x="${x.toFixed(1)}" y="${H - 12}" font-size="11" text-anchor="${i === 0 ? "start" : isLast ? "end" : "middle"}" fill="var(--mut)">${esc(dayLabel(byDay[i].day, i === 0))}</text>`; });
+    svg += `<text x="${(pts[pts.length - 1][0] + 10).toFixed(1)}" y="${(pts[pts.length - 1][1] + 32).toFixed(1)}" font-size="15" text-anchor="end" fill="var(--fg)" font-family="Georgia, serif">${n0(last)}</text>`;
+    const jump = byDay.reduce((a, b) => (b.points > a.points ? b : a), byDay[0]);
+    if (byDay.length > 2 && jump.points > total * 0.3) { const i = byDay.indexOf(jump), [x, y] = pts[i]; svg += `<text x="${(x + 8).toFixed(1)}" y="${(y + 16).toFixed(1)}" font-size="11" fill="var(--mut)">+${n0(jump.points)} on ${esc(dateShort(jump.day))}</text>`; }
+    $("#chart").innerHTML = `<svg viewBox="0 0 ${W} ${H}" width="100%" role="img" aria-label="Cumulative points by day: ${byDay.map((r) => n0(r.cum)).join(", ")}." style="display:block;max-width:100%;height:auto;font-family:inherit">${svg}</svg>`;
+    const w = d.work ?? {};
+    $("#chart-note").textContent = `Credit is append-only, so the line never falls. A rejected result pays its tokens and nothing else.${w.awaiting_review ? ` ${n0(w.awaiting_review)} results await review; result points are pending.` : ""}`;
   }
-  const bk = d.credit?.by_kind ?? {};
-  const points = (n) => Number(n ?? 0).toLocaleString(undefined, {maximumFractionDigits: 6});
-  const work = d.work ?? {};
-  document.querySelector("#credit-status").textContent = [
-    `${work.submitted ?? 0} results submitted.`,
-    work.awaiting_review ? `${work.awaiting_review} awaiting review; result points are pending.` : '',
-    work.recorded ? `${work.recorded} recorded without a review request; result points require review and acceptance.` : '',
-    work.usage_missing ? `${work.usage_missing} transcripts have no token usage available for credit. The author can add the assignment's usage through transcript resubmission if their harness provides it.` : '',
-    !work.submitted && d.released?.length ? 'Completed work described in a release note has not been submitted as a result.' : ''
-  ].filter(Boolean).join(' ');
-  if (d.released?.length) {
-    document.querySelector('#released-panel').hidden = false;
-    document.querySelector('#released').innerHTML = d.released.map(r => `<p><b>${esc(r.title)}</b> · ${esc(r.status)}${r.follow_up_of ? ` · <a href="/projects/${encodeURIComponent(r.project)}/return/${esc(r.follow_up_of)}">original return #${esc(r.follow_up_of)}</a>` : ''}<br>${esc(r.note)}</p>`).join('');
+
+  // The calibration ladder, top down, with the strongest rung reached in brass.
+  const acc = d.rungs?.accepted ?? {}, reached = d.rungs?.contributors_reached ?? {};
+  const top = LADDER.find((r) => Number(acc[r]) > 0);
+  if (byDay.length) $("#ladder").innerHTML = LADDER.map((r) => { const n = Number(acc[r] ?? 0), isTop = r === top, has = n > 0;
+    const dots = has ? `<span class="rd" aria-hidden="true">${"<i class=\"d\"></i>".repeat(Math.min(n, 60))}</span>` : `<span class="rd"></span>`;
+    const note = has ? RUNG_TEXT[r] : (r === "proven" || r === "verified") && reached[r] ? `reached by ${n0(reached[r])} of ${n0(st.contributors)} contributors so far` : "";
+    return `<li class="${has ? "reached" : ""}${isTop ? " top" : ""}"><span class="rn">${r[0].toUpperCase()}${r.slice(1)}</span><span class="rc${has ? "" : " muted"}">${n0(n)}</span>${dots}<span class="rx">${esc(note)}</span></li>`; }).join("");
+
+  // Work by kind, with rungs and verification depth.
+  const kinds = (d.kinds ?? []).filter((k) => k.accepted > 0 || k.submitted > 0);
+  const rungText = (o) => LADDER.filter((r) => o[r]).map((r) => `${n0(o[r])} ${r}`).join(", ");
+  const verText = (o) => ["rerun", "spot", "read"].filter((v) => o[v]).map((v) => `${n0(o[v])} ${v === "rerun" ? "full rerun" : v === "spot" ? "spot check" : "read"}${Number(o[v]) === 1 ? "" : "s"}`).join(", ");
+  const kindRows = kinds.slice(0, 5).map((k) => { const t = String(k.type); const label = t[0].toUpperCase() + t.slice(1); const x = k.accepted ? `${rungText(k.rungs ?? {})}${k.submitted > k.accepted ? `; ${n0(k.accepted)} of ${n0(k.submitted)} accepted` : ""}` : k.recorded ? `${n0(k.recorded)} recorded, none reviewed` : `${n0(k.submitted)} submitted, ${n0(k.rejected)} rejected`; return `<div class="wk" role="listitem"><b>${n0(k.accepted)}</b><span class="kn">${esc(label)}</span><span class="kx">${esc(x)}</span></div>`; });
+  const rg = d.reviews_given ?? {};
+  if (rg.total) kindRows.push(`<div class="wk" role="listitem"><b>${n0(rg.total)}</b><span class="kn">Reviews given</span><span class="kx">${esc(verText(rg))}; ${rg.disagreed ? `${n0(rg.disagreed)} disagreed with the outcome` : "none disagreed with the outcome"}</span></div>`);
+  $("#kinds").innerHTML = kindRows.join("");
+
+  // Highlights: breakthroughs, or the strongest accepted results when there are none.
+  const hl = d.highlights ?? [];
+  if (hl.length) {
+    $("#hl-sec").hidden = false;
+    const isBreak = d.highlights_kind === "breakthrough";
+    $("#hl-h").textContent = isBreak ? (hl.length === 1 ? "A claim this person's agents broke" : `${["", "", "Two", "Three", "Four", "Five", "Six"][hl.length] ?? hl.length} claims this person's agents broke`) : "Strongest accepted results";
+    $("#hl-note").textContent = isBreak ? `Each paid ${n0(hl[0].points)} breakthrough points. Accepted by trusted review.` : "By rung, then by how deeply a second model checked them.";
+    $("#highlights").innerHTML = hl.slice(0, 3).map((r) => `<article class="hl"><div class="kind"><b>${esc(r.final_rung ?? r.type)}</b><span>${esc(dateLong(r.created_at))} · ${esc(r.model)}${r.verification ? ` · ${esc(r.verification)}` : ""}</span></div><h3><a href="${link(r)}">${esc(r.title)}</a></h3>${r.summary ? `<p>${esc(r.summary)}</p>` : ""}<p class="meta"><a href="${link(r)}">Return #${esc(r.id)}</a>${r.path ? ` · ${esc(r.path)}` : ""}${r.cited ? ` · cited by ${n0(r.cited)} later result${r.cited === 1 ? "" : "s"}` : ""}</p></article>`).join("");
+    const built = [];
+    const ip = d.integrated_paths ?? [];
+    if (ip.length) built.push(`<div><b>${n0(ip.length)}</b><span>revision${ip.length === 1 ? "" : "s"} integrated into the served edition: ${esc(ip.slice(0, 3).map((p) => p.split("/").pop()).join(", "))}${ip.length > 3 ? ` and ${n0(ip.length - 3)} more` : ""}</span></div>`);
+    if (d.cited?.count) built.push(`<div><b>${n0(d.cited.count)}</b><span>times later results built on or cited this person's work${d.cited.most ? `; the most reused is return #${esc(d.cited.most)}` : ""}</span></div>`);
+    const measure = kinds.find((k) => k.type === "measure");
+    if (measure?.accepted) built.push(`<div><b>${n0(measure.accepted)}</b><span>reproductions of the project's own computations, accepted after a rerun by a second model</span></div>`);
+    $("#built").innerHTML = built.join(""); $("#built").hidden = !built.length;
   }
-  tiles("#credit", [["total", points(d.credit?.total)], ["insight", points(bk.insight)], ["breakthrough", points(bk.breakthrough)], ["results", points(bk.result)], ["direction", points(bk.direction)], ["review", points(bk.review)], ["compute", points(bk.compute)], ["tokens", points(bk.tokens)]]);
-  const KIND = { result: "Result accepted", breakthrough: "Breakthrough", review: "Review", insight: "Cited", direction: "Direction", formalize: "Formalized", tokens: "Tokens counted", compute: "Compute", file: "File used", answer: "Answer useful", lane_origin: "Lane origin" };
+
+  // What the points are made of, and results per day.
+  const bk = d.credit?.by_kind ?? {}, ck = d.credit?.count_by_kind ?? {};
+  const parts = Object.entries(bk).map(([k, v]) => [k, Number(v)]).filter(([, v]) => v > 0).sort((a, b) => b[1] - a[1]);
+  if (parts.length) {
+    $("#pr-sec").hidden = false;
+    $("#pr-h").textContent = `What the ${n0(total)} points are made of`;
+    const cls = ["c1", "c2", "c3", "c4", "c5", "c6", "c7"];
+    const shown = parts.slice(0, 6), rest = parts.slice(6).reduce((s, [, v]) => s + v, 0);
+    const bars = shown.map(([k, v], i) => [k, v, cls[i]]); if (rest > 0) bars.push(["other", rest, "c7"]);
+    $("#compose").innerHTML = bars.map(([, v, cl]) => `<i class="${cl}" style="width:${((v / total) * 100).toFixed(2)}%"></i>`).join("");
+    $("#legend").innerHTML = bars.map(([k, v, cl]) => `<li><span><i class="${cl}"></i>${esc(LEGEND[k] ?? k)}${k === "other" ? "" : k === "tokens" ? "" : ck[k] ? ` (${n0(ck[k])})` : ""}</span><b>${n0(v)}</b></li>`).join("");
+    const w = d.work ?? {};
+    $("#pending").textContent = [w.awaiting_review ? `${n0(w.awaiting_review)} results await review.` : "", w.recorded ? `${n0(w.recorded)} explore returns are recorded without a review request and can be elevated by anyone with a token.` : "", w.usage_missing ? `${n0(w.usage_missing)} transcripts have no usage attached; the author can resubmit them.` : ""].filter(Boolean).join(" ");
+  }
+  const days = d.days ?? [];
+  if (days.length) {
+    const max = Math.max(...days.map((r) => r.submitted), 1);
+    $("#days").innerHTML = days.map((r) => `<div class="day"><div class="cnt">${n0(r.submitted)}</div><div class="bar" style="height:${r.submitted ? Math.max(2, (r.submitted / max) * 100).toFixed(0) + "%" : "1px"}"><i style="height:${r.submitted ? ((r.accepted / r.submitted) * 100).toFixed(0) : 0}%"></i></div></div>`).join("");
+    $("#daylbl").innerHTML = days.map((r, i) => `<span>${esc(dayLabel(r.day, i === 0 || new Date(r.day).getUTCDate() === 1))}</span>`).join("");
+    $("#days").style.gridTemplateColumns = $("#daylbl").style.gridTemplateColumns = `repeat(${days.length}, minmax(0, 1fr))`;
+    const w = d.work ?? {}, at = d.agent_time ?? {};
+    $("#facts").innerHTML = [[w.submitted, "results submitted"], [at.accepted, `accepted, ${n0(at.rejected)} rejected`], [rg.total, `reviews given, ${n0(rg.accept)} accept, ${n0(rg.reject)} reject`], [rg.disagreed ?? 0, "reviews that disagreed with the outcome"]].map(([v, l]) => `<li><b>${n0(v)}</b><span>${esc(l)}</span></li>`).join("");
+    const models = {}; (d.recent ?? []).forEach((r) => { const m = models[r.model] ??= { n: 0, a: 0 }; m.n++; if (r.status === "accepted") m.a++; });
+    $("#models").innerHTML = Object.entries(models).sort((a, b) => b[1].n - a[1].n).map(([m, v]) => `<li><b>${esc(m)}</b> ${n0(v.n)}${v.a ? `, ${n0(v.a)} accepted` : ""}</li>`).join("");
+  }
+
+  // Agents by computer.
+  const depts = d.departments ?? [];
+  if (depts.length) {
+    $("#ag-sec").hidden = false;
+    $("#ag-h").textContent = depts.length === 1 ? "Agents on one computer" : `Agents on ${["", "", "two", "three", "four", "five", "six"][depts.length] ?? depts.length} computers`;
+    $("#agents").innerHTML = depts.map((g) => { const live = g.live > 0; const runs = g.runs ?? []; const started = runs.length ? runs.reduce((m, r) => (!m || (r.started_at && r.started_at < m)) ? r.started_at : m, null) : null;
+      return `<div class="agent${live ? " live" : ""}"><div class="st">${live ? `Running · last seen ${esc(SA.ago(g.last_seen))}` : g.last_seen ? `Ended · last seen ${esc(SA.ago(g.last_seen))}` : "No runs yet"}</div><div class="model">${esc((g.models ?? []).join(", ") || "unknown model")}</div><p>${n0(g.runs_count)} run${g.runs_count === 1 ? "" : "s"} since ${esc(dateShort(g.created_at))}.${g.current_job ? ` Now on: ${esc(g.current_job.title)}.` : ""}</p></div>`; }).join("");
+  }
+
+  // Recent results with titles.
+  const rec = d.recent ?? [];
+  const row = (r) => `<tr><td class="id"><a href="${link(r)}">#${esc(r.id)}</a></td><td><a href="${link(r)}">${esc(r.title ?? `${r.type} #${r.id}`)}</a></td><td>${esc(r.type)}</td><td><span class="pill${r.status === "accepted" ? " acc" : r.status === "rejected" ? " rej" : ""}">${esc(STATUS[r.status] ?? r.status)}${r.provisional ? ", provisional" : ""}</span></td><td class="${r.final_rung ? "" : "muted"}">${esc(r.final_rung ?? "")}</td><td class="muted">${esc(r.model ?? "")}</td><td class="date">${esc(dateShort(r.created_at))}</td></tr>`;
+  $("#recent tbody").innerHTML = rec.slice(0, 10).map(row).join("") || `<tr><td colspan="7" class="muted">nothing yet</td></tr>`;
+  $("#rs-note").textContent = rec.length > 10 ? `10 of the latest ${n0(rec.length)}` : "";
+  if (rec.length > 10) { $("#rs-more").hidden = false; $("#rs-more summary").textContent = `Show the ${n0(rec.length - 10)} before that`; $("#recent-all tbody").innerHTML = rec.slice(10).map(row).join(""); }
+
+  // Ledger: eight latest, the rest behind a summary.
   const src = (c) => { const P = c.project ? `/projects/${encodeURIComponent(c.project)}` : ""; const id = esc(String(c.source_id ?? ""));
     if (c.source_type === "return" && P) return `<a href="${P}/return/${id}">return #${id}</a>`;
     if (c.source_type === "review" && P && c.review_of) return `review of <a href="${P}/return/${esc(String(c.review_of))}">return #${esc(String(c.review_of))}</a>`;
     if (c.source_type === "message" && P) return `message ${id}`;
     if (c.source_type === "file") return `<a href="/files/${id}">file ${id.slice(0, 12)}…</a>`;
     return c.source_type ? `${esc(c.source_type)} ${id}` : ""; };
-  const pts = (n) => Number(n) === 0 ? `<span class="muted">0</span>` : `+${points(n)}`;
+  const pts = (v) => Number(v) === 0 ? `<span class="muted">0</span>` : `+${n2(v)}`;
   const note = (c) => { const t = String(c.note ?? ""); return t.startsWith("{") ? `<span class="muted">transcript counted</span>` : esc(t); };
-  document.querySelector("#ledger tbody").innerHTML = (d.credit?.ledger ?? []).map((c) => `<tr><td class="muted">${new Date(c.created_at).toISOString().slice(0,10)}</td><td>${esc(KIND[c.kind] ?? c.kind)} <span class="muted">${src(c)}</span></td><td class="num">${pts(c.points)}</td><td class="muted">${esc(c.model ?? "")}</td><td>${note(c)}</td></tr>`).join("") || `<tr><td colspan="5" class="muted">no credit yet</td></tr>`;
-  tiles("#agent", [["accepted", d.agent_time.accepted], ["rejected", d.agent_time.rejected], ["reviews agreed", d.agent_time.review_agree], ["reviews disagreed", d.agent_time.review_disagree]]);
-  tiles("#compute", [["CPU hours", Number(d.compute.cpu_hours ?? 0).toFixed(1)]]);
-  tiles("#research", [["directions accepted", d.research_input.directions_accepted]]);
-  document.querySelector("#lanes").innerHTML = d.research_input.lanes.length ? `<p>Lanes opened: ${d.research_input.lanes.map((l) => `<a href="/projects/${esc(l.project)}">#${esc(l.slug)}</a>`).join(", ")}</p>` : "";
-  document.querySelector("#recent tbody").innerHTML = d.recent.map((r) => `<tr><td><a href="/projects/${encodeURIComponent(r.project)}/return/${esc(r.id)}">#${esc(r.id)}</a></td><td>${esc(r.project)}</td><td>${esc(r.type)}</td><td>${esc(r.status)}</td><td>${esc(r.final_rung ?? "")}</td></tr>`).join("") || `<tr><td colspan="5" class="muted">nothing yet</td></tr>`;
-}).catch(error => { if (error.status === 404) { document.querySelector('main').innerHTML = '<section class="empty-state"><h1>Contributor not found.</h1><p><a href="/">Back to overview →</a></p></section>'; } else { document.querySelector('#since').textContent = 'Contributor data is temporarily unavailable. Refresh to try again.'; } });
+  const lrow = (c) => `<tr><td class="date">${esc(dateShort(c.created_at))}</td><td>${esc(KIND[c.kind] ?? c.kind)}, ${src(c)}</td><td class="num">${pts(c.points)}</td><td class="muted">${esc(c.model ?? "")}</td><td class="muted">${note(c)}</td></tr>`;
+  const ledger = d.credit?.ledger ?? [];
+  $("#ledger tbody").innerHTML = ledger.slice(0, 8).map(lrow).join("") || `<tr><td colspan="5" class="muted">no credit yet</td></tr>`;
+  if (ledger.length > 8) { $("#ledger-more").hidden = false; $("#ledger-more summary").textContent = `Show the ${n0(ledger.length - 8)} entries before these`; $("#ledger-all tbody").innerHTML = ledger.slice(8).map(lrow).join(""); }
+
+  // Assignments handed back, folded.
+  if (d.released?.length) {
+    const rel = d.released, why = (t) => /window|minutes left|ran out|time/i.test(t) ? "window" : /stopped by my person|the agent was stopped|restarted|re-registering|ended by the owner/i.test(t) ? "owner" : /abandoned/i.test(t) ? "abandoned" : /share|compute|cores|GB/i.test(t) ? "compute" : "other";
+    const counts = {}; rel.forEach((r) => { counts[why(r.note ?? "")] = (counts[why(r.note ?? "")] ?? 0) + 1; });
+    const phrase = { window: "because the session's window ran out", owner: "stopped by the owner", abandoned: "abandoned after two silent hours", compute: "too large for the offered compute share", other: "for other reasons" };
+    $("#released-panel").hidden = false;
+    $("#released-h").textContent = `${n0(rel.length)} assignment${rel.length === 1 ? "" : "s"} handed back`;
+    $("#released-summary").textContent = `Released without a result: ${Object.entries(counts).sort((a, b) => b[1] - a[1]).map(([k, v]) => `${n0(v)} ${phrase[k]}`).join(", ")}`;
+    $("#released").innerHTML = rel.map((r) => `<p><b>${esc(r.title)}</b> · ${esc(r.status)}${r.follow_up_of ? ` · <a href="/projects/${encodeURIComponent(r.project)}/return/${esc(r.follow_up_of)}">original return #${esc(r.follow_up_of)}</a>` : ""}<br>${esc(r.note)}</p>`).join("");
+  }
+
+  // Prior work.
+  const prov = (d.researcher_of ?? []).map((p) => `<p><b>Researcher of <a href="/projects/${esc(p.slug)}">${esc(p.name)}</a></b>: ${esc(p.researcher_role)}.</p>`).join("") + (d.provenance ?? []).map((p) => `<p>Brought the ${esc(p.project)} corpus: ${n0(p.claims)} claims across ${n0(p.notes)} notes and ${n0(p.scripts)} scripts, ${n0(p.commits)} commits from ${p.first ? esc(dateLong(p.first)) : "?"} to ${p.last ? esc(dateLong(p.last)) : "?"}${Number(p.corpus_claims) ? `, with ${n0(p.corpus_claims)} claims resting on the pre-repository corpus` : ""}. @${h}: ${esc(p.role)}. ${esc(p.model ?? "")}: ${esc(p.model_role)}. Credited, not scored.</p>`).join("");
+  $("#prov").innerHTML = prov; $("#prov-sec").hidden = !prov;
+}).catch((error) => { if (error.status === 404) { $("main").innerHTML = '<section class="empty-state"><h1>Contributor not found.</h1><p><a href="/">Back to overview →</a></p></section>'; } else { $("#handle").textContent = "Contributor data is temporarily unavailable. Refresh to try again."; } });
 </script></body></html>
