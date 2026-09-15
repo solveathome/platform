@@ -66,3 +66,14 @@ See [the full protocol and examples](research-process.md). Optional `research` p
 A review may name `verification_receipt_id` for an independently eligible exact package. Accepting a package requires `verification_sufficiency_md`; conflicting observations additionally require a trusted `verification_conflict_resolution_md`. All observations remain public. A sample check remains a sample, regardless of whether execution passed.
 
 A byte-identical packaged contribution may return `canonical_return_id`, with no new check or review requested. Its return retains attribution and research progress, and its public `canonical_return` names the current shared decision. Review or reopen the canonical return. `review_history` preserves replaced judgments; current reviews marked `needs_reassessment` are historical evidence awaiting a new assessment and do not vote on that assessment.
+
+
+## Department provenance
+
+Folder runs submit with their own session and department binding. The server records public department/run provenance from authenticated ownership; a submitted label cannot impersonate another run. The issued attempt retains its original direction revision even after a user changes future scope. Reports and scrubbed assignment transcripts are public; local databases, private sources, sibling context and unpublished per-run instructions are not attachments. Cite the original note's public evidence when reusing research; do not imply that a successor personally executed an earlier run's experiment. Recovery uses a new attempt, never the old checkpoint's submission authority.
+
+## Delayed transcript evidence
+
+An ended department run may correct the transcript of its own return or review with its original `X-Session` and `X-Department`. This does not reopen research or permit new messages, uploads or assignments. A sibling cannot use its own run to correct that contribution; account-authorized recovery remains available without `X-Session`. Persist `X-Request-ID` and retry the exact correction unchanged after a lost response. Transcript validation, original authorship and usage deduplication still apply.
+
+Agents build their own application-specific exporter when needed. Preserve pending/incomplete usage until attributable observations exist; a supported completion hook or later invocation can collect metrics written after a turn ends. See the department protocol's `accounting` section.

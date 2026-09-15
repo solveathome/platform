@@ -776,3 +776,142 @@ UPDATE returns r SET review_admitted_at=admitted.at FROM (
 CREATE INDEX IF NOT EXISTS returns_review_admission_idx ON returns (user_id,review_admitted_at) WHERE review_admitted_at IS NOT NULL;
 CREATE INDEX IF NOT EXISTS returns_deferred_review_idx ON returns (problem_id,created_at,id)
   WHERE status='pending' AND review_admitted_at IS NULL AND duplicate_of IS NULL AND NOT provisional;
+
+-- Folder departments (Sep 15). Account credentials, local knowledge, run identity,
+-- research direction and execution authority have independent lifetimes.
+ALTER TABLE tokens ADD COLUMN IF NOT EXISTS token_ciphertext TEXT;
+CREATE TABLE IF NOT EXISTS browser_sessions (
+  token_hash TEXT PRIMARY KEY,
+  user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+ALTER TABLE users ADD COLUMN IF NOT EXISTS agent_account_id TEXT;
+UPDATE users SET agent_account_id=md5(random()::text || clock_timestamp()::text || id::text) WHERE agent_account_id IS NULL;
+ALTER TABLE users ALTER COLUMN agent_account_id SET DEFAULT md5(random()::text || clock_timestamp()::text);
+CREATE UNIQUE INDEX IF NOT EXISTS users_agent_account_idx ON users(agent_account_id);
+CREATE TABLE IF NOT EXISTS departments (
+  id TEXT PRIMARY KEY,
+  user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  registration_key TEXT NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  last_seen TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE(user_id,registration_key)
+);
+CREATE TABLE IF NOT EXISTS agent_directions (
+  id TEXT PRIMARY KEY,
+  department_id TEXT NOT NULL REFERENCES departments(id) ON DELETE CASCADE,
+  problem_id BIGINT NOT NULL REFERENCES problems(id) ON DELETE CASCADE,
+  user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  revision INTEGER NOT NULL DEFAULT 1,
+  state TEXT NOT NULL DEFAULT 'active' CHECK(state IN ('active','complete','blocked','paused','refuted')),
+  note TEXT NOT NULL DEFAULT '',
+  continued_from TEXT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE TABLE IF NOT EXISTS agent_direction_revisions (
+  direction_id TEXT NOT NULL REFERENCES agent_directions(id) ON DELETE CASCADE,
+  revision INTEGER NOT NULL,
+  words TEXT NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  PRIMARY KEY(direction_id,revision)
+);
+ALTER TABLE sessions ADD COLUMN IF NOT EXISTS department_id TEXT REFERENCES departments(id) ON DELETE SET NULL;
+ALTER TABLE sessions ADD COLUMN IF NOT EXISTS run_id TEXT;
+ALTER TABLE sessions ADD COLUMN IF NOT EXISTS direction_id TEXT REFERENCES agent_directions(id) ON DELETE SET NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS sessions_run_idx ON sessions(run_id) WHERE run_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS sessions_department_idx ON sessions(department_id);
+ALTER TABLE jobs ADD COLUMN IF NOT EXISTS agent_direction_id TEXT REFERENCES agent_directions(id) ON DELETE CASCADE;
+ALTER TABLE jobs ADD COLUMN IF NOT EXISTS agent_direction_revision INTEGER;
+CREATE UNIQUE INDEX IF NOT EXISTS jobs_one_agent_step_idx ON jobs(agent_direction_id) WHERE agent_direction_id IS NOT NULL AND status IN ('queued','assigned');
+ALTER TABLE assignment_attempts ADD COLUMN IF NOT EXISTS department_id TEXT REFERENCES departments(id) ON DELETE SET NULL;
+ALTER TABLE assignment_attempts ADD COLUMN IF NOT EXISTS run_id TEXT;
+ALTER TABLE assignment_attempts ADD COLUMN IF NOT EXISTS direction_snapshot JSONB;
+ALTER TABLE messages ADD COLUMN IF NOT EXISTS department_id TEXT;
+ALTER TABLE messages ADD COLUMN IF NOT EXISTS run_id TEXT;
+ALTER TABLE returns ADD COLUMN IF NOT EXISTS department_id TEXT;
+ALTER TABLE returns ADD COLUMN IF NOT EXISTS run_id TEXT;
+ALTER TABLE reviews ADD COLUMN IF NOT EXISTS department_id TEXT;
+ALTER TABLE reviews ADD COLUMN IF NOT EXISTS run_id TEXT;
+ALTER TABLE asks ADD COLUMN IF NOT EXISTS from_department TEXT;
+ALTER TABLE asks ADD COLUMN IF NOT EXISTS from_run TEXT;
+ALTER TABLE asks ADD COLUMN IF NOT EXISTS to_department TEXT;
+ALTER TABLE asks ADD COLUMN IF NOT EXISTS to_run TEXT;
+ALTER TABLE asks ADD COLUMN IF NOT EXISTS handoff TEXT NOT NULL DEFAULT 'department' CHECK(handoff IN ('department','none'));
+ALTER TABLE asks ADD COLUMN IF NOT EXISTS routing TEXT CHECK(routing IN ('account','department','run','human','anyone'));
+ALTER TABLE asks ADD COLUMN IF NOT EXISTS claimed_session TEXT;
+ALTER TABLE asks ADD COLUMN IF NOT EXISTS claim_generation INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE asks ADD COLUMN IF NOT EXISTS claim_until TIMESTAMPTZ;
+-- Events are enqueued under the same project lock as publication. Receipt IDs are
+-- opaque per-event values: acknowledgements cannot skip unseen transactions.
+CREATE TABLE IF NOT EXISTS department_deliveries (
+  id TEXT PRIMARY KEY,
+  department_id TEXT NOT NULL REFERENCES departments(id) ON DELETE CASCADE,
+  problem_id BIGINT NOT NULL REFERENCES problems(id) ON DELETE CASCADE,
+  message_id BIGINT NOT NULL REFERENCES messages(id) ON DELETE CASCADE,
+  acknowledged_at TIMESTAMPTZ,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE(department_id,message_id)
+);
+CREATE INDEX IF NOT EXISTS department_pending_idx ON department_deliveries(department_id,problem_id,created_at) WHERE acknowledged_at IS NULL;
+CREATE TABLE IF NOT EXISTS mutation_receipts (
+  user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  session_id TEXT NOT NULL,
+  request_id TEXT NOT NULL,
+  request_hash TEXT NOT NULL,
+  status INTEGER NOT NULL,
+  receipt JSONB NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  PRIMARY KEY(user_id,session_id,request_id)
+);
+-- Derive public provenance from authenticated session/attempt ownership, never
+-- from a submitted display label. Old records retain unknown provenance.
+CREATE OR REPLACE FUNCTION department_provenance() RETURNS trigger AS $$
+DECLARE s sessions%ROWTYPE;
+BEGIN
+  IF TG_TABLE_NAME='messages' THEN SELECT * INTO s FROM sessions WHERE id=coalesce(NEW.session,nullif(current_setting('solveathome.session',true),'')) AND user_id=NEW.user_id;
+  ELSIF TG_TABLE_NAME='reviews' THEN SELECT ss.* INTO s FROM sessions ss JOIN jobs j ON j.assigned_session=ss.id WHERE j.id=NEW.review_job_id AND ss.user_id=NEW.user_id;
+  ELSIF NEW.job_id IS NOT NULL THEN SELECT ss.* INTO s FROM sessions ss JOIN jobs j ON j.assigned_session=ss.id WHERE j.id=NEW.job_id AND ss.user_id=NEW.user_id;
+  END IF;
+  IF s.id IS NULL THEN SELECT * INTO s FROM sessions WHERE id=nullif(current_setting('solveathome.session',true),'') AND user_id=NEW.user_id; END IF;
+  NEW.department_id=s.department_id; NEW.run_id=s.run_id;
+  RETURN NEW;
+END; $$ LANGUAGE plpgsql;
+DROP TRIGGER IF EXISTS messages_department_provenance ON messages;
+CREATE TRIGGER messages_department_provenance BEFORE INSERT ON messages FOR EACH ROW EXECUTE FUNCTION department_provenance();
+DROP TRIGGER IF EXISTS returns_department_provenance ON returns;
+CREATE TRIGGER returns_department_provenance BEFORE INSERT ON returns FOR EACH ROW EXECUTE FUNCTION department_provenance();
+
+DROP TRIGGER IF EXISTS reviews_department_provenance ON reviews;
+CREATE TRIGGER reviews_department_provenance BEFORE INSERT ON reviews FOR EACH ROW EXECUTE FUNCTION department_provenance();
+CREATE UNIQUE INDEX IF NOT EXISTS sessions_direction_idx ON sessions(direction_id) WHERE direction_id IS NOT NULL;
+CREATE TABLE IF NOT EXISTS agent_direction_links (
+  direction_id TEXT NOT NULL REFERENCES agent_directions(id) ON DELETE CASCADE,
+  revision INTEGER NOT NULL,
+  job_id BIGINT NOT NULL REFERENCES jobs(id) ON DELETE CASCADE,
+  reason TEXT NOT NULL,
+  PRIMARY KEY(direction_id,revision,job_id)
+);
+ALTER TABLE sessions ADD COLUMN IF NOT EXISTS recovery_attempt_id TEXT;
+CREATE TABLE IF NOT EXISTS assignment_recoveries (
+  old_attempt_id TEXT PRIMARY KEY REFERENCES assignment_attempts(id) ON DELETE CASCADE,
+  new_attempt_id TEXT NOT NULL UNIQUE REFERENCES assignment_attempts(id) ON DELETE CASCADE,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+-- Keep the permanent-token contract during a rolling deployment: an older slot
+-- must not revoke every agent when the person signs in again.
+CREATE OR REPLACE FUNCTION protect_agent_token() RETURNS trigger AS $$
+BEGIN
+  IF NEW.token_hash IS DISTINCT FROM OLD.token_hash OR
+     (NEW.revoked_at IS DISTINCT FROM OLD.revoked_at AND current_setting('solveathome.invalidate_token',true) IS DISTINCT FROM 'user-explicit') THEN
+    RAISE EXCEPTION 'agent tokens change only after explicit user invalidation';
+  END IF;
+  RETURN NEW;
+END; $$ LANGUAGE plpgsql;
+DROP TRIGGER IF EXISTS tokens_explicit_invalidation ON tokens;
+CREATE TRIGGER tokens_explicit_invalidation BEFORE UPDATE ON tokens FOR EACH ROW EXECUTE FUNCTION protect_agent_token();
+CREATE TABLE IF NOT EXISTS run_channel_members (
+  channel_id BIGINT NOT NULL REFERENCES channels(id) ON DELETE CASCADE,
+  session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+  last_seen_id BIGINT NOT NULL DEFAULT 0,
+  PRIMARY KEY(channel_id,session_id)
+);
