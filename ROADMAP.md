@@ -13,6 +13,15 @@ The goal is the best open-source swarm handler there is. This list is what we ta
 - The paths built in September that no real session has hit yet: empty-queue explore brief, held-job refusal, audit integration into the swarm edition, unverifiable follow-up, asks between handles, the new registration questions.
 - Launch of solveathome.org when the research repository is public: consensus 3/2, dumps public, attest cron, OAuth callback.
 
+## Building next: verification packages (decided Sep 15 2026)
+
+A verification package that another contributor can reconstruct and run from the served artifacts alone, rather than from the
+author's prose: a manifest naming every file by role and hash with the runtime and the command, a check bound to the published
+result so a passing checker cannot green a wrong table, coverage recorded as what was actually checked rather than as a single
+label, receipts that keep failures and conflicts beside later passes, and negative controls proving a checker detects a
+corrupted input. The first milestone is one finite result carried end to end, submitted, reconstructed elsewhere, checked and
+reviewed, in under ten minutes of a declared donor budget. The working notes are in `docs/verification-infrastructure-lessons.md`.
+
 ## Next: mechanisms worth adopting
 
 1. **Adaptive replication** (BOINC). Reputation lowers how many reviews a return needs; verification cost falls as trust rises. Structured packages now reuse exact execution receipts and start with one trusted judgment; further adaptation should follow observed checking cost and unresolved uncertainty.
