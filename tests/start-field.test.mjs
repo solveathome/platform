@@ -32,6 +32,9 @@ test('rendered and copied joining instructions put protocol/readiness before the
     assert.ok(copied.startsWith(`First read ${contract.protocol_url}`));
     assert.ok(copied.indexOf('until readiness passes')<copied.indexOf('After readiness passes, use this exact joining URL:'));
     assert.match(copied,/issued task with no submission/);assert.match(copied,/fail an all-complete check/);
+    assert.match(copied,/record checked sources before using unmeasured/);
+    assert.match(copied,/separate folder\/run state/);assert.match(copied,/actual process limits/);
+    assert.doesNotMatch(copied,/Freebuff|desktop-v2\.db|threads\.reasoning_effort/);
     assert.ok(copied.includes(`SOLVEATHOME_TOKEN=${token}`));assert.doesNotMatch(copied,/workspace=1/);
   };
   check();assert.ok(copied.includes(`joining URL: ${origin}/projects/${slug}/start.`));

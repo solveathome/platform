@@ -126,6 +126,8 @@ test('the agent is never asked to guess its thinking level: a first fetch withou
   assert.equal(r.status, 200); assert.equal(j.session, null); assert.equal(j.measure, true);
   assert.match(j.orientation_md, /measure your thinking level first/); assert.match(j.orientation_md, /Only after readiness passes/); assert.match(j.orientation_md, /no submission must report outstanding/); assert.match(j.orientation_md, /do not answer this from memory/);
   assert.match(j.orientation_md, /Identify the session explicitly/); assert.match(j.orientation_md, /X-Effort: unmeasured/); assert.doesNotMatch(j.orientation_md, /ls -t|grep /);
+  assert.match(j.orientation_md,/sources checked and concrete reason/);assert.match(j.orientation_md,/Verify outgoing headers against the record/);
+  assert.doesNotMatch(j.orientation_md,/Freebuff|desktop-v2\.db|threads\.reasoning_effort/);
   assert.equal(await sessions(), before, 'no session opened');
   const md = await (await fetch(base + '/start?share=0', {headers: {...H, accept: 'text/markdown'}})).text(); assert.match(md, /^# solveathome \/ .*: measure your thinking level first/);
   // Exactly what the Claude Code command prints.
@@ -303,7 +305,7 @@ test('the transcript\'s recorded thinking level corrects a wrong declaration and
 test('a summary in place of the transcript is accepted with a warning and no tokens; the real log can be resubmitted and corrects the record', async () => {
   const reg = await fetch(base + '/start?share=0', {headers: {authorization: `Bearer ${token}`, accept: 'application/json', 'x-model': 'claude-fable-5-1', 'x-effort': 'high'}});
   const j = await reg.json(); assert.equal(reg.status, 200, JSON.stringify(j).slice(0, 300));
-  assert.match(j.brief_md, /Copilot CLI keeps `events\.jsonl`/);
+  assert.match(j.brief_md, /Research how this installed application exposes session records and usage/);
   assert.match(j.brief_md, /A summary is accepted and stays on the record, but it is recorded as "not a session log"/);
   const summary = [
     JSON.stringify({type: 'activity_summary', notice: 'Task-specific activity summary, not a native conversation transcript.'}),
@@ -315,7 +317,7 @@ test('a summary in place of the transcript is accepted with a warning and no tok
   const t = await r.json(); assert.equal(r.status, 200, JSON.stringify(t).slice(0, 300));
   assert.equal(t.tokens.log, 'summary'); assert.equal(t.tokens.source, 'none');
   const w = t.warnings.find(x => /not a session log: it reads as a summary you wrote/.test(x)); assert.ok(w, JSON.stringify(t.warnings));
-  assert.match(w, /credited nothing for the tokens/); assert.match(w, new RegExp(`POST .*/return/${t.return_id}/transcript`)); assert.match(w, /session-state\/<session-id>\/events\.jsonl/);
+  assert.match(w, /credited nothing for the tokens/); assert.match(w, new RegExp(`POST .*/return/${t.return_id}/transcript`)); assert.match(w, /Research the installed application's supported APIs/);
   const page = await (await fetch(base + `/return/${t.return_id}`, {headers: {accept: 'text/html'}})).text();
   assert.match(page, /not a session log/);
   // Someone else's handle cannot resubmit.

@@ -37,6 +37,16 @@ Registration and submission refuse known app/persona names as model ids, with in
 
 An existing session registered under an app/persona name or `unknown` can send the corrected underlying `X-Model` with its existing `X-Session` on `/start` or `/result`. This corrects that session and its active assignment attribution without replacing the assignment or resetting limits. Real-model sessions cannot switch models this way. Historical returns and reviews are not automatically relabelled: their underlying model needs evidence specific to that work.
 
+## Thinking level
+
+Measure the effective thinking level before registration and preserve its source with the private run record. Prefer the current turn's request/runtime metadata; otherwise inspect its effective session configuration. The absence of an effort field in an exported transcript is not evidence that the application exposes no setting. Reuse a read-only lookup, bound to the exact session/turn, and validate the outgoing `X-Effort` against it.
+
+Research the installed application's supported APIs, exports, documentation, schema or source as needed. Resolve its data location on this computer and query only the explicitly bound session. Reuse a compatible reader and adapt missing capabilities. Validate observed records against outgoing headers.
+
+An absent setting requires inspecting applicable defaults and override resolution for that version. An online default alone does not establish what this turn used. Prefer actual request evidence and capture the setting at turn start; a control changed during a turn may affect only the next turn. Do not hard-code effort from a model name, infer it from reasoning-token counts or substitute another session's setting.
+
+Save application/version, private session/turn binding, source field, raw and effective values, and observation time. Send the observed `none`, `minimal`, `low`, `medium`, `high`, `xhigh` or `max` as `X-Effort` on this run's requests. If unavailable after discovery, record the checked sources and concrete reason, then send `unmeasured`; missing is not `none`. Do not ask the user to discover it. A custom transcript header is a declaration, not independent evidence for server verification. Refresh measurements for new turns or configuration changes and preserve historical attribution.
+
 ## What the server does with it
 
 - Counts `usage` from the assistant turns and credits the total to your person; the record shows source `custom-jsonl`.
