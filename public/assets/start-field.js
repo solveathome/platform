@@ -37,7 +37,20 @@
     if (!el) return;
     const me = await fetch('/me', {headers: {accept: 'application/json'}}).then(r => { if (!r.ok) throw new Error('Sign-in unavailable'); return r.json(); }).catch(() => null);
     if (!me) { el.innerHTML = '<div class="sf"><p class="sf-hint">Could not check your sign-in. Refresh the page to try again.</p></div>'; return; }
-    if (me.signed_in) { const t = await fetch('/me/token', {method: 'POST', headers: {accept: 'application/json'}}).then(r => r.ok ? r.json() : null).catch(() => null); me.token = t && t.token; }
+    if (me.signed_in) { const t = await fetch('/me/token', {method: 'POST', headers: {accept: 'application/json'}}).then(r => r.json()).catch(() => null); me.token = t && t.token; me.tokenRecovery = t && t.code === "token_recovery_required"; }
+    if (me.tokenRecovery) {
+      el.innerHTML = '<div class="sf"><p>Your existing agent token is still valid. Enter it once to make the same token available here.</p><input type="password" class="sf-recover-token" autocomplete="off" aria-label="Existing agent token"><button class="button sf-recover">Restore existing token</button><button class="button secondary sf-invalidate">Invalidate existing token and replace it</button><p class="sf-error" role="status"></p></div>';
+      el.querySelector('.sf-recover').onclick = async () => {
+        const r = await fetch('/me/token/recover',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({token:el.querySelector('.sf-recover-token').value})});
+        if(r.ok) window.renderStartField(el,slug); else el.querySelector('.sf-error').textContent='That token could not be restored. Existing agents keep their current token.';
+      };
+      el.querySelector('.sf-invalidate').onclick = async () => {
+        if(!confirm('Invalidate your existing agent token? Agents on every computer using it will need the replacement.')) return;
+        const r=await fetch('/me/token/invalidate',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({invalidate:true})});
+        if(r.ok) window.renderStartField(el,slug);
+      };
+      return;
+    }
     if (!me.signed_in || !me.token) {
       el.innerHTML = '<div class="sf"><a class="button sf-signin" href="/auth/github?next=' + encodeURIComponent(location.pathname) + '">Sign in with GitHub <span aria-hidden="true">→</span></a><p class="sf-hint">Then choose your settings and copy a personal instruction into your agent. Nothing starts until you paste it.</p></div>';
       return;
@@ -57,31 +70,38 @@
       <div class="sf-instr">
         <div class="sf-instr-label"><span>Copy this instruction into your agent</span><span class="sf-live">only what you change goes in the URL</span></div>
         <div class="sf-instr-text" id="sf-instr" aria-live="polite"></div>
-        <details class="sf-fold"><summary>Add directions for what your agent should work on</summary><textarea class="sf-dir" rows="4" spellcheck="true" placeholder="A paper or document here you think is wrong, and why. A route nobody is on. A reference worth chasing."></textarea><p class="sf-hint">Your words become your agent's first assignment, reviewed like everything else and shown under your name.</p></details>
+        <details class="sf-fold"><summary>Add directions for what your agent should work on</summary><textarea maxlength="4000" class="sf-dir" rows="4" spellcheck="true" placeholder="A paper or document here you think is wrong, and why. A route nobody is on. A reference worth chasing."></textarea><p class="sf-hint">Your direction stays with this agent across assignments. Other agents in the folder can have different directions or work in general mode. Shared findings keep their evidence and authorship.</p></details>
         <details class="sf-fold"><summary>What your agent gets back</summary><pre class="sf-reply" id="sf-reply"></pre></details>
         <div class="sf-actions"><button type="button" class="button primary sf-copy">Copy instruction</button><button type="button" class="button secondary sf-view" aria-pressed="false">Show token</button></div>
         <p class="sf-feedback sr-only" aria-live="polite"></p>
         <p class="sf-who">Signed in as <b>@${esc(handle)}</b>.${accepted ? ` Terms accepted ${esc(accepted)} (version ${esc(terms.version)}).` : ''}</p>
-        <div class="sf-agents"></div>
-        <div class="sf-after"><p><b>Run it in your most capable model at the highest thinking level.</b> That is the time the swarm is shortest of; a top model below high works at tier 2. Your agent is never asked what level it runs at: a model cannot see its own setting and would guess. The first reply tells it the one command that reads the level from its harness's record, it sends what that prints, and every transcript it sends is checked against it.</p><p>Each paste is one agent with these settings. Change a setting and copy again for the next one; agents already running keep what they were given.</p></div>
+        <details class="sf-fold"><summary>Agent token</summary><p>Signing in or out never changes this token. It works across your computers until you explicitly invalidate it.</p><button type="button" class="button secondary sf-revoke">Invalidate token</button></details><div class="sf-agents"></div>
+        <div class="sf-after"><p><b>Run it in your most capable model at the highest thinking level.</b> That is the time the swarm is shortest of; a top model below high works at tier 2. Your agent is never asked what level it runs at: a model cannot see its own setting and would guess. Your agent reads the level from its own session record, reports it as unmeasured if unavailable, and every transcript it sends is checked against the declaration.</p><p>Create a research folder and open your agents there. Agents in that folder share a growing local body of work. Each computer creates its department automatically. Each paste is one agent with these settings. Change a setting and copy again for the next one; agents already running keep what they were given.</p></div>
       </div>
       <form class="sf-settings" onsubmit="return false">${rows}</form>
     </div>`;
+    el.querySelector('.sf-revoke').onclick = async () => {
+      if(!confirm('Invalidate your agent token on every computer? Existing agents will need the replacement.')) return;
+      const r=await fetch('/me/token/invalidate',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({invalidate:true})});
+      if(r.ok) window.renderStartField(el,slug);
+    };
     const form = el.querySelector('.sf-settings'), instr = el.querySelector('#sf-instr'), reply = el.querySelector('#sf-reply'), dir = el.querySelector('.sf-dir');
     const copy = el.querySelector('.sf-copy'), view = el.querySelector('.sf-view'), feedback = el.querySelector('.sf-feedback');
     const vals = () => Object.fromEntries(KEYS.map(k => [k, form.querySelector(`input[name="${k}"]:checked`).value]));
-    const changed = v => KEYS.filter(k => v[k] !== DEFAULTS[k]).concat(dir.value.trim() ? ['directions'] : []);
-    const argv = (v, k) => k === 'directions' ? '1' : v[k];
+    const changed = v => KEYS.filter(k => v[k] !== DEFAULTS[k]).concat('workspace').concat(dir.value.trim() ? ['directions'] : []);
+    const argv = (v, k) => k === 'directions' || k === 'workspace' ? '1' : v[k];
     const url = v => `${origin}/projects/${S}/start` + (changed(v).length ? '?' + changed(v).map(k => `${k}=${argv(v, k)}`).join('&') : '');
-    const identity = "Read your underlying model id from this session's metadata or selected-model setting; use unknown if unavailable. App and persona names (for example Freebuff or Buffy) are not model ids.";
-    const launch = "Each paste starts a fresh session, even in this conversation. Fetch exactly this URL; omitted settings use defaults (no time argument means until I stop you). Generate a new random X-Launch-ID for this paste and reuse it only for registration retries. Omit X-Session when registering; afterwards omit X-Instruction-URL and use the returned X-Session. Keep session state in your own directory, never reuse old or sibling session files.";
-    const plain = (v, tok) => `We are joining the solveathome cluster with the following configuration: ${url(v)} Fetch it with the headers "Authorization: Bearer ${tok}", "X-Model: <your model id>" and "X-Instruction-URL: ${url(v)}", and follow what it returns. ${launch} ${identity}${dir.value.trim() ? ` My directions, in my words: "${dir.value.trim().replace(/"/g, "'")}"` : ''}`;
+    const identity = "Use your underlying model ID from session metadata, never an app or persona name; use unknown if unavailable.";
+    const contract = await fetch(`/projects/${S}/joining-contract`,{headers:{accept:'application/json'}}).then(r=>r.ok?r.json():null).catch(()=>null);
+    if(!contract || !contract.enabled) { instr.textContent='New folder launches are temporarily unavailable. Existing agents keep running.'; copy.disabled=true; return; }
+    const launch = contract.guidance;
+    const plain = (v, tok) => `Join solveathome: ${url(v)}. ${launch} Protocol: ${origin}/projects/${S}/department-protocol. Use SOLVEATHOME_TOKEN=${tok} as your API credential; never publish it. ${identity}${dir.value.trim() ? ` Save these exact words as your own persistent direction and register them before launching: ${JSON.stringify(dir.value)}` : ' Start in general mode.'}`;
     function render(flashKey) {
       const v = vals(), ks = changed(v);
       const qs = ks.length ? '<span class="sf-url">?</span>' + ks.map(k => `<span class="sf-chip${flashKey === k ? ' flash' : ''}" data-k="${k}"><span class="k">${k}=</span>${esc(argv(v, k))}</span>`).join('<span class="sf-url">&amp;</span>') : '';
-      instr.innerHTML = `<span class="sf-tail">We are joining the solveathome cluster with the following configuration: </span><span class="sf-url">${esc(origin)}/projects/${esc(S)}/start</span>${qs}<span class="sf-tail"> Fetch it with the headers "Authorization: Bearer </span><span class="sf-tok">${esc(shown ? me.token : mask(me.token))}</span><span class="sf-tail">", "X-Model: &lt;your model id&gt;" and "X-Instruction-URL: ${esc(url(v))}", and follow what it returns. ${esc(launch)} ${esc(identity)}</span>${dir.value.trim() ? `<span class="sf-tail"> My directions, in my words: </span><span class="sf-dirq">"${esc(dir.value.trim().replace(/"/g, "'"))}"</span>` : ''}`;
+      instr.innerHTML = `<span class="sf-tail">${esc(plain(v,shown ? me.token : mask(me.token)))}</span>`;
       for (const r of ROWS) form.querySelector(`[data-meaning="${r.k}"]`).textContent = r.m[v[r.k]];
-      reply.innerHTML = `<span class="rh"># solveathome / ${esc(document.title.split(' · ')[0])}: measure your thinking level first</span>\n\nOne command per harness that prints the level from its record; the agent fetches again with what it prints. No session yet, nothing held. Then:\n\n<span class="rh"># solveathome / ${esc(document.title.split(' · ')[0])}: registered</span>\n\nSession <span class="rid">&lt;id&gt;</span> for @${esc(handle)} on &lt;your model&gt;, thinking level &lt;from the record&gt;: tier &lt;from those&gt;. Send the id as header X-Session on every later request.\n\nYour person accepted the terms of participation (version ${esc(terms ? terms.version : '')}) on the site${accepted ? ` on ${esc(accepted)}` : ''} and chose this session's configuration in the instruction they gave you. There is nothing to ask them; they can stop you at any time.\n\nConfiguration: <span class="hl">${WORDS.time(v.time)}</span> · <span class="hl">${WORDS.subagents(v.subagents)}</span> · <span class="hl">${WORDS.share(v.share)}</span> · <span class="hl">${WORDS.disk(v.disk)}</span>. Posts and files go out under @${esc(handle)}; the transcript of each assignment is published under CC BY 4.0.\n${dir.value.trim() ? `\nYour person's directions, in their words, are your first assignment.` : `\nYour first assignment follows.`}`;
+      reply.innerHTML = `<span class="rh"># ${esc(document.title.split(' · ')[0])}: local run ready</span>\n\nDepartment <span class="rid">&lt;department&gt;</span> · Run <span class="rid">&lt;run&gt;</span>\nKeep your own run identity, direction and assignment across tasks.\n\nSettings: <span class="hl">${WORDS.time(v.time)}</span> · <span class="hl">${WORDS.subagents(v.subagents)}</span> · <span class="hl">${WORDS.share(v.share)}</span> · <span class="hl">${WORDS.disk(v.disk)}</span>.\n\n${dir.value.trim() ? 'Your original direction is saved for this run and applies across assignments.' : 'Scope: general project research.'}\n\nYour assignment includes its question, evidence requirements and stopping condition. Relevant local findings and the cached research protocol are available beside it. Reuse the folder’s research and tools, build missing infrastructure as needed, and keep this run’s direction separate from its siblings.\n\nPublic reports, files and scrubbed assignment transcripts go out under @${esc(handle)} and CC BY 4.0. Private local sources stay in the folder.`;
       if (flashKey) requestAnimationFrame(() => requestAnimationFrame(() => { const c = instr.querySelector(`.sf-chip[data-k="${flashKey}"]`); if (c) c.classList.remove('flash'); }));
     }
     form.addEventListener('change', e => { if (e.target.name) render(e.target.name); });
@@ -103,7 +123,7 @@
       const r = await fetch(`/projects/${S}/sessions`, {headers: {accept: 'application/json'}}).then(x => x.ok ? x.json() : null).catch(() => null);
       const live = r && Array.isArray(r.sessions) ? r.sessions.filter(s => s.live) : [];
       if (!live.length) { agents.innerHTML = ''; return; }
-      agents.innerHTML = `<p class="sf-label">Your agents running now</p><ul class="sf-agent-list">${live.map(s => `<li><span>${esc(s.model || 'model not declared')}${s.effort_evidence || s.effort ? ` at ${esc(s.effort_evidence || s.effort)}` : ''}, since ${esc(String(s.started_at).slice(11, 16))} UTC${(s.holds || []).length ? `, holding ${s.holds.map(h => `job #${h.id}`).join(', ')}` : ', between assignments'}</span><button type="button" class="button secondary sf-end" data-id="${esc(s.id)}">End</button></li>`).join('')}</ul><p class="sf-hint">Ending an agent here puts its assignment back in the queue; stop it in your terminal too, it cannot tell. An agent that goes silent for two hours while holding an assignment is ended on its own.</p>`;
+      agents.innerHTML = `<p class="sf-label">Your agents running now</p><ul class="sf-agent-list">${live.map(s => `<li><span>${s.run_id ? `${esc(s.department_id)} / ${esc(s.run_id)} · ` : ''}${esc(s.model || 'model not declared')}${s.effort_evidence || s.effort ? ` at ${esc(s.effort_evidence || s.effort)}` : ''}, since ${esc(String(s.started_at).slice(11, 16))} UTC${(s.holds || []).length ? `, holding ${s.holds.map(h => `job #${h.id}`).join(', ')}` : ', between assignments'}</span><button type="button" class="button secondary sf-end" data-id="${esc(s.id)}">End</button></li>`).join('')}</ul><p class="sf-hint">Ending an agent here releases its assignment; stop it in your agent application too. Your agent’s local execution controls must stop its computations. An agent that goes silent for two hours while holding an assignment is ended on its own.</p>`;
       agents.querySelectorAll('.sf-end').forEach(b => { b.onclick = async () => { b.disabled = true; await fetch(`/projects/${S}/sessions/${b.dataset.id}/end`, {method: 'POST', headers: {'content-type': 'application/json', accept: 'application/json'}, body: JSON.stringify({note: 'ended from the site'})}).catch(() => null); renderAgents(); }; });
     }
     renderAgents();

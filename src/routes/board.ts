@@ -2,7 +2,7 @@ import { shareMeta } from "../lib/share.js";
 import { wantsHtml } from "../lib/negotiate.js";
 import { Router } from "express";
 import { q, one } from "../db/index.js";
-import { bearer, optionalAuth, cookieToken } from "../lib/auth.js";
+import { bearer, optionalAuth, cookieToken, issueToken, recoverToken, invalidateToken, issueBrowserSession, TokenRecoveryRequired } from "../lib/auth.js";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { PUBLIC_DIR } from "../lib/paths.js";
@@ -35,7 +35,7 @@ board.get("/", async (req: any, res) => {
 const OWNER_SET = new Set((process.env.OWNER_HANDLES ?? "").split(",").map((s) => s.trim().toLowerCase()).filter(Boolean));
 root.get("/me", optionalAuth, async (req: any, res) => {
   if (!req.user) { res.json({ signed_in: false }); return; }
-  res.json({ signed_in: true, handle: req.user.handle, owner: OWNER_SET.has(String(req.user.handle).toLowerCase()) });
+  res.json({ signed_in: true, account_id: (await one(`SELECT agent_account_id FROM users WHERE id=$1`, [req.user.id]))?.agent_account_id, handle: req.user.handle, owner: OWNER_SET.has(String(req.user.handle).toLowerCase()) });
 });
 
 /** POST /me/token : the signed-in person's token for the start field. Cookie only, same-origin only, never on GET: a page script that can read /me cannot walk off with it by accident. */
@@ -44,7 +44,28 @@ root.post("/me/token", optionalAuth, async (req: any, res) => {
   const site = req.header("sec-fetch-site");
   if (!req.user || !viaCookie || (site && site !== "same-origin")) { res.status(403).json({ error: "sign in on the site first" }); return; }
   res.setHeader("Cache-Control", "no-store");
-  res.json({ handle: req.user.handle, token: cookieToken(req) });
+  try { res.json({ handle: req.user.handle, token: await issueToken(req.user.id) }); }
+  catch (error) { if (error instanceof TokenRecoveryRequired) { res.status(409).json({ error: error.message, code: "token_recovery_required" }); return; } throw error; }
+});
+
+// These actions require a signed-in browser and an explicit same-origin POST.
+for (const action of ["recover", "invalidate"] as const) root.post(`/me/token/${action}`, optionalAuth, async (req: any, res) => {
+  const site = req.header("sec-fetch-site");
+  if (!req.user || req.header("authorization") || !cookieToken(req) || (site && site !== "same-origin")) { res.status(403).json({ error: "sign in on the site first" }); return; }
+  res.setHeader("Cache-Control", "no-store");
+  if (action === "recover") {
+    if (typeof req.body?.token !== 'string' || req.body.token.length > 200 || !await recoverToken(req.body.token,req.user.id)) { res.status(400).json({ error: "that is not an active token for this account" }); return; }
+  } else {
+    if (req.body?.invalidate !== true) { res.status(400).json({ error: "explicit invalidate:true is required" }); return; }
+    // Upgrade a legacy agent-token cookie before explicit invalidation, so the
+    // person stays signed in and can retrieve the replacement afterwards.
+    if(!cookieToken(req).startsWith('sahweb_')) {
+      const browser=await issueBrowserSession(req.user.id);
+      res.setHeader('Set-Cookie',`sah_session=${browser}; Path=/; HttpOnly; SameSite=Lax; Max-Age=31536000${(process.env.BASE_URL ?? '').startsWith('https')?'; Secure':''}`);
+    }
+    await invalidateToken(req.user.id);
+  }
+  res.json({ ok: true });
 });
 
 /** GET /projects/:slug/board : project-scoped activity and research records. */
@@ -177,8 +198,11 @@ root.get("/@:handle", async (req, res) => {
     FROM claims c JOIN problems p ON p.id = c.problem_id WHERE lower(c.origin_handle) = lower($1) GROUP BY p.slug`, [u.handle]);
   const totals = await q(`SELECT kind, sum(points) AS points FROM credits WHERE user_id = $1 GROUP BY kind`, [u.id]);
   const researcher_of = await q(`SELECT slug, name, researcher_role FROM problems WHERE researcher_user_id = $1`, [u.id]);
+  const departments=await q(`SELECT d.id AS department_id,d.created_at,
+    coalesce(json_agg(json_build_object('run_id',s.run_id,'project',p.slug,'model',s.model,'ended_at',s.ended_at,'last_seen',s.last_seen)) FILTER(WHERE s.id IS NOT NULL),'[]') AS runs
+    FROM departments d LEFT JOIN sessions s ON s.department_id=d.id LEFT JOIN problems p ON p.id=s.problem_id WHERE d.user_id=$1 GROUP BY d.id ORDER BY d.created_at`,[u.id]);
   const { id: _omit, ...pub } = u;
-  res.json({ contributor: pub, researcher_of, provenance, credit: { total: totals.reduce((s: number, t: any) => s + Number(t.points), 0), by_kind: Object.fromEntries(totals.map((t: any) => [t.kind, Number(t.points)])), ledger }, agent_time: { accepted: u.accepted, rejected: u.rejected, review_agree: u.review_agree, review_disagree: u.review_disagree },
+  res.json({ departments, contributor: pub, researcher_of, provenance, credit: { total: totals.reduce((s: number, t: any) => s + Number(t.points), 0), by_kind: Object.fromEntries(totals.map((t: any) => [t.kind, Number(t.points)])), ledger }, agent_time: { accepted: u.accepted, rejected: u.rejected, review_agree: u.review_agree, review_disagree: u.review_disagree },
              compute: { cpu_hours: u.cpu_hours }, research_input: { directions_accepted: u.directions_accepted, lanes }, work, released, recent });
 });
 

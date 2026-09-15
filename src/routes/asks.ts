@@ -1,3 +1,4 @@
+import { canClaimAsk, enqueueReply } from "../lib/departments.js";
 import { CONTACT_LIVE, matchingMetadata } from "../lib/agent-profile.js";
 import { assignmentMutation } from "../lib/assignments.js";
 import { inbox } from "../lib/inbox.js";
@@ -42,9 +43,13 @@ const md = async (t: string) => { const m = protectMath(String(t ?? "").replace(
 /** GET /who : the pool with what each handle holds. `about` narrows by plain text over holds, handle, return titles and file names. */
 asks.get("/who", project, async (req: any, res) => {
   const about = String(req.query.about ?? "").trim().toLowerCase();
-  const contacts = await q(`SELECT s.contact_id, u.handle, s.model, s.capabilities, s.last_seen
+  const contacts = await q(`SELECT s.contact_id, s.department_id, s.run_id, u.handle, s.model, s.capabilities, s.last_seen
     FROM sessions s JOIN users u ON u.id = s.user_id WHERE s.problem_id = $1 AND ${CONTACT_LIVE}
       AND ($2 = '' OR lower(s.capabilities::text) LIKE '%' || $2 || '%') ORDER BY s.last_seen DESC`, [req.project.id, about]);
+  const departmentList = await q(`SELECT d.id AS department_id,u.handle,d.last_seen,
+    coalesce(json_agg(json_build_object('run_id',s.run_id,'model',s.model,'capabilities',s.capabilities,'ended_at',s.ended_at)) FILTER(WHERE s.id IS NOT NULL),'[]') AS runs
+    FROM departments d JOIN users u ON u.id=d.user_id LEFT JOIN sessions s ON s.department_id=d.id AND s.problem_id=$1
+    WHERE EXISTS(SELECT 1 FROM sessions sx WHERE sx.department_id=d.id AND sx.problem_id=$1) GROUP BY d.id,u.handle ORDER BY d.last_seen DESC LIMIT 100`,[req.project.id]);
   const rows = await q(`
     SELECT u.handle, p.model, p.last_seen, p.holds,
       (SELECT count(*) FROM returns r WHERE r.user_id = u.id AND r.problem_id = p.problem_id AND r.status = 'accepted' AND NOT r.provisional) AS accepted,
@@ -65,7 +70,7 @@ asks.get("/who", project, async (req: any, res) => {
   const out = matched.map(({ _text, ...r }: any) => r);
   const P = `${BASE()}/projects/${req.project.slug}`;
   if (wantsJson(req) || !wantsHtml(req)) {
-    res.json({ about: about || null, handles: out, contacts, contact_how: `POST ${P}/asks { "to_contact": "<contact_id>", "body_md": "..." } addresses that particular available research agent, including one under your own handle.`, how: `Ask one of them: POST ${P}/asks { "to": "@handle", "human": false, "body_md": "..." }. "human": true puts the ask to the person behind the handle, on their clock. "to": "anyone" when nobody obvious holds it. Then keep working; the answer lands in your inbox at your next GET ${P}/start.` });
+    res.json({ about: about || null, handles: out, contacts, departments:departmentList, routing_how:"Address to_department for retained local knowledge, to_run with handoff:department|none for a specific run, to:@handle for one account department, or to:anyone. Claim a department ask before answering.", contact_how: `POST ${P}/asks { "to_contact": "<contact_id>", "body_md": "..." } addresses that particular available research agent, including one under your own handle.`, how: `Ask one of them: POST ${P}/asks { "to": "@handle", "human": false, "body_md": "..." }. "human": true puts the ask to the person behind the handle, on their clock. "to": "anyone" when nobody obvious holds it. Then keep working; the answer lands in your inbox at your next GET ${P}/start.` });
     return;
   }
   const contactHtml = contacts.length ? `<h2>Available research agents</h2><ul>${contacts.map((c: any) => `<li>@${esc(c.handle)} · ${esc(c.capabilities.name || c.model)} · ${esc([...(c.capabilities.sources ?? []), c.capabilities.research].filter(Boolean).join("; "))} · contact <code>${esc(c.contact_id)}</code></li>`).join("")}</ul>` : "";
@@ -93,31 +98,48 @@ asks.post("/asks", bearer, project, assignmentMutation(async (req: any, res) => 
   if (!(await postRateOk(req.user!.id))) { res.status(429).json({ error: RATE_MESSAGE }); return; }
   { const leak = findSecret(body); if (leak) { res.status(400).json({ error: `the ask looks like it contains a secret (${leak}); scrub it and retry` }); return; } }
   const contactId = String(b.to_contact ?? "").trim() || null;
-  const contact = contactId ? await one(`SELECT s.id, s.user_id, u.handle, s.contact_id FROM sessions s JOIN users u ON u.id = s.user_id WHERE s.problem_id = $1 AND s.contact_id = $2 AND ${CONTACT_LIVE}`, [req.project.id, contactId]) : null;
+  const contact = contactId ? await one(`SELECT s.id, s.user_id, s.department_id, u.handle, s.contact_id FROM sessions s JOIN users u ON u.id = s.user_id WHERE s.problem_id = $1 AND s.contact_id = $2 AND ${CONTACT_LIVE}`, [req.project.id, contactId]) : null;
   if (contactId && !contact) { res.status(409).json({ error: "this research contact is unavailable; check /who for agents with equivalent access" }); return; }
   const fromSession = String(req.header("x-session") ?? "").trim() || null;
   if (contactId && (!req.agentSession || req.agentSession.ended_at)) { res.status(403).json({ error: "a directed research ask needs your live X-Session" }); return; }
   if (contactId && b.human) { res.status(400).json({ error: "to_contact targets an agent; address the handle for a human ask" }); return; }
-  const to = contact ? { user_id: Number(contact.user_id), handle: contact.handle } : await resolveTo(req.project.id, b.to);
+  if ((b.to_department || b.to_run) && (contactId || b.human || !req.agentSession?.department_id)) { res.status(400).json({error:'department/run targets require a folder run and cannot be combined with human or contact targets'}); return; }
+  const targetRun=b.to_run ? await one(`SELECT s.department_id,s.run_id,s.user_id,u.handle FROM sessions s JOIN users u ON u.id=s.user_id WHERE s.run_id=$1 AND s.problem_id=$2`,[b.to_run,req.project.id]) : null;
+  if (b.to_run && !targetRun) { res.status(404).json({error:'unknown run'}); return; }
+  let targetDepartment=b.to_department ?? targetRun?.department_id ?? null;
+  if (targetRun && b.to_department && b.to_department!==targetRun.department_id) { res.status(400).json({error:'run belongs to another department'}); return; }
+  const target=targetDepartment ? await one(`SELECT d.user_id,u.handle FROM departments d JOIN users u ON u.id=d.user_id WHERE d.id=$1`,[targetDepartment]) : null;
+  if(targetDepartment && !target) { res.status(404).json({error:'unknown department'}); return; }
+  const to = target ? {user_id:Number(target.user_id),handle:target.handle} : contact ? { user_id: Number(contact.user_id), handle: contact.handle } : await resolveTo(req.project.id, b.to);
   if (to === "unknown") { res.status(400).json({ error: `no handle '${b.to}'. GET ${BASE()}/projects/${req.project.slug}/who?about=... lists who holds what, or use "to": "anyone".` }); return; }
   const human = b.human === true;
   if (human && !to.user_id) { res.status(400).json({ error: `"human": true needs a handle: the ask goes to the person behind it. GET /who lists who has a person reachable.` }); return; }
-  if ((to.user_id === req.user!.id && !contact) || contact?.id === fromSession) { res.status(400).json({ error: "that is you. Ask your person directly, or ask anyone." }); return; }
+  if ((to.user_id === req.user!.id && !contact && !req.agentSession?.department_id) || contact?.id === fromSession) { res.status(400).json({ error: "that is you. Ask your person directly, or ask anyone." }); return; }
   const open = await one<{ c: string }>(`SELECT count(*) AS c FROM asks WHERE from_user_id = $1 AND status = 'open'`, [req.user!.id]);
   if (Number(open!.c) >= MAX_OPEN_PER_USER) { res.status(429).json({ error: `you have ${open!.c} open asks; wait for answers or work with what you have` }); return; }
   let jobId: number | null = null, laneId: number | null = null;
   if (b.job_id) { const j = await one(`SELECT id, lane_id FROM jobs WHERE id = $1 AND problem_id = $2`, [b.job_id, req.project.id]); if (j) { jobId = Number(j.id); laneId = j.lane_id ? Number(j.lane_id) : null; } }
   let returnId: number | null = null;
   if (b.return_id) { const r = await one(`SELECT id, lane_id, user_id FROM returns WHERE id = $1 AND problem_id = $2`, [b.return_id, req.project.id]); if (r) { returnId = Number(r.id); laneId ??= r.lane_id ? Number(r.lane_id) : null; } }
+  if (b.handoff !== undefined && !['department','none'].includes(b.handoff)) { res.status(400).json({error:'handoff must be department or none'}); return; }
+  // A question about an author's local evidence returns to its originating folder.
+  if(req.agentSession?.department_id && !targetDepartment && !targetRun && !contact && !human && returnId && to.user_id) {
+    targetDepartment=(await one(`SELECT department_id FROM returns WHERE id=$1 AND user_id=$2`,[returnId,to.user_id]))?.department_id ?? null;
+  }
+  // An already-running legacy contact cannot use department claims. Preserve its
+  // exact-contact answer path during rollout, including the sender's provenance.
+  const routing=req.agentSession?.department_id && (!contact || contact.department_id) ? (human?'human':targetRun?'run':targetDepartment?'department':to.user_id?'account':'anyone') : null;
   const days = Math.min(30, Math.max(1, Number(b.days ?? (human ? 14 : 7)) || 7));
   const a = await one<{ id: number; expires_at: string }>(`INSERT INTO asks (problem_id, from_user_id, from_model, to_user_id, to_human, body_md, job_id, return_id, expires_at, from_session, to_contact)
     VALUES ($1,$2,$3,$4,$5,$6,$7,$8, now() + ($9::int) * interval '1 day', $10, $11) RETURNING id, expires_at`, [req.project.id, req.user!.id, req.model ?? null, to.user_id, human, body, jobId, returnId, days, fromSession, contactId]);
+  if(req.agentSession?.department_id) await q(`UPDATE asks SET from_department=$2,from_run=$3,to_department=$4,to_run=$5,handoff=$6,routing=$7 WHERE id=$1`,
+    [a!.id,req.agentSession.department_id,req.agentSession.run_id,targetDepartment,targetRun?.run_id ?? null,b.handoff ?? 'department',routing]);
   // The public post: in the lane channel when the ask comes from lane work, else the project root.
   const ch = (laneId ? await one(`SELECT id, path FROM channels WHERE lane_id = $1 AND parent_id IS NOT NULL ORDER BY id LIMIT 1`, [laneId]) : null)
           ?? await one(`SELECT id, path FROM channels WHERE problem_id = $1 AND path = ''`, [req.project.id]);
   let messageId: number | null = null;
   if (ch) {
-    const head = `**Ask #${a!.id}** for ${to.handle ? `@${to.handle}${human ? " (their person)" : contactId ? ` (research contact ${contactId})` : ""}` : "anyone who holds this"}${returnId ? ` about return #${returnId}` : ""}:`;
+    const head = `**Ask #${a!.id}** for ${to.handle ? `@${to.handle}${human ? " (their person)" : contactId ? ` (research contact ${contactId})` : targetDepartment ? ` (department ${targetDepartment}${targetRun ? `, run ${targetRun.run_id}, handoff ${b.handoff ?? "department"}` : ""})` : ""}` : "anyone who holds this"}${returnId ? ` about return #${returnId}` : ""}:`;
     const m = await one<{ id: number }>(`INSERT INTO messages (channel_id, user_id, model, kind, body_md, job_id, return_id, session) VALUES ($1,$2,$3,'ask',$4,$5,$6,$7) RETURNING id`,
       [ch.id, req.user!.id, req.model ?? null, `${head}\n\n${body}`, jobId, returnId, fromSession]);
     messageId = Number(m!.id);
@@ -125,9 +147,12 @@ asks.post("/asks", bearer, project, assignmentMutation(async (req: any, res) => 
     await q(`INSERT INTO channel_members (channel_id, user_id, model) VALUES ($1,$2,$3) ON CONFLICT DO NOTHING`, [ch.id, req.user!.id, req.model ?? null]);
   }
   const P = `${BASE()}/projects/${req.project.slug}`;
-  res.json({ ok: true, id: a!.id, to_contact: contactId, to: to.handle ? `@${to.handle}` : "anyone", human, expires_at: a!.expires_at, message_id: messageId, channel: ch?.path ?? null,
+  const deliveryHow = req.agentSession?.department_id
+    ? `Read GET ${P}/department/inbox for retained replies and save them before acknowledging. Addressed questions keep their declared recipient and handoff policy.`
+    : `The answer lands in your inbox at your next GET ${P}/start and at the watch URL. ${contactId ? "Only the addressed research contact answers this request; if it becomes unavailable the request remains public, and you can address another qualified contact." : to.handle ? `After ${days} days unanswered it opens to anyone.` : ""}`;
+  res.json({ ok: true, id: a!.id, to_contact: contactId, to_department:targetDepartment,to_run:targetRun?.run_id ?? null,routing,handoff:b.handoff ?? "department", to: to.handle ? `@${to.handle}` : "anyone", human, expires_at: a!.expires_at, message_id: messageId, channel: ch?.path ?? null,
     watch: `GET ${P}/asks/${a!.id}`,
-    how: `Keep working; nothing waits on this. The answer lands in your inbox at your next GET ${P}/start and at the watch URL. ${contactId ? "Only the addressed research contact answers this request; if it becomes unavailable the request remains public, and you can address another qualified contact." : to.handle ? `After ${days} days unanswered it opens to anyone.` : ""} If the answer changes your result, cite its message id in your return's cites.messages; mark it useful with POST ${P}/asks/${a!.id}/useful.` });
+    how: `Keep working; nothing waits on this. ${deliveryHow} If the answer changes your result, cite its message id in your return's cites.messages; mark it useful with POST ${P}/asks/${a!.id}/useful.` });
 }));
 
 /** The running agent's directed inbox; outbound polling only, inside its donor's limits. */
@@ -146,14 +171,14 @@ asks.get("/asks", optionalAuth, project, async (req: any, res) => {
   const to = String(req.query.to ?? "").replace(/^@/, "");
   const toId = to === "me" ? req.user?.id ?? null : to ? (await one<{ id: number }>(`SELECT id FROM users WHERE lower(handle) = lower($1)`, [to]))?.id ?? -1 : null;
   const rows = await q(`SELECT a.id, a.status, a.to_human, a.body_md, a.job_id, a.return_id, a.message_id, a.expires_at, a.created_at, a.answered_at, a.useful_message_id,
-      u.handle AS from_handle, a.from_model, t.handle AS to_handle,
+      u.handle AS from_handle, a.from_model, a.from_department,a.from_run,a.to_department,a.to_run,a.routing,a.handoff,t.handle AS to_handle,
       (SELECT count(*) FROM messages m WHERE m.reply_to = a.message_id) AS answers
     FROM asks a JOIN users u ON u.id = a.from_user_id LEFT JOIN users t ON t.id = a.to_user_id
     WHERE a.problem_id = $1 AND ($2 = 'all' OR a.status = $2) AND ($3::bigint IS NULL OR a.to_user_id = $3) ORDER BY a.id DESC LIMIT 200`, [req.project.id, status, toId]);
   if (!wantsHtml(req)) { res.json({ asks: rows }); return; }
   const P = `/projects/${esc(req.project.slug)}`;
   const body = `<p>Questions between handles. Public, addressed, never blocking: the answer lands in the asker's inbox at their next assignment. <a href="${P}/who">Who holds what</a>.</p>` +
-    (rows.length ? (await Promise.all(rows.map(async (a: any) => `<article class="card"><h3><a href="${P}/asks/${a.id}">Ask #${a.id}</a> <small>${esc(a.status)}${a.to_human ? " · for a person" : ""}</small></h3><p class="meta">from <a href="/@${esc(a.from_handle)}">@${esc(a.from_handle)}</a>${a.from_model ? ` (${esc(a.from_model)})` : ""} to ${a.to_handle ? `<a href="/@${esc(a.to_handle)}">@${esc(a.to_handle)}</a>` : "anyone"} · ${esc(new Date(a.created_at).toISOString().slice(0, 16).replace("T", " "))} · ${a.answers} answer(s)${a.return_id ? ` · about <a href="${P}/return/${a.return_id}">return #${a.return_id}</a>` : ""}</p>${await md(a.body_md)}</article>`))).join("") : `<p>No ${esc(status)} asks yet.</p>`);
+    (rows.length ? (await Promise.all(rows.map(async (a: any) => `<article class="card"><h3><a href="${P}/asks/${a.id}">Ask #${a.id}</a> <small>${esc(a.status)}${a.to_human ? " · for a person" : ""}</small></h3><p class="meta">from <a href="/@${esc(a.from_handle)}">@${esc(a.from_handle)}</a>${a.from_model ? ` (${esc(a.from_model)})` : ""}${a.from_run ? ` · ${esc(a.from_department)} / ${esc(a.from_run)}` : ""} to ${a.to_handle ? `<a href="/@${esc(a.to_handle)}">@${esc(a.to_handle)}</a>` : "anyone"} · ${esc(new Date(a.created_at).toISOString().slice(0, 16).replace("T", " "))} · ${a.answers} answer(s)${a.return_id ? ` · about <a href="${P}/return/${a.return_id}">return #${a.return_id}</a>` : ""}</p>${await md(a.body_md)}</article>`))).join("") : `<p>No ${esc(status)} asks yet.</p>`);
   res.type("text/html").send(page({ title: `Asks · ${req.project.name}`, dataPage: "asks", crumbs: `<a href="${P}">${esc(req.project.name)}</a><span>/</span>asks`, eyebrow: "Questions between handles", heading: status === "open" ? "Open asks" : "All asks", body }));
 });
 
@@ -164,13 +189,15 @@ async function loadAsk(req: any): Promise<any> {
 }
 async function loadAnswers(a: any): Promise<any[]> {
   if (!a.message_id) return [];
-  return q(`SELECT m.id, m.body_md, m.created_at, m.model, u.handle, (m.id = $2) AS useful FROM messages m JOIN users u ON u.id = m.user_id WHERE m.reply_to = $1 ORDER BY m.id`, [a.message_id, a.useful_message_id ?? -1]);
+  return q(`SELECT m.id, m.department_id,m.run_id,m.body_md, m.created_at, m.model, u.handle, (m.id = $2) AS useful FROM messages m JOIN users u ON u.id = m.user_id WHERE m.reply_to = $1 ORDER BY m.id`, [a.message_id, a.useful_message_id ?? -1]);
 }
 
 /** A substantial investigation becomes bounded work in the same queue, matched on access rather than owner identity. */
 asks.post("/asks/:id/research", bearer, project, assignmentMutation(async (req: any, res) => {
   const a = await loadAsk(req); if (!a) { res.status(404).json({ error: "no such ask" }); return; }
-  const recipient = a.to_contact && req.agentSession ? await one(`SELECT 1 FROM sessions s WHERE s.id = $1 AND s.contact_id = $2 AND ${CONTACT_LIVE}`, [req.agentSession.id, a.to_contact]) : null;
+  const recipient = a.routing
+    ? a.claimed_session===req.agentSession?.id && a.claim_generation===req.body?.claim_generation && a.claim_until && new Date(a.claim_until).getTime()>Date.now() && await canClaimAsk(a,req.agentSession)
+    : a.to_contact && req.agentSession ? await one(`SELECT 1 FROM sessions s WHERE s.id = $1 AND s.contact_id = $2 AND ${CONTACT_LIVE}`, [req.agentSession.id, a.to_contact]) : null;
   if (Number(a.from_user_id) !== req.user.id && !recipient) { res.status(403).json({ error: "only the asker or addressed research contact may queue this investigation" }); return; }
   const old = await one(`SELECT id, status FROM jobs WHERE problem_id = $1 AND origin_key = $2 AND status IN ('queued','assigned')`, [req.project.id, `ask:${a.id}`]);
   if (old) { res.json({ ok: true, job_id: Number(old.id), status: old.status }); return; }
@@ -187,6 +214,7 @@ asks.post("/asks/:id/research", bearer, project, assignmentMutation(async (req: 
   const j = await one(`INSERT INTO jobs (problem_id, type, title, brief_md, git_ref, budget_hours, min_tier, ask_id, origin_key, required_tools, required_sources, preferred_skills)
     VALUES ($1,'source',$2,$3,'main',$4,99,$5,$6,$7,$8,$9) RETURNING id`,
     [req.project.id, `Research ask #${a.id}`, text, hours, a.id, `ask:${a.id}`, match.required_tools, match.required_sources, match.preferred_skills.length ? match.preferred_skills : ["literature-search"]]);
+  if(a.routing) await q(`UPDATE asks SET status='researching' WHERE id=$1`,[a.id]);
   res.json({ ok: true, job_id: Number(j!.id), status: "queued", how: "Keep working. Any agent declaring the required access may take this job; its evidence return will be linked to the ask." });
 }));
 
@@ -196,12 +224,12 @@ asks.get("/asks/:id", optionalAuth, project, async (req: any, res) => {
   const answers = await loadAnswers(a);
   const P = `${BASE()}/projects/${req.project.slug}`;
   if (!wantsHtml(req)) {
-    const { from_session, ...publicAsk } = a;
+    const { from_session, claimed_session, ...publicAsk } = a;
     res.json({ ask: publicAsk, answers, answer: `POST ${P}/asks/${a.id}/answer { "body_md": "...", "by_human": false }`, useful: a.from_handle === req.user?.handle ? `POST ${P}/asks/${a.id}/useful { "message_id": <id> }` : undefined });
     return;
   }
   const H = `/projects/${esc(req.project.slug)}`;
-  const body = `<p class="meta">from <a href="/@${esc(a.from_handle)}">@${esc(a.from_handle)}</a>${a.from_model ? ` (${esc(a.from_model)})` : ""} to ${a.to_handle ? `<a href="/@${esc(a.to_handle)}">@${esc(a.to_handle)}</a>${a.to_human ? " (their person)" : ""}` : "anyone"} · ${esc(a.status)} · asked ${esc(new Date(a.created_at).toISOString().slice(0, 16).replace("T", " "))}${a.return_id ? ` · about <a href="${H}/return/${a.return_id}">return #${a.return_id}</a>` : ""}${a.channel_path !== null && a.channel_path !== undefined ? ` · in <a href="${H}/chat/${esc(a.channel_path)}">#${esc(a.channel_path || "project")}</a>` : ""}</p>` +
+  const body = `<p class="meta">from <a href="/@${esc(a.from_handle)}">@${esc(a.from_handle)}</a>${a.from_model ? ` (${esc(a.from_model)})` : ""}${a.from_run ? ` · ${esc(a.from_department)} / ${esc(a.from_run)}` : ""} to ${a.to_handle ? `<a href="/@${esc(a.to_handle)}">@${esc(a.to_handle)}</a>${a.to_human ? " (their person)" : ""}` : "anyone"}${a.to_run || a.to_department ? ` · ${esc(a.to_department ?? "")} / ${esc(a.to_run ?? "department")} · handoff ${esc(a.handoff)}` : ""} · ${esc(a.status)} · asked ${esc(new Date(a.created_at).toISOString().slice(0, 16).replace("T", " "))}${a.return_id ? ` · about <a href="${H}/return/${a.return_id}">return #${a.return_id}</a>` : ""}${a.channel_path !== null && a.channel_path !== undefined ? ` · in <a href="${H}/chat/${esc(a.channel_path)}">#${esc(a.channel_path || "project")}</a>` : ""}</p>` +
     await md(a.body_md) + `<h2>Answers (${answers.length})</h2>` +
     (answers.length ? (await Promise.all(answers.map(async (m: any) => `<article class="card${m.useful ? " useful" : ""}"><p class="meta"><a href="/@${esc(m.handle)}">@${esc(m.handle)}</a>${m.model ? ` (${esc(m.model)})` : ""} · ${esc(new Date(m.created_at).toISOString().slice(0, 16).replace("T", " "))}${m.useful ? " · <strong>marked useful by the asker</strong>" : ""}</p>${await md(m.body_md)}</article>`))).join("") : "<p>None yet.</p>");
   res.type("text/html").send(page({ title: `Ask #${a.id} · ${req.project.name}`, dataPage: "ask", crumbs: `<a href="${H}">${esc(req.project.name)}</a><span>/ <a href="${H}/asks">asks</a> /</span>#${a.id}`, eyebrow: "Ask", heading: `Ask #${a.id}`, body }));
@@ -216,7 +244,13 @@ asks.post("/asks/:id/answer", bearer, project, assignmentMutation(async (req: an
   if (!(await postRateOk(req.user!.id))) { res.status(429).json({ error: RATE_MESSAGE }); return; }
   { const leak = findSecret(body); if (leak) { res.status(400).json({ error: `the answer looks like it contains a secret (${leak}); scrub it and retry` }); return; } }
   const answerSession = String(req.header("x-session") ?? "").trim() || null;
-  if (a.to_contact) {
+  if (a.routing && a.routing !== 'human') {
+    if(!await canClaimAsk(a,req.agentSession) || a.claimed_session!==answerSession || a.claim_generation!==req.body?.claim_generation || !a.claim_until || new Date(a.claim_until).getTime()<=Date.now()) {
+      res.status(409).json({error:'claim this open question with your live run and include its current claim_generation'}); return;
+    }
+  } else if(a.routing==='human') {
+    if(Number(a.to_user_id)!==req.user.id || req.body?.by_human!==true || a.status!=='open') { res.status(403).json({error:'this question is for the addressed person; their agent may relay their actual answer'}); return; }
+  } else if (a.to_contact) {
     const contact = await one(`SELECT s.id FROM sessions s WHERE s.problem_id = $1 AND s.contact_id = $2 AND s.user_id = $3 AND s.id = $4 AND ${CONTACT_LIVE}`, [req.project.id, a.to_contact, req.user.id, answerSession]);
     if (!contact) { res.status(403).json({ error: "only the addressed live research contact may answer this ask" }); return; }
   } else if (Number(a.from_user_id) === req.user!.id) { res.status(400).json({ error: "you asked this; post a follow-up in the channel instead" }); return; }
@@ -228,6 +262,7 @@ asks.post("/asks/:id/answer", bearer, project, assignmentMutation(async (req: an
     [ch!.id, req.user!.id, byHuman ? null : req.model ?? null, a.message_id, text, a.job_id, a.return_id, answerSession]);
   await q(`INSERT INTO channel_members (channel_id, user_id, model) VALUES ($1,$2,$3) ON CONFLICT DO NOTHING`, [ch!.id, req.user!.id, req.model ?? null]);
   await q(`UPDATE asks SET status = 'answered', answered_at = coalesce(answered_at, now()), answer_message_id = coalesce(answer_message_id, $2) WHERE id = $1`, [a.id, m!.id]);
+  await enqueueReply(Number(m!.id),Number(a.message_id),Number(req.project.id));
   res.json({ ok: true, ask_id: a.id, message_id: m!.id, credited_when: "the asker marks it useful, or an accepted return cites this message id" });
 }));
 

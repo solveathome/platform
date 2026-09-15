@@ -34,7 +34,7 @@ export type SchedulingAgent = {
   problemId: number; slug: string; sessionId: string; uid: number; tier: number; model: string | null;
   provider: string | null; trusted: boolean; granted: boolean; lane: string | null;
   cpuHours: number; ramGb: number; hasGpu: boolean; disk: number; maxHours: number;
-  reviewStreak: number; capabilities: Partial<Capabilities>;
+  jobId?: number; directionId?: string | null; directionRevision?: number; reviewStreak: number; capabilities: Partial<Capabilities>;
 };
 
 /** Shared predicates: the backlog and selection must count exactly the same eligible work. */
@@ -60,6 +60,10 @@ function eligibility(a: SchedulingAgent, omitCompute = false) {
     `(pr.id IS NULL OR pr.model IS DISTINCT FROM ${model}::text)`,
     `(pr.id IS NULL OR j.min_tier >= 99 OR ${tier} <= coalesce(amt.tier, 99))`,
   ];
+  clauses.push(a.directionId
+    ? `((j.agent_direction_id=${p(a.directionId)} AND j.agent_direction_revision=${p(a.directionRevision)}) OR (j.agent_direction_id IS NULL AND EXISTS(SELECT 1 FROM agent_direction_links dl WHERE dl.job_id=j.id AND dl.direction_id=${p(a.directionId)} AND dl.revision=${p(a.directionRevision)})))`
+    : `j.agent_direction_id IS NULL`);
+  if(a.jobId) clauses.push(`j.id=${p(a.jobId)}`);
   if (!omitCompute) clauses.push(
     `coalesce((j.compute_hint->>'cpu_hours')::numeric,0) <= ${p(a.cpuHours)}`,
     `coalesce((j.compute_hint->>'ram_gb')::numeric,0) <= ${p(a.ramGb > 0 ? a.ramGb : 8)}`,

@@ -1,3 +1,5 @@
+import { assignmentMutation } from "../lib/assignments.js";
+import { enqueueReply } from "../lib/departments.js";
 import { Router } from "express";
 import { q, one } from "../db/index.js";
 import { bearer, optionalAuth } from "../lib/auth.js";
@@ -84,7 +86,7 @@ chat.get("/chat", project, async (req: any, res) => {
 });
 
 /** POST /chat : spawn a sub-channel. Body: { parent: "<path>", name: "attempt-7", title, purpose }. Posts a 'spawn' message in the parent. */
-chat.post("/chat", bearer, project, async (req: any, res) => {
+chat.post("/chat", bearer, project, assignmentMutation(async (req: any, res) => {
   { const mine = await one<{ c: string }>(`SELECT count(*) AS c FROM channels WHERE problem_id = $1 AND created_by = $2 AND status = 'open'`, [req.project.id, req.user!.id]); if (Number(mine?.c ?? 0) >= MAX_OPEN_CHANNELS_PER_USER) { res.status(429).json({ error: `you have ${mine!.c} open sub-channels here (limit ${MAX_OPEN_CHANNELS_PER_USER}); close some first` }); return; } }
   const b = req.body ?? {};
   const parentPath = String(b.parent ?? "").replace(/^\/+|\/+$/g, "");
@@ -100,26 +102,26 @@ chat.post("/chat", bearer, project, async (req: any, res) => {
   await q(`INSERT INTO messages (channel_id, user_id, model, kind, body_md) VALUES ($1,$2,$3,'spawn',$4)`,
     [parent.id, req.user!.id, req.model ?? null, `Opened sub-channel \`${path}\`: ${String(b.title ?? name)}${b.purpose ? `\n\n${b.purpose}` : ""}\n\nJoin: POST /projects/${req.project.slug}/chat/${path}/join`]);
   res.json({ ok: true, path, join: `/projects/${req.project.slug}/chat/${path}/join` });
-});
+}));
 
 /** Root (project-wide) channel: /chat/join, /chat/messages, /chat/leave map to path "". */
 function rootPath(req: any, _res: any, next: any): void { req.params.path = ""; next(); }
-chat.post("/chat/join", bearer, project, rootPath, channel, (req: any, res: any, next: any) => joinHandler(req, res, next));
-chat.post("/chat/leave", bearer, project, rootPath, channel, (req: any, res: any) => leaveHandler(req, res));
+chat.post("/chat/join", bearer, project, rootPath, channel, assignmentMutation(joinHandler));
+chat.post("/chat/leave", bearer, project, rootPath, channel, assignmentMutation(leaveHandler));
 chat.get("/chat/messages", optionalAuth, project, rootPath, channel, (req: any, res: any) => listHandler(req, res));
 /** GET /chat/messages/:id : one message by id from any channel of the project, JSON (issue #45: a reviewer checking attribution needs the cited text). */
 chat.get("/chat/messages/:id", optionalAuth, project, async (req: any, res: any) => {
   const id = Number(req.params.id);
   if (!Number.isInteger(id) || id <= 0) { res.status(400).json({ error: "message id must be a positive integer" }); return; }
-  const m = await one(`SELECT m.id, c.path AS channel_path, u.handle, m.model, m.kind, m.reply_to, m.body_md, m.job_id, m.return_id, m.created_at FROM messages m JOIN channels c ON c.id = m.channel_id JOIN users u ON u.id = m.user_id WHERE m.id = $1 AND c.problem_id = $2`, [id, req.project.id]);
+  const m = await one(`SELECT m.id, c.path AS channel_path, u.handle, m.department_id,m.run_id,m.model, m.kind, m.reply_to, m.body_md, m.job_id, m.return_id, m.created_at FROM messages m JOIN channels c ON c.id = m.channel_id JOIN users u ON u.id = m.user_id WHERE m.id = $1 AND c.problem_id = $2`, [id, req.project.id]);
   if (!m) { res.status(404).json({ error: `no message #${id} in this project` }); return; }
   if (req.query.html) { const pages = await paperPages(req.project.slug); (m as any).body_html = await renderMessage(m.body_md, req.project.slug, pages); }
   res.json(numIds(m));
 });
-chat.post("/chat/messages", bearer, project, rootPath, channel, (req: any, res: any) => postHandler(req, res));
+chat.post("/chat/messages", bearer, project, rootPath, channel, assignmentMutation(postHandler));
 
 /** POST /chat/*path/close { note } : any member may close a sub-channel when its purpose is served; lane and project channels stay open. Reopen by spawning the same name. */
-chat.post("/chat/*path/close", bearer, project, channel, async (req: any, res: any) => {
+chat.post("/chat/*path/close", bearer, project, channel, assignmentMutation(async (req: any, res: any) => {
   if (!req.channel.parent_id || req.channel.lane_id && (await one(`SELECT 1 FROM lanes WHERE id = $1 AND slug = $2`, [req.channel.lane_id, req.channel.path]))) { res.status(400).json({ error: "lane and project channels stay open; close only sub-channels" }); return; }
   const member = await one(`SELECT 1 FROM channel_members WHERE channel_id = $1 AND user_id = $2`, [req.channel.id, req.user!.id]);
   if (!member) { res.status(403).json({ error: "join the channel before closing it" }); return; }
@@ -129,16 +131,18 @@ chat.post("/chat/*path/close", bearer, project, channel, async (req: any, res: a
   const parent = await one(`SELECT id FROM channels WHERE id = $1`, [req.channel.parent_id]);
   if (parent) await q(`INSERT INTO messages (channel_id, user_id, model, kind, body_md) VALUES ($1,$2,$3,'done',$4)`, [parent.id, req.user!.id, req.model ?? null, `Closed sub-channel \`${req.channel.path}\`${note ? `: ${note}` : "."}`]);
   res.json({ ok: true, path: req.channel.path, status: "closed" });
-});
+}));
 
 /** POST /chat/*path/join */
-chat.post("/chat/*path/join", bearer, project, channel, joinHandler);
+chat.post("/chat/*path/join", bearer, project, channel, assignmentMutation(joinHandler));
 async function joinHandler(req: any, res: any, _next?: any): Promise<void> {
   await q(`INSERT INTO channel_members (channel_id, user_id, model) VALUES ($1,$2,$3) ON CONFLICT (channel_id, user_id) DO UPDATE SET model = EXCLUDED.model`, [req.channel.id, req.user!.id, req.model ?? null]);
+  if(req.agentSession?.department_id) await q(`INSERT INTO run_channel_members(channel_id,session_id) VALUES($1,$2) ON CONFLICT DO NOTHING`,[req.channel.id,req.agentSession.id]);
   const last = await one<{ m: string }>(`SELECT coalesce(max(id),0) AS m FROM messages WHERE channel_id = $1`, [req.channel.id]);
-  const members = await q(`SELECT u.handle, m.model FROM channel_members m JOIN users u ON u.id = m.user_id WHERE m.channel_id = $1`, [req.channel.id]);
-  const recent = (await q(`SELECT m.id, u.handle, m.model, m.kind, m.reply_to, m.body_md, m.job_id, m.created_at FROM messages m JOIN users u ON u.id = m.user_id WHERE m.channel_id = $1 ORDER BY m.id DESC LIMIT ${RECENT}`, [req.channel.id])).reverse();
-  const open = await q(`SELECT m.id, u.handle, m.model, m.kind, left(m.body_md, 600) AS body_md, m.created_at FROM messages m JOIN users u ON u.id = m.user_id
+  const members = await q(`SELECT u.handle,s.model,s.department_id,s.run_id FROM run_channel_members m JOIN sessions s ON s.id=m.session_id JOIN users u ON u.id=s.user_id WHERE m.channel_id=$1 AND s.ended_at IS NULL
+    UNION ALL SELECT u.handle,m.model,NULL,NULL FROM channel_members m JOIN users u ON u.id=m.user_id WHERE m.channel_id=$1 AND NOT EXISTS(SELECT 1 FROM run_channel_members rm JOIN sessions s ON s.id=rm.session_id WHERE rm.channel_id=m.channel_id AND s.user_id=u.id AND s.ended_at IS NULL)`,[req.channel.id]);
+  const recent = (await q(`SELECT m.id, u.handle, m.department_id,m.run_id,m.model, m.kind, m.reply_to, m.body_md, m.job_id, m.created_at FROM messages m JOIN users u ON u.id = m.user_id WHERE m.channel_id = $1 ORDER BY m.id DESC LIMIT ${RECENT}`, [req.channel.id])).reverse();
+  const open = await q(`SELECT m.id, u.handle, m.department_id,m.run_id,m.model, m.kind, left(m.body_md, 600) AS body_md, m.created_at FROM messages m JOIN users u ON u.id = m.user_id
       WHERE m.channel_id = $1 AND m.kind = ANY($2) AND m.created_at > now() - interval '${OPEN_DAYS} days' AND m.user_id <> $3
         AND NOT EXISTS (SELECT 1 FROM messages r WHERE r.reply_to = m.id) ORDER BY m.id DESC LIMIT 8`, [req.channel.id, CONVERSATION_KINDS, req.user!.id]);
   const base = `/projects/${req.project.slug}/chat/${req.channel.path ? req.channel.path + "/" : ""}`;
@@ -148,8 +152,12 @@ async function joinHandler(req: any, res: any, _next?: any): Promise<void> {
              listen: `GET ${base}messages?since=${last!.m}&wait=30  (markdown; send Accept: application/json for JSON, html=1 adds body_html)`, post: `POST ${base}messages { "body_md", "kind": "idea|question|challenge|reply|found|stuck|claim|done", "reply_to": <id or null>, "job_id": <id or null> }` });
 }
 
-chat.post("/chat/*path/leave", bearer, project, channel, leaveHandler);
+chat.post("/chat/*path/leave", bearer, project, channel, assignmentMutation(leaveHandler));
 async function leaveHandler(req: any, res: any): Promise<void> {
+  if(req.agentSession?.department_id) {
+    await q(`DELETE FROM run_channel_members WHERE channel_id=$1 AND session_id=$2`,[req.channel.id,req.agentSession.id]);
+    if(await one(`SELECT 1 FROM run_channel_members rm JOIN sessions s ON s.id=rm.session_id WHERE rm.channel_id=$1 AND s.user_id=$2 AND s.ended_at IS NULL`,[req.channel.id,req.user.id])) { res.json({ok:true}); return; }
+  }
   await q(`DELETE FROM channel_members WHERE channel_id = $1 AND user_id = $2`, [req.channel.id, req.user!.id]);
   res.json({ ok: true });
 }
@@ -161,10 +169,11 @@ async function leaveHandler(req: any, res: any): Promise<void> {
  */
 chat.get("/chat/*path/messages", optionalAuth, project, channel, listHandler);
 async function listHandler(req: any, res: any): Promise<void> {
+  const reader=req.user && req.header('x-session') ? await one(`SELECT id,department_id FROM sessions WHERE id=$1 AND user_id=$2 AND problem_id=$3`,[req.header('x-session'),req.user.id,req.project.id]) : null;
   let wait = Math.min(MAX_WAIT, Math.max(0, Number(req.query.wait ?? 0)));
   // A browser or an anonymous client may wait too, a little less, keyed by address: without it a tab re-polled with no delay and ran its whole address into the rate limit (Sep 11 2026).
   if (wait > 0 && !req.user) wait = Math.min(wait, 20);
-  const waiterKey = req.user ? req.user.id : `ip:${clientIp(req)}`;
+  const waiterKey = req.user ? reader?.department_id ? `${req.user.id}:${reader.id}` : req.user.id : `ip:${clientIp(req)}`;
   if (wait > 0 && ((waitsByUser.get(waiterKey) ?? 0) >= MAX_WAITERS_PER_USER || activeWaits >= MAX_WAITERS)) { res.setHeader("Retry-After", "5"); res.status(429).json({ error: "too many open listeners; one listener per channel per agent, retry in a few seconds" }); return; }
   if (wait > 0) { activeWaits += 1; waitsByUser.set(waiterKey, (waitsByUser.get(waiterKey) ?? 0) + 1); res.on("close", () => { activeWaits -= 1; waitsByUser.set(waiterKey, (waitsByUser.get(waiterKey) ?? 1) - 1); }); }
   const limit = Math.min(200, Math.max(1, Number(req.query.limit ?? RECENT)));
@@ -177,26 +186,27 @@ async function listHandler(req: any, res: any): Promise<void> {
   const deadline = Date.now() + wait * 1000;
   let rows: any[] = [];
   for (;;) {
-    rows = await q(`SELECT m.id, u.handle, m.model, m.kind, m.reply_to, m.body_md, m.job_id, m.return_id, m.created_at,
+    rows = await q(`SELECT m.id, u.handle, m.department_id,m.run_id,m.model, m.kind, m.reply_to, m.body_md, m.job_id, m.return_id, m.created_at,
                       coalesce((SELECT json_agg(json_build_object('sha256', f.sha256, 'name', f.name, 'bytes', f.bytes) ORDER BY r.created_at)
                                 FROM file_refs r JOIN files f ON f.sha256 = r.file_sha WHERE r.ref_type = 'message' AND r.ref_id = m.id AND f.deleted_at IS NULL), '[]'::json) AS files
                     FROM messages m JOIN users u ON u.id = m.user_id WHERE m.channel_id = $1 AND m.id > $2 AND ($4::bigint IS NULL OR m.id < $4) ORDER BY m.id LIMIT $3`, [req.channel.id, since, limit, upTo]);
     if (rows.length || Date.now() >= deadline) break;
     await waitForMessage(Number(req.channel.id), since, deadline);
   }
-  if (req.user) await q(`UPDATE channel_members SET last_seen_id = GREATEST(last_seen_id, $3) WHERE channel_id = $1 AND user_id = $2`, [req.channel.id, req.user.id, rows.at(-1)?.id ?? since]);
+  if(reader?.department_id) await q(`UPDATE run_channel_members SET last_seen_id=GREATEST(last_seen_id,$3) WHERE channel_id=$1 AND session_id=$2`,[req.channel.id,reader.id,rows.at(-1)?.id ?? since]);
+  else if (req.user) await q(`UPDATE channel_members SET last_seen_id = GREATEST(last_seen_id, $3) WHERE channel_id = $1 AND user_id = $2`, [req.channel.id, req.user.id, rows.at(-1)?.id ?? since]);
   if ((req.header("accept") ?? "").includes("application/json")) {
     // Browsers render body_html (links clickable); agents read body_md.
     if (req.query.html) { const pages = await paperPages(req.project.slug); for (const m of rows) m.body_html = await renderMessage(m.body_md, req.project.slug, pages); }
     // Ids are numbers to a client (issue #38): pg returns bigint as strings.
     res.json({ path: req.channel.path, since: Number(since), last_id: Number(rows.at(-1)?.id ?? since), messages: rows.map(numIds) }); return;
   }
-  const md = rows.map((m) => `#### [${m.id}] @${m.handle}${m.model ? ` (${m.model})` : ""} · ${m.kind}${m.reply_to ? ` · re ${m.reply_to}` : ""} · ${new Date(m.created_at).toISOString()}\n\n${m.body_md}\n${(m.files ?? []).length ? "\nFiles: " + m.files.map((f: any) => `${f.name} -> GET /files/${f.sha256}`).join(", ") + "\n" : ""}`).join("\n");
+  const md = rows.map((m) => `#### [${m.id}] @${m.handle}${m.run_id ? ` · ${m.department_id} / ${m.run_id}` : ""}${m.model ? ` (${m.model})` : ""} · ${m.kind}${m.reply_to ? ` · re ${m.reply_to}` : ""} · ${new Date(m.created_at).toISOString()}\n\n${m.body_md}\n${(m.files ?? []).length ? "\nFiles: " + m.files.map((f: any) => `${f.name} -> GET /files/${f.sha256}`).join(", ") + "\n" : ""}`).join("\n");
   res.type("text/markdown").send(md || `(no new messages in \`${req.channel.path || "project"}\` since ${since}; poll again with since=${since}&wait=30)\n`);
 }
 
 /** POST /chat/*path/messages  Body: { body_md, kind?, reply_to?, job_id?, return_id? } */
-chat.post("/chat/*path/messages", bearer, project, channel, postHandler);
+chat.post("/chat/*path/messages", bearer, project, channel, assignmentMutation(postHandler));
 async function postHandler(req: any, res: any): Promise<void> {
   const b = req.body ?? {};
   const body = String(b.body_md ?? "").trim();
@@ -209,6 +219,12 @@ async function postHandler(req: any, res: any): Promise<void> {
   if (b.reply_to && kind === "say") kind = "reply";
   if (kind === "reply" && !b.reply_to) { res.status(400).json({ error: "a reply needs reply_to: the id of the message you are answering" }); return; }
   if (b.reply_to) { const parent = await one(`SELECT 1 FROM messages WHERE id = $1 AND channel_id = $2`, [b.reply_to, req.channel.id]); if (!parent) { res.status(400).json({ error: "reply_to must be a message in this channel" }); return; } }
+  if(b.reply_to) {
+    const addressed=await one(`SELECT a.routing,a.from_department FROM asks a WHERE a.message_id=$1`,[b.reply_to]);
+    if(addressed?.routing && !(b.kind==='question' && addressed.from_department===req.agentSession?.department_id)) {
+      res.status(409).json({error:'answer an addressed question through /asks/:id/answer with its claim; the originating department may post a question as a follow-up'}); return;
+    }
+  }
   // Status is one line in and one line out. Everything else in the channel should be something another agent can think about or act on.
   if ((kind === "claim" || kind === "done") && b.job_id) {
     // One claim and one done per assignment, not per job for all time: a job handed back and taken again starts a fresh pair
@@ -222,7 +238,9 @@ async function postHandler(req: any, res: any): Promise<void> {
   await q(`INSERT INTO channel_members (channel_id, user_id, model) VALUES ($1,$2,$3) ON CONFLICT DO NOTHING`, [req.channel.id, req.user!.id, req.model ?? null]);
   const m = await one<{ id: number }>(`INSERT INTO messages (channel_id, user_id, model, kind, reply_to, body_md, job_id, return_id, session) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING id`,
     [req.channel.id, req.user!.id, req.model ?? null, kind, b.reply_to ?? null, body, b.job_id ?? null, b.return_id ?? null, String(req.header("x-session") ?? "").trim().slice(0, 64) || null]);
+  if(req.agentSession?.department_id) await q(`INSERT INTO run_channel_members(channel_id,session_id) VALUES($1,$2) ON CONFLICT DO NOTHING`,[req.channel.id,req.agentSession.id]);
   let attached: string[] = [];
   try { attached = await files.attach(b.files, "message", Number(m!.id)); } catch (e: any) { res.status(e.status ?? 400).json({ error: e.message, message_id: m!.id }); return; }
+  await enqueueReply(Number(m!.id),b.reply_to ? Number(b.reply_to) : null,Number(req.project.id));
   res.json({ ok: true, id: Number(m!.id), path: req.channel.path, files: attached });
 }

@@ -11,7 +11,7 @@ before(async () => {
   await db.query(`
     CREATE TEMP TABLE users (id bigint, handle text);
     CREATE TEMP TABLE pool (problem_id bigint, user_id bigint, model text, last_seen timestamptz);
-    CREATE TEMP TABLE sessions (id text, problem_id bigint, user_id bigint, model text, last_seen timestamptz, ended_at timestamptz, effort text);
+    CREATE TEMP TABLE sessions (id text, problem_id bigint, user_id bigint, model text, last_seen timestamptz, ended_at timestamptz, effort text, department_id text, run_id text);
     CREATE TEMP TABLE jobs (problem_id bigint, assigned_to bigint, assigned_session text, status text, expires_at timestamptz, id bigserial, title text, type text, assigned_at timestamptz);
     CREATE TEMP TABLE returns (id bigint, problem_id bigint, tokens jsonb, cpu_hours numeric);
     CREATE TEMP TABLE reviews (return_id bigint, tokens jsonb);
@@ -62,7 +62,7 @@ test('counts are project-scoped, exclude expired assignments, and count each usa
   const {rows: agents} = await db.query(ACTIVE_AGENTS_SQL, [1]);
   assert.equal(agents.length, 2);
   assert.deepEqual(agents.map(a => [a.handle, a.model, Number(a.assignments_underway)]), [['Alice', 'model-a', 1], ['Alice', 'model-a2', 1]]);
-  assert.deepEqual(Object.keys(agents[0]).sort(), ['assignments_underway', 'handle', 'last_seen', 'model']);
+  assert.deepEqual(Object.keys(agents[0]).sort(), ['assignments_underway', 'department_id', 'handle', 'last_seen', 'model', 'run_id']);
 });
 
 test('roster limit does not truncate totals', async () => {
@@ -101,7 +101,7 @@ test('running work belongs to the actual live session; stale, ended, orphaned an
   assert.deepEqual(running.jobs.map(j => [j.handle, j.model, j.effort, j.title]), [
     ['Alice', 'model-a', 'high', 'Check a proof'], ['Alice', 'model-b', 'max', 'Try a new direction'],
   ]);
-  assert.deepEqual(Object.keys(running.jobs[0]).sort(), ['assigned_at', 'effort', 'handle', 'id', 'last_seen', 'model', 'title', 'type']);
+  assert.deepEqual(Object.keys(running.jobs[0]).sort(), ['assigned_at', 'department_id', 'effort', 'handle', 'id', 'last_seen', 'model', 'run_id', 'title', 'type']);
   const {rows: [activity]} = await db.query(ACTIVITY_SQL, [4]);
   assert.equal(Number(activity.assignments_underway), Number(running.total));
   assert.equal(Number(activity.assignments_abandoned), 5);

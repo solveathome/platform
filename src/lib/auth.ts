@@ -1,4 +1,3 @@
-import { LAUNCH_GUIDANCE } from "./launch.js";
 import { hitDetailed } from "./ratelimit.js";
 import { canonicalModel, providerFromModel, defaultTier, parseEffort, modelIdentityError, MODEL_IDENTITY_GUIDANCE } from "./model-id.js";
 import { wantsHtml } from "./negotiate.js";
@@ -6,7 +5,8 @@ import { featuredProject } from "./projects.js";
 export { providerFromModel };
 import { createHash, randomBytes } from "node:crypto";
 import type { Request, Response, NextFunction } from "express";
-import { one, q } from "../db/index.js";
+import { one, q, transaction } from "../db/index.js";
+import { sealToken, openToken } from "./token-vault.js";
 import * as reputation from "./reputation.js";
 import { TERMS_VERSION } from "./terms.js";
 
@@ -19,10 +19,54 @@ declare global {
 
 export function hashToken(t: string): string { return createHash("sha256").update(t).digest("hex"); }
 
+export class TokenRecoveryRequired extends Error {
+  constructor() { super("Your existing agent token is still valid. Supply it once to restore display on this device, or explicitly invalidate it to create a replacement."); }
+}
+
+/** The account's exact agent token persists until explicit invalidation. */
 export async function issueToken(userId: number, label = "default"): Promise<string> {
-  const raw = "sah_" + randomBytes(24).toString("base64url");
-  await q(`INSERT INTO tokens (user_id, token_hash, label) VALUES ($1, $2, $3)`, [userId, hashToken(raw), label]);
+  return transaction(async () => {
+    await q(`SELECT pg_advisory_xact_lock(hashtextextended($1,0))`, [`agent-token:${userId}`]);
+    const existing = await one(`SELECT token_ciphertext FROM tokens WHERE user_id=$1 AND revoked_at IS NULL ORDER BY id LIMIT 1`, [userId]);
+    if (existing) {
+      if (!existing.token_ciphertext) throw new TokenRecoveryRequired();
+      try { return await openToken(existing.token_ciphertext, userId); }
+      catch { throw new TokenRecoveryRequired(); }
+    }
+    const raw = "sah_" + randomBytes(24).toString("base64url");
+    await q(`INSERT INTO tokens (user_id,token_hash,label,token_ciphertext) VALUES ($1,$2,$3,$4)`, [userId,hashToken(raw),label,await sealToken(raw,userId)]);
+    return raw;
+  });
+}
+
+/** A legacy token's first authenticated use recovers its original value, without rotation. */
+export async function recoverToken(raw: string, userId: number): Promise<boolean> {
+  const row = await one(`SELECT id FROM tokens WHERE user_id=$1 AND token_hash=$2 AND revoked_at IS NULL`, [userId,hashToken(raw)]);
+  if (!row) return false;
+  await q(`UPDATE tokens SET token_ciphertext=$2 WHERE id=$1`, [row.id,await sealToken(raw,userId)]);
+  return true;
+}
+export async function invalidateToken(userId: number): Promise<void> {
+  await transaction(async () => {
+    await q(`SELECT pg_advisory_xact_lock(hashtextextended($1,0))`, [`agent-token:${userId}`]);
+    await q(`SELECT set_config('solveathome.invalidate_token','user-explicit',true)`);
+    await q(`UPDATE tokens SET revoked_at=now() WHERE user_id=$1 AND revoked_at IS NULL`, [userId]);
+  });
+}
+export async function issueBrowserSession(userId: number): Promise<string> {
+  const raw = "sahweb_" + randomBytes(24).toString("base64url");
+  await q(`INSERT INTO browser_sessions(token_hash,user_id) VALUES ($1,$2)`, [hashToken(raw),userId]);
   return raw;
+}
+async function authenticated(raw: string, browser: boolean): Promise<any> {
+  if (!raw || raw.length > 200) return null;
+  const row = await one(`SELECT u.id,u.handle,u.terms_version,u.agent_account_id,t.token_ciphertext
+    FROM tokens t JOIN users u ON u.id=t.user_id WHERE t.token_hash=$1 AND t.revoked_at IS NULL`, [hashToken(raw)]);
+  if (row) {
+    if (!row.token_ciphertext) await recoverToken(raw,Number(row.id));
+    return row;
+  }
+  return browser ? one(`SELECT u.id,u.handle,u.terms_version,u.agent_account_id FROM browser_sessions b JOIN users u ON u.id=b.user_id WHERE b.token_hash=$1`, [hashToken(raw)]) : null;
 }
 
 /** True when the request carries a bearer token (or session cookie) that exists and is not revoked. Used before buffering large bodies. */
@@ -30,7 +74,7 @@ export async function tokenExists(req: Request): Promise<boolean> {
   const h = req.header("authorization") ?? "";
   const raw = (h.startsWith("Bearer ") ? h.slice(7).trim() : "") || cookieToken(req);
   if (!raw || raw.length > 200) return false;
-  return !!(await one(`SELECT 1 FROM tokens WHERE token_hash = $1 AND revoked_at IS NULL`, [hashToken(raw)]));
+  return !!(await authenticated(raw, !h.startsWith("Bearer ")));
 }
 
 /** Bearer token auth. The agent also reports its model in X-Model, e.g. "claude-fable-5-1" or "gpt-6-astra". */
@@ -43,13 +87,11 @@ export async function bearer(req: Request, res: Response, next: NextFunction): P
     if (/ChatGPT|OpenAI/i.test(req.header("user-agent") ?? "")) { res.status(401).json({ error: "You are reading this from the ChatGPT app's web fetch, which cannot send the Authorization header, the X-Model header or the POST bodies this API needs, so an agent cannot join from inside ChatGPT.", for_your_person: "Paste the same instruction into Codex (OpenAI's coding agent, CLI or cloud) or any agent with a shell, such as Claude Code. It signs in, registers and works the assignment from there; nothing else is needed.", codex: "https://openai.com/codex" }); return; }
     res.status(401).json({ error: "missing bearer token; sign in at /auth/github to get one" }); return;
   }
-  const row = await one<{ id: number; handle: string; terms_version: string | null }>(
-    `SELECT u.id, u.handle, u.terms_version FROM tokens t JOIN users u ON u.id = t.user_id
-     WHERE t.token_hash = $1 AND t.revoked_at IS NULL`, [hashToken(raw)]);
+  const row = await authenticated(raw, !h.startsWith("Bearer "));
   if (!row) { res.status(401).json({ error: "unknown or revoked token" }); return; }
   // A session is seen on every authenticated request it makes (issue #19), not only at /start.
   const xs = String(req.header("x-session") ?? "").trim();
-  if (xs && xs.length <= 64) await q(`UPDATE sessions SET last_seen = now() WHERE id = $1 AND user_id = $2 AND ended_at IS NULL`, [xs, row.id]);
+  if (xs && xs.length <= 64) await q(`UPDATE sessions SET last_seen = now() WHERE id = $1 AND user_id = $2 AND ended_at IS NULL AND (department_id IS NULL OR last_seen>now()-interval '120 minutes' OR NOT EXISTS(SELECT 1 FROM jobs WHERE assigned_session=sessions.id AND status='assigned'))`, [xs, row.id]);
   if (row.terms_version !== TERMS_VERSION) {
     const msg = `@${row.handle} has not accepted the current terms of participation (version ${TERMS_VERSION}). Stop and tell your person: they accept on the site, signed in, at ${process.env.BASE_URL ?? ""}/terms. An agent cannot accept for them.`;
     // Never accepted: nothing works. Accepted an earlier version: the channel, files and release still work so a session can finish tidily; everything else waits for the person.
@@ -73,19 +115,20 @@ export async function bearer(req: Request, res: Response, next: NextFunction): P
   next();
 }
 
-/** POST /auth/logout : clear the browser cookie. The token itself stays valid for agents; revoke it by signing in again. */
-export function logout(req: Request, res: Response): void {
+/** POST /auth/logout : clear the browser cookie. The token itself stays valid for agents; only explicit token invalidation revokes it. */
+export async function logout(req: Request, res: Response): Promise<void> {
+  await q(`DELETE FROM browser_sessions WHERE token_hash=$1`, [hashToken(cookieToken(req))]);
   const secure = (process.env.BASE_URL ?? "").startsWith("https");
   res.setHeader("Set-Cookie", `sah_session=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0${secure ? "; Secure" : ""}`);
   if (wantsHtml(req)) { res.redirect("/"); return; }
   res.json({ ok: true, signed_in: false });
 }
 
-/** Browser sessions: the same token, in an HttpOnly cookie set at sign-in. */
+/** Browser cookies are independent of permanent agent credentials. Legacy cookies remain usable. */
 export function cookieToken(req: Request): string {
   const c = req.header("cookie") ?? "";
   const m = /(?:^|;\s*)sah_session=([^;]+)/.exec(c);
-  return m ? decodeURIComponent(m[1]) : "";
+  try { return m ? decodeURIComponent(m[1]) : ""; } catch { return ""; }
 }
 
 /** Like bearer, but never 401s: sets req.user when a token is present. */
@@ -93,8 +136,7 @@ export async function optionalAuth(req: Request, _res: Response, next: NextFunct
   const h = req.header("authorization") ?? "";
   const raw = (h.startsWith("Bearer ") ? h.slice(7).trim() : "") || cookieToken(req);
   if (raw) {
-    const row = await one<{ id: number; handle: string }>(
-      `SELECT u.id, u.handle FROM tokens t JOIN users u ON u.id = t.user_id WHERE t.token_hash = $1 AND t.revoked_at IS NULL`, [hashToken(raw)]);
+    const row = await authenticated(raw, !h.startsWith("Bearer "));
     if (row) { req.user = { id: Number(row.id), handle: row.handle }; req.model = canonicalModel(req.header("x-model")) || undefined; req.provider = req.model ? providerFromModel(req.model) : undefined; }
   }
   next();
@@ -150,9 +192,8 @@ export async function githubCallback(req: Request, res: Response): Promise<void>
      ON CONFLICT (github_id) DO UPDATE SET handle = EXCLUDED.handle RETURNING id`, [gh.id, gh.login]);
   const seeded = (process.env.SEED_REVIEWERS ?? "").split(",").map((s) => s.trim().toLowerCase()).includes(gh.login.toLowerCase());
   await reputation.ensure(Number(user!.id), seeded);
-  // Signing in again is the kill switch: every earlier token of this person stops working (agents included). The docs promise this.
-  await q(`UPDATE tokens SET revoked_at = now() WHERE user_id = $1 AND revoked_at IS NULL`, [user!.id]);
-  const raw = await issueToken(Number(user!.id));
+  // Browser sign-in never changes or invalidates an agent credential.
+  const raw = await issueBrowserSession(Number(user!.id));
   const secure = (process.env.BASE_URL ?? "").startsWith("https");
   res.setHeader("Set-Cookie", [`sah_session=${encodeURIComponent(raw)}; Path=/; HttpOnly; SameSite=Lax; Max-Age=31536000${secure ? "; Secure" : ""}`, `sah_oauth=; Path=/auth; HttpOnly; SameSite=Lax; Max-Age=0${secure ? "; Secure" : ""}`]);
   const wantsHtmlNow = wantsHtml(req);
@@ -160,22 +201,5 @@ export async function githubCallback(req: Request, res: Response): Promise<void>
   const next = safeNext(st.next);
   // Accepting the terms is part of signing in: anyone without the current version on record lands on the acceptance step first.
   if (wantsHtmlNow) { res.redirect(accepted ? next : `/terms?signin=1&next=${encodeURIComponent(next)}`); return; }
-  res.type("text/plain").send(
-`You are signed in as @${gh.login}.
-${accepted ? "" : `
-First accept the terms of participation (version ${TERMS_VERSION}) at ${process.env.BASE_URL}/terms, signed in on the site. The token below does nothing for an agent until you have.
-`}
-Your token (shown once, keep it):
-
-  ${raw}
-
-Paste this line into Claude Code or Codex:
-
-  We are joining the solveathome cluster with the following configuration: ${process.env.BASE_URL}/projects/${(await featuredProject())?.slug ?? "<slug>"}/start Fetch it with the headers "Authorization: Bearer ${raw}" and "X-Model: <your model id>", and follow what it returns. ${LAUNCH_GUIDANCE} ${MODEL_IDENTITY_GUIDANCE} (It is never asked what level it thinks at: the first reply gives it the command that reads the level from its own record.)
-
-Settings (session length, sub-agents, compute share, disk) are chosen on the project page, which writes them into that URL; this line uses the defaults.
-
-Your page: ${process.env.BASE_URL}/@${gh.login}
-Everything you submit is published under CC BY 4.0, credited to @${gh.login}, including attempts that fail.
-`);
+  res.type("text/plain").send(`Signed in as @${gh.login}. Open ${process.env.BASE_URL}/projects/${(await featuredProject())?.slug ?? ""} to copy your joining instruction. Your agent token is unchanged.\n`);
 }

@@ -11,7 +11,7 @@ const canonical = (v: any): any => Array.isArray(v) ? v.map(canonical) : v && ty
 const digest = (v: any) => createHash("sha256").update(JSON.stringify(canonical(v))).digest("hex");
 
 /** Buffer the response until the transaction commits; a failed submission rolls back all its DB effects. */
-export function assignmentMutation(handler: (req: any, res: any) => Promise<void>, options: { completion?: boolean | "release"; commitErrors?: boolean } = {}): RequestHandler {
+export function assignmentMutation(handler: (req: any, res: any) => Promise<void>, options: { completion?: boolean | "release"; historicalEvidence?: boolean; commitErrors?: boolean } = {}): RequestHandler {
   return async (req: any, res, next) => {
     const json = res.json, send = res.send;
     let response: { kind: "json" | "send"; body: any } | undefined;
@@ -41,6 +41,30 @@ export function assignmentMutation(handler: (req: any, res: any) => Promise<void
             req.provider = req.model ? (await one(`SELECT provider FROM model_tiers WHERE model = $1`, [req.model]))?.provider ?? providerFromModel(req.model) : undefined;
             req.effort = parseEffort(s.effort_evidence) ?? req.effort ?? parseEffort(s.effort);
             req.agentSession = s;
+            await q(`SELECT set_config('solveathome.session',$1,true)`,[s.id]);
+          }
+          const department = String(req.header("x-department") ?? "");
+          if (department && (!await one(`SELECT 1 FROM departments WHERE id=$1 AND user_id=$2`, [department,req.user.id]) || (req.agentSession && req.agentSession.department_id !== department))) {
+            res.status(403).json({ error: "department does not belong to this account and session" }); throw new Refused();
+          }
+          if (req.agentSession?.department_id && department !== req.agentSession.department_id) {
+            res.status(403).json({ error: "send this run's X-Department" }); throw new Refused();
+          }
+          const requestId = req.method === 'POST' ? String(req.header('x-request-id') ?? '') : '';
+          const receiptScope = `${req.project.id}:${xs || req.header('x-launch-id') || 'account'}`;
+          const requestHash = digest({ method:req.method,path:req.originalUrl,body:req.body ?? {} });
+          if (requestId) {
+            if (!/^[A-Za-z0-9_-]{8,100}$/.test(requestId)) { res.status(400).json({ error:'invalid X-Request-ID' }); throw new Refused(); }
+            const previous = await one(`SELECT * FROM mutation_receipts WHERE user_id=$1 AND session_id=$2 AND request_id=$3`, [req.user.id,receiptScope,requestId]);
+            if (previous) {
+              if (previous.request_hash !== requestHash) { res.status(409).json({ error:'request ID already used with different content' }); throw new Refused(); }
+              res.status(previous.status).json(previous.receipt); return;
+            }
+          }
+          // Receipts remain readable after a run ends; new work does not.
+          if (req.agentSession?.department_id && req.method === 'POST' && !options.completion && !options.historicalEvidence && !/\/end$/.test(req.path)
+              && (req.agentSession.ended_at || (req.agentSession.ends_at && new Date(req.agentSession.ends_at).getTime() <= Date.now() && !await one(`SELECT 1 FROM jobs WHERE assigned_session=$1 AND status='assigned' AND (expires_at IS NULL OR expires_at>now())`,[xs])))) {
+            res.status(409).json({ error:'run ended; a fresh instruction is required for new work' }); throw new Refused();
           }
           let attempt: any;
           const hash = options.completion ? digest({ operation: options.completion === "release" ? "release" : "result", body: req.body ?? {} }) : null;
@@ -78,6 +102,9 @@ export function assignmentMutation(handler: (req: any, res: any) => Promise<void
           }
           await handler(req, res);
           if (res.statusCode >= 400 && !options.commitErrors) throw new Refused();
+          if (requestId && res.statusCode < 400 && response?.kind === 'json') await q(
+            `INSERT INTO mutation_receipts(user_id,session_id,request_id,request_hash,status,receipt) VALUES($1,$2,$3,$4,$5,$6)`,
+            [req.user.id,receiptScope,requestId,requestHash,res.statusCode,JSON.stringify(response.body)]);
           if (attempt && res.statusCode < 400 && response?.kind === "json") {
             if (req.modelCorrection) response.body = { ...response.body, model_correction: req.modelCorrection };
             await q(`UPDATE assignment_attempts SET receipt = $2, request_hash = $3 WHERE id = $1`, [attempt.id, JSON.stringify(response.body), hash]);
@@ -100,9 +127,9 @@ export async function claimAssignment(row: any, session: any, userId: number, ti
     expires_at = now() + ($4::numeric * interval '2 hours'), attempt_id = $5 WHERE id = $1 AND status = 'queued' RETURNING *`,
     [row.id, userId, session.id, Math.max(0.25, hours), id]);
   if (!assigned) throw new Error("assignment candidate was no longer queued");
-  await q(`INSERT INTO assignment_attempts (id, job_id, problem_id, session_id, user_id, model, tier, purpose, scheduled, budget_hours, reason,research_stage)
-    VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)`,
-    [id, row.id, row.problem_id, session.id, userId, session.model, tier, row.purpose ?? "work", scheduled, hours, JSON.stringify(reason), stageOf(row)]);
+  await q(`INSERT INTO assignment_attempts (id, job_id, problem_id, session_id, user_id, model, tier, purpose, scheduled, budget_hours, reason,research_stage,department_id,run_id,direction_snapshot)
+    VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)`,
+    [id, row.id, row.problem_id, session.id, userId, session.model, tier, row.purpose ?? "work", scheduled, hours, JSON.stringify(reason), stageOf(row),session.department_id ?? null,session.run_id ?? null,session.direction_snapshot ? JSON.stringify(session.direction_snapshot) : null]);
   const updated = await one(`UPDATE sessions SET jobs = jobs + 1, last_seen = now(), last_type = $2,
     review_streak = CASE WHEN $2 IN ('review','audit') THEN review_streak + 1 ELSE 0 END WHERE id = $1 RETURNING jobs`, [session.id, row.type]);
   session.jobs = Number(updated!.jobs);
@@ -110,6 +137,6 @@ export async function claimAssignment(row: any, session: any, userId: number, ti
 }
 
 export async function releaseAssignment(j: any, note: string): Promise<void> {
-  await q(`UPDATE jobs SET status = 'queued', assigned_to = NULL, assigned_session = NULL, assigned_at = NULL, expires_at = NULL,
+  await q(`UPDATE jobs SET status = CASE WHEN agent_direction_id IS NULL THEN 'queued' ELSE 'expired' END, assigned_to = NULL, assigned_session = NULL, assigned_at = NULL, expires_at = NULL,
     release_count = release_count + 1, last_released_session = assigned_session, last_release_note = $2 WHERE id = $1 AND status = 'assigned'`, [j.id, note.slice(0, 500)]);
 }
