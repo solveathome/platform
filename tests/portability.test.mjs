@@ -55,3 +55,35 @@ test('unseeded random draws that reach stdout get a note; a seeded generator, a 
   assert.deepEqual(portabilityNotes('hdr.py', 'print("rate: 12 per second as stated in the paper")\n'), []);
   assert.equal(portabilityNotes('t.py', 'print("elapsed", elapsed)\n').length, 1, 'two arguments are not one literal');
 });
+
+// Issues #71 and #65: the note is shown to the author and repeated to the reviewer, and a fix job is opened for it, so a
+// false positive costs a real assignment. Measured over every served script and every uploaded script, 1112 in all: these
+// shapes accounted for four of the flags, and joining a call across its lines found six genuine clock reads that reading
+// one line at a time had missed.
+const timing = (name, src) => portabilityNotes(name, src).filter((n) => n.startsWith('prints'));
+
+test('issue #71: a print whose arguments span lines sends to stderr if any line of the call says so', () => {
+  const multiline = "import sys, time, json\nstarted = time.monotonic()\nprint(json.dumps({'wall_seconds': time.monotonic() - started,\n                  'cpu_seconds': cpu}), file=sys.stderr)\nprint(answer)\n";
+  assert.deepEqual(timing('revise-registry.py', multiline), [], 'file=sys.stderr on the second line of the call still redirects it');
+  const toStdout = "import time, json\nstarted = time.monotonic()\nprint(json.dumps({'wall_seconds': time.monotonic() - started,\n                  'cpu_seconds': cpu}))\n";
+  assert.equal(timing('run.py', toStdout).length, 1, 'the same call without the redirect is still a stdout clock read');
+  const jsMultiline = "const t0 = Date.now();\nconsole.log(`${String(n).padEnd(3)} ${best} ` +\n  `${((Date.now() - t0) / 1000).toFixed(2)}`);\n";
+  assert.equal(timing('h2.js', jsMultiline).length, 1, 'a clock read on the continuation line is found, not missed');
+});
+
+test('issue #65: naming a clock API inside a literal is a label, not a read', () => {
+  const label = "const unbound = scan();\nconsole.log(`    of those, with an explicit clock read (Date.now/hrtime/perf_counter): ${unbound.length}`);\n";
+  assert.deepEqual(timing('rawcheck.mjs', label), [], 'the statement reads no clock; it counts scripts that do');
+  const real = "const t0 = Date.now();\nconsole.log(`done in ${((Date.now() - t0) / 1000).toFixed(1)}s`);\n";
+  assert.equal(timing('real.js', real).length, 1, 'the same API outside a literal is a read');
+  const pyInterp = 'import time\nt0 = time.time()\nprint(f"(sieve {time.time() - t0:.2f}s)")\n';
+  assert.equal(timing('sieve.py', pyInterp).length, 1, 'a clock read inside an f-string interpolation still counts');
+});
+
+test('a ratio and a note about the absence of a clock are not timing', () => {
+  assert.deepEqual(timing('quartic.js', "console.log(`  ${z}  ${(r.R1/s).toFixed(1)}`);\n"), [], 'R1/s divides by a variable named s');
+  assert.equal(timing('rate.js', "console.log(`${(done/1000).toFixed(1)}/s`);\n").length, 1, 'a real per-second figure still counts');
+  const disclaimer = "console.log(JSON.stringify({z, s, W,\n  strict: STRICT}));   // no elapsed field: the\n// tail's normaliser only rewrites times that carry a unit.\n";
+  assert.deepEqual(timing('theta.js', disclaimer), [], 'a comment saying there is no elapsed field is not an elapsed field');
+  assert.equal(timing('floor.py', 'print(total // seconds, "elapsed")\n').length, 1, 'floor division is not a comment in Python');
+});

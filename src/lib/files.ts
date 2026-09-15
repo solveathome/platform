@@ -196,7 +196,12 @@ const STDOUT_PRINT = /(console\.log|process\.stdout\.write|\bprint\s*\(|\bprintf
 // A clock or timer read, or a progress figure with a number next to it. Bare words are not enough: in this corpus "eta", "rate:",
 // "remaining" and "/s" are mathematics ("(L_0 eta/64)", "The growth rate: is", "The remaining exact relations", "{Bd/s}*delta"), and
 // Sep 12–13 2026 the word list alone flagged seven section headers for one real timing print, each opening a fix job.
-const PROGRESS_WORDS = /(elapsed|\btook\b|time\.time\(|perf_counter|monotonic\(|Date\.now|performance\.now|hrtime|Instant::now|time\.Now\(|datetime\.now|wall[- ]?clock|\bprogress[:=]|per second|\bit\/s\b|[\d}]\s*\/s(?=[\s"'`)\],]|$)|%\s*(done|complete)|\btick(s|ing)?\b|throughput|\brate[:=]\s*[\d{$(]|\bremaining[:=]?\s*[\d{$(])/i;
+// A clock read is code, so it is tested with string and template literals blanked: a line that *names* the APIs it looks for,
+// `console.log(\`… with an explicit clock read (Date.now/hrtime/perf_counter): ${n}\`)`, reads no clock (platform issue #65).
+const CLOCK_CALL = /(time\.time\(|perf_counter|monotonic\(|Date\.now|performance\.now|hrtime|Instant::now|time\.Now\(|datetime\.now)/i;
+// Human words for progress, tested on the line as written: inside a literal is exactly where "elapsed" belongs when it is real.
+// `/s` after a digit that ends an identifier is a ratio, not a rate: `${(r.R1/s).toFixed(1)}` divides by a variable named s.
+const PROGRESS_WORDS = /(elapsed|\btook\b|wall[- ]?clock|\bprogress[:=]|per second|\bit\/s\b|(?:}|(?<![A-Za-z_])\d)\s*\/s(?=[\s"'`)\],]|$)|%\s*(done|complete)|\btick(s|ing)?\b|throughput|\brate[:=]\s*[\d{$(]|\bremaining[:=]?\s*[\d{$(])/i;
 const ETA = /\bETA\b/; // upper case only: lower-case eta is a Greek letter in every script seen so far
 /**
  * Why a file will not run, or not reproduce, on another machine (Chris, Sep 12 2026: never refuse, tell the author and the reviewer):
@@ -214,6 +219,51 @@ const RNG_CALL: Record<string, RegExp> = {
 };
 const RNG_SEEDED = /(random\.seed\s*\(|Random\s*\(\s*\d|np\.random\.seed\s*\(|default_rng\s*\(\s*[^)\s]|RandomState\s*\(\s*\d|rand\.Seed\s*\(|rand\.New\s*\(|seed_from_u64|from_seed|StdRng|Random\.seed!|MersenneTwister\s*\(\s*\d|mulberry32|splitmix|xorshift|xoshiro|\bseed\b)/i;
 const COMMENT = /^\s*(\/\/|#|\/\*|\*)/;
+
+/** The line with the text of string and template literals blanked out, keeping `${...}` and `{...}` so an interpolated clock read survives. */
+export function blankLiterals(line: string): string {
+  let out = "", quote = "", depth = 0;
+  for (let i = 0; i < line.length; i++) {
+    const c = line[i];
+    if (quote) {
+      if (c === "\\") { out += "  "; i++; continue; }
+      if (depth === 0 && c === "$" && line[i + 1] === "{") { out += "${"; depth = 1; i++; continue; }
+      if (depth === 0 && c === "{") { out += "{"; depth = 1; continue; }
+      if (depth > 0) { if (c === "{") depth++; if (c === "}") depth--; out += c; continue; }
+      if (c === quote) { quote = ""; out += c; continue; }
+      out += " "; continue;
+    }
+    if (c === "'" || c === '"' || c === "`") { quote = c; out += c; continue; }
+    out += c;
+  }
+  return out;
+}
+
+/**
+ * A print whose arguments run over several lines is one statement: `print(json.dumps({...}),\n  file=sys.stderr)` sends its
+ * timing to stderr, and reading only the first line calls it a stdout print (platform issue #71). The call is joined until its
+ * parentheses balance, at most a few lines, and falls back to the line alone when they never do.
+ */
+function callText(lines: string[], i: number, ext: string): string {
+  const marker = /^(py|sh|r|jl|rb|pl)$/.test(ext) ? "#" : "//";
+  let text = stripComment(lines[i], marker), open = 0;
+  const count = (s: string) => { for (const c of s) { if (c === "(") open++; else if (c === ")") open--; } };
+  count(text);
+  for (let k = 1; open > 0 && k <= 6 && i + k < lines.length; k++) { const l = stripComment(lines[i + k], marker); text += "\n" + l; count(l); }
+  return open > 0 ? stripComment(lines[i], marker) : text;
+}
+
+/** The line without its trailing comment: a note that says there is *no* elapsed field must not read as one. Quotes are respected, and the marker is the language's own (`//` is floor division in Python). */
+function stripComment(line: string, marker: string): string {
+  let quote = "";
+  for (let i = 0; i < line.length; i++) {
+    const c = line[i];
+    if (quote) { if (c === "\\") i++; else if (c === quote) quote = ""; continue; }
+    if (c === "'" || c === '"' || c === "`") { quote = c; continue; }
+    if (line.startsWith(marker, i)) return line.slice(0, i);
+  }
+  return line;
+}
 export function portabilityNotes(name: string, content: string): string[] {
   const ext = (String(name ?? "").split(".").pop() ?? "").toLowerCase();
   const notes: string[] = [];
@@ -225,9 +275,11 @@ export function portabilityNotes(name: string, content: string): string[] {
   for (let i = 0; i < lines.length; i++) {
     const l = lines[i];
     if (COMMENT.test(l)) continue;
-    const toStdout = STDOUT_PRINT.test(l) && !/stderr|console\.error|>&2|file=sys\.stderr|eprint/.test(l);
+    if (!STDOUT_PRINT.test(l)) continue;
+    const call = callText(lines, i, ext);
+    const toStdout = !/stderr|console\.error|>&2|file=sys\.stderr|eprint/.test(call);
     printsStdout = printsStdout || toStdout;
-    if (toStdout && (PROGRESS_WORDS.test(l) || ETA.test(l)) && !LITERAL_ONLY.test(l)) {
+    if (toStdout && (PROGRESS_WORDS.test(call) || ETA.test(call) || CLOCK_CALL.test(blankLiterals(call))) && !LITERAL_ONLY.test(l)) {
       notes.push(`prints what looks like progress or timing to stdout on line ${i + 1} ("${l.trim().slice(0, 80)}"): stdout is the artifact and must reproduce byte for byte elsewhere; send progress, timing and rates to stderr.`);
       break;
     }
