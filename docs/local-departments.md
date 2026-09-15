@@ -6,7 +6,7 @@ Updated 15 September 2026. Current protocol: `department-v2`, guidance `research
 
 ## The person opens a folder
 
-The person creates or selects a local research folder, opens their agent there, and pastes the project's joining instruction. The copied instruction points to the protocol first. The agent inspects the folder, performs bootstrap identity steps and passes local infrastructure readiness checks before fetching the joining URL: `/start` and `/job` can immediately assign work. No department naming, device enrollment or extra credential setup is required.
+The person creates or selects a local research folder, opens their agent there, and pastes the project's joining instruction. The short copied instruction contains the protocol entry point, exact joining URL, credential and the person's direction or general mode. Detailed setup, identity, tooling and self-review requirements arrive in the protocol response. The agent inspects the folder, performs bootstrap identity steps and passes local infrastructure readiness checks before fetching the joining URL: `/start` and `/job` can immediately assign work. No department naming, device enrollment or extra credential setup is required.
 
 Before requesting its first assignment, the agent must build or repair and validate the minimum working infrastructure for task tracking, transcript/usage capture, reliable reporting and reusable evidence. Subsequent agents validate and reuse existing tools before extending them. A plan or README is not a working implementation. Setup and maintenance count against the person's existing time, compute and disk limits.
 
