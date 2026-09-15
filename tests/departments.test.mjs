@@ -69,6 +69,7 @@ test('sibling directions and general mode remain separate; exact launch retries 
   two=await launch(dep,second.direction_id);general=await launch(dep);
   assert.notEqual(one.run_id,two.run_id);assert.equal(one.direction.words,'Keep researching the finite alpha bound.');
   assert.equal(two.direction.words,'Investigate beta counterexamples.');assert.equal(general.direction,null);
+  for(const run of [one,two,general])assert.match(run.brief_md,/self-review your local framework/);
   assert.match(general.brief_md,/Ordinary queue/);assert.doesNotMatch(general.brief_md,/alpha|beta/);
   const replay=await call(one.query,{headers:one.launchHeaders});assert.equal(replay.attempt_id,one.attempt_id);assert.equal(replay.brief_md,one.brief_md);
   assert.ok(one.brief_md.length<6000,`effective brief should be compact (${one.brief_md.length})`);
@@ -83,6 +84,8 @@ test('a completed first task retains the direction and requires a justified next
   await call('/run/next-step',{run:one,body:{revision:0,title:'stale',question:'q',why:'w',stop_when:'s',budget_hours:.5},status:409});
   const next=await call('/run/next-step',{run:one,body:{revision:1,title:'Alpha finite test',question:'Test alpha for n=12.',why:'Bound the alpha uncertainty.',stop_when:'One finite witness or the bound.',budget_hours:.5},headers:{'x-request-id':'nextstep_'+random()}});
   const second=await call('/start',{run:one});assert.equal(second.job_id,next.job_id);assert.equal(second.direction.words,one.direction.words);Object.assign(one,second);
+  assert.match(second.brief_md,/Build and validate missing essentials now/);
+  assert.match(second.brief_md,/self-review your local framework/);
   await call('/run/direction',{run:one,body:{revision:1,words:'Now test alpha for n=13.',user_instruction:true}});
   const current=await call('/run/context',{run:one});assert.equal(current.direction.revision,2);assert.equal(current.attempt.direction_snapshot.revision,1);
   assert.equal((await call('/start',{run:one})).direction.revision,1,'held attempt replays issued scope');
@@ -174,11 +177,21 @@ test('guidance discovery supports API-only clients, a local handoff and a separa
   const {credential,id}=await account();
   const contract=await call('/joining-contract',{credential});
   assert.equal(contract.distribution,'guidance');assert.equal(contract.helper_url,undefined);
+  assert.match(contract.guidance,/Before research, build or repair and validate/);
+  assert.match(contract.guidance,/Before every assignment, self-review/);
   const response=await fetch(contract.protocol_url);assert.equal(response.status,200);
   const protocol=await response.json();assert.match(protocol.version,/^department-v2\./);
   assert.equal(protocol.helper,undefined);assert.equal(protocol.effort_commands,undefined);
   assert.match(protocol.sections.bootstrap,/X-Instruction-URL/);assert.match(protocol.sections.api,/X-Request-ID/);
   assert.match(protocol.sections.publication,/Transcript \(required\)/);
+  assert.match(protocol.sections.bootstrap,/Required before research/);
+  assert.match(protocol.sections.framework,/persist and reload task progress/);
+  assert.match(protocol.sections.framework,/research completion, server submission and accounting completeness separately/);
+  assert.match(protocol.sections.accounting,/Implement or reuse and validate/);
+  assert.match(protocol.sections.accounting,/Freebuff/);
+  assert.match(protocol.sections.accounting,/next authorized startup or job/);
+  const framework=await call('/department-protocol?section=framework',{credential});
+  assert.deepEqual(Object.keys(framework.sections),['framework']);
   const focused=await call('/department-protocol?section=accounting',{credential});
   assert.deepEqual(Object.keys(focused.sections),['accounting']);assert.equal(focused.version,protocol.version);
   const markdown=await fetch(contract.protocol_url+'?section=bootstrap',{headers:{accept:'text/markdown'}});

@@ -35,6 +35,6 @@ export function folderLaunchContract(base: string, slug: string) {
     enabled: process.env.DEPARTMENT_MODE !== 'off',
     distribution: 'guidance',
     protocol_url: `${base}/projects/${slug}/department-protocol`,
-    guidance: `Work in the local research folder I opened. Read the department protocol, inspect the folder's existing research and tools, and build only the missing infrastructure using this computer's available capabilities. Document it for subsequent agents and coordinate shared changes. Automatically create or reuse this folder's department, then register your own run from the exact joining URL with your model ID and measured effort. Reuse shared knowledge and preserve your own direction across assignments.`,
+    guidance: `Work in the local research folder I opened. Read the department protocol, especially framework, bootstrap and accounting. Before research, build or repair and validate working local tools for task tracking, transcript and usage capture, reliable reporting and reusable evidence. Exercise the tools; a plan or README alone is insufficient. Use this computer's available capabilities and reuse existing tools. Automatically create or reuse this folder's department, then register your own run from the exact joining URL with your model ID and measured effort. Before every assignment, self-review your framework and make bounded improvements that help the research; record the checks and lessons for subsequent agents. Preserve shared evidence, sibling runs and your own persistent direction.`,
   };
 }
