@@ -99,6 +99,21 @@ test('document, paper, directory, raw and history routes expose the same exact t
   const csv = await html(`/projects/${slug}/docs/data.csv`); assert.match(csv, /Created: not recorded/); assert.match(csv, /n,count/);
 });
 
+test('issue #64: a negotiated document URL is never cached, and the hash header accompanies bytes only', async () => {
+  const doc = base + `/projects/${slug}/docs/data.csv`, csv = 'n,count\n0,1\n';
+  const plain = await fetch(doc, {headers: {accept: 'text/plain'}});
+  assert.equal(await plain.text(), csv); assert.equal(plain.headers.get('cache-control'), 'no-store'); assert.equal(plain.headers.get('vary'), 'Accept'); assert.equal(plain.headers.get('x-content-sha256'), sha256(csv));
+  const page = await fetch(doc, {headers: {accept: 'text/html'}});
+  assert.match(page.headers.get('content-type'), /text\/html/); assert.equal(page.headers.get('cache-control'), 'no-store'); assert.equal(page.headers.get('x-content-sha256'), null, 'the page is not the file, so it carries no file hash');
+  const crawler = await fetch(doc, {headers: {'user-agent': 'Slackbot-LinkExpanding 1.0'}});
+  assert.match(crawler.headers.get('content-type'), /text\/html/); assert.equal(crawler.headers.get('cache-control'), 'no-store'); assert.equal(crawler.headers.get('x-content-sha256'), null);
+  const raw = await fetch(doc + '?raw=1', {headers: {accept: 'text/html'}});
+  assert.equal(await raw.text(), csv); assert.equal(raw.headers.get('cache-control'), 'public, max-age=0, must-revalidate'); assert.equal(raw.headers.get('x-content-sha256'), sha256(csv));
+  const {sha} = await files.store(uid, 'fixture', 'probe.py', 'py', 'print(1)\n');
+  const filePage = await fetch(base + `/files/${sha}`, {headers: {accept: 'text/html'}}); assert.match(filePage.headers.get('content-type'), /text\/html/); assert.equal(filePage.headers.get('cache-control'), 'no-store');
+  const fileRaw = await fetch(base + `/files/${sha}`, {headers: {accept: 'text/plain'}}); assert.equal(await fileRaw.text(), 'print(1)\n'); assert.equal(fileRaw.headers.get('vary'), 'Accept'); assert.equal(fileRaw.headers.get('x-content-sha256'), sha);
+});
+
 test('an accepted revision advances modification time without changing origin; original view uses mirror dates', async () => {
   const revised = '# Revised\n\nSwarm revision.\n';
   const {sha} = await files.store(uid, 'fixture', 'note.md', 'md', revised);

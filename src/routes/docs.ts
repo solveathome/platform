@@ -102,6 +102,11 @@ async function serve(req: any, res: any, edition: Edition): Promise<void> {
   const to = docsRedirect(slug, rel);
   if (to) { res.set("Cache-Control", "no-store").redirect(303, to); return; }
   const publication = readPublication(root);
+  // One URL, two bodies (issue #64): the page for a browser Accept or a link-preview crawler, the bytes for everyone else. An edge
+  // cache keyed on the URL alone would hand one caller the other's body for as long as the entry lived (Cloudflare caches .js/.py
+  // by extension for four hours and does not honour Vary), so the negotiated URL is never cached; ?raw=1 is unambiguous and may be.
+  res.set("Vary", "Accept");
+  res.set("Cache-Control", req.query.raw ? "public, max-age=0, must-revalidate" : "no-store");
   if (!publication) { res.status(503).type("text/plain").send("The document portfolio is awaiting publication review.\n"); return; }
   const abs = safePath(root, rel);
   if (!abs || !existsSync(abs)) {
@@ -148,14 +153,14 @@ async function serve(req: any, res: any, edition: Edition): Promise<void> {
   const timestamps = await datesForDocument(pid ? Number(pid) : undefined, publication, rel, digest, seed);
   const historyUrl = `/projects/${encodeURIComponent(slug)}/history/${rel.split("/").map(encodeURIComponent).join("/")}`;
   const record = recordHtml(timestamps, historyUrl);
-  res.set("X-Content-SHA256", digest);
+  const bytes = () => res.set("X-Content-SHA256", digest);   // set only on responses whose body is the file, never on the rendered page
   if (timestamps.created_at) res.set("X-Document-Created-At", timestamps.created_at);
   if (timestamps.modified_at) res.set("X-Document-Modified-At", timestamps.modified_at);
   if (timestamps.recorded_at) res.set("X-Document-Recorded-At", timestamps.recorded_at);
-  if (req.query.meta) { res.json({path: rel, edition, timestamps, source: publication.files[rel]?.source ?? null, history_url: historyUrl}); return; }
+  if (req.query.meta) { bytes(); res.json({path: rel, edition, timestamps, source: publication.files[rel]?.source ?? null, history_url: historyUrl}); return; }
   const revisedNote = revised ? `<span class="muted">${revised.swarm ? `swarm edition, version ${revised.versions}: changed by <a href="/@${esc(revised.author)}">@${esc(revised.author)}</a>${revised.verified.length ? `, verified by ${revised.verified.map((h: string) => `<a href="/@${esc(h)}">@${esc(h)}</a>`).join(", ")}` : ""}` : `version ${revised.versions}, as cut from the research repository on ${timeHtml(revised.at)}`} · <a href="/projects/${esc(slug)}/history/${esc(rel)}">history and diffs</a>${revised.swarm ? ` · <a href="/projects/${esc(slug)}/docs/${esc(rel)}?original=1">current mirror</a>` : ""}</span>` : "";
   if (ext === ".md" && !browser) {
-    res.set({ "Content-Type": "text/markdown; charset=utf-8", "X-Content-Type-Options": "nosniff" }).send(content.toString("utf8")); return;
+    bytes(); res.set({ "Content-Type": "text/markdown; charset=utf-8", "X-Content-Type-Options": "nosniff" }).send(content.toString("utf8")); return;
   }
   if (ext === ".md" && content.length <= 1024 * 1024) {
     const r = await renderMarkdown(content.toString("utf8"), slug, rel, edition);
@@ -174,6 +179,7 @@ async function serve(req: any, res: any, edition: Edition): Promise<void> {
     const body = TEXT_EXT.has(ext) && content.length <= MAX_TEXT ? `<pre><code>${esc(content.toString("utf8"))}</code></pre>` : `<p>This file is available as a download.</p>`;
     res.type("text/html").send(chrome(slug, rel, crumbsFor(slug, rel, edition), `${record}<p><a href="${rawUrl}">Raw file / download</a></p>${body}`)); return;
   }
+  bytes();
   if (IMG[ext]) { res.type(IMG[ext]).set({ "X-Content-Type-Options": "nosniff", "Content-Security-Policy": "default-src 'none'; sandbox" }).send(content); return; }
   if (TEXT_EXT.has(ext) && st.size <= MAX_TEXT) {
     res.set({ "Content-Type": "text/plain; charset=utf-8", "X-Content-Type-Options": "nosniff", "Content-Security-Policy": "default-src 'none'; sandbox" }).send(content.toString("utf8"));

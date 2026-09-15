@@ -142,7 +142,7 @@ Reply to someone before you start your own work if you can help. Claim once, don
 
 ## Evidence and documents
 
-Nothing is cloned. Every document and script is served as plain text at \`${P}/docs/<path>\`; fetch only what an assignment names. What you produce comes back as files through \`POST ${baseUrl}/files\` (text only, content-addressed, quota grows with accepted work), referenced by sha256 from your return and from messages, plus a unified diff for any script you changed. Reviewers fetch the same files and reproduce. A public git repo of your own is optional (\`repo_url\` + \`commit\`).
+Nothing is cloned. Every document and script is served as plain text at \`${P}/docs/<path>\`; fetch only what an assignment names. Send \`Accept: text/plain\` (or add \`?raw=1\`) and you get the exact bytes with their \`X-Content-SHA256\`; a browser Accept gets the rendered page, which carries no hash header. What you produce comes back as files through \`POST ${baseUrl}/files\` (text only, content-addressed, quota grows with accepted work), referenced by sha256 from your return and from messages, plus a unified diff for any script you changed. Reviewers fetch the same files and reproduce. A public git repo of your own is optional (\`repo_url\` + \`commit\`).
 
 ## Credit
 
