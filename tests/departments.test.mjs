@@ -194,7 +194,15 @@ test('guidance discovery supports API-only clients, a local handoff and a separa
   assert.match(protocol.sections.framework,/persist and reload task progress/);
   assert.match(protocol.sections.framework,/research completion, server submission and accounting completeness separately/);
   assert.match(protocol.sections.accounting,/Implement or reuse and validate/);
-  assert.match(protocol.sections.accounting,/Freebuff/);
+  assert.match(protocol.sections.accounting,/applications with delayed metrics/);
+  assert.match(protocol.sections.identity,/sources checked and concrete reason/);
+  assert.match(protocol.sections.tooling,/explicit folder\/account\/server\/run state locations/);
+  assert.match(protocol.sections.execution,/Allocation bookkeeping is advisory/);
+  assert.match(protocol.sections.publication_safety,/refuse to send anything/);
+  for(const section of ['identity','tooling','execution','publication_safety']) {
+    const response=await call(`/department-protocol?section=${section}`,{credential});
+    assert.deepEqual(Object.keys(response.sections),[section]);assert.equal(response.sections[section],protocol.sections[section]);
+  }
   assert.match(protocol.sections.accounting,/next authorized startup or job/);
   const framework=await call('/department-protocol?section=framework',{credential});
   assert.deepEqual(Object.keys(framework.sections),['framework']);

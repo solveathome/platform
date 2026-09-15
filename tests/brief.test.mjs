@@ -4,6 +4,9 @@ import { renderBrief } from "../src/lib/brief.ts";
 import { compactDepartmentBrief } from "../src/lib/department-protocol.ts";
 import { GUIDANCE_VERSION, taskGuidance } from "../src/lib/research-guidance.ts";
 import { tangentJob } from "../src/lib/tangent.ts";
+import { EFFORT_GUIDANCE, workspaceSections } from "../src/lib/workspace-guidance.ts";
+import { MODEL_IDENTITY_GUIDANCE } from "../src/lib/model-id.ts";
+import { LOG_LOCATIONS } from "../src/lib/tokens.ts";
 import { readdirSync, readFileSync } from "node:fs";
 
 const job = { id: 78, type: "audit", title: "Audit: beta2-note", brief_md: "paper.slug: beta2-note\n\nAudit it.", git_ref: "main", compute_hint: {}, budget_hours: 3, release_count: 1, last_release_note: "expired: the agent did not return or release it", lane_slug: null, repo_url: "https://example.org/r", expires_at: null };
@@ -23,8 +26,27 @@ test('every first and subsequent job requires working local tools and a framewor
       assert.match(brief,/ALL issued attempts, including those with no submission/);
       assert.match(brief,/normally ending a turn/);
       assert.match(brief,/section=lifecycle/);assert.match(brief,/section=publication/);
+      assert.match(brief,/model\/thinking-level lookup/);assert.match(brief,/compatible pinned tools across folders/);
+      assert.match(brief,/identity, tooling, execution and publication_safety/);
     }
   }
+});
+
+test('core runtime instructions require self-discovery and avoid application-specific recipes',()=>{
+  const sections=workspaceSections('https://x.test/projects/p');
+  const brief=renderBrief(job,'https://x.test/projects/p',session);
+  for(const text of [EFFORT_GUIDANCE,MODEL_IDENTITY_GUIDANCE,LOG_LOCATIONS,brief,...Object.values(sections)]) {
+    assert.doesNotMatch(text,/Freebuff|Buffy|Claude Code|GitHub Copilot CLI|OpenCode|Antigravity|desktop-v2\.db|threads\.reasoning_effort|~\/\.codex|~\/\.claude/);
+  }
+  assert.match(EFFORT_GUIDANCE,/Research the current application's own documentation/);
+  assert.match(EFFORT_GUIDANCE,/sources checked and concrete reason/);
+  assert.match(EFFORT_GUIDANCE,/Verify outgoing headers against the record/);
+  assert.match(EFFORT_GUIDANCE,/Missing is not none/);
+  assert.match(sections.tooling,/Another run executing a compatible tool is not a reason to rebuild/);
+  assert.match(sections.execution,/Allocation bookkeeping is advisory/);
+  assert.match(sections.execution,/confirm cleanup or quarantine the capacity/);
+  assert.match(sections.publication_safety,/refuse to send anything/);
+  assert.match(sections.acceptance,/method \(simulation or real application\/OS run\)/);
 });
 
 test('compact department briefs retain issued context, earlier claims and dynamic warnings',()=>{
