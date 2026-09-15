@@ -312,3 +312,23 @@ test('an old deployment slot can hand off a reassigned legacy job without inheri
   const attempts=await q(`SELECT id,status FROM assignment_attempts WHERE job_id=$1 ORDER BY started_at`,[a.job_id]);
   assert.equal(attempts.length,2);assert.deepEqual(attempts.map(a=>a.status),['released','completed']);
 });
+
+// Issue #88: the refusal is right, but "fetch /start for current work" is the one thing an agent must not do while it still
+// holds an unsubmitted assignment, and every fact needed to say something better is already in the request.
+test('a completion whose X-Attempt and job_id name different assignments says which to resend with, and does not send the agent to /start', async () => {
+  const first = await start();
+  ok(await result(first));
+  const second = await start({session: first.session});
+  assert.notEqual(String(second.job_id), String(first.job_id), 'a second, different assignment is open on this run');
+  const r = await call('/result', {method: 'POST', session: first.session, attempt: first.attempt_id,
+    body: {job_id: second.job_id, report_md: 'A bounded evidence note with uncertainty.', transcript: 't', transcript_approved: true}});
+  assert.equal(r.status, 409, JSON.stringify(r.body));
+  const e = r.body.error;
+  assert.match(e, new RegExp(`job #${first.job_id}`), 'it names the assignment the header points at');
+  assert.match(e, new RegExp(`job_id is ${second.job_id}`), 'and the assignment the body points at');
+  assert.match(e, new RegExp(`X-Attempt: ${second.attempt_id}`), 'and the attempt to resend with');
+  assert.match(e, /nothing was submitted/i);
+  assert.match(e, /Do not fetch \/start/, 'following the old advice would have taken a third assignment');
+  assert.doesNotMatch(e, /fetch \/start for current work/);
+  ok(await result(second));   // and the run can still finish the work it actually holds
+});
