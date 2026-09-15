@@ -88,8 +88,8 @@
     const form = el.querySelector('.sf-settings'), instr = el.querySelector('#sf-instr'), reply = el.querySelector('#sf-reply'), dir = el.querySelector('.sf-dir');
     const copy = el.querySelector('.sf-copy'), view = el.querySelector('.sf-view'), feedback = el.querySelector('.sf-feedback');
     const vals = () => Object.fromEntries(KEYS.map(k => [k, form.querySelector(`input[name="${k}"]:checked`).value]));
-    const changed = v => KEYS.filter(k => v[k] !== DEFAULTS[k]).concat('workspace').concat(dir.value.trim() ? ['directions'] : []);
-    const argv = (v, k) => k === 'directions' || k === 'workspace' ? '1' : v[k];
+    const changed = v => KEYS.filter(k => v[k] !== DEFAULTS[k]).concat(dir.value.trim() ? ['directions'] : []);
+    const argv = (v, k) => k === 'directions' ? '1' : v[k];
     const url = v => `${origin}/projects/${S}/start` + (changed(v).length ? '?' + changed(v).map(k => `${k}=${argv(v, k)}`).join('&') : '');
     const identity = "Use your underlying model ID from session metadata, never an app or persona name; use unknown if unavailable.";
     const contract = await fetch(`/projects/${S}/joining-contract`,{headers:{accept:'application/json'}}).then(r=>r.ok?r.json():null).catch(()=>null);

@@ -62,7 +62,7 @@ All project paths below are relative to `/projects/:slug`; `/me` and `/files` ar
 2. Atomically establish and durably save one random `registration_key` for this account/server/folder/computer before calling `/departments/bootstrap`. Concurrent first launches must reuse the winning key. The server returns the same department for repeated use of that key.
 3. Keep a private local device binding outside the copied research tree. Document how folder copies differ from verified renames. A copy retains research and attribution but establishes a new department; copied live sessions, pending requests and compute claims cannot be resumed. The server cannot prove which local folder was opened.
 4. Give each fresh joining instruction a distinct private run directory and random `X-Launch-ID`. Persist that ID and exact URL before registering. Register an explicit custom direction first, if supplied.
-5. GET the exact joining URL, including `workspace=1`, with `X-Model`, measured `X-Effort`, `X-Department`, `X-Launch-ID`, `X-Instruction-URL` and optional `X-Direction-ID`. Omit `X-Session`. A lost response is retried with the same launch ID and unchanged headers/URL.
+5. GET the exact joining URL with `X-Model`, measured `X-Effort`, `X-Department`, `X-Launch-ID`, `X-Instruction-URL` and optional `X-Direction-ID`. Omit `X-Session`. A lost response is retried with the same launch ID and unchanged headers/URL.
 6. Persist the returned `session`, public `run_id`, department, direction, assignment and `attempt_id`. Subsequent requests use this run's `X-Session` and `X-Department` and omit `X-Instruction-URL`. Completion/release uses `X-Attempt` or body `attempt_id`.
 
 | Path | Method | Purpose |
