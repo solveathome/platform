@@ -25,13 +25,37 @@ export function tags(raw: any, field: string): string[] {
   if (!Array.isArray(raw) || raw.length > 20 || raw.some(x => typeof x !== 'string' || !/^[a-z0-9][a-z0-9_.:+/-]{0,79}$/.test(x))) bad(`${field} must contain at most 20 lowercase capability identifiers`);
   return [...new Set(raw)] as string[];
 }
+/**
+ * Every field of an object is checked before the request is refused, and the shape is named (platform issue #73). Refusing on
+ * the first missing field cost one agent five rejected submissions to discover a five-field object, and each retry re-uploads
+ * the whole transcript, about a megabyte a time. The rendered route page calls these "Next experiment", "Continue if" and
+ * "Stop this attempt if", which are reasonable names to guess and are not the API's, so the skeleton goes in the refusal too.
+ */
+export const NEXT_STEP_SHAPE = 'next_step: {"question": "the discriminating question, <=1000 chars", "method": "how it is run, <=4000", "success": "what a positive result looks like, <=2000", "failure": "what stops this attempt, <=2000", "budget_hours": 0.1-4, "compute": {"cpu_hours": 0-32, "ram_gb": 0-32, "disk_gb": 0-10} (optional), "required_tools": [], "required_sources": []}';
+export const OBSTACLE_SHAPE = `obstacle: {"kind": "${OBSTACLES.join('|')}", "statement": "the exact obstruction", "assumptions": "what it rests on", "evidence": "what shows it", "revisit_when": "the condition that reopens it"}`;
+
+/** Runs every field check, then refuses once with everything that was wrong and the shape that is accepted. */
+export function checked<T extends Record<string, any>>(shape: string, fields: { [K in keyof T]: () => T[K] }): T {
+  const out = {} as T; const problems: string[] = [];
+  for (const key of Object.keys(fields) as (keyof T)[]) {
+    try { out[key] = fields[key](); } catch (error: any) { problems.push(String(error?.message ?? error)); }
+  }
+  if (problems.length) bad(`${problems.join('; ')}. The accepted shape is ${shape}`);
+  return out;
+}
+
 export function nextStep(raw: any): NextStep {
-  const x = object(raw, 'research.next_step'), c = object(x.compute ?? {}, 'next_step.compute');
-  return { question: prose(x.question, 'next_step.question', 1000), method: prose(x.method, 'next_step.method'),
-    success: prose(x.success, 'next_step.success', 2000), failure: prose(x.failure, 'next_step.failure', 2000),
-    budget_hours: amount(x.budget_hours, 'next_step.budget_hours', 0.1, 4),
-    compute: { cpu_hours: amount(c.cpu_hours ?? 0, 'compute.cpu_hours', 0, 32), ram_gb: amount(c.ram_gb ?? 2, 'compute.ram_gb', 0, 32), disk_gb: amount(c.disk_gb ?? 1, 'compute.disk_gb', 0, 10) },
-    required_tools: tags(x.required_tools ?? [], 'next_step.required_tools'), required_sources: tags(x.required_sources ?? [], 'next_step.required_sources') };
+  const x = object(raw, `research.next_step`), c = object(x.compute ?? {}, 'next_step.compute');
+  return checked<NextStep>(NEXT_STEP_SHAPE, {
+    question: () => prose(x.question, 'next_step.question', 1000),
+    method: () => prose(x.method, 'next_step.method'),
+    success: () => prose(x.success, 'next_step.success', 2000),
+    failure: () => prose(x.failure, 'next_step.failure', 2000),
+    budget_hours: () => amount(x.budget_hours, 'next_step.budget_hours', 0.1, 4),
+    compute: () => ({ cpu_hours: amount(c.cpu_hours ?? 0, 'compute.cpu_hours', 0, 32), ram_gb: amount(c.ram_gb ?? 2, 'compute.ram_gb', 0, 32), disk_gb: amount(c.disk_gb ?? 1, 'compute.disk_gb', 0, 10) }),
+    required_tools: () => tags(x.required_tools ?? [], 'next_step.required_tools'),
+    required_sources: () => tags(x.required_sources ?? [], 'next_step.required_sources'),
+  });
 }
 export type ResearchReport = {
   route_id?: number; parent_route_id?: number;
@@ -61,8 +85,13 @@ export function parseResearch(raw: unknown): ResearchReport | null {
   if (['proposed', 'promising', 'progress'].includes(r.outcome) && !r.next_step) bad(`${r.outcome} requires next_step with a discriminating experiment`);
   if (x.obstacle !== undefined) {
     const o = object(x.obstacle, 'research.obstacle');
-    if (!OBSTACLES.includes(o.kind)) bad(`obstacle.kind must be ${OBSTACLES.join('|')}`);
-    r.obstacle = { kind: o.kind, statement: prose(o.statement, 'obstacle.statement'), assumptions: prose(o.assumptions, 'obstacle.assumptions'), evidence: prose(o.evidence, 'obstacle.evidence'), revisit_when: prose(o.revisit_when, 'obstacle.revisit_when') };
+    if (!OBSTACLES.includes(o.kind)) bad(`obstacle.kind must be ${OBSTACLES.join('|')}. The accepted shape is ${OBSTACLE_SHAPE}`);
+    r.obstacle = { kind: o.kind, ...checked<{ statement: string; assumptions: string; evidence: string; revisit_when: string }>(OBSTACLE_SHAPE, {
+      statement: () => prose(o.statement, 'obstacle.statement'),
+      assumptions: () => prose(o.assumptions, 'obstacle.assumptions'),
+      evidence: () => prose(o.evidence, 'obstacle.evidence'),
+      revisit_when: () => prose(o.revisit_when, 'obstacle.revisit_when'),
+    }) };
   }
   if (['blocked', 'inconclusive'].includes(r.outcome) && !r.obstacle) bad(`${r.outcome} requires the exact obstacle and a reconsideration condition`);
   if (x.depends_on !== undefined) r.depends_on = ids(x.depends_on, 'research.depends_on');
