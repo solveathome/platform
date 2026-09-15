@@ -4,7 +4,7 @@ import {readFileSync} from 'node:fs';
 import vm from 'node:vm';
 import {folderLaunchContract} from '../src/lib/launch.ts';
 
-test('rendered and copied joining instructions put protocol/readiness before the assignment URL',async()=>{
+test('copied joining instructions stay short and fetch setup guidance before the assignment URL',async()=>{
   const origin='https://example.test',slug='twin-primes',token='sah_fixture_token_never_real';
   const settings={time:'continuous',subagents:'yes',share:'75',disk:'5'},nodes=new Map();
   const node=selector=>{
@@ -30,17 +30,19 @@ test('rendered and copied joining instructions put protocol/readiness before the
   await node('.sf-copy').onclick();
   const check=()=>{
     assert.ok(copied.startsWith(`First read ${contract.protocol_url}`));
-    assert.ok(copied.indexOf('until readiness passes')<copied.indexOf('After readiness passes, use this exact joining URL:'));
-    assert.match(copied,/issued task with no submission/);assert.match(copied,/fail an all-complete check/);
-    assert.match(copied,/record checked sources before using unmeasured/);
-    assert.match(copied,/separate folder\/run state/);assert.match(copied,/actual process limits/);
+    assert.ok(copied.indexOf('follow its setup instructions')<copied.indexOf('After readiness passes, use this exact joining URL:'));
+    assert.ok(!copied.includes(contract.guidance),'detailed instructions belong in the protocol response');
+    assert.doesNotMatch(copied,/all-complete check|thinking-level lookup|publication_safety|model ID|self-review/);
     assert.doesNotMatch(copied,/Freebuff|desktop-v2\.db|threads\.reasoning_effort/);
     assert.ok(copied.includes(`SOLVEATHOME_TOKEN=${token}`));assert.doesNotMatch(copied,/workspace=1/);
   };
   check();assert.ok(copied.includes(`joining URL: ${origin}/projects/${slug}/start.`));
+  assert.ok(copied.length<550,`default instruction is ${copied.length} characters`);
+  assert.match(copied,/Start in general mode/);
   settings.time='2h';node('.sf-settings').events.change({target:{name:'time'}});
   const direction='Study “alpha” exactly.\nKeep this direction across assignments.';
   node('.sf-dir').value=direction;node('.sf-dir').events.input();await node('.sf-copy').onclick();
   check();assert.ok(copied.includes(`/start?time=2h&directions=1.`));assert.ok(copied.includes(JSON.stringify(direction)));
+  assert.doesNotMatch(copied,/Start in general mode/);
   assert.ok(!requests.some(path=>path.includes('/start')),'the joining form never requests an assignment');
 });
