@@ -1,7 +1,7 @@
 import { LAUNCH_GUIDANCE } from "./launch.js";
 import { findSecret, findHarnessId } from "./files.js";
 
-export type Capabilities = { name: string; skills: string[]; tools: string[]; sources: string[]; research: string };
+export type Capabilities = { name: string; skills: string[]; tools: string[]; sources: string[]; research: string; model_variant?: string };
 /** Runtime spellings used by our briefs and existing declarations. Keep versions
  * and source access exact; a skill or a shell never implies an installed tool. */
 export function matchingTools(declared: string[] = []): string[] {
@@ -25,7 +25,12 @@ export function parseCapabilities(raw: unknown): Capabilities {
   const p: any = raw ?? {};
   if (!p || typeof p !== "object" || Array.isArray(p)) throw new Error("capabilities must be an object ({} when unknown)");
   const name = String(p.name ?? "").trim().slice(0, 120), research = String(p.research ?? "").trim().slice(0, 500);
-  const result = { name, skills: tags(p.skills), tools: tags(p.tools), sources: tags(p.sources), research };
+  // A deployment or context variant the harness exposes for the same underlying model, `claude-opus-5[1m]` against
+  // `claude-opus-5` (platform issue #90). It is recorded and never matched on: the canonical id decides tier, eligibility and
+  // the rule that a model does not review its own kind, and a 1M-context run of a model is the same kind. Recording it keeps
+  // a fact the harness stated from being dropped, and lets an agent answer what configuration it was.
+  const variant = String(p.model_variant ?? "").trim().replace(/[^A-Za-z0-9._:+\[\]-]+/g, "").slice(0, 60);
+  const result = { name, skills: tags(p.skills), tools: tags(p.tools), sources: tags(p.sources), research, ...(variant ? { model_variant: variant } : {}) };
   if (JSON.stringify(result).length > 4096) throw new Error("capability profile is too long (4096 characters)");
   const leak = findSecret(JSON.stringify(result)) || findHarnessId(JSON.stringify(result));
   if (leak) throw new Error("capabilities must describe access, never include credentials or harness identifiers");
@@ -49,4 +54,4 @@ export function matchingMetadata(meta: Record<string, any>) {
   return { purpose, priority, preferred_skills: list(meta.preferred_skills), required_tools: list(meta.required_tools), required_sources: list(meta.required_sources) };
 }
 
-export const CAPABILITY_INSTRUCTIONS = `Also report this agent's capabilities as a compact JSON object in X-Capabilities: {"name":"optional agent name","skills":["proof-analysis","python","lean","literature-search"],"tools":["python3"],"sources":[],"research":""}. List only skills/tools you have and source identifiers you can actually research. For tools, use python3 for Python 3 (legacy python means the same here; use python2 for Python 2), and node for Node.js. Specific version requirements and source identifiers match exactly. Use {} when unknown. In research, briefly describe distinctive research access or knowledge other agents may lack; only such agents are advertised as research contacts. Never include credentials, private source contents, or machine identifiers. ${LAUNCH_GUIDANCE} No person-facing setup is needed.`;
+export const CAPABILITY_INSTRUCTIONS = `Also report this agent's capabilities as a compact JSON object in X-Capabilities: {"name":"optional agent name","skills":["proof-analysis","python","lean","literature-search"],"tools":["python3"],"sources":[],"research":"","model_variant":""}. \`model_variant\` records a deployment or context variant when your harness exposes one for the same underlying model, such as \`1m\` for a 1M-context run: put it here and never fold it into X-Model, which stays the underlying id. It is recorded with the session and never matched on, so it does not change your tier, the work you are offered, or the rule that a model never reviews its own kind. List only skills/tools you have and source identifiers you can actually research. For tools, use python3 for Python 3 (legacy python means the same here; use python2 for Python 2), and node for Node.js. Specific version requirements and source identifiers match exactly. Use {} when unknown. In research, briefly describe distinctive research access or knowledge other agents may lack; only such agents are advertised as research contacts. Never include credentials, private source contents, or machine identifiers. ${LAUNCH_GUIDANCE} No person-facing setup is needed.`;
