@@ -11,6 +11,33 @@ const canonical = (v: any): any => Array.isArray(v) ? v.map(canonical) : v && ty
 const digest = (v: any) => createHash("sha256").update(JSON.stringify(canonical(v))).digest("hex");
 
 /** Buffer the response until the transaction commits; a failed submission rolls back all its DB effects. */
+/**
+ * Why a completion was refused, in terms of the request that was sent (platform issue #88). Every fact is already in it: the
+ * attempt the header names, the job the body names, and what this run currently holds. The old text said only "fetch /start
+ * for current work", which is the one thing an agent must not do while it still holds an unsubmitted assignment: following it
+ * takes a second live assignment and leaves the first untracked. A failed /result also re-uploads the whole transcript, so a
+ * message that turns the diagnosis into the fix is worth the two queries it costs.
+ */
+async function staleAttemptError(aid: string, job: any, sessionId: string, userId: number): Promise<string> {
+  const short = (id: unknown) => String(id ?? "").slice(0, 8);
+  const named = aid ? await one<{ id: string; job_id: string; status: string; receipt: any }>(`SELECT id, job_id, status, receipt FROM assignment_attempts WHERE id = $1`, [aid]) : null;
+  const live = job.attempt_id ? await one<{ id: string; status: string; session_id: string }>(`SELECT id, status, session_id FROM assignment_attempts WHERE id = $1`, [job.attempt_id]) : null;
+  const held = await q<{ id: string }>(`SELECT id FROM jobs WHERE problem_id = $1 AND assigned_session = $2 AND status = 'assigned' ORDER BY id`, [job.problem_id, sessionId]);
+  const holding = held.map((h) => `#${h.id}`).join(", ");
+  // The header and the body name different assignments: almost always a client that built X-Attempt from run state, not from this request.
+  if (named && String(named.job_id) !== String(job.id)) {
+    const was = named.receipt?.return_id ? `, submitted as return #${named.receipt.return_id}` : named.status ? `, ${named.status}` : "";
+    const use = live && live.session_id === sessionId && live.status === "assigned"
+      ? ` Job #${job.id}'s current attempt is ${live.id}: resend this result unchanged with X-Attempt: ${live.id}.`
+      : ` Job #${job.id} is ${job.status}${job.status === "assigned" ? " but its attempt is not this run's" : ""}.`;
+    return `X-Attempt names attempt ${short(named.id)}… of job #${named.job_id}${was}, and the body's job_id is ${job.id}: the two name different assignments, so nothing was submitted.${use}${holding ? ` Do not fetch /start while this run still holds ${holding}: that would take another assignment and leave this one unaccounted for.` : ""}`;
+  }
+  if (aid && !named) return `X-Attempt names ${short(aid)}…, which is not an attempt of job #${job.id}${live ? `; its current attempt is ${live.id}` : ""}. Nothing was submitted. Use the attempt id from this assignment's brief${holding ? `, and do not fetch /start while this run still holds ${holding}` : ""}.`;
+  if (aid && named && live && live.id !== aid) return `attempt ${short(aid)}… of job #${job.id} was replaced by ${live.id}${live.session_id === sessionId ? ", which this run holds: resend with that X-Attempt" : ", which another of your sessions holds: send that agent's X-Session"}. Nothing was submitted.`;
+  const expired = job.expires_at && new Date(job.expires_at).getTime() <= Date.now();
+  return `job #${job.id} is ${expired ? "past its deadline" : `no longer assigned (${job.status})`}, so this result was not recorded.${holding ? ` This run still holds ${holding}: finish or release ${held.length === 1 ? "it" : "them"} first.` : " Fetch /start for current work."}`;
+}
+
 export function assignmentMutation(handler: (req: any, res: any) => Promise<void>, options: { completion?: boolean | "release"; historicalEvidence?: boolean; commitErrors?: boolean } = {}): RequestHandler {
   return async (req: any, res, next) => {
     const json = res.json, send = res.send;
@@ -97,7 +124,7 @@ export function assignmentMutation(handler: (req: any, res: any) => Promise<void
               res.json(attempt.receipt); return;
             }
             if ((aid && (!attempt || j.attempt_id !== aid)) || j.status !== "assigned" || (j.expires_at && new Date(j.expires_at).getTime() <= Date.now())) {
-              res.status(409).json({ error: "this assignment is no longer active; fetch /start for current work" }); throw new Refused();
+              res.status(409).json({ error: await staleAttemptError(aid, j, xs, req.user.id) }); throw new Refused();
             }
           }
           await handler(req, res);
