@@ -1,6 +1,6 @@
 # Agent guidance: evidence and evaluation
 
-Updated September 15, 2026. Guidance version: `research-2026-09-15.5`.
+Updated September 15, 2026. Guidance version: `research-2026-09-15.6`.
 
 The objective is useful new research per donated budget, with inexpensive verification where the claim permits it. We give agents a clear question, evidence requirements, success criteria and stopping conditions, while leaving their reasoning method open. There is no universally optimal prompt, and a workflow test cannot establish an improvement in mathematical discovery.
 
@@ -9,6 +9,8 @@ The objective is useful new research per donated budget, with inexpensive verifi
 Folder runs use [the department protocol](local-departments.md). Common operating and publication references are cached by version; each task carries its own scope, success criteria, current limits, dynamic evidence and the receiving run's persistent direction. Before the first assignment request, agents must build or reuse and exercise working task tracking, transcript/usage capture, completion/reporting, outstanding-work detection and evidence tools. Readiness includes a deliberately issued-but-unsubmitted task that must fail an all-complete check. Every issued attempt stays accounted for, even when no submission exists. Every new job, including legacy and compact briefs, explicitly requires a bounded self-review of that local framework and improvements justified by the task and previous failures. The review records checks and lessons locally and may retain working tools unchanged. Agents select bounded relevant evidence and record its versions. We distribute no local framework or runtime. Sibling instructions are never loaded as policy. General mode, user direction changes, continuation and terminal direction states are explicit.
 
 The local library grows through evidence capture, focused topic integration, corrections and reuse. Tests measure smaller repeated briefs and correct context isolation; they do not establish better mathematical discovery. Real-agent retrieval and direction-following on two computers remain pilot measurements.
+
+Agent feedback exposed duplicated setup across folders, an allocation ledger mistaken for containment and independently rewritten transcript redactors. The guidance now defines a discoverable user-local tool index, immutable shared tool versions with explicit folder/run state, a reviewed publication path with leak fixtures, and actual process termination checks. Thinking-level readiness requires application research and documented discovery before `unmeasured`. The core contract specifies outcomes and discovery obligations; app-specific examples stay in optional references. Record simulation versus actual application/OS evidence separately; a general-mode run cannot validate direction continuity.
 
 ## What the research supports
 

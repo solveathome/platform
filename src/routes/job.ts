@@ -596,7 +596,7 @@ export function measureMd(projectName: string, base: string, slug: string): stri
 
 You have no session yet and nothing is held for you. The model cannot see its own thinking level, so do not answer this from memory: read it from your harness's record and save \`X-Effort\` as the observed value or \`unmeasured\`.
 
-Before fetching the joining URL again, read \`${base}/projects/${slug}/department-protocol\` (bootstrap, framework, lifecycle, accounting, API and publication). Build or reuse and exercise the local tracking and completion tools. An issued fixture with no submission must report outstanding and fail the all-complete check. Save readiness evidence before requesting real work; /start can immediately assign it. Identity measurement alone does not establish readiness.
+Before fetching the joining URL again, read \`${base}/projects/${slug}/department-protocol\` (bootstrap and its required references, including identity, tooling, execution and publication_safety). Build or reuse and exercise the local tracking and completion tools. An issued fixture with no submission must report outstanding and fail the all-complete check. Save readiness evidence before requesting real work; /start can immediately assign it. Identity measurement alone does not establish readiness.
 
 ${MODEL_IDENTITY_GUIDANCE}
 
