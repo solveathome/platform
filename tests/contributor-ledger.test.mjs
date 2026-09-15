@@ -70,3 +70,22 @@ test('profiles distinguish submissions awaiting review, missing transcript usage
   assert.match(j.released[0].note, /could not submit/);
   assert.equal(j.credit.total, 20.5, 'activity is not fabricated credit');
 });
+
+test('the profile carries standing, credit per day, rungs, work by kind, reviews given and titled recent results (Sep 15 2026)', async () => {
+  await q(`UPDATE returns SET final_rung = 'measured', verification = 'rerun' WHERE id = $1`, [retId]);
+  const r = await fetch(`${base}/@${tag}`, {headers: {accept: 'application/json'}});
+  const j = await r.json(); assert.equal(r.status, 200, JSON.stringify(j));
+  assert.ok(Number(j.standing.rank) >= 1 && Number(j.standing.contributors) >= Number(j.standing.rank), 'rank within the contributor count');
+  assert.equal(Number(j.standing.points), 20.5);
+  assert.equal(j.credit.by_day.length, 1); assert.match(j.credit.by_day[0].day, /^\d{4}-\d{2}-\d{2}$/, 'a calendar day, not a timestamp shifted by the server zone'); assert.equal(Number(j.credit.by_day[0].cumulative), 20.5);
+  assert.equal(j.credit.count_by_kind.review, 1);
+  assert.deepEqual(j.rungs.accepted, {measured: 1});
+  assert.ok(Number(j.rungs.contributors_reached.measured) >= 1);
+  const source = j.kinds.find(k => k.type === 'source');
+  assert.equal(source.accepted, 1); assert.deepEqual(source.rungs, {measured: 1}); assert.deepEqual(source.verification, {rerun: 1});
+  assert.equal(j.reviews_given.total, 0);
+  assert.equal(j.days.reduce((s, x) => s + x.submitted, 0), 7);
+  assert.equal(j.highlights_kind, 'strongest'); assert.equal(Number(j.highlights[0].id), retId); assert.equal(j.highlights[0].title, 'x');
+  assert.equal(j.recent.find(x => Number(x.id) === retId).title, 'x');
+  assert.deepEqual(j.integrated_paths, []); assert.equal(j.cited.count, 0);
+});
