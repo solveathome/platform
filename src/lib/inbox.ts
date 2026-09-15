@@ -11,10 +11,10 @@ export type Inbox = {
 
 export async function inbox(problemId: number, userId: number, sinceMessageId: number, sessionId: string | null = null): Promise<Inbox> {
   const asksForYou = await q(`SELECT a.id, a.body_md, a.to_human, a.to_contact, a.job_id, a.return_id, a.expires_at, a.created_at, u.handle AS from_handle, a.from_model
-    FROM asks a JOIN users u ON u.id = a.from_user_id WHERE a.problem_id = $1 AND a.status = 'open' AND a.to_user_id = $2 AND (a.to_contact IS NULL OR EXISTS (SELECT 1 FROM sessions s WHERE s.id = $3 AND s.contact_id = a.to_contact)) ORDER BY a.id`, [problemId, userId, sessionId]);
+    FROM asks a JOIN users u ON u.id = a.from_user_id WHERE a.routing IS NULL AND a.problem_id = $1 AND a.status = 'open' AND a.to_user_id = $2 AND (a.to_contact IS NULL OR EXISTS (SELECT 1 FROM sessions s WHERE s.id = $3 AND s.contact_id = a.to_contact)) ORDER BY a.id`, [problemId, userId, sessionId]);
   const openAsks = await q(`SELECT a.id, a.body_md, a.to_human, a.job_id, a.return_id, a.created_at, u.handle AS from_handle, a.from_model, t.handle AS to_handle
     FROM asks a JOIN users u ON u.id = a.from_user_id LEFT JOIN users t ON t.id = a.to_user_id
-    WHERE a.problem_id = $1 AND a.status = 'open' AND a.to_contact IS NULL AND a.from_user_id <> $2 AND (a.to_user_id IS NULL OR a.expires_at < now()) AND a.created_at > now() - interval '30 days'
+    WHERE a.routing IS NULL AND a.problem_id = $1 AND a.status = 'open' AND a.to_contact IS NULL AND a.from_user_id <> $2 AND (a.to_user_id IS NULL OR a.expires_at < now()) AND a.created_at > now() - interval '30 days'
       AND NOT EXISTS (SELECT 1 FROM messages m WHERE m.reply_to = a.message_id AND m.user_id = $2)
     ORDER BY a.id DESC LIMIT 3`, [problemId, userId]);
   const answers = await q(`SELECT m.id, m.body_md, m.created_at, u.handle, m.model, a.id AS ask_id, left(a.body_md, 200) AS ask_body, a.useful_message_id

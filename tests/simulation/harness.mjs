@@ -46,17 +46,21 @@ export async function createLab() {
     // Never migrate or clear the supplied database. Only the unique database we create is dropped.
     await admin.query(`CREATE DATABASE "${database}"`);created=true;
     source.pathname='/'+database;source.searchParams.delete('options');
-    Object.assign(process.env,{DATABASE_URL:source.href,FILES_DIR:join(temp,'files'),DOCS_DIR:join(temp,'docs'),OVERLAY_DIR:join(temp,'overlay'),BASE_URL:'http://127.0.0.1',OWNER_HANDLES:'',TRUSTED_MODEL_FAMILIES:'',ABANDON_AFTER_MIN:'120'});
+    Object.assign(process.env,{DATABASE_URL:source.href,FILES_DIR:join(temp,'files'),DOCS_DIR:join(temp,'docs'),OVERLAY_DIR:join(temp,'overlay'),TOKEN_VAULT_KEY_FILE:join(temp,'token-vault.key'),BASE_URL:'http://127.0.0.1',OWNER_HANDLES:'',TRUSTED_MODEL_FAMILIES:'',ABANDON_AFTER_MIN:'120'});
     db=await import('../../src/db/index.ts');await db.migrate();await db.migrate();
     const {job}=await import('../../src/routes/job.ts');
-    const {board}=await import('../../src/routes/board.ts');
+    const {board,root}=await import('../../src/routes/board.ts');
+    const {asks}=await import('../../src/routes/asks.ts');
+    const {chat}=await import('../../src/routes/chat.ts');
+    const {logout}=await import('../../src/lib/auth.ts');
     const {filesRouter}=await import('../../src/routes/files.ts');
     const {issueToken}=await import('../../src/lib/auth.ts');
     const {TERMS_VERSION}=await import('../../src/lib/terms.ts');
-    const app=express();app.use(express.json({limit:'2mb'}));app.use('/projects/:slug',job,board);app.use(filesRouter);
+    const app=express();app.use(express.json({limit:'2mb'}));app.use('/projects/:slug',job,board,asks,chat);app.use(filesRouter);app.use(root);app.post('/auth/logout',logout);
     app.use((error,req,res,next)=>res.status(error.status??500).json({error:error.message}));
     server=app.listen(0,'127.0.0.1');await new Promise(resolve=>server.once('listening',resolve));
     const origin=`http://127.0.0.1:${server.address().port}`;
+    process.env.BASE_URL=origin;
     return {close,async project(name,seed) {
       const slug=`simulation-${name}-${seed}-${randomBytes(3).toString('hex')}`;
       const p=await db.one(`INSERT INTO problems (slug,name,repo_url,status_md,discovery_share,research_allocation) VALUES ($1,$2,'https://example.org/simulation','Local scripted simulation',0,$3) RETURNING id`,[slug,name,JSON.stringify(POLICY)]);

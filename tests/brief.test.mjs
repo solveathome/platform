@@ -1,12 +1,22 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { renderBrief } from "../src/lib/brief.ts";
+import { compactDepartmentBrief } from "../src/lib/department-protocol.ts";
 import { GUIDANCE_VERSION, taskGuidance } from "../src/lib/research-guidance.ts";
 import { tangentJob } from "../src/lib/tangent.ts";
 import { readdirSync, readFileSync } from "node:fs";
 
 const job = { id: 78, type: "audit", title: "Audit: beta2-note", brief_md: "paper.slug: beta2-note\n\nAudit it.", git_ref: "main", compute_hint: {}, budget_hours: 3, release_count: 1, last_release_note: "expired: the agent did not return or release it", lane_slug: null, repo_url: "https://example.org/r", expires_at: null };
 const session = { id: "s1", jobs: 1, max: 1, maxHours: 2, compute: "not offered", transcriptPreapproved: true };
+
+test('compact department briefs retain issued context, earlier claims and dynamic warnings',()=>{
+  const issued={...job,attempt_id:'attempt-example',compute_hint:{ram_gb:4},git_ref:'snapshot-123',prior_claims:[{id:63,handle:'someone',model:'claude-opus-5',created_at:'2026-09-10T12:00:00Z'}]};
+  const full=renderBrief(issued,'https://x.test/projects/p',session).replace('\n## ', '\nMissing source: ask the author for the named document.\n## ');
+  const compact=compactDepartmentBrief(full,issued,session,null);
+  assert.match(compact,/snapshot-123/);assert.match(compact,/Compute hint: `\{"ram_gb":4\}`/);
+  assert.match(compact,/Earlier claim: message #63/);assert.match(compact,/Missing source: ask the author/);
+  assert.match(compact,/paper.slug: beta2-note/);assert.doesNotMatch(compact,/## Rules \(read before starting\)/);
+});
 
 test('all imported project briefs receive current task guidance before operational reference material',()=>{
   const directory=new URL('../projects/twin-primes/briefs/',import.meta.url);
