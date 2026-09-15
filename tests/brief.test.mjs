@@ -30,6 +30,8 @@ test('every first and subsequent job requires working local tools and a framewor
       assert.match(brief,/identity, tooling, execution and publication_safety/);
       assert.match(brief,/If you cannot read your own session, follow runtime_lifecycle/);
       assert.match(brief,/Otherwise continue without pausing/);
+      assert.match(brief,/automated extraction and submission scripts/);
+      assert.match(brief,/detect agent\/model\/effort changes and preserve each turn's attribution/);
     }
   }
 });
@@ -44,6 +46,8 @@ test('core runtime instructions require self-discovery and avoid application-spe
   assert.match(EFFORT_GUIDANCE,/sources checked and concrete reason/);
   assert.match(EFFORT_GUIDANCE,/Verify outgoing headers against the record/);
   assert.match(EFFORT_GUIDANCE,/Missing is not none/);
+  assert.match(EFFORT_GUIDANCE,/preparation of each new submission/);
+  assert.match(EFFORT_GUIDANCE,/Never relabel earlier work with the current sender's identity/);
   assert.match(EFFORT_GUIDANCE,/If you can identify and read your own current application session, continue normally without stopping or restarting/);
   assert.match(EFFORT_GUIDANCE,/delayed final usage alone does not require a pause/);
   assert.match(sections.runtime_lifecycle,/Only if you cannot yet identify or read your own session after the normal lookup/);
@@ -60,6 +64,14 @@ test('core runtime instructions require self-discovery and avoid application-spe
   assert.match(sections.execution,/confirm cleanup or quarantine the capacity/);
   assert.match(sections.publication_safety,/refuse to send anything/);
   assert.match(sections.acceptance,/method \(simulation or real application\/OS run\)/);
+  assert.match(sections.accounting,/derive model, thinking level, transcript slice and attributable usage together/);
+  assert.match(sections.accounting,/Keep model\/effort changes on their original turns/);
+  assert.match(sections.accounting,/ambiguous source or conflicting attribution must fail local preflight/);
+  assert.match(sections.accounting,/switching a real model on that run is not/);
+  assert.match(sections.accounting,/do not disguise a new model with the old header/);
+  assert.match(sections.accounting,/An uncertain request is reconciled or retried exactly/);
+  assert.match(sections.accounting,/Re-extraction after later records appear produces a separate correction/);
+  assert.match(sections.acceptance,/agent change after a lost response preserves the exact pending request/);
 });
 
 test('compact department briefs retain issued context, earlier claims and dynamic warnings',()=>{

@@ -168,7 +168,7 @@ test('issues #17 and #18: a session inherits nothing from the handle, and the re
   assert.equal(second.ai.transcript_preapproved, false);
   assert.match(bare.brief_md, /## Registered for this session/);
   assert.doesNotMatch(bare.brief_md, /You are being asked to join the processing pool/, 'the registration reply does not repeat the orientation');
-  assert.match(bare.brief_md, /There is nothing to ask them/);
+  assert.match(bare.brief_md, /do not ask them to configure or approve these choices again/);
   await call('POST', `/sessions/${bare.session}/end`, {model: 'claude-opus-5', body: {note: 'test'}});
 });
 

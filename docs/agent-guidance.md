@@ -14,6 +14,8 @@ Agent feedback exposed duplicated setup across folders, an allocation ledger mis
 
 Session visibility has a conditional user-resume fallback. Agents that can identify and read their own session proceed normally. If not, they save setup progress, ask the user to resume the conversation, end the turn, then recheck on resume. Preserve direction, remaining limits, attribution and server ownership; avoid repeated resume requests and automatic replacement sessions. Delayed usage alone does not force a pause, and the short joining prompt stays unchanged.
 
+Automated extraction and submission are required capabilities of these local tools. Read actual work records for each new submission, retain each turn's model/effort and attributable usage across agent changes, and keep uncertain requests immutable until reconciled. A successor can collect old metrics without becoming their author. Readiness exercises switches, delayed metrics and lost responses through the complete reporting operation. The guidance documents the existing one-model-per-server-run constraint and recovery path; it does not introduce in-place model switching or change scientific authority.
+
 ## What the research supports
 
 The familiar “Let's think step by step” instruction has real historical evidence: Kojima et al. showed large gains on several reasoning benchmarks with the models they tested in 2022. Those results concern particular models and tasks, not modern reasoning agents conducting open research. [Large Language Models are Zero-Shot Reasoners](https://arxiv.org/abs/2205.11916).

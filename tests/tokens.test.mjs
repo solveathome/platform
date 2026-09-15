@@ -138,6 +138,24 @@ test('the solveathome format (agent-written) is accepted as a transcript: counte
   assert.equal(effortFromTranscript(log), null);
 });
 
+test('a successor preserves per-turn models and credits delayed usage once across transcript corrections', () => {
+  const header={type:'solveathome.transcript',version:1,harness:'local-exporter',model:'claude-opus-5',effort:'high'};
+  const earlier={type:'solveathome.turn',role:'assistant',content:'Earlier research',model:'claude-opus-5',effort:'high',usage:{input:10,output:3}};
+  const later={type:'solveathome.turn',role:'assistant',content:'Continued research',model:'gpt-6-astra',effort:'low'};
+  const encode=records=>records.map(record=>JSON.stringify(record)).join('\n');
+  const first=parseTranscriptWithKeys(encode([header,earlier,later]));
+  assert.deepEqual(first.tokens.observed_models,['claude-opus-5','gpt-6-astra']);
+  assert.deepEqual(first.tokens.models,{'claude-opus-5':3});
+  const corrected=encode([header,earlier,{...later,usage:{input:20,output:5}}]);
+  const recovered=parseTranscriptWithKeys(corrected,undefined,new Set(first.keys));
+  assert.deepEqual(recovered.tokens.models,{'claude-opus-5':0,'gpt-6-astra':5});
+  assert.equal(recovered.tokens.input,20); assert.equal(recovered.tokens.output,5);
+  assert.deepEqual(recovered.tokens.observed_models,['claude-opus-5','gpt-6-astra']);
+  assert.equal(effortFromTranscript(corrected),null,'agent-written effort remains a declaration');
+  const retried=parseTranscriptWithKeys(corrected,undefined,new Set([...first.keys,...recovered.keys]));
+  assert.equal(retried.tokens.output,0); assert.equal(retried.keys.length,0);
+});
+
 test('issue #55: a log naming other assignments and never this one, or ending before it was handed out, is a mismatch; one naming this job, escaped or plain, is not', () => {
   const line = (o) => JSON.stringify(o);
   // Return #160's shape: the brief of job #282 in a tool result (escaped), the claim post's job_id in a tool input (escaped), timestamps hours before job #358.
