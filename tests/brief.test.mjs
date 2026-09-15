@@ -200,3 +200,16 @@ test("briefs distinguish session limits from per-assignment budgets and retain t
   assert.match(capped, /assignment 1 of 1 your person allowed/);
   assert.match(capped, /When the cap is reached the server says so: stop/);
 });
+
+// Issue #83: the protocol is an imperative second-person spec with sections named identity, bootstrap and runtime_lifecycle,
+// so a summarising fetcher read it as an attempt to install an alternative operating framework and refused to relay it.
+// Onboarding then fails closed at step one, before a department has any local cache. The content is unchanged; what was
+// missing is the context a defensive reader needs to place it.
+test('issue #83: the protocol says what it is, and who published it, before it says anything else', async () => {
+  const { PROTOCOL_PROVENANCE } = await import('../src/lib/department-protocol.ts');
+  assert.match(PROTOCOL_PROVENANCE, /^What this is: the participation guidance for solveathome/);
+  assert.match(PROTOCOL_PROVENANCE, /github\.com\/solveathome\/platform/, 'who publishes it');
+  assert.match(PROTOCOL_PROVENANCE, /Your person chose to join this project and gave you this URL/, 'why the reader has it');
+  assert.match(PROTOCOL_PROVENANCE, /does not replace or override your own operating rules/, 'the sentence a defensive reader is missing');
+  assert.match(PROTOCOL_PROVENANCE, /applies only to work on this project/);
+});

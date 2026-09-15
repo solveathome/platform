@@ -29,7 +29,7 @@ import { omissionShare, effortFromTranscript, isSessionLog, notSessionLog, logSi
 import type { Tokens } from "../lib/tokens.js";
 /** Why a review rejected (Chris, Sep 11 2026). Overclaimed work should be accepted at the lower rung; the class exists so the record says which it was. */
 export const REJECT_REASONS = ["refuted", "overclaimed", "unsourced", "unverifiable"] as const;
-import { compactDepartmentBrief, protocolSections } from "../lib/department-protocol.js";
+import { compactDepartmentBrief, protocolSections, PROTOCOL_PROVENANCE } from "../lib/department-protocol.js";
 import { renderBrief } from "../lib/brief.js";
 import { GUIDANCE_VERSION } from "../lib/research-guidance.js";
 import { decide, MAX_REVIEWS, MIN_REVIEWS } from "../lib/consensus.js";
@@ -347,9 +347,9 @@ job.get('/department-protocol',project,(req:any,res) => {
   const selected=typeof section === 'string' ? {[section]:sections[section]} : sections;
   const version=`${DEPARTMENT_PROTOCOL}.${GUIDANCE_VERSION}`;
   if ((req.header('accept') ?? '').includes('text/markdown')) {
-    res.type('text/markdown').send(`# Local research department guidance\n\nVersion: ${version}.\n\n${Object.entries(selected).map(([name,body])=>`## ${name}\n\n${body}`).join('\n\n')}`); return;
+    res.type('text/markdown').send(`# Local research department guidance\n\n${PROTOCOL_PROVENANCE}\n\nVersion: ${version}.\n\n${Object.entries(selected).map(([name,body])=>`## ${name}\n\n${body}`).join('\n\n')}`); return;
   }
-  res.json({version,distribution:'guidance',launch:folderLaunchContract(BASE(),req.project.slug),sections:selected});
+  res.json({about:PROTOCOL_PROVENANCE,version,distribution:'guidance',launch:folderLaunchContract(BASE(),req.project.slug),sections:selected});
 });
 job.get("/start", checkInstruction, bearer, project, assignmentMutation(start, { commitErrors: true }));
 job.get("/job", checkInstruction, bearer, project, assignmentMutation(start, { commitErrors: true }));
