@@ -16,8 +16,8 @@ const $ = (s) => document.querySelector(s);
 const n0 = (v) => Math.round(Number(v) || 0).toLocaleString("en");
 const n2 = (v) => Number(v || 0).toLocaleString("en", { maximumFractionDigits: 2 });
 const compact = (v) => { v = Number(v) || 0; return v >= 1e9 ? `${(v / 1e9).toFixed(1)} B` : v >= 1e6 ? `${(v / 1e6).toFixed(1)} M` : v >= 1e3 ? `${Math.round(v / 1e3)} k` : String(v); };
-const dayLabel = (d, withMonth) => { const t = new Date(d); return withMonth ? t.toLocaleDateString("en-GB", { day: "numeric", month: "short", timeZone: "UTC" }) : String(t.getUTCDate()); };
-const dateShort = (d) => new Date(d).toLocaleDateString("en-GB", { day: "numeric", month: "short", timeZone: "UTC" });
+const dayLabel = (d, withMonth) => { const t = new Date(d); return withMonth ? dateShort(t) : String(t.getUTCDate()); };
+const dateShort = (d) => new Date(d).toLocaleDateString("en-GB", { day: "numeric", month: "short", timeZone: "UTC" }).replace("Sept", "Sep");
 const dateLong = (d) => new Date(d).toLocaleDateString("en-GB", { day: "numeric", month: "long", year: "numeric", timeZone: "UTC" });
 const MILESTONES = [100, 500, 1000, 5000, 10000, 50000, 100000];
 const LADDER = ["proven", "verified", "measured", "heuristic", "conjectured", "refuted"];
@@ -34,7 +34,7 @@ SA.json(location.pathname).then((d) => {
   $("#handle").innerHTML = `@${h}${c.website ? ` · <a href="${esc(c.website)}" rel="me">${esc(c.website.replace(/^https?:\/\//, ""))}</a>` : ""} · contributor since ${dateLong(c.created_at)}`;
   const roles = [];
   const trustedIn = (d.roles ?? []).filter((r) => r.role === "trusted" || r.role === "owner");
-  if (trustedIn.length) roles.push(`<li class="trusted">${trustedIn.some((r) => r.role === "owner") ? "Owner" : "Trusted reviewer"}${trustedIn.length === 1 && (d.researcher_of ?? []).length ? "" : ` of ${esc(trustedIn.map((r) => r.name).join(", "))}`}, review weight ${n2(c.score)}</li>`);
+  if (trustedIn.length) { const names = trustedIn.map((r) => r.name).filter(Boolean); const researcherOf = new Set((d.researcher_of ?? []).map((p) => p.slug)); const named = names.length && !trustedIn.every((r) => researcherOf.has(r.slug)); roles.push(`<li class="trusted">${trustedIn.some((r) => r.role === "owner") ? "Owner" : "Trusted reviewer"}${named ? ` of ${esc(names.join(", "))}` : ""}, review weight ${n2(c.score)}</li>`); }
   else if (Number(c.score) !== 1) roles.push(`<li>Review weight ${n2(c.score)}</li>`);
   (d.researcher_of ?? []).forEach((p) => roles.push(`<li>Researcher of <a href="/projects/${esc(p.slug)}">${esc(p.name)}</a></li>`));
   (d.provenance ?? []).forEach((p) => roles.push(`<li>Brought the prior work: ${n0(p.claims)} claims, ${n0(p.commits)} commits</li>`));
@@ -122,7 +122,8 @@ SA.json(location.pathname).then((d) => {
     const w = d.work ?? {};
     $("#pending").textContent = [w.awaiting_review ? `${n0(w.awaiting_review)} results await review.` : "", w.recorded ? `${n0(w.recorded)} explore returns are recorded without a review request and can be elevated by anyone with a token.` : "", w.usage_missing ? `${n0(w.usage_missing)} transcripts have no usage attached; the author can resubmit them.` : ""].filter(Boolean).join(" ");
   }
-  const days = d.days ?? [];
+  const rawDays = d.days ?? [], days = [];
+  if (rawDays.length) { const byKey = new Map(rawDays.map((r) => [r.day, r])); const t = new Date(rawDays[0].day), end = new Date(rawDays[rawDays.length - 1].day); for (let i = 0; i < 400 && t <= end; i++, t.setUTCDate(t.getUTCDate() + 1)) { const key = t.toISOString().slice(0, 10); days.push(byKey.get(key) ?? { day: key, submitted: 0, accepted: 0 }); } }
   if (days.length) {
     const max = Math.max(...days.map((r) => r.submitted), 1);
     $("#days").innerHTML = days.map((r) => `<div class="day"><div class="cnt">${n0(r.submitted)}</div><div class="bar" style="height:${r.submitted ? Math.max(2, (r.submitted / max) * 100).toFixed(0) + "%" : "1px"}"><i style="height:${r.submitted ? ((r.accepted / r.submitted) * 100).toFixed(0) : 0}%"></i></div></div>`).join("");
@@ -130,8 +131,7 @@ SA.json(location.pathname).then((d) => {
     $("#days").style.gridTemplateColumns = $("#daylbl").style.gridTemplateColumns = `repeat(${days.length}, minmax(0, 1fr))`;
     const w = d.work ?? {}, at = d.agent_time ?? {};
     $("#facts").innerHTML = [[w.submitted, "results submitted"], [at.accepted, `accepted, ${n0(at.rejected)} rejected`], [rg.total, `reviews given, ${n0(rg.accept)} accept, ${n0(rg.reject)} reject`], [rg.disagreed ?? 0, "reviews that disagreed with the outcome"]].map(([v, l]) => `<li><b>${n0(v)}</b><span>${esc(l)}</span></li>`).join("");
-    const models = {}; (d.recent ?? []).forEach((r) => { const m = models[r.model] ??= { n: 0, a: 0 }; m.n++; if (r.status === "accepted") m.a++; });
-    $("#models").innerHTML = Object.entries(models).sort((a, b) => b[1].n - a[1].n).map(([m, v]) => `<li><b>${esc(m)}</b> ${n0(v.n)}${v.a ? `, ${n0(v.a)} accepted` : ""}</li>`).join("");
+    $("#models").innerHTML = (d.models ?? []).map((m) => `<li><b>${esc(m.model ?? "unknown")}</b> ${n0(m.submitted)}${m.accepted ? `, ${n0(m.accepted)} accepted` : ""}</li>`).join("");
   }
 
   // Agents by computer.
@@ -145,7 +145,7 @@ SA.json(location.pathname).then((d) => {
 
   // Recent results with titles.
   const rec = d.recent ?? [];
-  const row = (r) => `<tr><td class="id"><a href="${link(r)}">#${esc(r.id)}</a></td><td><a href="${link(r)}">${esc(r.title ?? `${r.type} #${r.id}`)}</a></td><td>${esc(r.type)}</td><td><span class="pill${r.status === "accepted" ? " acc" : r.status === "rejected" ? " rej" : ""}">${esc(STATUS[r.status] ?? r.status)}${r.provisional ? ", provisional" : ""}</span></td><td class="${r.final_rung ? "" : "muted"}">${esc(r.final_rung ?? "")}</td><td class="muted">${esc(r.model ?? "")}</td><td class="date">${esc(dateShort(r.created_at))}</td></tr>`;
+  const row = (r) => `<tr><td class="id"><a href="${link(r)}">#${esc(r.id)}</a></td><td><a href="${link(r)}">${esc(r.title ?? `${r.type} #${r.id}`)}</a></td><td>${esc(r.type)}</td><td><span class="pill${r.status === "accepted" ? " acc" : r.status === "rejected" ? " rej" : ""}">${esc(STATUS[r.status] ?? r.status)}${r.provisional ? ", provisional" : ""}</span></td><td class="${r.final_rung && r.final_rung !== "recorded" ? "" : "muted"}">${esc(r.final_rung && r.final_rung !== "recorded" ? r.final_rung : "")}</td><td class="muted">${esc(r.model ?? "")}</td><td class="date">${esc(dateShort(r.created_at))}</td></tr>`;
   $("#recent tbody").innerHTML = rec.slice(0, 10).map(row).join("") || `<tr><td colspan="7" class="muted">nothing yet</td></tr>`;
   $("#rs-note").textContent = rec.length > 10 ? `10 of the latest ${n0(rec.length)}` : "";
   if (rec.length > 10) { $("#rs-more").hidden = false; $("#rs-more summary").textContent = `Show the ${n0(rec.length - 10)} before that`; $("#recent-all tbody").innerHTML = rec.slice(10).map(row).join(""); }

@@ -198,7 +198,10 @@ root.get("/@:handle", async (req, res) => {
     FROM claims c JOIN problems p ON p.id = c.problem_id WHERE lower(c.origin_handle) = lower($1) GROUP BY p.slug`, [u.handle]);
   const totals = await q(`SELECT kind, sum(points) AS points, count(*)::int AS n FROM credits WHERE user_id = $1 GROUP BY kind`, [u.id]);
   const researcher_of = await q(`SELECT slug, name, researcher_role FROM problems WHERE researcher_user_id = $1`, [u.id]);
-  const roles = await q(`SELECT p.slug, p.name, pr.role FROM project_roles pr JOIN problems p ON p.id = pr.problem_id WHERE pr.user_id = $1 AND pr.revoked_at IS NULL ORDER BY pr.role, p.slug`, [u.id]);
+  // Roles as the trust page defines them: project_roles rows, plus the implicit owners (a project's researcher and OWNER_HANDLES).
+  const roleRows = await q(`SELECT p.slug, p.name, pr.role FROM project_roles pr JOIN problems p ON p.id = pr.problem_id WHERE pr.user_id = $1 AND pr.revoked_at IS NULL ORDER BY pr.role, p.slug`, [u.id]);
+  const roles = [...roleRows, ...researcher_of.filter((r: any) => !roleRows.some((x: any) => x.slug === r.slug && x.role === "owner")).map((r: any) => ({ slug: r.slug, name: r.name, role: "owner" }))];
+  if (OWNER_SET.has(String(u.handle).toLowerCase()) && !roles.some((r: any) => r.role === "owner")) roles.push({ slug: null, name: null, role: "owner" });
   const departments=await q(`SELECT d.id AS department_id,d.created_at,
     coalesce(json_agg(json_build_object('run_id',s.run_id,'project',p.slug,'model',s.model,'ended_at',s.ended_at,'last_seen',s.last_seen)) FILTER(WHERE s.id IS NOT NULL),'[]') AS runs
     FROM departments d LEFT JOIN sessions s ON s.department_id=d.id LEFT JOIN problems p ON p.id=s.problem_id WHERE d.user_id=$1 GROUP BY d.id ORDER BY d.created_at`,[u.id]);
@@ -225,6 +228,7 @@ root.get("/@:handle", async (req, res) => {
       count(*) FILTER (WHERE agreed_with_outcome = false)::int AS disagreed, count(*) FILTER (WHERE agreed_with_outcome)::int AS agreed,
       count(*) FILTER (WHERE coalesce(verification, 'read') = 'rerun')::int AS rerun, count(*) FILTER (WHERE verification = 'spot')::int AS spot, count(*) FILTER (WHERE coalesce(verification, 'read') = 'read')::int AS read
     FROM reviews WHERE user_id = $1`, [u.id]);
+  const models = await q(`SELECT model, count(*)::int AS submitted, count(*) FILTER (WHERE status = 'accepted')::int AS accepted FROM returns WHERE user_id = $1 GROUP BY model ORDER BY submitted DESC, model`, [u.id]);
   const days = await q(`SELECT to_char(created_at::date, 'YYYY-MM-DD') AS day, count(*)::int AS submitted, count(*) FILTER (WHERE status = 'accepted')::int AS accepted
     FROM returns WHERE user_id = $1 GROUP BY created_at::date ORDER BY created_at::date`, [u.id]);
   const titleOf = (r: any) => r.job_title ?? String(r.report_md ?? "").split("\n").find((l: string) => l.trim())?.replace(/^#+\s*/, "").trim() ?? `${r.type} #${r.id}`;
@@ -255,7 +259,7 @@ root.get("/@:handle", async (req, res) => {
              credit: { total: totals.reduce((s: number, t: any) => s + Number(t.points), 0), by_kind: Object.fromEntries(totals.map((t: any) => [t.kind, Number(t.points)])), count_by_kind: Object.fromEntries(totals.map((t: any) => [t.kind, Number(t.n)])), by_day, ledger },
              standing: { rank: standing?.rank ?? null, contributors: standing?.contributors ?? 0, points: Number(standing?.points ?? 0) },
              rungs: { accepted: Object.fromEntries(rungRows.map((r: any) => [r.rung, r.n])), contributors_reached: Object.fromEntries(reachedRows.map((r: any) => [r.rung, r.n])) },
-             kinds, reviews_given, days, highlights: highlights.length ? highlights : strongest, highlights_kind: highlights.length ? "breakthrough" : "strongest",
+             kinds, reviews_given, days, models, highlights: highlights.length ? highlights : strongest, highlights_kind: highlights.length ? "breakthrough" : "strongest",
              integrated_paths: integratedPaths.map((r: any) => r.path), cited: { count: cited?.n ?? 0, most: cited?.most ?? null },
              agent_time: { accepted: u.accepted, rejected: u.rejected, review_agree: u.review_agree, review_disagree: u.review_disagree },
              compute: { cpu_hours: u.cpu_hours }, research_input: { directions_accepted: u.directions_accepted, lanes }, work, released, recent: recentOut });
