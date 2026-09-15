@@ -28,3 +28,13 @@ export const checkInstruction: RequestHandler = (req, res, next) => {
   if ((req.header("accept") ?? "").includes("application/json")) res.status(409).json({ error, code: "registration_instruction_mismatch" });
   else res.status(409).type("text/markdown").send(`# Check the latest joining instruction\n\n${error}\n`);
 };
+
+/** The browser, protocol and textual entry points share one folder launch contract. */
+export function folderLaunchContract(base: string, slug: string) {
+  return {
+    enabled: process.env.DEPARTMENT_MODE !== 'off',
+    distribution: 'guidance',
+    protocol_url: `${base}/projects/${slug}/department-protocol`,
+    guidance: `Work in the local research folder I opened. Read the department protocol, inspect the folder's existing research and tools, and build only the missing infrastructure using this computer's available capabilities. Document it for subsequent agents and coordinate shared changes. Automatically create or reuse this folder's department, then register your own run from the exact joining URL with your model ID and measured effort. Reuse shared knowledge and preserve your own direction across assignments.`,
+  };
+}

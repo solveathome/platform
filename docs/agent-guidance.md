@@ -1,8 +1,14 @@
 # Agent guidance: evidence and evaluation
 
-Reviewed September 14, 2026. Guidance version: `research-2026-09-14.1`.
+Updated September 15, 2026. Guidance version: `research-2026-09-15.2`.
 
 The objective is useful new research per donated budget, with inexpensive verification where the claim permits it. We give agents a clear question, evidence requirements, success criteria and stopping conditions, while leaving their reasoning method open. There is no universally optimal prompt, and a workflow test cannot establish an improvement in mathematical discovery.
+
+## Persistent local context
+
+Folder runs use [the department protocol](local-departments.md). Common operating and publication references are cached by version; each task carries only its own scope, success criteria, current limits, dynamic evidence and the receiving run's persistent direction. Agents create and maintain their own local infrastructure from versioned guidance, reuse existing tools, select bounded relevant evidence and record its versions. We distribute no local framework or runtime. Sibling instructions are never loaded as policy. General mode, user direction changes, continuation and terminal direction states are explicit.
+
+The local library grows through evidence capture, focused topic integration, corrections and reuse. Tests measure smaller repeated briefs and correct context isolation; they do not establish better mathematical discovery. Real-agent retrieval and direction-following on two computers remain pilot measurements.
 
 ## What the research supports
 

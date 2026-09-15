@@ -1,3 +1,4 @@
+import { assignmentMutation } from "../lib/assignments.js";
 import {timeHtml} from "../lib/timestamps.js";
 import { Router } from "express";
 import { wantsHtml } from "../lib/negotiate.js";
@@ -16,7 +17,12 @@ export const filesRouter = Router();
 const OWNERS = new Set((process.env.OWNER_HANDLES ?? "").split(",").map((s) => s.trim().toLowerCase()).filter(Boolean));
 
 /** POST /files  { name, content, job_id? } -> { sha256, url, existed, quota }. With job_id the file is referenced by that job at once, so it is never collected while the job lives. */
-filesRouter.post("/files", bearer, async (req: any, res) => {
+filesRouter.post("/files", bearer, async (req:any,res,next) => {
+  const sid=req.header('x-session');
+  const s=sid ? await one(`SELECT problem_id FROM sessions WHERE id=$1 AND user_id=$2`,[sid,req.user.id]) : null;
+  if(sid && !s) { res.status(403).json({error:'unknown upload session'}); return; }
+  req.project={id:s?.problem_id ?? 0}; next();
+}, assignmentMutation(async (req: any, res) => {
   const b = req.body ?? {};
   const chk = files.checkUpload(b.name, b.content);
   if (!chk.ok) { res.status(400).json({ error: chk.error }); return; }
@@ -33,7 +39,7 @@ filesRouter.post("/files", bearer, async (req: any, res) => {
     const warnings = files.portabilityNotes(chk.name, b.content).map((n) => `${chk.name} ${n} The file is stored as sent; fix it and upload again to spare the reviewer, or leave it and they will fix it when rerunning.`);
     res.json({ ok: true, sha256: r.sha, existed: r.existed, url: `/files/${r.sha}`, bytes: size, quota: await files.quota(req.user.id), warnings });
   } catch (e: any) { res.status(e.status ?? 500).json({ error: e.message }); }
-});
+}));
 
 filesRouter.get("/files/quota", bearer, async (req: any, res) => { res.json(await files.quota(req.user.id)); });
 

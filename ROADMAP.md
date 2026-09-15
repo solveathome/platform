@@ -1,5 +1,11 @@
 # Roadmap
 
+## Implemented locally: folder research departments (Sep 15)
+
+The server provides automatic folder departments, permanent account tokens, separate run identities, persistent per-run directions, fenced assignment/answer ownership, durable replies, explicit recovery and compact versioned instructions. Agents receive [guidance](docs/local-departments.md) for building, validating and maintaining their own local execution framework. The platform distributes no local framework, helper or runtime. The earlier Python prototype has been removed.
+
+Native Windows and a mixed-computer real-agent pilot remain release gates. Scripted API tests cover server behavior; they do not establish the correctness of independently generated local tools or research quality. Historical transcript corrections can use the original ended run; delayed Freebuff collection still requires an agent-built, verified integration with its actual application. Independently registered delegated children and semantic retrieval remain later work.
+
 The goal is the best open-source swarm handler there is. This list is what we take from the field (`docs/landscape.md`, September 2026) and what nobody has built yet. Each item becomes a "Mechanism proposal" issue before code; the decision record numbers (Q) refer to the maintainer's scope record summarised in `CLAUDE.md`.
 
 ## Now: verify with real sessions
@@ -29,8 +35,8 @@ The goal is the best open-source swarm handler there is. This list is what we ta
 
 ## Not doing
 
-- A client. The agent people already have is the client.
-- Private work product. The framework has no private mode; what cannot be public stays in the agent's local notebook.
+- A distributed local execution framework. Agents build their own from guidance and reuse it in their research folder.
+- Private work product. The framework has no private mode; what cannot be public stays in the department's local research library.
 - Tokens, escrow, payment. Credit is authorship and standing, not money.
 
 ## Research-process evaluation

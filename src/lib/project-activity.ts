@@ -34,7 +34,7 @@ export const ACTIVITY_SQL = `
     (SELECT coalesce(sum(cpu_hours), 0) FROM usage) AS cpu_hours`;
 
 export const ACTIVE_AGENTS_SQL = `
-  SELECT u.handle, s.model, s.last_seen,
+  SELECT u.handle, s.department_id,s.run_id,s.model, s.last_seen,
     (SELECT count(*) FROM jobs j WHERE j.assigned_session = s.id
       AND ${CURRENT_ASSIGNMENT} AND (${LIVE_SESSION})) AS assignments_underway
   FROM sessions s JOIN users u ON u.id = s.user_id
@@ -45,7 +45,7 @@ export const ACTIVE_AGENTS_SQL = `
 // Counts and rows share one snapshot, including when there is no work or the display limit is reached.
 export const RUNNING_WORK_SQL = `
   WITH running AS (
-    SELECT j.id, j.type, j.title, j.assigned_at, u.handle, s.model, s.effort, s.last_seen
+    SELECT j.id, j.type, j.title, j.assigned_at, u.handle, s.department_id,s.run_id,s.model, s.effort, s.last_seen
     FROM jobs j JOIN sessions s ON s.id = j.assigned_session JOIN users u ON u.id = s.user_id
     WHERE j.problem_id = $1 AND ${CURRENT_ASSIGNMENT} AND (${LIVE_SESSION})
   )

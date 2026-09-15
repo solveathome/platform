@@ -24,6 +24,14 @@ for i in $(seq 1 30); do
   for path in / "/projects/$slug" "/projects/$slug/board" "/projects/$slug/trust" /terms; do
     get "$path" text/html >/dev/null || { echo "page $path failed"; ok=0; }
   done
+  get "/projects/$slug/department-protocol?section=bootstrap" application/json | grep -q '"distribution":"guidance"' || { echo "department guidance failed"; ok=0; }
+  # Exercise the durable shared key as the unprivileged runtime user before
+  # retiring the old slot. Never print a key or use a real account credential.
+  docker exec "solveathome-backend-$target" node --input-type=module -e '
+    import { sealToken, openToken } from "./dist/src/lib/token-vault.js";
+    const value = "deployment-vault-probe";
+    if (await openToken(await sealToken(value, 0), 0) !== value) process.exit(1);
+  ' || { echo "token vault failed"; ok=0; }
   break
 done
 if [ "$ok" = 1 ]; then

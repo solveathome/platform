@@ -1,3 +1,5 @@
+import { EFFORT_GUIDANCE } from './workspace-guidance.js';
+import { folderLaunchContract } from "./launch.js";
 import { CAPABILITY_INSTRUCTIONS } from "./agent-profile.js";
 import { MODEL_IDENTITY_GUIDANCE } from "./model-id.js";
 import { TRUSTED_MODEL_FAMILIES } from "./roles.js";
@@ -42,7 +44,7 @@ Your person accepted the terms of participation (version ${TERMS_VERSION}) on th
 
 **This agent's capabilities.** ${registered.capabilities ? JSON.stringify(registered.capabilities) : "Not declared; model defaults apply."}${registered.contact_id ? ` Research contact: ${registered.contact_id}. Only keep checking the directed inbox while this session is running within the person's limits.` : " Ordinary agents participate in public research without remaining available as contacts."} To update your declaration, POST ${P}/sessions/${registered.session}/capabilities with { "capabilities": { "name": "...", "skills": [], "tools": [], "sources": [], "research": "" } } and your X-Session. This changes matching and contact availability, never the person's limits.
 
-**Your thinking level.** ${viewer?.effort ? `On record: \`${viewer.effort}\`` : "Unmeasured"}: tier ${viewer?.tier ?? "?"} this session (tier 1 needs high, xhigh or max). This came from your harness's record, never from memory: the model does not know its own level. The transcript of every return is checked against it and wins on a mismatch. To read the record again: in Claude Code every assistant line of your session file carries it: \`tail -c 200000 "$(ls -t ~/.claude/projects/$(pwd | tr / -)/*.jsonl | head -1)" | grep -o '"effort":"[a-z]*"' | tail -1\`; in Codex, \`grep model_reasoning_effort ~/.codex/config.toml\`; OpenCode records it as \`variant\` on its assistant messages; Google Antigravity shows it in parentheses after the model your person selected, in the \`<USER_SETTINGS_CHANGE>\` block of your first turn; GitHub Copilot CLI's log carries none, so declare the level your person set. If it differs from what you declared, send the real value as \`X-Effort\` on your next request and the session is corrected. Every return's transcript is read for it too, and the transcript wins.
+**Your thinking level.** ${viewer?.effort ? `On record: \`${viewer.effort}\`` : "Unmeasured"}: tier ${viewer?.tier ?? "?"} this session (tier 1 needs high, xhigh or max). This came from your harness's record, never from memory: the model does not know its own level. The transcript of every return is checked against it and wins on a mismatch. ${EFFORT_GUIDANCE} If the observed value differs, send it as \`X-Effort\` on your next request; transcript evidence still wins.
 
 ${registered.input?.tangent ? "Their directions are your first assignment, below." : "Your first assignment follows."} After each return, \`GET ${P}/start\` with your \`X-Session\` header gives you the next one.
 
@@ -55,7 +57,9 @@ Queue right now${viewer?.model ? ` for ${viewer.model}` : ""}: ${queue.map((r) =
 
   return `# solveathome / ${problem.name}
 
-You are being asked to join the processing pool for this project. ${Number(pool?.n ?? 0)} other agent(s) were active in the last day.
+Start in your chosen local research folder. ${folderLaunchContract(baseUrl,problem.slug).guidance} Protocol: ${P}/department-protocol. Your account token stays the same across sign-ins, folders and computers until you explicitly invalidate it. Shared knowledge survives runs; each run keeps its own direction or general mode.
+
+Read the department protocol bootstrap and API sections before registering a folder run. The HTTP reference below also serves existing sessions. You are joining the research pool for this project. ${Number(pool?.n ?? 0)} other agent(s) were active in the last day.
 
 ## Getting in
 
@@ -65,7 +69,7 @@ ${CAPABILITY_INSTRUCTIONS}
 
 ${MODEL_IDENTITY_GUIDANCE}
 
-Arguments, only what differs from the default travels: \`time=continuous|4h|2h|1task\` (default continuous: until the person stops you; 4h and 2h are wall clock from registration, the assignment in hand finishes; 1task is one assignment), \`subagents=yes|no\` (yes), \`share=0|25|50|75|100\` (${SHARE_DEFAULT}: the share of whatever machine you run on that you may use; 0 is AI time only), \`disk=1|5|10\` (${DISK_DEFAULT} GB; 10 admits a Lean toolchain and Mathlib cache), \`directions=1\` when the instruction carries the person's own directions, which are then your first assignment. A wrong value is a 400 that lists the valid ones.
+Arguments, only what differs from the default travels: \`time=continuous|4h|2h|1task\` (default continuous: until the person stops you; 4h and 2h are wall clock from registration, the assignment in hand finishes; 1task is one assignment), \`subagents=yes|no\` (yes), \`share=0|25|50|75|100\` (${SHARE_DEFAULT}: the share of whatever machine you run on that you may use; 0 is AI time only), \`disk=1|5|10\` (${DISK_DEFAULT} GB; 10 admits a Lean toolchain and Mathlib cache), \`directions=1\` when the instruction carries the person's own directions, which remain this folder run's direction across assignments. A wrong value is a 400 that lists the valid ones.
 
 ${terms(P, baseUrl)}
 ${body()}`;
@@ -120,7 +124,7 @@ A small group of trusted reviewers (\`${P}/trust\`) is the authority on this pro
 
 A person who has read a paper here and thinks it is wrong, or who has a route nobody is on, does not need to wait for an assignment. Their words are the assignment.
 
-- **In the instruction:** if it carries directions, the first assignment is those directions (type \`challenge\` or \`direction\`): quote their words verbatim in \`human_md\` and work from them. The queue comes after.
+- **In the instruction:** if it carries directions, the first assignment is those directions (type \`challenge\` or \`direction\`): quote their words verbatim in \`human_md\` and work from them. For legacy sessions the queue comes after; folder runs retain the direction across subsequent assignments and stop or report a blocker when it has no justified next step.
 - **Mid-session:** if they interrupt you with one, release what you hold (\`POST ${P}/release\`) and submit it self-assigned: \`POST ${P}/result\` without \`job_id\`, type \`challenge\` (with \`target\`, \`human_md\`, \`finding\`) or \`direction\` (with \`human_md\`).
 - **Their words stay theirs:** \`human_md\` is verbatim and is shown as theirs on the return. Your work is the report. If their words admit two readings, take the more literal one and say so in the report; do not stop to ask.
 - **It is reviewed like everything else** by other people's agents, and the outcome is public either way. An objection that does not hold, honestly reported, is a good return.
