@@ -38,7 +38,7 @@ export type SchedulingAgent = {
 };
 
 /** Shared predicates: the backlog and selection must count exactly the same eligible work. */
-function eligibility(a: SchedulingAgent, omitCompute = false) {
+function eligibility(a: SchedulingAgent, omitCompute = false, sameKindOnly = false) {
   const values: any[] = [];
   const p = (v: any) => { values.push(v); return `$${values.length}`; };
   const pid = p(a.problemId), tier = p(a.tier), sid = p(a.sessionId), uid = p(a.uid), model = p(a.model);
@@ -57,7 +57,7 @@ function eligibility(a: SchedulingAgent, omitCompute = false) {
     `(pr.id IS NULL OR ${p(a.trusted)}::boolean)`,
     `NOT EXISTS (SELECT 1 FROM reviews rv WHERE rv.return_id = j.parent_return_id AND rv.user_id = ${uid} AND NOT rv.needs_reassessment)`,
     `NOT EXISTS (SELECT 1 FROM jobs j2 WHERE j2.parent_return_id = j.parent_return_id AND j2.id <> j.id AND j2.assigned_to = ${uid} AND j2.status = 'assigned')`,
-    `(pr.id IS NULL OR pr.model IS DISTINCT FROM ${model}::text)`,
+    sameKindOnly ? `(pr.id IS NOT NULL AND pr.model IS NOT DISTINCT FROM ${model}::text)` : `(pr.id IS NULL OR pr.model IS DISTINCT FROM ${model}::text)`,
     `(pr.id IS NULL OR j.min_tier >= 99 OR ${tier} <= coalesce(amt.tier, 99))`,
   ];
   clauses.push(a.directionId
@@ -78,7 +78,12 @@ export async function backlogFor(a: SchedulingAgent) {
   const e = eligibility(a);
   const row = await one(`SELECT count(*) FILTER (WHERE j.type IN ('review','audit')) AS reviews,
     count(*) FILTER (WHERE j.type NOT IN ('review','audit')) AS research ${e.joins} WHERE ${e.where}`, e.values);
-  return { reviews: Number(row?.reviews ?? 0), research: Number(row?.research ?? 0) };
+  // Reviews this agent cannot take *only* because a model never reviews its own kind (platform issue #82). Without it the
+  // scheduler records eligible_backlog.reviews = 0 while the brief prints the count waiting, and the two describe one queue:
+  // "no review debt" and "review debt nobody here can serve" are not the same fact, and only the second one grows.
+  const k = eligibility(a, false, true);
+  const blocked = await one(`SELECT count(*) FILTER (WHERE j.type IN ('review','audit')) AS reviews ${k.joins} WHERE ${k.where}`, k.values);
+  return { reviews: Number(row?.reviews ?? 0), research: Number(row?.research ?? 0), blocked_reviews: Number(blocked?.reviews ?? 0) };
 }
 
 const DEFAULT_SKILLS = `CASE j.type WHEN 'formalize' THEN ARRAY['lean','formalize'] WHEN 'measure' THEN ARRAY['python','computation'] WHEN 'source' THEN ARRAY['literature-search'] WHEN 'break' THEN ARRAY['proof-analysis','counterexamples'] WHEN 'review' THEN ARRAY['verification','proof-analysis'] WHEN 'explore' THEN ARRAY['proof-analysis','research'] ELSE ARRAY[]::text[] END`;

@@ -239,7 +239,7 @@ ${ENDED_LAUNCH_GUIDANCE}
     agent.jobId=Number(recovery.job_id);
   }
   const tangentFirst = !session.department_id && Number(session.jobs) === 0 && settings.input?.tangent ? await synthesizeTangent(req, session, settings.input.tangent as Tangent) : null;
-  const need = tier === 1 ? await backlogFor(agent) : { reviews: 0, research: 0 };
+  const need = tier === 1 ? await backlogFor(agent) : { reviews: 0, research: 0, blocked_reviews: 0 };
   const runOfReviews = Math.min(4, Math.max(1, Math.ceil(need.reviews / Math.max(1, need.research))));
   const preferResearch = tier === 1 && agent.reviewStreak >= runOfReviews;
   const share = discoveryShare(req.project.slug, req.project.discovery_share);
@@ -277,7 +277,8 @@ ${ENDED_LAUNCH_GUIDANCE}
     ?? await synthesizeExplore(req, session, lane, maxHours, null, true);
   if (!row) row = await synthesizeExplore(req, session, lane, maxHours, await computeBlocked(agent));
   const reason = { policy: session.direction_id ? "agent direction" : tangentFirst ? "person's tangent" : portfolio ? "research portfolio" : reserveDiscovery ? "reserved tier-1 discovery" : "eligible work by need and capability",
-    tier, guidance_version: GUIDANCE_VERSION, discovery_share: share, discovery_allocation: used, eligible_backlog: need, prefer_research: preferResearch,
+    tier, guidance_version: GUIDANCE_VERSION, discovery_share: share, discovery_allocation: used, eligible_backlog: { reviews: need.reviews, research: need.research }, prefer_research: preferResearch,
+    ...(need.blocked_reviews ? { blocked_backlog: { reviews: need.blocked_reviews, reason: "a model never reviews its own kind; these wait for an agent on another model" } } : {}),
     research_allocation: portfolio, research_hours: portfolioUsed, research_bucket: researchBucket(row),
     skill_matches: Number(row.skill_matches ?? 0), purpose: row.purpose ?? 'work' };
   row = await claimAssignment(row, session, uid, tier, reason, !tangentFirst && !session.direction_id);
