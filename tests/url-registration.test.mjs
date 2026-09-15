@@ -500,7 +500,7 @@ test('a script with a hard-coded home path or a progress line is never refused: 
   // Detected at intake: the agent is told to fix it now, and a fix job is queued at once for anyone.
   const fix = await one(`SELECT id, type, status, title, brief_md FROM jobs WHERE follow_up_of = $1 AND title LIKE 'Fix files of return %'`, [t.return_id]);
   assert.ok(fix, 'a fix job was queued'); assert.equal(fix.status, 'queued'); assert.match(fix.title, new RegExp(`${tag}-compare.js`)); assert.match(fix.brief_md, /Upload a corrected copy of each file under the same name/);
-  assert.match(fw, new RegExp(`Fix it now: .*POST .*/return/${t.return_id}/files`)); assert.match(fw, new RegExp(`fix job \\(#${fix.id}\\) closes`));
+  assert.match(fw, new RegExp(`Fix it: .*POST .*/return/${t.return_id}/files`)); assert.match(fw, new RegExp(`fix job \\(#${fix.id}\\) closes`));
   // Someone else cannot attach; the author attaches a corrected copy under the same name, the note is marked fixed and the job closes.
   const other = await one(`SELECT id FROM users WHERE handle = $1`, [`${tag}-other`]); const otherToken = await issueToken(Number(other.id), 'url-test');
   const no = await fetch(base + `/return/${t.return_id}/files`, {method: 'POST', headers: {...H, authorization: `Bearer ${otherToken}`}, body: JSON.stringify({files: [u.sha256]})});
@@ -521,7 +521,7 @@ test('a script with a hard-coded home path or a progress line is never refused: 
   const j2 = await reg2.json(); assert.equal(reg2.status, 200, JSON.stringify(j2).slice(0, 300));
   const r2 = await fetch(base + '/result', {method: 'POST', headers: {...H, 'x-session': j2.session}, body: JSON.stringify({job_id: j2.job_id, report_md: 'Same script again.', transcript: 't', transcript_approved: true, author_rung: 'measured', files: [u.sha256]})});
   const t2 = await r2.json(); assert.equal(r2.status, 200, JSON.stringify(t2).slice(0, 400));
-  const fw2 = t2.warnings.find(w => /will not run as shipped/.test(w)); assert.ok(fw2, JSON.stringify(t2.warnings)); assert.match(fw2, /If the detection is wrong, say so in the report; the reviewer decides/); assert.doesNotMatch(fw2, /queued fix job/);
+  const fw2 = t2.warnings.find(w => /will not run as shipped/.test(w)); assert.ok(fw2, JSON.stringify(t2.warnings)); assert.match(fw2, /If the detection is wrong, say so in the report and leave the file alone; the reviewer decides, and nothing is queued for anyone else/); assert.doesNotMatch(fw2, /queued fix job/);
   assert.ok(!(await one(`SELECT id FROM jobs WHERE follow_up_of = $1 AND title LIKE 'Fix files of return %'`, [t2.return_id])), 'no second fix job for a file already on the record');
   await end(j2.session);
 });

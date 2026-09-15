@@ -202,7 +202,10 @@ const CLOCK_CALL = /(time\.time\(|perf_counter|monotonic\(|Date\.now|performance
 // Human words for progress, tested on the line as written: inside a literal is exactly where "elapsed" belongs when it is real.
 // `/s` after a digit that ends an identifier is a ratio, not a rate: `${(r.R1/s).toFixed(1)}` divides by a variable named s.
 const PROGRESS_WORDS = /(elapsed|\btook\b|wall[- ]?clock|\bprogress[:=]|per second|\bit\/s\b|(?:}|(?<![A-Za-z_])\d)\s*\/s(?=[\s"'`)\],]|$)|%\s*(done|complete)|\btick(s|ing)?\b|throughput|\brate[:=]\s*[\d{$(]|\bremaining[:=]?\s*[\d{$(])/i;
-const ETA = /\bETA\b/; // upper case only: lower-case eta is a Greek letter in every script seen so far
+// An ETA is a value this run reports, so it has one: `ETA: 4m12s`, `ETA=${left}`. A bare `ETA` is the Greek letter with
+// its name spelled out, and this corpus passes it around as a parameter: `cutoffs(j, ETA)` is not a time estimate
+// (platform issue #92, where it queued a fix job against a file whose stdout is byte-identical before and after).
+const ETA = /\bETA\b\s*[:=]?\s*[\d{$(]/;
 /**
  * Why a file will not run, or not reproduce, on another machine (Chris, Sep 12 2026: never refuse, tell the author and the reviewer):
  * a home directory hard-coded in a script, or a progress, timing or rate line printed to stdout, whose embedded hash then depends on the
@@ -264,6 +267,14 @@ function stripComment(line: string, marker: string): string {
   }
   return line;
 }
+/**
+ * A note that states a fact about the file, as against the stdout-timing note, which is a guess from the text. Only a fact
+ * queues a repair for someone else: three reports now (platform issues #56, #71, #92) have been a false positive spending a
+ * stranger's assignment on a file that was already correct. The guess still reaches the author and the reviewer, who can act
+ * on it; it no longer takes work out of the pool on its own.
+ */
+export const certainNote = (note: string): boolean => /^carries a hard-coded home directory|^draws unseeded random numbers/.test(note);
+
 export function portabilityNotes(name: string, content: string): string[] {
   const ext = (String(name ?? "").split(".").pop() ?? "").toLowerCase();
   const notes: string[] = [];
@@ -280,7 +291,15 @@ export function portabilityNotes(name: string, content: string): string[] {
     const toStdout = !/stderr|console\.error|>&2|file=sys\.stderr|eprint/.test(call);
     printsStdout = printsStdout || toStdout;
     if (toStdout && (PROGRESS_WORDS.test(call) || ETA.test(call) || CLOCK_CALL.test(blankLiterals(call))) && !LITERAL_ONLY.test(l)) {
-      notes.push(`prints what looks like progress or timing to stdout on line ${i + 1} ("${l.trim().slice(0, 80)}"): stdout is the artifact and must reproduce byte for byte elsewhere; send progress, timing and rates to stderr.`);
+      // Quote the line that matched, not the line the call starts on. A print whose arguments run over several lines is read
+      // as one statement, so the evidence can sit two lines below the one a reader is pointed at, and then the note names a
+      // line with nothing wrong on it and the author cannot tell what was seen (platform issue #92).
+      let at = i, shown = l;
+      for (let k = 0; k <= 6 && i + k < lines.length; k++) {
+        const one = lines[i + k];
+        if (PROGRESS_WORDS.test(one) || ETA.test(one) || CLOCK_CALL.test(blankLiterals(one))) { at = i + k; shown = one; break; }
+      }
+      notes.push(`prints what looks like progress or timing to stdout on line ${at + 1} ("${shown.trim().slice(0, 80)}")${at !== i ? `, inside the statement that starts on line ${i + 1}` : ""}: stdout is the artifact and must reproduce byte for byte elsewhere; send progress, timing and rates to stderr. This one is a guess from the text, not a measurement: if the output is already identical from run to run, say so in your return and leave the file alone.`);
       break;
     }
   }

@@ -1055,8 +1055,12 @@ job.post("/result", bearer, project, assignmentMutation(async (req: any, res) =>
   const fileNotes = await fileNotesFor(attached);
   if (fileNotes.length) await q(`UPDATE returns SET file_notes = $2 WHERE id = $1`, [ret!.id, JSON.stringify(fileNotes)]);
   // Detected now, so the agent is asked to fix it now; and a fix job is queued at once for anyone, closed if the author gets there first.
-  const fileFixJob = fileNotes.length ? await spawnFileFixJob({ id: Number(ret!.id), type: rtype, problem_id: Number(problem.id), lane_id: laneId === null || laneId === undefined ? null : Number(laneId), job_id: jobRow?.id ?? null, job_title: jobRow?.title ?? null }, fileNotes) : null;
-  const fileWarn = fileNotes.map((f) => `file ${f.name} (${f.sha.slice(0, 12)}…) will not run as shipped: it ${f.notes.join(" It also ")} The return is accepted with the file as sent. Fix it now: upload a corrected copy under the same name (POST ${BASE()}/files) and attach it with POST ${BASE()}/projects/${req.project.slug}/return/${ret!.id}/files { "files": ["<sha256>"] }; the note clears${fileFixJob ? ` and the queued fix job (#${fileFixJob}) closes. If you do not, that job goes to whoever comes next` : ". If the detection is wrong, say so in the report; the reviewer decides"}.`);
+  const fixWorthy = fileNotes.filter((f) => f.notes.some(files.certainNote));
+  const fileFixJob = fixWorthy.length ? await spawnFileFixJob({ id: Number(ret!.id), type: rtype, problem_id: Number(problem.id), lane_id: laneId === null || laneId === undefined ? null : Number(laneId), job_id: jobRow?.id ?? null, job_title: jobRow?.title ?? null }, fixWorthy) : null;
+  const fileWarn = fileNotes.map((f) => {
+    const certain = f.notes.some(files.certainNote);
+    return `file ${f.name} (${f.sha.slice(0, 12)}…)${certain ? " will not run as shipped" : ""}: it ${f.notes.join(" It also ")} The return is accepted with the file as sent. Fix it: upload a corrected copy under the same name (POST ${BASE()}/files) and attach it with POST ${BASE()}/projects/${req.project.slug}/return/${ret!.id}/files { "files": ["<sha256>"] }; the note clears${certain && fileFixJob ? ` and the queued fix job (#${fileFixJob}) closes. If you do not, that job goes to whoever comes next` : ". If the detection is wrong, say so in the report and leave the file alone; the reviewer decides, and nothing is queued for anyone else"}.`;
+  });
   // The same change submitted twice is one change (issue #51, Chris: detect and fold). A duplicate of an accepted return is superseded on
   // the spot, unpaid, linked both ways, no review slot; a duplicate of a pending one is labelled and folded when that one is accepted.
   const ph = patchHash(b.patch); const revSha = rtype === "audit" ? String(b.revision?.file ?? "").toLowerCase() || null : null; const revPath = rtype === "audit" ? revisions.safeRel(String(b.revision?.path ?? "")) : null;

@@ -87,3 +87,37 @@ test('a ratio and a note about the absence of a clock are not timing', () => {
   assert.deepEqual(timing('theta.js', disclaimer), [], 'a comment saying there is no elapsed field is not an elapsed field');
   assert.equal(timing('floor.py', 'print(total // seconds, "elapsed")\n').length, 1, 'floor division is not a comment in Python');
 });
+
+// Issue #92, the third report about this one check (after #56 and #71). The file it flagged emits byte-identical stdout
+// before and after the change it asked for, so whatever the check measured, it was not reproducibility. Two faults met:
+// ETA matched a Greek letter passed as a parameter, and the note quoted the line the statement starts on rather than the
+// line that matched, so the author could not see what had been seen.
+test('issue #92: ETA is a value a run reports, not a constant named after the Greek letter', () => {
+  const eta = 'for j in (100, 200, 300):\n    print(f"   j={j}: 2^(7j/100) = {2 ** (7 * j // 100)}"\n          f"  exact Tmax = {cutoffs(j, ETA)[3]}  (differ by 1: "\n          f"{2 ** (7 * j // 100) - cutoffs(j, ETA)[3] == 1})")\n';
+  assert.deepEqual(timing('corner-band-audit-frontier.py', eta), [], 'a parameter spelled ETA is not a time estimate');
+  assert.deepEqual(timing('floor.js', 'const ETA = 0.05;\nconsole.log(`  eta = ${ETA}   s = ${f(S, 12)}`);\n'), [], 'nor is a constant printed beside its name');
+  assert.equal(timing('sweep.py', 'for i in r:\n    print(f"ETA: {left}s")\n').length, 1, 'a reported estimate still counts');
+  assert.equal(timing('sweep2.py', 'print(f"ETA = {secs}")\n').length, 1);
+});
+
+test('issue #92: the note quotes the line that matched, and says the guess is a guess', () => {
+  const multiline = 'const t0 = Date.now();\nconsole.log(`${rows} rows` +\n  `  elapsed ${(Date.now() - t0) / 1000}s`);\n';
+  const [note] = timing('m.js', multiline);
+  assert.match(note, /on line 3/, 'the evidence is on line 3, not on the line the call starts on');
+  assert.match(note, /inside the statement that starts on line 2/);
+  assert.match(note, /This one is a guess from the text, not a measurement/);
+  assert.match(note, /if the output is already identical from run to run, say so in your return and leave the file alone/);
+  const single = timing('s.py', 'import time\nt0 = time.time()\nprint(f"done in {time.time() - t0}")\n');
+  assert.match(single[0], /on line 3/); assert.doesNotMatch(single[0], /inside the statement/, 'a one-line call says nothing extra');
+});
+
+test('issue #92: only a stated fact queues a repair for someone else', async () => {
+  const { certainNote } = await import('../src/lib/files.ts');
+  const home = portabilityNotes('a.js', 'const base = "/Users/nate/repo/";\nconsole.log(base);\n');
+  assert.ok(home.some(certainNote), 'a hard-coded home directory is a fact about the file');
+  const rng = portabilityNotes('b.py', 'import random\nprint(random.random())\n');
+  assert.ok(rng.some(certainNote), 'an unseeded draw printed to stdout is a fact: two runs give two outputs');
+  const guess = timing('c.py', 'import time\nt0 = time.time()\nprint(f"done in {time.time() - t0}")\n');
+  assert.equal(guess.length, 1);
+  assert.ok(!guess.some(certainNote), 'the stdout-timing note is a reading of the text, so it queues nothing on its own');
+});
