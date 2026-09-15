@@ -20,6 +20,9 @@ test('every first and subsequent job requires working local tools and a framewor
       assert.match(brief,/before the first research step/);assert.match(brief,/server receipt before marking the result submitted/);
       assert.match(brief,/usage explicitly pending/);assert.match(brief,/section=framework/);
       assert.match(brief,/Preserve sibling runs and their instructions/);
+      assert.match(brief,/ALL issued attempts, including those with no submission/);
+      assert.match(brief,/normally ending a turn/);
+      assert.match(brief,/section=lifecycle/);assert.match(brief,/section=publication/);
     }
   }
 });

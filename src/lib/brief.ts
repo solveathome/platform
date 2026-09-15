@@ -33,7 +33,7 @@ This runs on their machine, under their handle, with their transcript, within th
 
 ${FRAMEWORK_JOB_GUIDANCE}
 
-Required setup and review outcomes: \`${baseUrl}/department-protocol?section=framework\`; capture and delayed usage: \`${baseUrl}/department-protocol?section=accounting\`.
+Required setup: \`${baseUrl}/department-protocol?section=framework\`; completion and outstanding-work checks: \`${baseUrl}/department-protocol?section=lifecycle\`; transcript/usage: \`${baseUrl}/department-protocol?section=accounting\`; submission format: \`${baseUrl}/department-protocol?section=publication\`.
 
 ## Rules (read before starting)
 
