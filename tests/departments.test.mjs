@@ -25,10 +25,10 @@ async function call(path,{run,body,headers={},status=200,credential=token,root=f
 }
 const bootstrap=(key=random(),credential)=>call('/departments/bootstrap',{credential,body:{registration_key:key}});
 async function launch(department,direction,query='',credential=token){
-  const key=random(),url=w.origin+w.base+'/start?workspace=1'+query;
+  const key=random(),path='/start'+(query ? '?'+query.replace(/^&/, '') : ''),url=w.origin+w.base+path;
   const headers={'x-department':department,'x-launch-id':key,'x-instruction-url':url,...(direction?{'x-direction-id':direction}: {})};
-  const result=await call('/start?workspace=1'+query,{headers,credential});
-  return {...result,launch:key,launchHeaders:headers,query:'/start?workspace=1'+query};
+  const result=await call(path,{headers,credential});
+  return {...result,launch:key,launchHeaders:headers,query:path};
 }
 const submit=run=>call('/result',{run,headers:{'x-attempt':run.attempt_id},body:{job_id:run.job_id,report_md:'Planning fixture: bounded uncertainty remains.',transcript:'Scripted test: no model inference or token claims.',transcript_approved:true}});
 
@@ -60,7 +60,7 @@ test('concurrent folder bootstrap converges, another computer and another accoun
   assert.equal(new Set(results.map(x=>x.department_id)).size,1);dep=results[0].department_id;
   remote=(await bootstrap()).department_id;external=(await bootstrap(key,otherToken)).department_id;
   assert.notEqual(dep,remote);assert.notEqual(dep,external);
-  await call('/start?workspace=1',{credential:otherToken,headers:{'x-department':dep,'x-launch-id':random()},status:403});
+  await call('/start',{credential:otherToken,headers:{'x-department':dep,'x-launch-id':random()},status:403});
 });
 test('sibling directions and general mode remain separate; exact launch retries replay the compact scope',async()=>{
   const direction=await call(`/departments/${dep}/directions`,{body:{words:'Keep researching the finite alpha bound.'},headers:{'x-request-id':random()}});
@@ -74,7 +74,7 @@ test('sibling directions and general mode remain separate; exact launch retries 
   assert.ok(one.brief_md.length<6000,`effective brief should be compact (${one.brief_md.length})`);
   await call('/run/context',{run:one,headers:{'x-department':remote},status:403});
   const before=await w.one(`SELECT count(*)::int n FROM sessions WHERE problem_id=$1`,[w.pid]);
-  await call('/start?workspace=1',{headers:{'x-department':dep,'x-launch-id':random(),'x-direction-id':direction.direction_id},status:409});
+  await call('/start',{headers:{'x-department':dep,'x-launch-id':random(),'x-direction-id':direction.direction_id},status:409});
   assert.equal((await w.one(`SELECT count(*)::int n FROM sessions WHERE problem_id=$1`,[w.pid])).n,before.n);
 });
 test('a completed first task retains the direction and requires a justified next step; updates preserve in-flight provenance',async()=>{
@@ -142,7 +142,7 @@ test('public identity never exposes session credentials; forged chat sessions ar
 test('recovery needs a fresh eligible run in the original department and fences the old attempt',async()=>{
   const before=await launch(dep);
   await call('/release',{run:before,body:{job_id:before.job_id,note:'Interrupted with checkpoint'},headers:{'x-attempt':before.attempt_id}});
-  const resumed=await call('/start?workspace=1',{headers:{'x-department':dep,'x-launch-id':random(),'x-recover-attempt':before.attempt_id}});
+  const resumed=await call('/start',{headers:{'x-department':dep,'x-launch-id':random(),'x-recover-attempt':before.attempt_id}});
   assert.equal(resumed.job_id,before.job_id);assert.notEqual(resumed.attempt_id,before.attempt_id);
   await call('/result',{run:before,body:{job_id:before.job_id,report_md:'Stale result',transcript:'test',transcript_approved:true},headers:{'x-attempt':before.attempt_id},status:409});
   assert.equal((await w.one(`SELECT new_attempt_id FROM assignment_recoveries WHERE old_attempt_id=$1`,[before.attempt_id])).new_attempt_id,resumed.attempt_id);
@@ -265,7 +265,7 @@ test('pausing department launches covers existing folders but preserves exact re
   try {
     process.env.DEPARTMENT_MODE='off';
     assert.equal((await call('/joining-contract',{credential})).enabled,false);
-    await call('/start?workspace=1',{credential,headers:{'x-department':did,'x-launch-id':random()},status:503});
+    await call('/start',{credential,headers:{'x-department':did,'x-launch-id':random()},status:503});
     assert.equal((await call(run.query,{credential,headers:run.launchHeaders})).session,run.session);
     assert.equal((await call('/start',{credential,run})).attempt_id,run.attempt_id);
   } finally {if(previous===undefined)delete process.env.DEPARTMENT_MODE;else process.env.DEPARTMENT_MODE=previous;}
