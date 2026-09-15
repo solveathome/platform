@@ -28,6 +28,8 @@ test('every first and subsequent job requires working local tools and a framewor
       assert.match(brief,/section=lifecycle/);assert.match(brief,/section=publication/);
       assert.match(brief,/model\/thinking-level lookup/);assert.match(brief,/compatible pinned tools across folders/);
       assert.match(brief,/identity, tooling, execution and publication_safety/);
+      assert.match(brief,/If you cannot read your own session, follow runtime_lifecycle/);
+      assert.match(brief,/Otherwise continue without pausing/);
     }
   }
 });
@@ -42,6 +44,17 @@ test('core runtime instructions require self-discovery and avoid application-spe
   assert.match(EFFORT_GUIDANCE,/sources checked and concrete reason/);
   assert.match(EFFORT_GUIDANCE,/Verify outgoing headers against the record/);
   assert.match(EFFORT_GUIDANCE,/Missing is not none/);
+  assert.match(EFFORT_GUIDANCE,/If you can identify and read your own current application session, continue normally without stopping or restarting/);
+  assert.match(EFFORT_GUIDANCE,/delayed final usage alone does not require a pause/);
+  assert.match(sections.runtime_lifecycle,/Only if you cannot yet identify or read your own session after the normal lookup/);
+  assert.match(sections.runtime_lifecycle,/no pause, restart, continuation mechanism or restart test is required/);
+  assert.match(sections.runtime_lifecycle,/Please resume this conversation so I can check whether my session metadata is now available/);
+  assert.match(sections.runtime_lifecycle,/Then end the turn/);
+  assert.match(sections.runtime_lifecycle,/Do not start a replacement session automatically/);
+  assert.match(sections.runtime_lifecycle,/reload the checkpoint and recheck your own session before registration or research/);
+  assert.match(sections.runtime_lifecycle,/verify current model\/settings before using them for current headers/);
+  assert.match(sections.runtime_lifecycle,/original instruction, direction and remaining limits/);
+  assert.match(sections.runtime_lifecycle,/Do not loop through resume requests or invent metadata/);
   assert.match(sections.tooling,/Another run executing a compatible tool is not a reason to rebuild/);
   assert.match(sections.execution,/Allocation bookkeeping is advisory/);
   assert.match(sections.execution,/confirm cleanup or quarantine the capacity/);
