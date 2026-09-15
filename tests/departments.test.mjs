@@ -182,6 +182,7 @@ test('guidance discovery supports API-only clients, a local handoff and a separa
   assert.match(contract.guidance,/Before every assignment, self-review/);
   const response=await fetch(contract.protocol_url);assert.equal(response.status,200);
   const protocol=await response.json();assert.match(protocol.version,/^department-v2\./);
+  assert.deepEqual(protocol.launch,contract,'the protocol response carries the detailed launch guidance');
   assert.equal(protocol.helper,undefined);assert.equal(protocol.effort_commands,undefined);
   assert.match(protocol.sections.bootstrap,/X-Instruction-URL/);assert.match(protocol.sections.api,/X-Request-ID/);
   assert.match(protocol.sections.publication,/Transcript \(required\)/);
@@ -211,6 +212,10 @@ test('guidance discovery supports API-only clients, a local handoff and a separa
   const markdown=await fetch(contract.protocol_url+'?section=bootstrap',{headers:{accept:'text/markdown'}});
   assert.match(markdown.headers.get('vary'),/Accept/);
   assert.match(markdown.headers.get('content-type'),/text\/markdown/);assert.match(await markdown.text(),/POST .*\/departments\/bootstrap/);
+  const fullMarkdown=await (await fetch(contract.protocol_url,{headers:{accept:'text/markdown'}})).text();
+  assert.match(fullMarkdown,/NO submission/);assert.match(fullMarkdown,/Before research on this assignment, self-review/);
+  assert.match(fullMarkdown,/sources checked and concrete reason/);assert.match(fullMarkdown,/## publication_safety/);
+  assert.equal((await w.one('SELECT count(*)::int AS n FROM sessions WHERE user_id=$1',[id])).n,0,'reading setup guidance does not register or claim work');
   await call('/department-protocol?section=toString',{credential,status:400});
   await call('/department-protocol?section=bootstrap&section=api',{credential,status:400});
   // Deliberately plain HTTP and files: no production client or fixed local database.

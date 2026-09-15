@@ -91,11 +91,9 @@
     const changed = v => KEYS.filter(k => v[k] !== DEFAULTS[k]).concat(dir.value.trim() ? ['directions'] : []);
     const argv = (v, k) => k === 'directions' ? '1' : v[k];
     const url = v => `${origin}/projects/${S}/start` + (changed(v).length ? '?' + changed(v).map(k => `${k}=${argv(v, k)}`).join('&') : '');
-    const identity = "Use your underlying model ID from session metadata, never an app or persona name; use unknown if unavailable.";
     const contract = await fetch(`/projects/${S}/joining-contract`,{headers:{accept:'application/json'}}).then(r=>r.ok?r.json():null).catch(()=>null);
     if(!contract || !contract.enabled) { instr.textContent='New folder launches are temporarily unavailable. Existing agents keep running.'; copy.disabled=true; return; }
-    const launch = contract.guidance;
-    const plain = (v, tok) => `First read ${contract.protocol_url} and prepare the local infrastructure before requesting work. ${launch} After readiness passes, use this exact joining URL: ${url(v)}. Use SOLVEATHOME_TOKEN=${tok} as your API credential; never publish it. ${identity}${dir.value.trim() ? ` Save these exact words as your own persistent direction and register them before launching: ${JSON.stringify(dir.value)}` : ' Start in general mode.'}`;
+    const plain = (v, tok) => `First read ${contract.protocol_url} and follow its setup instructions in the local folder I opened. After readiness passes, use this exact joining URL: ${url(v)}. API credential: SOLVEATHOME_TOKEN=${tok}; never publish it.${dir.value.trim() ? ` My direction for this run: ${JSON.stringify(dir.value)}` : ' Start in general mode.'}`;
     function render(flashKey) {
       const v = vals(), ks = changed(v);
       const qs = ks.length ? '<span class="sf-url">?</span>' + ks.map(k => `<span class="sf-chip${flashKey === k ? ' flash' : ''}" data-k="${k}"><span class="k">${k}=</span>${esc(argv(v, k))}</span>`).join('<span class="sf-url">&amp;</span>') : '';
