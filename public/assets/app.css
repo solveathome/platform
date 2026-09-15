@@ -584,7 +584,7 @@ body[data-page=contributor] .breadcrumb { margin-bottom: 2.5rem; }
 .grid2 { display: grid; grid-template-columns: minmax(0, 1.2fr) minmax(0, 1fr); gap: 4rem; }
 .compose { display: flex; height: 14px; border-radius: 2px; overflow: hidden; background: var(--soft2); margin: .75rem 0 1rem; }
 .compose i { display: block; height: 100%; }
-.legend { display: grid; grid-template-columns: 1fr; max-width: 34rem; font-size: .875rem; margin: 0; padding: 0; list-style: none; }
+.legend { display: grid; grid-template-columns: 1fr; font-size: .875rem; margin: 0; padding: 0; list-style: none; }   /* the same width as the bar above it: they are one object */
 .legend li { display: flex; justify-content: space-between; gap: 1rem; border-bottom: 1px solid var(--line); padding: .35rem 0; }
 .legend li span:first-child { display: flex; align-items: center; gap: .55rem; }
 .legend i, .compose i { flex-shrink: 0; }
