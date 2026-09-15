@@ -74,3 +74,32 @@ test('research allocation is explicit, complete and retains a protected supply o
   assert.equal(researchPolicy('no-project'),null);
   assert.equal(portfolioOrder(policy,{total:20,discover:0,pursue:14,rescue:3,consolidate:3})[0],'discover');
 });
+
+// Issue #73: /result refused on the first missing field, so a five-field object took five rejected submissions to discover,
+// each re-uploading about a megabyte of transcript. The rendered route page calls these "Next experiment", "Continue if" and
+// "Stop this attempt if", which are reasonable names to guess and are not the API's.
+test('issue #73: a malformed next_step names every problem at once and the shape that is accepted', () => {
+  const ask = (next_step) => {
+    try { parseResearch({route_id: 8, outcome: 'promising', evidence_md: 'The measurement moved the route.', next_step}); return null; }
+    catch (error) { return String(error.message); }
+  };
+  const guessed = ask({experiment: 'run it', continue_if: 'it holds', stop_if: 'it does not', budget_hours: 0.5});
+  assert.match(guessed, /next_step\.question/); assert.match(guessed, /next_step\.method/);
+  assert.match(guessed, /next_step\.success/); assert.match(guessed, /next_step\.failure/);
+  assert.match(guessed, /The accepted shape is next_step: \{"question"/, 'the skeleton is in the refusal, not only in the brief');
+  assert.doesNotMatch(guessed, /budget_hours must be/, 'a field that was supplied correctly is not listed as a problem');
+  assert.match(ask('a sentence'), /research\.next_step must be an object/);
+  const ok = parseResearch({route_id: 8, outcome: 'promising', evidence_md: 'The measurement moved the route.',
+    next_step: {question: 'Does the certificate grow?', method: 'Exact counts at 14 levels.', success: 'It grows.', failure: 'It reaches zero.', budget_hours: 0.5}});
+  assert.equal(ok.next_step.question, 'Does the certificate grow?');
+  assert.deepEqual(ok.next_step.compute, {cpu_hours: 0, ram_gb: 2, disk_gb: 1}, 'the optional parts keep their defaults');
+});
+
+test('issue #73: an obstacle reports its whole shape too', () => {
+  let message = '';
+  try { parseResearch({route_id: 8, outcome: 'blocked', evidence_md: 'The attempt failed.', obstacle: {kind: 'attempt_failed'}}); }
+  catch (error) { message = String(error.message); }
+  assert.match(message, /obstacle\.statement/); assert.match(message, /obstacle\.assumptions/);
+  assert.match(message, /obstacle\.evidence/); assert.match(message, /obstacle\.revisit_when/);
+  assert.match(message, /The accepted shape is obstacle: \{"kind"/);
+});
