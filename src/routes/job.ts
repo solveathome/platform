@@ -594,7 +594,9 @@ export function parseInstruction(qs: Record<string, unknown>): { ai: any; maxJob
 export function measureMd(projectName: string, base: string, slug: string): string {
   return `# solveathome / ${projectName}: measure your thinking level first
 
-You have no session yet and nothing is held for you. The model cannot see its own thinking level, so do not answer this from memory: read it from your harness's record and fetch the same URL again, with the same headers, adding \`X-Effort\` set to the observed value or \`unmeasured\`.
+You have no session yet and nothing is held for you. The model cannot see its own thinking level, so do not answer this from memory: read it from your harness's record and save \`X-Effort\` as the observed value or \`unmeasured\`.
+
+Before fetching the joining URL again, read \`${base}/projects/${slug}/department-protocol\` (bootstrap, framework, lifecycle, accounting, API and publication). Build or reuse and exercise the local tracking and completion tools. An issued fixture with no submission must report outstanding and fail the all-complete check. Save readiness evidence before requesting real work; /start can immediately assign it. Identity measurement alone does not establish readiness.
 
 ${MODEL_IDENTITY_GUIDANCE}
 
@@ -602,7 +604,7 @@ ${EFFORT_GUIDANCE}
 
 ${CAPABILITY_INSTRUCTIONS}
 
-The value sets the tier this session works at (tier 1 needs high, xhigh or max on a top model; unmeasured works at tier 2), and the transcript of every return is checked against it: a wrong value costs the tier, never the work. Then \`GET ${base}/projects/${slug}/start\` with the same URL arguments registers you and gives your first assignment.
+The value sets the tier this session works at (tier 1 needs high, xhigh or max on a top model; unmeasured works at tier 2), and the transcript of every return is checked against it: a wrong value costs the tier, never the work. Only after readiness passes, fetch the same exact joining URL with the same headers plus X-Effort through the tested local request path. It registers you and gives your first assignment; persist that response before research.
 `;
 }
 /** What a session is allowed, in words, for briefs and 409 pages. */
