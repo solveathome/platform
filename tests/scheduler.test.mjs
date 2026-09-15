@@ -124,9 +124,9 @@ test('queue matching shares hard eligibility between backlog and choice, then re
   await queued({sources:['private-archive'],priority:10});
   const plain=await queued();
   const a={problemId:pid,slug,sessionId:'synthetic',uid,tier:2,model:'test-model',provider:'test',trusted:false,granted:false,lane:null,cpuHours:0,ramGb:0,hasGpu:false,disk:1,maxHours:2,reviewStreak:0,capabilities:{}};
-  assert.deepEqual(await backlogFor(a),{reviews:0,research:1});assert.equal((await selectJob(a,false)).id,plain.id);
+  assert.deepEqual(await backlogFor(a),{reviews:0,research:1,blocked_reviews:0});assert.equal((await selectJob(a,false)).id,plain.id);
   a.capabilities={tools:['lean'],skills:['lean']};
-  assert.deepEqual(await backlogFor(a),{reviews:0,research:2});assert.equal((await selectJob(a,false)).id,j.id);
+  assert.deepEqual(await backlogFor(a),{reviews:0,research:2,blocked_reviews:0});assert.equal((await selectJob(a,false)).id,j.id);
   const old=await queued({age:400});assert.equal((await selectJob(a,false)).id,old.id,'age eventually overtakes bounded matching terms');
   const live=await start({capabilities:a.capabilities});assert.equal(live.job_id,old.id);
 });
@@ -158,10 +158,10 @@ test('runtime aliases match existing sessions without implying versions, source 
   await queued({tools:['lean']});await queued({tools:['bash']});
   await queued({sources:['python3']});
   const a={problemId:pid,slug,sessionId:legacy.session,uid,tier:3,model:'test-model',provider:'test',trusted:false,granted:false,lane:null,cpuHours:0,ramGb:0,hasGpu:false,disk:1,maxHours:2,reviewStreak:0,capabilities:{skills:['python','lean'],tools:['shell']}};
-  assert.deepEqual(await backlogFor(a),{reviews:0,research:0});
-  a.capabilities.tools=['python3'];assert.deepEqual(await backlogFor(a),{reviews:0,research:1});
+  assert.deepEqual(await backlogFor(a),{reviews:0,research:0,blocked_reviews:0});
+  a.capabilities.tools=['python3'];assert.deepEqual(await backlogFor(a),{reviews:0,research:1,blocked_reviews:0});
   assert.equal((await selectJob(a,false)).id,python.id);
-  a.capabilities.tools=['node'];assert.deepEqual(await backlogFor(a),{reviews:0,research:1});
+  a.capabilities.tools=['node'];assert.deepEqual(await backlogFor(a),{reviews:0,research:1,blocked_reviews:0});
   assert.equal((await selectJob(a,false)).id,node.id);
 });
 
@@ -331,4 +331,21 @@ test('a completion whose X-Attempt and job_id name different assignments says wh
   assert.match(e, /Do not fetch \/start/, 'following the old advice would have taken a third assignment');
   assert.doesNotMatch(e, /fetch \/start for current work/);
   ok(await result(second));   // and the run can still finish the work it actually holds
+});
+
+// Issue #82: an operator running one model kind stacks review jobs of its own returns that no agent of theirs can take. The
+// brief printed the count; the scheduler recorded eligible_backlog.reviews = 0, because it counts only what this agent may
+// take. Both were true and both described the same queue, so "no review debt" and "debt nobody here can serve" read alike.
+test('review jobs blocked only by the same-kind rule are counted as blocked, not as an empty backlog',async()=>{
+  const ret=await one(`INSERT INTO returns (problem_id,type,user_id,model,provider,report_md,transcript,status) VALUES ($1,'measure',$2,'claude-fable-5-1','anthropic','A measured table.','t','pending') RETURNING id`,[pid,uid]);
+  await one(`INSERT INTO jobs (problem_id,type,title,brief_md,git_ref,budget_hours,min_tier,parent_return_id) VALUES ($1,'review',$2,'Check it.','main',1,99,$3) RETURNING id`,[pid,`Review return #${ret.id}`,ret.id]);
+  const a={problemId:pid,slug,sessionId:'synthetic-82',uid,tier:1,model:'claude-fable-5-1',provider:'anthropic',trusted:true,granted:true,lane:null,cpuHours:4,ramGb:8,hasGpu:false,disk:1,maxHours:2,reviewStreak:0,capabilities:{}};
+  const mine=await backlogFor(a);
+  assert.equal(mine.reviews,0,'a model is never offered a review of its own kind');
+  assert.equal(mine.blocked_reviews,1,`the debt is visible instead of reading as an empty queue: ${JSON.stringify(mine)}`);
+  const other=await backlogFor({...a,model:'gpt-6-astra',provider:'openai'});
+  assert.equal(other.reviews,1,'another model can take it');
+  assert.equal(other.blocked_reviews,0,'and has nothing blocked by kind');
+  await q(`DELETE FROM jobs WHERE parent_return_id=$1`,[ret.id]);
+  await q(`DELETE FROM returns WHERE id=$1`,[ret.id]);
 });
