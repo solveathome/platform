@@ -275,3 +275,33 @@ test('a Freebuff Desktop export is a session log: usage per turn, the model from
   assert.equal(twice.entries, 2, 'a turn repeated in the export counts once');
 });
 
+
+// Issue #93: a brief that allows sub-agents says their tokens stay inside the same budget, and the child's turns live in its
+// own session file. A return that delegates and sends only the parent's log under-reports what the assignment cost, silently:
+// the extraction is complete for the file it was given. One reported assignment credited 40,878 output tokens for the whole
+// assignment while a single prior-art child had reported 235,184. Both halves are already in the transcript.
+test('a transcript that starts sub-agents and carries none of their turns is detectable', async () => {
+  const { subagentGap } = await import('../src/lib/tokens.ts');
+  const launch = (name) => JSON.stringify({type: 'assistant', sessionId: 'main', isSidechain: false,
+    message: {id: 'm1', model: 'claude-opus-5', content: [{type: 'tool_use', name, input: {description: 'go'}}], usage: {input_tokens: 1, output_tokens: 1}}});
+  const plain = JSON.stringify({type: 'assistant', sessionId: 'main', isSidechain: false, message: {id: 'm2', model: 'claude-opus-5', content: [], usage: {input_tokens: 1, output_tokens: 1}}});
+  assert.deepEqual(subagentGap([launch('Agent'), plain].join('\n')), {launched: 1, present: 0}, 'the launch is in the parent log, the child is not');
+  assert.deepEqual(subagentGap([launch('Task'), plain].join('\n')), {launched: 1, present: 0}, 'either name');
+  assert.deepEqual(subagentGap([plain, plain].join('\n')), {launched: 0, present: 0}, 'no delegation, nothing to say');
+  // A child's turns arrive either marked as a sidechain, or as a separate file concatenated in, which carries its own id.
+  const sidechain = JSON.stringify({type: 'assistant', sessionId: 'main', isSidechain: true, message: {id: 'c1', model: 'claude-opus-5', content: [], usage: {input_tokens: 9, output_tokens: 9}}});
+  assert.deepEqual(subagentGap([launch('Agent'), sidechain].join('\n')), {launched: 1, present: 1});
+  const otherFile = JSON.stringify({type: 'assistant', sessionId: 'child-1', isSidechain: false, message: {id: 'c2', model: 'claude-opus-5', content: [], usage: {input_tokens: 9, output_tokens: 9}}});
+  assert.deepEqual(subagentGap([launch('Agent'), plain, otherFile].join('\n')), {launched: 1, present: 1}, 'a concatenated file is the child too');
+  assert.equal(subagentGap('prose, not a log').launched, 0);
+});
+
+test('the sub-agent warning names the count and how to send the missing turns', async () => {
+  const { subagentWarning } = await import('../src/lib/tokens.ts');
+  const launch = JSON.stringify({type: 'assistant', sessionId: 'main', isSidechain: false,
+    message: {id: 'm1', model: 'claude-opus-5', content: [{type: 'tool_use', name: 'Agent', input: {description: 'prior art'}}], usage: {input_tokens: 1, output_tokens: 1}}});
+  const [w] = subagentWarning(launch, 'https://x/projects/p/return/1/transcript');
+  assert.match(w, /starts 1 sub-agent and carries none/);
+  assert.match(w, /https:\/\/x\/projects\/p\/return\/1\/transcript/, 'the agent is told where to send the whole log');
+  assert.deepEqual(subagentWarning('no log at all', 'https://x'), [], 'silence when there is nothing to say');
+});
