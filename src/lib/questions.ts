@@ -46,3 +46,14 @@ export function questions(slug: string): Question[] {
   return list;
 }
 export function openQuestions(slug: string, n = 5): Question[] { return questions(slug).filter((q) => q.status === "OPEN" || q.status === "PARTIAL").slice(0, n); }
+
+/**
+ * The slice of the open-and-partial list a registry sweep asks for. The cursor wraps, the window does not run past the end
+ * (platform issue #61: three sweeps advanced 23-37, 38-52, then asked for 53-67 of a list with 53 rows, and every lane's
+ * template carries the same counter, so an exhausted backlog kept dispatching empty sweeps).
+ */
+export function sweepWindow(index: number, rows: number, size = 15): { from: number; take: number } {
+  if (!(rows > 0) || !(size > 0)) return { from: 1, take: 0 };
+  const from = ((Math.max(0, Math.floor(index)) * size) % rows) + 1;
+  return { from, take: Math.min(size, rows - from + 1) };
+}
