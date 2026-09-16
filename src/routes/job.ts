@@ -263,6 +263,15 @@ ${ENDED_LAUNCH_GUIDANCE}
     row ??= await selectJob(agent,true);
     if(!row) { await q('ROLLBACK TO SAVEPOINT recovery_selection'); res.status(409).json({error:'recovery does not fit the current model, capabilities, scope or donor limits'}); return; }
   }
+  // Judgment of a checked package is never starved by the research portfolio (Sep 16 2026). Only a handle trusted by grant
+  // can decide a return, and a packaged return with completed independent execution needs a bounded decision, not review-pool
+  // time: on Sep 16 every fresh Fable session of the owner was sent to pursuit while 22 checked packages waited, because
+  // consolidation hours were over their share. Plain reviews still follow the portfolio (frontier agents are not a review pool,
+  // Sep 11; the ecosystem simulation holds research at 60% of frontier time). The alternation still applies: after a run of
+  // reviews the session goes to research.
+  const trustedJudgment = !row && agent.granted && tier === 1 && !preferResearch
+    ? await selectJob(agent, false, false, undefined, true) : null;
+  row ??= trustedJudgment;
   if (!row && portfolio && portfolioUsed) {
     for (const bucket of portfolioOrder(portfolio, portfolioUsed)) {
       if (bucket === 'rescue') await prepareRescue(agent.problemId, agent.model, lane);
@@ -276,7 +285,7 @@ ${ENDED_LAUNCH_GUIDANCE}
   if (reserveDiscovery) row = await selectJob(agent, preferResearch, true)
     ?? await synthesizeExplore(req, session, lane, maxHours, null, true);
   if (!row) row = await synthesizeExplore(req, session, lane, maxHours, await computeBlocked(agent));
-  const reason = { policy: session.direction_id ? "agent direction" : tangentFirst ? "person's tangent" : portfolio ? "research portfolio" : reserveDiscovery ? "reserved tier-1 discovery" : "eligible work by need and capability",
+  const reason = { policy: session.direction_id ? "agent direction" : tangentFirst ? "person's tangent" : trustedJudgment ? "trusted judgment" : portfolio ? "research portfolio" : reserveDiscovery ? "reserved tier-1 discovery" : "eligible work by need and capability",
     tier, guidance_version: GUIDANCE_VERSION, discovery_share: share, discovery_allocation: used, eligible_backlog: { reviews: need.reviews, research: need.research }, prefer_research: preferResearch,
     ...(need.blocked_reviews ? { blocked_backlog: { reviews: need.blocked_reviews, reason: "a model never reviews its own kind; these wait for an agent on another model" } } : {}),
     research_allocation: portfolio, research_hours: portfolioUsed, research_bucket: researchBucket(row),

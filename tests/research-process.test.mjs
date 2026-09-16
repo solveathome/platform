@@ -598,3 +598,24 @@ test('a review queued under the previous template is served with the current gui
   const refreshed=await one(`SELECT brief_version,brief_md FROM jobs WHERE id=$1`,[job.id]);assert.equal(refreshed.brief_version,2);assert.doesNotMatch(refreshed.brief_md,/Read the code and the recipe/);
   assert.equal((refreshed.brief_md.match(/Evidence needs reassessment/g)||[]).length,1,'the note is kept once');
 });
+
+// Sep 16 2026: the owner's Fable sessions were all sent to pursuit while 22 checked packages waited for the only handle that
+// can decide them, because the portfolio's consolidation share was already spent. A granted handle takes judgment first.
+test('a handle trusted by grant is handed waiting judgment before the research portfolio; a model-trusted one still follows the portfolio',async()=>{
+  const plan=await packageFor(),r=await computation(plan),a=await start('runner');assert.equal(a.type,'check');
+  ok(await submit('runner',await receipt(a,r.return_id),a));
+  assert.equal((await one(`SELECT count(*)::int AS n FROM jobs WHERE parent_return_id=$1 AND type='review' AND status='queued'`,[r.return_id])).n,1,'the checked package awaits judgment');
+  await q(`UPDATE problems SET research_allocation=$2 WHERE id=$1`,[pid,JSON.stringify({discover:.3,pursue:.4,rescue:.15,consolidate:.15})]);
+  // Pursuit work is plentiful and consolidation is over its share, as on production.
+  await q(`INSERT INTO jobs (problem_id,type,title,brief_md,budget_hours,purpose,research_stage,min_tier) SELECT $1,'source','Pursue '||n,'Find new evidence.',0.25,'discovery','pursue',1 FROM generate_series(1,20) n`,[pid]);
+  await q(`INSERT INTO assignment_attempts (id,job_id,problem_id,session_id,user_id,model,tier,purpose,scheduled,budget_hours,started_at,status,research_stage) SELECT md5(random()::text||n),(SELECT id FROM jobs WHERE problem_id=$1 AND type='source' LIMIT 1),$1,NULL,$2,'claude-opus-5',1,'work',true,4,now()-interval '1 day','completed','consolidate' FROM generate_series(1,5) n`,[pid,users.author.id]);
+  const astra=await start('astra');assert.notEqual(astra.type,'review','trusted by model only: the portfolio decides');assert.equal(astra.assignment_reason.policy,'research portfolio');
+  // Plain reviews of unpackaged returns are review-pool work and stay behind the portfolio, even for a granted handle.
+  for(let i=0;i<5;i++){const plain=await one(`INSERT INTO returns (problem_id,type,user_id,model,provider,report_md,transcript,status) VALUES ($1,'explore',$2,'claude-opus-5','anthropic','Synthetic finite claim.','t','pending') RETURNING id`,[pid,users.author.id]);await q(`INSERT INTO jobs (problem_id,type,title,brief_md,budget_hours,min_tier,parent_return_id,priority) VALUES ($1,'review','Plain review','Review the claim.',0.25,1,$2,5)`,[pid,plain.id]);}
+  const judge=await start('judge');assert.equal(judge.type,'review','trusted by grant: checked judgment first');assert.equal(judge.assignment_reason.policy,'trusted judgment');
+  assert.equal(Number((await one(`SELECT parent_return_id FROM jobs WHERE id=$1`,[judge.job_id])).parent_return_id),r.return_id,'the checked package, not a higher-priority plain review');
+  assert.match(judge.brief_md,/\*\*Basis for judgment/);
+  ok(await call('/release',{who:'judge',method:'POST',assignment:judge,body:{job_id:judge.job_id,note:'test'}}));
+  await q(`UPDATE jobs SET status='expired' WHERE parent_return_id=$1 AND type='review'`,[r.return_id]);
+  const again=await start('judge',judge);assert.notEqual(again.assignment_reason.policy,'trusted judgment','with only plain reviews waiting, the portfolio decides');
+});
