@@ -12,7 +12,7 @@ import { isDeepStrictEqual } from "node:util";
 import { backlogFor, selectJob, computeBlocked, discoveryShare, discoveryDue, allocation, researchPolicy, researchAllocation, portfolioOrder, researchBucket, type SchedulingAgent } from "../lib/scheduler.js";
 import { parseResearch, stageOf } from '../lib/research-format.js';
 import { recordResearch, prepareRescue, researchBrief, routeContext, reconsiderDependents } from '../lib/research.js';
-import { parseVerificationPlan, saveVerificationPlan, queueCheck, saveCheckReceipt, verificationRuns, verificationState, verificationBrief, judgmentBudget, validateReceiptUse, isCompletedCheck, expireWaitingChecks, checkWaitExpired, identicalClaim, verificationSummary } from '../lib/verification.js';
+import { parseVerificationPlan, saveVerificationPlan, queueCheck, saveCheckReceipt, verificationRuns, verificationState, verificationBrief, judgmentBudget, validateReceiptUse, isCompletedCheck, expireWaitingChecks, checkWaitExpired, identicalClaim, verificationSummary, receiptId } from '../lib/verification.js';
 import { readFileSync } from 'node:fs';
 import { ROOT } from '../lib/paths.js';
 import { bearer, optionalAuth, modelTier } from "../lib/auth.js";
@@ -931,7 +931,7 @@ job.post("/result", bearer, project, assignmentMutation(async (req: any, res) =>
     await q(`INSERT INTO credits (user_id, model, provider, problem_id, lane_id, kind, points, source_type, source_id, note) SELECT $1,$2,$3,$4,$5,'tokens',0,'review',$6,$7 WHERE $8::numeric > 0`,
       [uid, req.model ?? null, req.provider ?? null, parentRow.problem_id, parentRow.lane_id, String(jobRow?.id ?? `r${reviewOf}`) /* no job: 'r<return id>'; the profile ledger reads both forms */, `${(tokens.input + tokens.output + tokens.cache_read + tokens.cache_write).toLocaleString("en-US")} tokens (${tokens.output.toLocaleString("en-US")} output), ${tokens.source}, review of return #${reviewOf}`, tokens.input + tokens.output + tokens.cache_read + tokens.cache_write]);
     await q(`UPDATE reviews SET verification_receipt_id=$3,verification_sufficiency_md=$4,verification_conflict_resolution_md=$5,verification_conflict_through=$6 WHERE return_id=$1 AND user_id=$2`,
-      [reviewOf, uid, b.verification_receipt_id ?? null, b.verification_sufficiency_md ? String(b.verification_sufficiency_md).slice(0, 8000) : null,
+      [reviewOf, uid, receiptId(b.verification_receipt_id), b.verification_sufficiency_md ? String(b.verification_sufficiency_md).slice(0, 8000) : null,
         reviewerTrusted && b.verification_conflict_resolution_md ? String(b.verification_conflict_resolution_md).slice(0, 8000) : null,
         reviewerTrusted && b.verification_conflict_resolution_md ? executionState?.latest_receipt_id ?? null : null]);
     if (reviewerTrusted && b.verification_conflict_resolution_md) await q(`UPDATE jobs j SET status='expired' FROM returns r WHERE r.id=$1 AND j.problem_id=r.problem_id AND j.origin_key LIKE 'check-conflict:'||r.verification_fingerprint||':%' AND j.status='queued'`, [reviewOf]);

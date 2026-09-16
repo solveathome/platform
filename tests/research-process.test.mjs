@@ -234,7 +234,9 @@ test('finite package reconstructs from served bytes, detects corruption, records
   const review=await start('judge');assert.equal(review.type,'review');assert.equal(Number((await one('SELECT budget_hours FROM jobs WHERE id=$1',[review.job_id])).budget_hours),.25);
   assert.equal((await submit('judge',{verdict:'accept',rung:'verified'},review)).status,400);
   const receiptId=Number(subject.verification_runs[0].id);
-  ok(await submit('judge',{verdict:'accept',rung:'verified',notes_md:'All four terms checked; finite scope only.',verification_receipt_id:receiptId,verification_sufficiency_md:'The checker reads and validates the published four-term target.'},review));
+  assert.equal((await submit('judge',{verdict:'accept',rung:'verified',notes_md:'x',verification_receipt_id:'2x',verification_sufficiency_md:'y'},review)).status,400,'a non-numeric id is refused');
+  // The record serves the id as a JSON string; sending it back unchanged must work (supervised Fable session, Sep 16).
+  ok(await submit('judge',{verdict:'accept',rung:'verified',notes_md:'All four terms checked; finite scope only.',verification_receipt_id:String(receiptId),verification_sufficiency_md:'The checker reads and validates the published four-term target.'},review));
   assert.equal(ok(await call(`/return/${r.return_id}`)).status,'accepted');
   const page=ok(await call(`/return/${r.return_id}`,{accept:'text/html'}));
   assert.ok(page.includes(`Uses execution receipt #${receiptId}.`));
