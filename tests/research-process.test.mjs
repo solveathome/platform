@@ -468,6 +468,7 @@ test('itemised controls, stated limits and declared tools feed a summary generat
   assert.match(review.brief_md,/\*\*Judgment required\.\*\* Decide whether this method at this coverage establishes the claim at the rung requested, with the 2 caveats above/);
   assert.match(review.brief_md,/Receipts on this package \(fingerprint [a-f0-9]{12}…\):\n- Receipt #\d+ \(return #\d+\): pass, @research-runner-[a-f0-9]+ \(claude-sonnet-5\), rerun, 1 s$/m);
   assert.doesNotMatch(review.brief_md,/"schema_version": 1/,'a reviewer fetches the package when a specific uncertainty needs it');
+  assert.match(review.brief_md,/Your job: judge it within the budget, starting from the Verification section below/);assert.doesNotMatch(review.brief_md,/Fetch the return's files \(GET \/files\/<sha256>\) and the served scripts/,'one path, not two');assert.doesNotMatch(review.brief_md,/before judging/);
   assert.match(review.brief_md,/smallest useful next check/);
   const page=(await call(`/return/${r.return_id}`,{accept:'text/html'})).body;assert.match(page,/1 of 2 detected/);assert.match(page,/Generated from the package, every receipt/);
   const board=ok(await call('/board')).research.checks;
@@ -528,4 +529,32 @@ test('an advisory-only decision stays provisional in the summary and is open wor
   assert.ok(!s.lines.some(l=>l.startsWith('Accepted')),'never "accepted by trusted review"');
   const board=ok(await call('/board')).research.checks;
   assert.equal(board.judged,0);assert.equal(board.provisional,1);assert.equal(board.awaiting_judgment,1);assert.equal(board.median_hours_receipt_to_judgment,null);
+});
+
+test('the highlighted receipt keeps its own coverage and exclusions, however many earlier receipts said more',async()=>{
+  const plan=await packageFor(),r=await computation(plan),a=await start('runner');assert.equal(a.type,'check');
+  ok(await submit('runner',{check_receipt:{...(await receipt(a,r.return_id)).check_receipt,coverage_md:'All four terms, first pass.'}},a));
+  const subject=ok(await call(`/return/${r.return_id}`));
+  const details=(coverage_md,method='rerun')=>JSON.stringify({exit_code:0,stdout_sha256:null,environment:'Python 3.12',coverage_md,method,shared_components_md:method==='rerun'?'Author checker.':'Own parser and comparison.',controls_md:'Changed term fails.',expected_visible:true,blocker:null});
+  for(const [coverage,method] of [['All four terms, second pass.','rerun'],['All four terms, third pass.','rerun'],['Rows 1–2 only; rows 3–4 not checked.','independent_implementation']]){
+    const result=await one(`INSERT INTO returns (problem_id,type,user_id,model,provider,report_md,transcript,status) VALUES ($1,'check',$2,$3,'anthropic','Observed pass.','t','recorded') RETURNING id`,[pid,users.runner.id,models.runner]);
+    await q(`INSERT INTO verification_runs (subject_return_id,result_return_id,fingerprint,outcome,observed,elapsed_seconds,details) VALUES ($1,$2,$3,'pass','pass',1,$4)`,[r.return_id,result.id,subject.verification_fingerprint,details(coverage,method)]);
+  }
+  const s=ok(await call(`/return/${r.return_id}`)).verification_summary;
+  assert.match(s.headline,/^A separate implementation by @research-runner-[a-f0-9]+ \(claude-sonnet-5\) matched the expected result: exit 0, 1 s\. 4 independent receipts report pass\.$/);
+  const coverage=s.lines.filter(l=>l.startsWith('Worker-observed coverage'));
+  assert.equal(coverage.length,3);
+  assert.match(coverage[0],/^Worker-observed coverage \(receipt #\d+, @research-runner-[a-f0-9]+, highlighted above\): Rows 1–2 only; rows 3–4 not checked\.$/,'the highlighted receipt\'s exclusions never disappear');
+  assert.match(coverage[1],/: All four terms, first pass\.$/);assert.match(coverage[2],/: All four terms, second pass\.$/);
+  assert.ok(s.lines.includes('1 other distinct coverage description not shown; every receipt is on the return.'),JSON.stringify(s.lines));
+});
+
+test('a trusted decision that preceded execution is counted apart, never as a negative judgment time',async()=>{
+  const plan=await packageFor(),r=await computation(plan),a=await start('runner');assert.equal(a.type,'check');
+  ok(await submit('runner',await receipt(a,r.return_id),a));
+  // A trusted decision on the supplied evidence, recorded a day before the receipt arrived.
+  await q(`UPDATE returns SET status='accepted',final_rung='measured',provisional=false WHERE id=$1`,[r.return_id]);
+  await q(`INSERT INTO return_decisions (return_id,status,final_rung,provisional,by,note,decided_at) VALUES ($1,'accepted','measured',false,'trusted','judged on the evidence',now()-interval '1 day')`,[r.return_id]);
+  const board=ok(await call('/board')).research.checks;
+  assert.equal(board.judged,1);assert.equal(board.judged_before_execution,1);assert.equal(board.median_hours_receipt_to_judgment,null);
 });
