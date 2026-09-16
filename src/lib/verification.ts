@@ -197,10 +197,17 @@ export function judgmentBudget(plan?: VerificationPlan | null): number {
   // the program's runtime. Older packages get the same small initial assessment budget.
   return plan ? Math.min(4, Math.max(0.1, (plan.cost.judgment_minutes ?? 15) / 60)) : 0.5;
 }
-export async function validateReceiptUse(returnId: number, receiptId: unknown): Promise<void> {
-  if (receiptId === undefined || receiptId === null) return;
-  if (!Number.isSafeInteger(receiptId) || Number(receiptId) < 1) bad('verification_receipt_id must be a positive integer');
-  const receipt = (await verificationRuns(returnId)).find(r => Number(r.id) === receiptId);
+/** The record serves receipt ids as JSON strings (bigint); a reviewer may send the id back as it was received. */
+export function receiptId(raw: unknown): number | null {
+  if (raw === undefined || raw === null || raw === '') return null;
+  const n = typeof raw === 'string' && /^\d{1,15}$/.test(raw) ? Number(raw) : raw;
+  if (!Number.isSafeInteger(n) || Number(n) < 1) bad('verification_receipt_id must be a positive integer (the receipt id as served on the return)');
+  return Number(n);
+}
+export async function validateReceiptUse(returnId: number, raw: unknown): Promise<void> {
+  const id = receiptId(raw);
+  if (id === null) return;
+  const receipt = (await verificationRuns(returnId)).find(r => Number(r.id) === id);
   if (!receipt || !receipt.independent || !['recorded', 'accepted'].includes(receipt.receipt_status)) bad('verification_receipt_id must reference independent execution of this exact package in this project, with a valid receipt');
 }
 export type VerificationSummary = {

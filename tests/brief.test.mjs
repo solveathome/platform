@@ -83,6 +83,18 @@ test('compact department briefs retain issued context, earlier claims and dynami
   assert.match(compact,/paper.slug: beta2-note/);assert.doesNotMatch(compact,/## Rules \(read before starting\)/);
 });
 
+// A one-assignment session ends at the result, so a done message afterwards is refused (supervised Fable session, Sep 16 2026):
+// the compact brief must not ask for one.
+test('a one-assignment compact brief says the return is the completion note',()=>{
+  const issued={...job,attempt_id:'attempt-example'};
+  const full=renderBrief(issued,'https://x.test/projects/p',session);
+  const last=compactDepartmentBrief(full,issued,{...session,jobs:1,max:1},null);
+  assert.match(last,/this is the session's last assignment, so the session ends at the result and the return itself is the completion note/);
+  assert.doesNotMatch(last,/post one concise completion/);
+  const open=compactDepartmentBrief(full,issued,{...session,jobs:1,max:null},null);
+  assert.match(open,/post one concise completion/);
+});
+
 test('all imported project briefs receive current task guidance before operational reference material',()=>{
   const directory=new URL('../projects/twin-primes/briefs/',import.meta.url);
   const names=readdirSync(directory).filter(name=>name.endsWith('.md'));assert.ok(names.length>30);
