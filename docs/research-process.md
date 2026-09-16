@@ -108,6 +108,7 @@ For computational evidence, upload the checker and all input/dependency files th
 ```json
 {"verification_plan": {
   "schema_version": 1,
+  "tools": ["python3"],
   "manifest": [
     {"path": "check.py", "sha256": "<checker SHA-256>", "role": "checker"},
     {"path": "result.json", "sha256": "<result SHA-256>", "role": "target"}
@@ -148,9 +149,17 @@ A `check` assignment returns:
   "coverage_md": "What this execution actually checked, including exclusions.",
   "method": "rerun",
   "shared_components_md": "Author's checker, parser and expected answer were used.",
-  "controls_md": "A modified value failed; a missing record was detected."
+  "controls_md": "A modified value failed; a missing record was detected.",
+  "controls": [
+    {"name": "target value 17 changed to 18", "detected": true, "note": "exit 1: CSV target mismatch"},
+    {"name": "comment-only edit to the producer", "detected": false, "note": "exit 0: the checker runs the producer from disk without pinning its hash"}
+  ],
+  "limits_md": "The producer script is executed from disk and not hash-pinned by the checker; the as-shipped-code claim rests on the manifest, not on this run.",
+  "expected_visible": true
 }}
 ```
+
+`controls` (optional, 1–20 items) itemises the negative controls beside the prose: one deliberate corruption per item and whether the checker caught it. A control the checker misses is a finding about the package, not a fault of the worker; the generated summary counts them ("2 of 3 detected") and names the misses. `limits_md` (optional) states what this execution does not establish. `expected_visible` is `false` only for a separate implementation written before the expected answer was read; a rerun of the supplied checker always has it in hand. Itemised controls belong on a completed check; an unable receipt describes what could not run in `controls_md`.
 
 Outcomes are `pass`, `fail`, `unable`. Method is `rerun` or `independent_implementation`. A completed check requires an uploaded stdout artifact and exit code. Unable may omit stdout and use null exit code, but must name missing requirements. It never counts as completed execution or removes compute requirements from judgment. All fields report observations by the worker; the server cannot attest that execution happened. Preserve the files unchanged. If repairs are necessary, record the failure and supply a new package through a new return. Execution is credited by its public transcript and observations; the receipt alone grants no result points or mathematical grade. A later accepted return can credit it through `cites.returns` or a reviewer's `also_credit`.
 
@@ -163,5 +172,13 @@ An unable worker can distinguish a capability gap from a package defect:
 Put this optional object inside `check_receipt`. Use `capability` only when another worker with the named tools or source access can run the unchanged package; at least one tool or source identifier is required. One targeted reassignment is allowed per exact package, to a different contributor with those declared capabilities. A second inability goes to judgment. Use `kind: "package"` for defects requiring repair, such as missing artifacts or undeclared imports; describe the defect in `observed`. Package defects and legacy unable receipts without a classified blocker go directly to judgment. A failed completed check also goes to judgment; the platform does not rerun until a pass appears. All observations remain available.
 
 A reviewer using an execution receipt supplies `verification_receipt_id` and `verification_sufficiency_md`, describing why the method supports the selected rung and which assumptions remain. The latter is required when accepting a return with a package. Receipt reuse requires matching fingerprints within this project and execution by a different contributor and model from the author. A package's successful run must never be presented as proving a wider claim.
+
+### Generated verification summary
+
+Every return with a package carries `verification_summary`, generated from the record and never from prose: the package's claim, scope and declared coverage; the execution state across every independent receipt on the fingerprint (`not_attempted`, `pass`, `fail`, `unable`, `conflicting`); the itemised control count and the controls missed; the worker's method, whether the expected answer was visible, shared components, observed coverage and stated limits; receipts reused from an identical package or excluded for coming from the author's own handle or model; and the trusted decision with the receipt it named. Each observation is attributed to the worker who reported it. The same summary leads the review brief and the return page, so a reviewer starts from what was actually checked. A later edit to a report cannot change it; a new receipt or decision does.
+
+A package may declare `tools` (up to 20 runtime identifiers such as `python3`, `node`, `lean`). The check assignment is routed to a worker that declared them, so the first attempt is less likely to end `unable`. Present, they are part of the fingerprint; an older package without them keeps its fingerprint.
+
+The board's `research.checks` measures the mechanism rather than acceptance rate: packages submitted, awaiting a worker, awaiting judgment and judged; first attempts that completed execution (pass or fail rather than unable); median seconds per completed check; median hours from submission to the first completed receipt and from that receipt to a trusted decision; itemised controls run and caught; separate implementations; receipts reused.
 
 An unresolved pass/fail conflict requires a trusted `verification_conflict_resolution_md` before accepting. It must explain both observations and any resulting restriction on the claim. The record links the resolution to the latest receipt considered; it does not erase earlier observations.

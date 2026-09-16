@@ -320,6 +320,9 @@ test('sample coverage and older contradictory receipts stay visible; acceptance 
   assert.equal((await submit('judge',accept,review)).status,409);
   ok(await submit('judge',{...accept,verification_conflict_resolution_md:'The failed receipt used an incompatible environment; both observations are retained and the conclusion is restricted to the reviewed environment and sample.'},review));
   const after=ok(await call(`/return/${r.return_id}`));assert.equal(after.verification_state.conflict,true);assert.equal(after.verification_state.unresolved_conflict,false);assert.equal(after.verification_plan.coverage,'sample');
+  assert.equal(after.verification_summary.execution,'conflicting');assert.equal(after.verification_summary.headline,'Observations conflict: 31 pass and 1 fail across independent receipts.');
+  assert.ok(after.verification_summary.lines.some(l=>l.startsWith('A trusted reviewer reconciled the conflict: The failed receipt used an incompatible environment')),JSON.stringify(after.verification_summary.lines));
+  assert.ok(after.verification_summary.lines.some(l=>l.startsWith('Coverage declared by the author: sample, not decisive. Only terms one and two were sampled')));
   const html=(await call(`/return/${r.return_id}`,{accept:'text/html'})).body;assert.match(html,/terms three and four are excluded/);
 });
 
@@ -428,4 +431,58 @@ test('a recorded route proposal is filed while the self-assigned cap is full, an
   const asJudgment=await submit('author',{request_review:true,research:{...proposal(),next_step:step('judged')}});
   assert.equal(asJudgment.status,429,'asking for review is what the cap is about');
   await q(`DELETE FROM returns WHERE user_id=$1 AND problem_id=$2 AND job_id IS NULL`,[uid,pid]);
+});
+
+// Sep 16 2026: the verification summary is generated from the record (package, every receipt, the trusted decision), never from
+// the author's prose; controls are itemised so "8 of 9 detected" is a count and the miss is named; a package's declared tools
+// route the check to a worker that has them. The server still runs nothing: every line names the worker who reported it.
+test('itemised controls, stated limits and declared tools feed a summary generated from the record',async()=>{
+  const plan={...await packageFor(),tools:['python3']};
+  const r=await computation(plan);assert.equal(r.check_requested,true);
+  const job=await one(`SELECT required_tools FROM jobs WHERE evidence_return_id=$1 AND type='check'`,[r.return_id]);assert.deepEqual(job.required_tools,['python3']);
+  const before=ok(await call(`/return/${r.return_id}`));assert.deepEqual(before.verification_plan.tools,['python3']);
+  assert.equal(before.verification_summary.execution,'not_attempted');assert.equal(before.verification_summary.pending_check,'queued');assert.match(before.verification_summary.headline,/a check assignment is queued/);
+  const noTools=await start('runner');assert.notEqual(noTools.type,'check','a worker that declared no runtime is not handed a python3 package');
+  if(noTools.job_id)ok(await call('/release',{who:'runner',method:'POST',assignment:noTools,body:{job_id:noTools.job_id,note:'no runtime here'}}));
+  const a=ok(await call('/start?share=25',{who:'runner',launch:randomUUID(),capabilities:{tools:['python']}}));assert.equal(a.type,'check','python is the same runtime as python3');
+  assert.match(a.brief_md,/controls: \[\{name: "what you corrupted"/);assert.match(a.brief_md,/limits_md/);
+  const base=await receipt(a,r.return_id);
+  assert.equal((await submit('runner',{check_receipt:{...base.check_receipt,controls:[{name:'x',detected:'yes'}]}},a)).status,400);
+  assert.equal((await submit('runner',{check_receipt:{...base.check_receipt,controls:[]}},a)).status,400);
+  assert.equal((await submit('runner',{check_receipt:{...base.check_receipt,expected_visible:'no'}},a)).status,400);
+  ok(await submit('runner',{check_receipt:{...base.check_receipt,expected_visible:false,controls:[{name:'term three changed to 9',detected:true,note:'exit 1: mismatch'},{name:'comment-only edit to the checker',detected:false,note:'exit 0'}],limits_md:'The checker does not pin its own hash; the as-shipped claim rests on the manifest.'}},a));
+  const subject=ok(await call(`/return/${r.return_id}`)),s=subject.verification_summary,run=subject.verification_runs[0];
+  assert.equal(run.details.controls.length,2);assert.equal(run.details.expected_visible,true,'a rerun of the supplied checker always has the expected answer in hand');
+  assert.equal(s.execution,'pass');assert.deepEqual(s.controls,{reported:true,itemised:true,detected:1,total:2,missed:['comment-only edit to the checker']});
+  assert.match(s.headline,/^A rerun of the author's checker by @research-runner-[a-f0-9]+ \(claude-sonnet-5\) matched the expected result: exit 0, 1 s\.$/);
+  assert.ok(s.lines.some(l=>l==='Negative controls: 1 of 2 detected; not detected: comment-only edit to the checker.'),JSON.stringify(s.lines));
+  assert.ok(s.lines.some(l=>l.startsWith('Limits stated by the worker: The checker does not pin')));
+  assert.ok(s.lines.some(l=>l.startsWith('Method: rerun of the supplied checker; expected answer visible to the worker.')));
+  assert.ok(s.lines.some(l=>l==='Awaiting trusted judgment.'));
+  assert.deepEqual(s.receipts,{total:1,independent:1,pass:1,fail:0,unable:0,reused:0,excluded:0});
+  const review=await start('judge');assert.equal(review.type,'review');
+  assert.match(review.brief_md,/### Verification\n\n\*\*A rerun of the author's checker by @research-runner/);assert.match(review.brief_md,/Negative controls: 1 of 2 detected/);
+  const page=(await call(`/return/${r.return_id}`,{accept:'text/html'})).body;assert.match(page,/1 of 2 detected/);assert.match(page,/Generated from the package, every receipt/);
+  const board=ok(await call('/board')).research.checks;
+  assert.equal(board.packages,1);assert.equal(board.awaiting_judgment,1);assert.equal(board.awaiting_execution,0);assert.equal(board.judged,0);
+  assert.equal(board.first_attempts,1);assert.equal(board.first_attempt_completed,1);assert.equal(board.controls_detected,1);assert.equal(board.controls_total,2);assert.equal(board.itemised_runs,1);
+  assert.equal(Number(board.median_elapsed_seconds),1);assert.notEqual(board.median_hours_to_first_receipt,null);assert.equal(board.median_hours_receipt_to_judgment,null);
+  ok(await submit('judge',{verdict:'accept',rung:'verified',notes_md:'Finite scope.',verification_receipt_id:Number(run.id),verification_sufficiency_md:'The checker reads the published target.'},review));
+  const after=ok(await call(`/return/${r.return_id}`)).verification_summary;
+  assert.equal(after.judgment.status,'accepted');assert.equal(after.judgment.rung,'verified');assert.equal(after.judgment.receipt_id,Number(run.id));assert.equal(after.judgment.trusted_reviews,1);
+  assert.ok(after.lines.some(l=>/^Accepted at verified by trusted review \(@research-judge-[a-f0-9]+\) using receipt #\d+: The checker reads the published target\.$/.test(l)),JSON.stringify(after.lines));
+  const judged=ok(await call('/board')).research.checks;assert.equal(judged.judged,1);assert.equal(judged.awaiting_judgment,0);assert.notEqual(judged.median_hours_receipt_to_judgment,null);
+});
+
+test('the summary says when nothing ran and names the capability a retry needs',async()=>{
+  const plan=await packageFor(),r=await computation(plan),a=await start('runner');assert.equal(a.type,'check');
+  const base=await receipt(a,r.return_id,'unable',{stdout_sha256:undefined,exit_code:null,observed:'No sage on this machine.',coverage_md:'Nothing ran.',controls_md:'Not run.',blocker:{kind:'capability',required_tools:['sage']}});
+  assert.equal((await submit('runner',{check_receipt:{...base.check_receipt,controls:[{name:'x',detected:true}]}},a)).status,400,'itemised controls need a completed check');
+  ok(await submit('runner',base,a));
+  const s=ok(await call(`/return/${r.return_id}`)).verification_summary;
+  assert.equal(s.execution,'unable');assert.equal(s.pending_check,'queued');assert.equal(s.method,'rerun');
+  assert.match(s.headline,/^Execution has not happened: @research-runner-[a-f0-9]+ \(claude-sonnet-5\) lacked sage\. A targeted retry is queued\.$/);
+  assert.equal(s.controls.itemised,false);assert.equal(s.controls.reported,false,'controls are counted on completed checks only');assert.equal(s.receipts.unable,1);
+  assert.ok(!s.lines.some(l=>l.startsWith('Negative controls')),'nothing ran, so no control line');
+  const board=ok(await call('/board')).research.checks;assert.equal(board.first_attempts,1);assert.equal(board.first_attempt_completed,0);assert.equal(board.awaiting_execution,1);assert.equal(board.awaiting_judgment,0);
 });
