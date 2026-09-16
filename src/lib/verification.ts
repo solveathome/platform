@@ -214,7 +214,10 @@ export type VerificationSummary = {
   pending_check: 'queued' | 'assigned' | 'expired' | null;
   unresolved_conflict: boolean;
   latest_receipt_id: number | null;
-  judgment: { status: string; rung: string | null; trusted_reviews: number; advisory_reviews: number; receipt_id: number | null; sufficiency_md: string | null };
+  /** Unresolved caveats with their source receipts: stated limits and controls the checker missed. A later pass never hides them. */
+  caveats: { receipt_id: number; handle: string; text: string }[];
+  /** From the decision record: `provisional` means advisory reviews only, which never counts as accepted anywhere. */
+  judgment: { status: string; provisional: boolean; by: 'trusted' | 'advisory' | null; rung: string | null; trusted_reviews: number; advisory_reviews: number; receipt_id: number | null; sufficiency_md: string | null };
 };
 const clip = (s: unknown, n: number) => { const t = String(s ?? '').replace(/\s+/g, ' ').trim(); return t.length > n ? t.slice(0, n - 1).trimEnd() + '…' : t; };
 const who = (r: any) => `@${r.handle} (${r.model})`;
@@ -224,8 +227,9 @@ const who = (r: any) => `@${r.handle} (${r.model})`;
  * "verified through 1,000". Every observation names the worker who reported it; the server ran nothing.
  */
 export async function verificationSummary(returnId: number): Promise<VerificationSummary | null> {
-  const ret = await one(`SELECT id,status,final_rung,verification_plan,verification_fingerprint,review_admitted_at,problem_id FROM returns WHERE id=$1`, [returnId]);
+  const ret = await one(`SELECT id,status,provisional,final_rung,verification_plan,verification_fingerprint,review_admitted_at,problem_id FROM returns WHERE id=$1`, [returnId]);
   if (!ret?.verification_plan) return null;
+  const decision = await one(`SELECT status,provisional,by,final_rung FROM return_decisions WHERE return_id=$1 ORDER BY id DESC LIMIT 1`, [returnId]);
   const plan: VerificationPlan = ret.verification_plan;
   const runs = await verificationRuns(returnId);
   const state = await verificationState(returnId);
@@ -266,36 +270,66 @@ export async function verificationSummary(returnId: number): Promise<Verificatio
   const allControls: CheckControl[] = itemised.flatMap(r => r.details.controls);
   const missed = allControls.filter(c => !c.detected).map(c => c.name);
   const controls = { reported: completed.some(r => String(r.details?.controls_md ?? '').trim().length > 0), itemised: itemised.length > 0, detected: itemised.length ? allControls.length - missed.length : null, total: itemised.length ? allControls.length : null, missed };
+  // Caveats keep their source receipt. A later passing receipt never hides an earlier stated limit or a missed control;
+  // only a reviewer's written sufficiency explains why one no longer applies.
+  const caveats: VerificationSummary['caveats'] = [];
+  for (const r of [...completed].reverse()) {   // oldest first, so the record reads in order
+    if (r.details?.limits_md) caveats.push({ receipt_id: Number(r.id), handle: r.handle, text: clip(r.details.limits_md, 300) });
+    for (const c of (Array.isArray(r.details?.controls) ? r.details.controls : []) as CheckControl[]) if (!c.detected) caveats.push({ receipt_id: Number(r.id), handle: r.handle, text: `Control not detected: ${clip(c.name, 120)}${c.note ? ` (${clip(c.note, 120)})` : ''}` });
+  }
   if (completed.length) {
     lines.push(controls.itemised ? `Negative controls: ${controls.detected} of ${controls.total} detected${missed.length ? `; not detected: ${missed.map(m => clip(m, 80)).join('; ')}` : ''}.`
       : controls.reported ? 'Negative controls: reported in prose by the worker, not itemised.' : 'Negative controls: none reported.');
     const m = latest.details?.method === 'independent_implementation';
-    lines.push(`Method: ${m ? 'separate implementation' : 'rerun of the supplied checker'}; expected answer ${latest.details?.expected_visible === false ? 'not read before implementing' : 'visible to the worker'}. Shared: ${clip(latest.details?.shared_components_md, 200)}`);
-    lines.push(`Worker-observed coverage: ${clip(latest.details?.coverage_md, 240)}`);
-    if (latest.details?.limits_md) lines.push(`Limits stated by the worker: ${clip(latest.details.limits_md, 300)}`);
+    lines.push(`Method (receipt #${latest.id}): ${m ? 'separate implementation' : 'rerun of the supplied checker'}; expected answer ${latest.details?.expected_visible === false ? 'not read before implementing' : 'visible to the worker'}. Shared: ${clip(latest.details?.shared_components_md, 200)}`);
+    const coverages = new Map<string, any>();
+    for (const r of [...completed].reverse()) { const key = clip(r.details?.coverage_md, 240); if (key && !coverages.has(key)) coverages.set(key, r); }
+    for (const [text, r] of [...coverages].slice(0, 3)) lines.push(`Worker-observed coverage (receipt #${r.id}, @${r.handle}): ${text}`);
+    if (completed.length > 1) lines.push(`${completed.length} completed independent receipts; all are on the record.`);
+    for (const c of caveats) lines.push(`Caveat from receipt #${c.receipt_id} (@${c.handle}): ${c.text}`);
   }
   const reused = runs.filter(r => r.reused).length, excluded = runs.length - valid.length;
   if (reused) lines.push(`${reused} receipt${reused === 1 ? '' : 's'} come from another submission of the identical package.`);
   if (excluded) lines.push(`${excluded} receipt${excluded === 1 ? '' : 's'} excluded: from the author's own handle or model, or withdrawn.`);
-  // Judgment: the trusted decision on the record, never inferred from receipts.
+  // Judgment: read from the decision record. Advisory-only decisions are provisional and never count as accepted or rejected.
   const trusted = reviews.filter(v => v.trusted && !v.needs_reassessment), advisory = reviews.filter(v => !v.trusted);
-  const decider = trusted.find(v => (v.verdict === 'accept') === (ret.status === 'accepted')) ?? trusted[trusted.length - 1] ?? null;
-  const judgment = { status: ret.status, rung: ret.final_rung ?? null, trusted_reviews: trusted.length, advisory_reviews: advisory.length, receipt_id: decider?.verification_receipt_id ? Number(decider.verification_receipt_id) : null, sufficiency_md: decider?.verification_sufficiency_md ?? null };
-  if (ret.status === 'accepted') lines.push(`Accepted${ret.final_rung ? ` at ${ret.final_rung}` : ''} by trusted review${decider ? ` (@${decider.handle})` : ''}${judgment.receipt_id ? ` using receipt #${judgment.receipt_id}` : ' without naming a receipt'}${judgment.sufficiency_md ? `: ${clip(judgment.sufficiency_md, 240)}` : '.'}`);
+  const provisional = !!ret.provisional;
+  const by: 'trusted' | 'advisory' | null = ['trusted', 'advisory'].includes(decision?.by) ? decision.by : null;
+  const decider = provisional ? null : trusted.find(v => (v.verdict === 'accept') === (ret.status === 'accepted')) ?? trusted[trusted.length - 1] ?? null;
+  const judgment = { status: ret.status, provisional, by, rung: ret.final_rung ?? null, trusted_reviews: trusted.length, advisory_reviews: advisory.length, receipt_id: decider?.verification_receipt_id ? Number(decider.verification_receipt_id) : null, sufficiency_md: decider?.verification_sufficiency_md ?? null };
+  if (provisional) lines.push(`Provisional ${ret.status}${ret.final_rung ? ` (${ret.final_rung})` : ''} on ${advisory.length} advisory review${advisory.length === 1 ? '' : 's'} only: no trusted review yet, so this counts as neither accepted nor rejected; a trusted review makes it final.`);
+  else if (ret.status === 'accepted') lines.push(`Accepted${ret.final_rung ? ` at ${ret.final_rung}` : ''} by trusted review${decider ? ` (@${decider.handle})` : ''}${judgment.receipt_id ? ` using receipt #${judgment.receipt_id}` : ' without naming a receipt'}${judgment.sufficiency_md ? `: ${clip(judgment.sufficiency_md, 240)}` : '.'}`);
   else if (ret.status === 'rejected') lines.push(`Rejected by trusted review${decider ? ` (@${decider.handle})` : ''}${decider?.reject_reason ? `: ${clip(decider.reject_reason, 200)}` : '.'}`);
   else if (ret.status === 'pending') lines.push(`Awaiting trusted judgment${advisory.length ? ` (${advisory.length} advisory review${advisory.length === 1 ? '' : 's'} so far)` : ''}.`);
   else if (ret.status === 'recorded') lines.push('Recorded without a review request; elevate it to put it before reviewers.');
   else lines.push(`Status: ${ret.status}.`);
-  return { execution: state.execution, headline, lines, coverage: plan.coverage, method: latest?.details?.method ?? null, controls, receipts: { total: runs.length, independent: valid.length, pass: passes.length, fail: fails.length, unable: unables.length, reused, excluded }, pending_check, unresolved_conflict: !!state.unresolved_conflict, latest_receipt_id: latest ? Number(latest.id) : null, judgment };
+  return { execution: state.execution, headline, lines, coverage: plan.coverage, method: latest?.details?.method ?? null, controls, receipts: { total: runs.length, independent: valid.length, pass: passes.length, fail: fails.length, unable: unables.length, reused, excluded }, pending_check, unresolved_conflict: !!state.unresolved_conflict, latest_receipt_id: latest ? Number(latest.id) : null, caveats, judgment };
 }
 export function summaryMarkdown(s: VerificationSummary): string {
-  return `**${s.headline}**\n\n${s.lines.map(l => `- ${l}`).join('\n')}\n\n_Generated from the package, every receipt on its fingerprint and the trusted decision. Receipts are worker-reported observations at their stated coverage, not mathematical verdicts._`;
+  return `**${s.headline}**\n\n${s.lines.map(l => `- ${l}`).join('\n')}\n\n_Generated from the package, every receipt on its fingerprint and the decision record. Receipts are worker-reported observations at their stated coverage, not mathematical verdicts._`;
 }
-export async function verificationBrief(returnId: number): Promise<string> {
+/** What a reviewer is asked to decide, given the state of the evidence: the cheapest credible check, bounded escalation. */
+function judgmentAsk(s: VerificationSummary): string {
+  const tail = ' If more work is needed, reject as unverifiable and name in needs_md the precise missing obligation and the smallest useful next check, with its judgment_minutes: a certificate to read, a reduction step to inspect, a changed output to compare, or one small decisive test. Never a rerun of the research.';
+  if (s.execution === 'conflicting') return `Receipts conflict. Acceptance needs a trusted verification_conflict_resolution_md explaining both observations and any restriction on the claim. If you cannot reconcile them, name the smallest check that would decide between them.${tail}`;
+  if (s.execution === 'fail') return `Independent execution did not match. Decide whether the mismatch is in the claim, the package or the environment; reject with the exact difference, or, if the package is repairable, say what a corrected package needs.${tail}`;
+  if (s.execution === 'pass') return `Decide whether this method at this coverage establishes the claim at the rung requested${s.caveats.length ? `, with the ${s.caveats.length} caveat${s.caveats.length === 1 ? '' : 's'} above either accounted for or restricting the claim` : ''}. Reuse the receipt: name it in verification_receipt_id and state in verification_sufficiency_md what it establishes and which assumptions remain. Do not rerun the package unless you can name a specific weakness the receipt leaves open; then do the smallest check that addresses it and say why. A sample stays a sample.${tail}`;
+  return `No independent execution exists${s.pending_check === 'queued' || s.pending_check === 'assigned' ? ' yet' : ''}. Judge the supplied evidence on its own terms at its actual coverage, or reject as unverifiable.${tail}`;
+}
+/**
+ * The verification section of a brief or page. A reviewer gets the summary, the specific judgment asked, and one line per
+ * receipt; the full package and every receipt are one GET away, fetched when a particular uncertainty warrants it. A check
+ * worker and the public page get the record in full.
+ */
+export async function verificationBrief(returnId: number, audience: 'review' | 'record' = 'record'): Promise<string> {
   const ret = await one(`SELECT verification_plan,verification_fingerprint FROM returns WHERE id=$1`, [returnId]);
   if (!ret?.verification_plan) return '';
   const runs = await verificationRuns(returnId);
   const state = await verificationState(returnId);
   const summary = await verificationSummary(returnId);
+  if (audience === 'review' && summary) {
+    const receipts = runs.slice(0, 10).map(r => `- Receipt #${r.id} (return #${r.result_return_id}): ${r.outcome}, @${r.handle} (${r.model}), ${r.details?.method ?? 'method not recorded'}, ${Math.round(Number(r.elapsed_seconds))} s${r.reused ? ', reused from an identical package' : ''}${!r.independent ? ', not independent of the author' : ''}${!['recorded', 'accepted'].includes(r.receipt_status) ? `, receipt ${r.receipt_status}` : ''}`).join('\n');
+    return `\n\n### Verification\n\n${summaryMarkdown(summary)}\n\n**Judgment required.** ${judgmentAsk(summary)}\n\n${runs.length ? `Receipts on this package (fingerprint ${ret.verification_fingerprint.slice(0, 12)}…):\n${receipts}${runs.length > 10 ? `\n- …and ${runs.length - 10} more on the return.` : ''}` : 'No receipts on this package.'}\n\nThe full package (manifest, command, expected output, comparison rule) and every receipt with its observed output are at GET <project base>/return/${returnId} as \`verification_plan\`, \`verification_runs\` and \`verification_summary\`; fetch them when a specific uncertainty needs them.\n`;
+  }
   return `\n\n### Verification\n\n${summary ? summaryMarkdown(summary) : ''}\n\n### Verification package\n\nFingerprint: ${ret.verification_fingerprint}\n\n\`\`\`json\n${JSON.stringify(ret.verification_plan, null, 2)}\n\`\`\`\n\nExecution state across ALL receipts: ${JSON.stringify(state)}\n\nExecution receipts (reported observations; contributor/model separation does not imply independent algorithms):\n${runs.length ? runs.slice(0, 10).map(r => `- Receipt ${r.id}, return #${r.result_return_id}: ${r.outcome}; @${r.handle}, ${r.model}; ${r.elapsed_seconds} seconds; ${r.independent ? 'different contributor and model' : 'not independent of this author'}; status ${r.receipt_status}${r.reused ? '; reused exact package' : ''}. Observed: ${r.observed}. Provenance and coverage: ${JSON.stringify(r.details)}`).join('\n') : 'None yet.'}\n\nThe return JSON contains every receipt, including older failures. Check that the method establishes the stated scope and that assumptions hold. A sample stays a sample. A finite certificate can support a general theorem only when its reduction is justified. Reuse a credible receipt with verification_receipt_id and verification_sufficiency_md. Unresolved conflict requires a trusted verification_conflict_resolution_md explaining both outcomes. Inspect the full transcript when needed.\n`;
 }

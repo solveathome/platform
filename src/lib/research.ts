@@ -29,21 +29,24 @@ export async function researchSummary(problemId: number): Promise<any> {
     count(*) FILTER (WHERE v.outcome='fail')::int AS failed,count(*) FILTER (WHERE v.outcome='unable')::int AS unable,
     coalesce(sum(v.elapsed_seconds),0) AS elapsed_seconds FROM verification_runs v JOIN returns r ON r.id=v.result_return_id WHERE r.problem_id=$1`, [problemId]);
   const reuse = await one(`SELECT count(*)::int AS reused_receipts FROM reviews rv JOIN returns r ON r.id=rv.return_id JOIN verification_runs v ON v.id=rv.verification_receipt_id WHERE r.problem_id=$1 AND v.subject_return_id<>r.id`, [problemId]);
-  // Measurement the proposal asked for (Sep 14): where packages stand, how fast a first receipt arrives, whether the first attempt
+  // Measurement the proposal asked for (Sep 14): where packages stand,
+  // A reused receipt can predate the package it now serves: that package waited zero hours, never a negative number.
+  // Advisory-only (provisional) decisions are open work, never judged. how fast a first receipt arrives, whether the first attempt
   // reconstructs at all, and whether the controls workers ran caught anything. Counted from receipts, never from acceptance rate.
-  const packages = await one(`WITH pkg AS (SELECT r.id,r.status,r.user_id,r.model,r.verification_fingerprint AS fp,r.created_at FROM returns r WHERE r.problem_id=$1 AND r.verification_plan IS NOT NULL AND r.duplicate_of IS NULL),
+  const packages = await one(`WITH pkg AS (SELECT r.id,r.status,r.provisional,(r.status='pending' OR r.provisional) AS open,r.user_id,r.model,r.verification_fingerprint AS fp,r.created_at FROM returns r WHERE r.problem_id=$1 AND r.verification_plan IS NOT NULL AND r.duplicate_of IS NULL),
     run AS (SELECT v.outcome,v.fingerprint,v.created_at,w.user_id,w.model FROM verification_runs v JOIN returns w ON w.id=v.result_return_id WHERE w.problem_id=$1 AND w.status IN ('recorded','accepted')),
     independent AS (SELECT p.id,r.outcome,r.created_at FROM pkg p JOIN run r ON r.fingerprint=p.fp AND r.user_id<>p.user_id AND r.model<>p.model),
     completed AS (SELECT id,min(created_at) AS first_at FROM independent WHERE outcome IN ('pass','fail') GROUP BY id),
     first_attempt AS (SELECT DISTINCT ON (id) id,outcome FROM independent ORDER BY id,created_at),
-    decided AS (SELECT d.return_id AS id,min(d.decided_at) AS decided_at FROM return_decisions d JOIN pkg p ON p.id=d.return_id WHERE d.status IN ('accepted','rejected') GROUP BY d.return_id)
+    decided AS (SELECT d.return_id AS id,min(d.decided_at) AS decided_at FROM return_decisions d JOIN pkg p ON p.id=d.return_id WHERE d.status IN ('accepted','rejected') AND NOT d.provisional GROUP BY d.return_id)
     SELECT (SELECT count(*) FROM pkg)::int AS packages,
-      (SELECT count(*) FROM pkg WHERE status='pending' AND id IN (SELECT id FROM completed))::int AS awaiting_judgment,
-      (SELECT count(*) FROM pkg WHERE status='pending' AND id NOT IN (SELECT id FROM completed))::int AS awaiting_execution,
-      (SELECT count(*) FROM pkg WHERE status IN ('accepted','rejected'))::int AS judged,
+      (SELECT count(*) FROM pkg WHERE open AND id IN (SELECT id FROM completed))::int AS awaiting_judgment,
+      (SELECT count(*) FROM pkg WHERE open AND id NOT IN (SELECT id FROM completed))::int AS awaiting_execution,
+      (SELECT count(*) FROM pkg WHERE provisional)::int AS provisional,
+      (SELECT count(*) FROM pkg WHERE status IN ('accepted','rejected') AND NOT provisional)::int AS judged,
       (SELECT count(*) FROM first_attempt)::int AS first_attempts,
       (SELECT count(*) FROM first_attempt WHERE outcome IN ('pass','fail'))::int AS first_attempt_completed,
-      (SELECT round((percentile_cont(0.5) WITHIN GROUP (ORDER BY (extract(epoch FROM c.first_at-p.created_at)/3600)::double precision))::numeric,2) FROM completed c JOIN pkg p ON p.id=c.id) AS median_hours_to_first_receipt,
+      (SELECT round((percentile_cont(0.5) WITHIN GROUP (ORDER BY greatest(0,extract(epoch FROM c.first_at-p.created_at)/3600)::double precision))::numeric,2) FROM completed c JOIN pkg p ON p.id=c.id) AS median_hours_to_first_receipt,
       (SELECT round((percentile_cont(0.5) WITHIN GROUP (ORDER BY (extract(epoch FROM d.decided_at-c.first_at)/3600)::double precision))::numeric,2) FROM decided d JOIN completed c ON c.id=d.id) AS median_hours_receipt_to_judgment`, [problemId]);
   const controls = await one(`SELECT count(*) FILTER (WHERE v.outcome IN ('pass','fail'))::int AS completed_runs,
       count(*) FILTER (WHERE jsonb_typeof(v.details->'controls')='array')::int AS itemised_runs,
