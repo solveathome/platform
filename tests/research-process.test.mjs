@@ -468,7 +468,14 @@ test('itemised controls, stated limits and declared tools feed a summary generat
   assert.match(review.brief_md,/\*\*Judgment required\.\*\* Decide whether this method at this coverage establishes the claim at the rung requested, with the 2 caveats above/);
   assert.match(review.brief_md,/Receipts on this package \(fingerprint [a-f0-9]{12}…\):\n- Receipt #\d+ \(return #\d+\): pass, @research-runner-[a-f0-9]+ \(claude-sonnet-5\), rerun, 1 s$/m);
   assert.doesNotMatch(review.brief_md,/"schema_version": 1/,'a reviewer fetches the package when a specific uncertainty needs it');
-  assert.match(review.brief_md,/Your job: judge it within the budget, starting from the Verification section below/);assert.doesNotMatch(review.brief_md,/Fetch the return's files \(GET \/files\/<sha256>\) and the served scripts/,'one path, not two');assert.doesNotMatch(review.brief_md,/before judging/);
+  // The complete served brief has one template: no sentence asks the reviewer to fetch or read everything first.
+  assert.match(review.brief_md,/Your job: judge it within the budget from the Verification section\./);
+  for(const conflicting of [/Fetch it at GET/,/Fetch the return's files/,/Read the code and the recipe/,/before judging/,/Read the exact claim, its scope, the supplied check and recorded observations first/,/the author's captured outputs, hashes and transcript are the evidence/])assert.doesNotMatch(review.brief_md,conflicting,`conflicting obligation ${conflicting}`);
+  assert.match(review.brief_md,/How deep to go \(verification\): `"verification": "read"` is judging from the Verification section/);
+  assert.match(review.brief_md,/\*\*Basis for judgment \(the package's own words, immutable and fingerprinted\)\.\*\*\n\nClaim: The supplied four terms equal 1,2,3,4\.\n\nScope: Terms one through four only\.\n\nAssumptions: JSON contains integers\.\n\nWhy the check supports the claim: /);
+  assert.match(review.brief_md,/Caveats, in full:\n- Receipt #\d+ \(@research-runner-[a-f0-9]+\): The checker does not pin its own hash; the as-shipped claim rests on the manifest\.\n- Receipt #\d+ \(@research-runner-[a-f0-9]+\): Control not detected: comment-only edit to the checker \(exit 0\)/);
+  assert.ok(s.lines.some(l=>l==='Assumptions declared by the author: JSON contains integers.'));assert.ok(s.lines.some(l=>l.startsWith('Why the check supports the claim, as the author argues it: ')));
+  assert.equal(s.basis.assumptions,'JSON contains integers.');
   assert.match(review.brief_md,/smallest useful next check/);
   const page=(await call(`/return/${r.return_id}`,{accept:'text/html'})).body;assert.match(page,/1 of 2 detected/);assert.match(page,/Generated from the package, every receipt/);
   const board=ok(await call('/board')).research.checks;
@@ -547,6 +554,22 @@ test('the highlighted receipt keeps its own coverage and exclusions, however man
   assert.match(coverage[0],/^Worker-observed coverage \(receipt #\d+, @research-runner-[a-f0-9]+, highlighted above\): Rows 1–2 only; rows 3–4 not checked\.$/,'the highlighted receipt\'s exclusions never disappear');
   assert.match(coverage[1],/: All four terms, first pass\.$/);assert.match(coverage[2],/: All four terms, second pass\.$/);
   assert.ok(s.lines.includes('1 other distinct coverage description not shown; every receipt is on the return.'),JSON.stringify(s.lines));
+});
+
+test('coverage is deduplicated on the complete text: a qualification past the display length is neither merged away nor hidden',async()=>{
+  const plan=await packageFor(),r=await computation(plan),a=await start('runner');assert.equal(a.type,'check');
+  const opening='All rows of the supplied table were recomputed with the pinned checker in a clean directory and compared value by value against the published target, with exit codes and byte counts recorded for the run, the environment pinned to CPython 3.12 and the comparison exact. ';
+  assert.ok(opening.length>240);
+  ok(await submit('runner',{check_receipt:{...(await receipt(a,r.return_id)).check_receipt,coverage_md:opening+'Rows 1–4 all checked.'}},a));
+  const subject=ok(await call(`/return/${r.return_id}`));
+  const result=await one(`INSERT INTO returns (problem_id,type,user_id,model,provider,report_md,transcript,status) VALUES ($1,'check',$2,$3,'anthropic','Observed pass.','t','recorded') RETURNING id`,[pid,users.runner.id,models.runner]);
+  await q(`INSERT INTO verification_runs (subject_return_id,result_return_id,fingerprint,outcome,observed,elapsed_seconds,details) VALUES ($1,$2,$3,'pass','pass',1,$4)`,[r.return_id,result.id,subject.verification_fingerprint,JSON.stringify({exit_code:0,stdout_sha256:null,environment:'Python 3.12',coverage_md:opening+'Rows after 2 excluded.',method:'rerun',shared_components_md:'Author checker.',controls_md:'Changed term fails.',expected_visible:true,blocker:null})]);
+  const s=ok(await call(`/return/${r.return_id}`)).verification_summary;
+  assert.equal(s.coverages.length,2,'same opening, different exclusions: two coverages');
+  assert.equal(s.coverages[0].highlighted,true);assert.ok(s.coverages[0].text.endsWith('Rows after 2 excluded.'));assert.ok(s.coverages[1].text.endsWith('Rows 1–4 all checked.'));
+  const shown=s.lines.filter(l=>l.startsWith('Worker-observed coverage'));assert.equal(shown.length,2);
+  for(const l of shown)assert.match(l,/… \(shortened; full text in verification_summary\.coverages on the return\)$/,l);
+  const review=await start('judge');assert.match(review.brief_md,/Coverage each worker observed, in full:\n- Receipt #\d+ \(@research-runner-[a-f0-9]+, highlighted\): .*Rows after 2 excluded\.\n- Receipt #\d+ \(@research-runner-[a-f0-9]+\): .*Rows 1–4 all checked\./);
 });
 
 test('a trusted decision that preceded execution is counted apart, never as a negative judgment time',async()=>{
