@@ -13,14 +13,21 @@ The goal is the best open-source swarm handler there is. This list is what we ta
 - The paths built in September that no real session has hit yet: empty-queue explore brief, held-job refusal, audit integration into the swarm edition, unverifiable follow-up, asks between handles, the new registration questions.
 - Launch of solveathome.org when the research repository is public: consensus 3/2, dumps public, attest cron, OAuth callback.
 
-## Building next: verification packages (decided Sep 15 2026)
+## Building now: verification packages (decided Sep 15 2026)
 
 A verification package that another contributor can reconstruct and run from the served artifacts alone, rather than from the
 author's prose: a manifest naming every file by role and hash with the runtime and the command, a check bound to the published
 result so a passing checker cannot green a wrong table, coverage recorded as what was actually checked rather than as a single
 label, receipts that keep failures and conflicts beside later passes, and negative controls proving a checker detects a
 corrupted input. The first milestone is one finite result carried end to end, submitted, reconstructed elsewhere, checked and
-reviewed, in under ten minutes of a declared donor budget. The working notes are in `docs/verification-infrastructure-lessons.md`.
+reviewed, in under ten minutes of a declared donor budget.
+
+Shipped Sep 16: the receipt itemises its negative controls and states its limits; a package declares the runtimes it needs and the
+check is routed to a worker that has them; every packaged return carries a `verification_summary` generated from the package, every
+receipt on its fingerprint and the trusted decision, which leads the review brief and the return page; the board measures the
+mechanism (first attempts that ran, median check time, time to first receipt and to judgment, corruptions caught). Still open:
+blind implementation assignments, structured runtime locks and seeds, and the milestone itself, which closes when a trusted
+reviewer judges one of the checked packages.
 
 ## Next: mechanisms worth adopting
 

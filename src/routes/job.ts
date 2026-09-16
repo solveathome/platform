@@ -12,7 +12,7 @@ import { isDeepStrictEqual } from "node:util";
 import { backlogFor, selectJob, computeBlocked, discoveryShare, discoveryDue, allocation, researchPolicy, researchAllocation, portfolioOrder, researchBucket, type SchedulingAgent } from "../lib/scheduler.js";
 import { parseResearch, stageOf } from '../lib/research-format.js';
 import { recordResearch, prepareRescue, researchBrief, routeContext, reconsiderDependents } from '../lib/research.js';
-import { parseVerificationPlan, saveVerificationPlan, queueCheck, saveCheckReceipt, verificationRuns, verificationState, verificationBrief, judgmentBudget, validateReceiptUse, isCompletedCheck, expireWaitingChecks, checkWaitExpired, identicalClaim } from '../lib/verification.js';
+import { parseVerificationPlan, saveVerificationPlan, queueCheck, saveCheckReceipt, verificationRuns, verificationState, verificationBrief, judgmentBudget, validateReceiptUse, isCompletedCheck, expireWaitingChecks, checkWaitExpired, identicalClaim, verificationSummary } from '../lib/verification.js';
 import { readFileSync } from 'node:fs';
 import { ROOT } from '../lib/paths.js';
 import { bearer, optionalAuth, modelTier } from "../lib/auth.js";
@@ -1476,6 +1476,7 @@ job.get("/return/:id", optionalAuth, project, async (req: any, res) => {
   r.review_deferred = r.status === 'pending' && !r.provisional && !r.duplicate_of && !r.review_admitted_at;
   r.verification_runs = await verificationRuns(Number(r.id));
   r.verification_state = r.verification_plan ? await verificationState(Number(r.id)) : null;
+  r.verification_summary = r.verification_plan ? await verificationSummary(Number(r.id)) : null;   // generated from the record; see summaryMarkdown for the page
   r.canonical_return = r.verification_plan && r.duplicate_of ? await one(`SELECT id,status,final_rung,provisional FROM returns WHERE id=$1`, [r.duplicate_of]) : null;
   r.review_history = await q(`SELECT h.review-'transcript'||jsonb_build_object('handle',u.handle) AS review,h.archived_at FROM review_history h LEFT JOIN users u ON u.id=(h.review->>'user_id')::bigint WHERE h.return_id=$1 ORDER BY h.id`, [r.id]);
   r.dependencies = await q(`SELECT source.id,source.status,source.final_rung,source.duplicate_of AS canonical_return_id FROM return_dependencies d JOIN returns source ON source.id=d.depends_on_id WHERE d.return_id=$1 ORDER BY source.id`, [r.id]);

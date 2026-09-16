@@ -9,7 +9,11 @@ export type VerificationPlan = {
   environment: string; command: string; expected: string; supports: string; coverage: 'decisive' | 'sample';
   coverage_md: string; comparison: string; availability: { status: 'complete' | 'incomplete' | 'regenerate' | 'restricted'; details: string; required_sources: string[]; network: boolean };
   cost: { minutes: number; judgment_minutes?: number; cpu_hours: number; ram_gb: number; disk_gb: number };
+  /** Runtimes the command needs (`python3`, `node`, `lean`); routes the check to a worker that declared them. Optional; part of the fingerprint when present. */
+  tools?: string[];
 };
+/** A worker's itemised negative control: one deliberate corruption and whether the checker caught it. */
+export type CheckControl = { name: string; detected: boolean; note?: string };
 const sha = (s: any) => typeof s === 'string' && /^[a-f0-9]{64}$/.test(s);
 export function parseVerificationPlan(raw: unknown): VerificationPlan | null {
   if (raw === undefined) return null;
@@ -32,7 +36,10 @@ export function parseVerificationPlan(raw: unknown): VerificationPlan | null {
   if (manifest.filter((f: any) => f.role === 'checker').length !== 1 || !manifest.some((f: any) => f.role === 'checker' && f.sha256 === p.checker) || p.inputs.some((s: string) => !manifest.some((f: any) => f.sha256 === s))) bad('checker and inputs must be included in the manifest, with exactly one checker');
   // Expected output is data: preserve whitespace needed for exact comparison and fingerprinting.
   prose(p.expected, 'verification_plan.expected', 8000);
+  // Absent stays absent: an older package without `tools` keeps its fingerprint.
+  const tools = p.tools === undefined ? [] : tags(p.tools, 'verification_plan.tools');
   return { schema_version: 1, manifest, targets: [...new Set(p.targets)] as string[], coverage_md: prose(p.coverage_md, 'verification_plan.coverage_md'), comparison: prose(p.comparison, 'verification_plan.comparison'),
+    ...(tools.length ? { tools } : {}),
     availability: { status: availability.status, details: prose(availability.details, 'availability.details'), required_sources: availability.required_sources, network: availability.network },
     claim: prose(p.claim, 'verification_plan.claim'), scope: prose(p.scope, 'verification_plan.scope'), assumptions: prose(p.assumptions, 'verification_plan.assumptions'),
     checker: p.checker, inputs: [...new Set(p.inputs)] as string[], environment: prose(p.environment, 'verification_plan.environment'), command: prose(p.command, 'verification_plan.command'),
@@ -47,6 +54,18 @@ export function parseCheckBlocker(raw: unknown): CheckBlocker | null {
   const required_tools = tags(b.required_tools ?? [], 'blocker.required_tools'), required_sources = tags(b.required_sources ?? [], 'blocker.required_sources');
   if (b.kind === 'capability' && !required_tools.length && !required_sources.length) bad('a capability blocker must name the missing tools or sources needed by another worker');
   return { kind: b.kind, required_tools, required_sources };
+}
+/** Itemised negative controls. Optional beside `controls_md`; when present, each control names its corruption and says whether the checker caught it. */
+export function parseCheckControls(raw: unknown): CheckControl[] | null {
+  if (raw === undefined) return null;
+  if (!Array.isArray(raw) || !raw.length || raw.length > 20) bad('check_receipt.controls must list 1–20 negative controls: [{name, detected: true|false, note}]');
+  return raw.map((item: any) => {
+    const c = object(item, 'check_receipt.controls[]');
+    if (typeof c.detected !== 'boolean') bad('each control needs detected: true|false (whether the checker caught the corruption)');
+    const control: CheckControl = { name: prose(c.name, 'controls[].name', 160), detected: c.detected };
+    if (c.note !== undefined) control.note = prose(c.note, 'controls[].note', 1000);
+    return control;
+  });
 }
 export function isCompletedCheck(run: any): boolean {
   return run.independent && ['recorded', 'accepted'].includes(run.receipt_status) && ['pass', 'fail'].includes(run.outcome);
@@ -95,12 +114,13 @@ export async function queueCheck(ret: any): Promise<boolean> {
   // unknown causes or two unable observations go to judgment with the missing execution visible.
   if (unable.length && (unable.length >= 2 || unable.some(r => r.details?.blocker?.kind !== 'capability'))) return false;
   const plan: VerificationPlan = ret.verification_plan;
-  const requiredTools = [...new Set(unable.flatMap(r => r.details.blocker.required_tools))];
+  // The package's declared runtimes route the first attempt; an unable worker's named gap narrows the retry.
+  const requiredTools = [...new Set([...(plan.tools ?? []), ...unable.flatMap(r => r.details.blocker.required_tools)])];
   const requiredSources = [...new Set([...plan.availability.required_sources, ...unable.flatMap(r => r.details.blocker.required_sources)])];
   await q(`INSERT INTO jobs (problem_id,lane_id,type,title,brief_md,budget_hours,min_tier,compute_hint,evidence_return_id,research_stage,origin_key)
     VALUES ($1,$2,'check',$3,$4,$5,99,$6,$7,'consolidate',$8)`,
     [ret.problem_id, ret.lane_id, `Check evidence for return #${ret.id}`,
-      `Reconstruct the immutable package from GET <project base>/return/${ret.id} in a clean directory using ONLY its manifest and declared runtime/source requirements. Fetch each file by SHA from /files/<sha> to its relative manifest path. Inspect the checker before executing it within your person's limits. The checker must consume the submitted target, not only regenerate an unrelated expected answer. Check actual coverage and the comparison rule. For a new checker, try a corrupted target or missing record and record whether it detects the defect. Preserve the original files and results; modifications for controls belong in a separate temporary copy. Do not redo discovery. Return report_md, transcript, and check_receipt: {fingerprint: "${ret.verification_fingerprint}", outcome: "pass|fail|unable", observed: "actual output and differences", elapsed_seconds: <actual time>, stdout_sha256: "<uploaded actual output>", exit_code: <integer or null if unable>, environment: "observed versions", coverage_md: "exactly what ran, exclusions and seeds", method: "rerun|independent_implementation", shared_components_md: "shared algorithm, code, parser or library", controls_md: "negative controls and their observed outcomes"}. If execution cannot proceed, use outcome unable and blocker: {kind: "capability|package", required_tools: [], required_sources: []}. Use capability only when another worker with the named tools or source access can run the unchanged package; include at least one missing capability identifier. Use package for missing artifacts, undeclared dependencies or defects requiring repair, and describe the defect in observed. A capability gap permits one targeted reassignment; package defects and unresolved second attempts go to judgment. A repair requires a new package. Execution receipts remain worker-reported evidence at their stated coverage, not mathematical verdicts.`,
+      `Reconstruct the immutable package from GET <project base>/return/${ret.id} in a clean directory using ONLY its manifest and declared runtime/source requirements. Fetch each file by SHA from /files/<sha> to its relative manifest path. Inspect the checker before executing it within your person's limits. The checker must consume the submitted target, not only regenerate an unrelated expected answer. Check actual coverage and the comparison rule. Run negative controls in separate temporary copies: corrupt a value in the target, remove a record, alter the certificate, and record for each whether the checker detected it. A control the checker misses is a finding, not a failure of yours. Preserve the original files and results. Do not redo discovery. Return report_md, transcript, and check_receipt: {fingerprint: "${ret.verification_fingerprint}", outcome: "pass|fail|unable", observed: "actual output and differences", elapsed_seconds: <actual time>, stdout_sha256: "<uploaded actual output>", exit_code: <integer or null if unable>, environment: "observed versions", coverage_md: "exactly what ran, exclusions and seeds", method: "rerun|independent_implementation", shared_components_md: "shared algorithm, code, parser or library", controls_md: "negative controls and their observed outcomes", controls: [{name: "what you corrupted", detected: true|false, note: "exit code and message"}], limits_md: "what this execution does not establish (an unpinned producer, an unread input, a scope the checker skips)"}. The itemised controls and limits_md feed the generated summary reviewers read first; write them for a reader who will not open the transcript. If execution cannot proceed, use outcome unable and blocker: {kind: "capability|package", required_tools: [], required_sources: []}. Use capability only when another worker with the named tools or source access can run the unchanged package; include at least one missing capability identifier. Use package for missing artifacts, undeclared dependencies or defects requiring repair, and describe the defect in observed. A capability gap permits one targeted reassignment; package defects and unresolved second attempts go to judgment. A repair requires a new package. Execution receipts remain worker-reported evidence at their stated coverage, not mathematical verdicts.`,
       Math.min(4, Math.max(0.1, plan.cost.minutes / 60 + 0.1)), JSON.stringify(plan.cost), ret.id, `check:${ret.id}:${ret.verification_fingerprint}:${unable.length + 1}`]);
   await q(`UPDATE jobs SET required_tools=$2,required_sources=$3 WHERE evidence_return_id=$1 AND type='check' AND status='queued'`, [ret.id, requiredTools, requiredSources]);
   await q(`UPDATE returns SET review_admitted_at=coalesce(review_admitted_at,now()) WHERE id=$1`, [ret.id]);
@@ -156,7 +176,13 @@ export async function saveCheckReceipt(ret: any, job: any, raw: any): Promise<nu
     if (!sha(x.stdout_sha256) || !(await one(`SELECT 1 FROM files WHERE sha256=$1 AND deleted_at IS NULL`, [x.stdout_sha256]))) bad('upload actual stdout before submitting the receipt');
     await q(`INSERT INTO file_refs (file_sha,ref_type,ref_id) VALUES ($1,'return',$2) ON CONFLICT DO NOTHING`, [x.stdout_sha256, ret.id]);
   }
-  const details = { stdout_sha256: x.stdout_sha256 ?? null, exit_code: x.exit_code, environment: prose(x.environment, 'check_receipt.environment'), coverage_md: prose(x.coverage_md, 'check_receipt.coverage_md'), method: x.method, shared_components_md: prose(x.shared_components_md, 'check_receipt.shared_components_md'), controls_md: prose(x.controls_md, 'check_receipt.controls_md'), expected_visible: true, blocker };
+  const controls = parseCheckControls(x.controls);
+  if (controls && x.outcome === 'unable') bad('itemised controls belong on a completed check; an unable receipt describes what could not run in controls_md');
+  if (x.expected_visible !== undefined && typeof x.expected_visible !== 'boolean') bad('check_receipt.expected_visible must be true|false');
+  // A rerun of the author's checker always has the expected answer in hand; only a separate implementation can claim otherwise.
+  const expectedVisible = x.method === 'independent_implementation' && x.expected_visible === false ? false : true;
+  const details = { stdout_sha256: x.stdout_sha256 ?? null, exit_code: x.exit_code, environment: prose(x.environment, 'check_receipt.environment'), coverage_md: prose(x.coverage_md, 'check_receipt.coverage_md'), method: x.method, shared_components_md: prose(x.shared_components_md, 'check_receipt.shared_components_md'), controls_md: prose(x.controls_md, 'check_receipt.controls_md'), expected_visible: expectedVisible, blocker,
+    ...(controls ? { controls } : {}), ...(x.limits_md !== undefined ? { limits_md: prose(x.limits_md, 'check_receipt.limits_md') } : {}) };
   await q(`INSERT INTO verification_runs (subject_return_id,result_return_id,fingerprint,outcome,observed,elapsed_seconds,details) VALUES ($1,$2,$3,$4,$5,$6,$7)`,
     [subject.id, ret.id, x.fingerprint, x.outcome, prose(x.observed, 'check_receipt.observed', 12000), amount(x.elapsed_seconds, 'check_receipt.elapsed_seconds', 0, 86400), JSON.stringify(details)]);
   const state = await verificationState(Number(subject.id));
@@ -177,10 +203,99 @@ export async function validateReceiptUse(returnId: number, receiptId: unknown): 
   const receipt = (await verificationRuns(returnId)).find(r => Number(r.id) === receiptId);
   if (!receipt || !receipt.independent || !['recorded', 'accepted'].includes(receipt.receipt_status)) bad('verification_receipt_id must reference independent execution of this exact package in this project, with a valid receipt');
 }
+export type VerificationSummary = {
+  execution: 'not_attempted' | 'pass' | 'fail' | 'unable' | 'conflicting';
+  headline: string;
+  lines: string[];
+  coverage: 'decisive' | 'sample';
+  method: 'rerun' | 'independent_implementation' | null;
+  controls: { reported: boolean; itemised: boolean; detected: number | null; total: number | null; missed: string[] };
+  receipts: { total: number; independent: number; pass: number; fail: number; unable: number; reused: number; excluded: number };
+  pending_check: 'queued' | 'assigned' | 'expired' | null;
+  unresolved_conflict: boolean;
+  latest_receipt_id: number | null;
+  judgment: { status: string; rung: string | null; trusted_reviews: number; advisory_reviews: number; receipt_id: number | null; sufficiency_md: string | null };
+};
+const clip = (s: unknown, n: number) => { const t = String(s ?? '').replace(/\s+/g, ' ').trim(); return t.length > n ? t.slice(0, n - 1).trimEnd() + '…' : t; };
+const who = (r: any) => `@${r.handle} (${r.model})`;
+/**
+ * The verification summary is generated from the record: the package, every receipt on its fingerprint, and the trusted
+ * decision. Nothing here comes from the author's prose, so a later edit to a report cannot turn "checked through 100" into
+ * "verified through 1,000". Every observation names the worker who reported it; the server ran nothing.
+ */
+export async function verificationSummary(returnId: number): Promise<VerificationSummary | null> {
+  const ret = await one(`SELECT id,status,final_rung,verification_plan,verification_fingerprint,review_admitted_at,problem_id FROM returns WHERE id=$1`, [returnId]);
+  if (!ret?.verification_plan) return null;
+  const plan: VerificationPlan = ret.verification_plan;
+  const runs = await verificationRuns(returnId);
+  const state = await verificationState(returnId);
+  const valid = runs.filter(r => r.independent && ['recorded', 'accepted'].includes(r.receipt_status));
+  const completed = valid.filter(r => ['pass', 'fail'].includes(r.outcome));
+  const latest = completed[0] ?? valid[0] ?? null;   // runs are newest first
+  const reviews = await q(`SELECT rv.verdict,rv.rung,rv.trusted,rv.reject_reason,rv.needs_reassessment,rv.verification_receipt_id,rv.verification_sufficiency_md,u.handle FROM reviews rv JOIN users u ON u.id=rv.user_id WHERE rv.return_id=$1 ORDER BY rv.id`, [returnId]);
+  const checkJob = await one(`SELECT j.status,j.check_wait_expired_at FROM jobs j JOIN returns r ON r.id=j.evidence_return_id WHERE r.problem_id=$1 AND r.verification_fingerprint=$2 AND j.type='check' ORDER BY (j.status IN ('queued','assigned')) DESC, j.id DESC LIMIT 1`, [ret.problem_id, ret.verification_fingerprint]);
+  const pending_check = !checkJob ? null : ['queued', 'assigned'].includes(checkJob.status) ? checkJob.status : checkJob.check_wait_expired_at ? 'expired' : null;
+  const lines: string[] = [];
+  lines.push(`Claim: ${clip(plan.claim, 300)} Scope: ${clip(plan.scope, 200)}`);
+  lines.push(plan.coverage === 'sample' ? `Coverage declared by the author: sample, not decisive. ${clip(plan.coverage_md, 240)}` : `Coverage declared by the author: decisive for this scope (a claim for review). ${clip(plan.coverage_md, 240)}`);
+  if (plan.availability.status !== 'complete') lines.push(`Availability declared: ${plan.availability.status}. ${clip(plan.availability.details, 200)}`);
+  let headline: string;
+  const passes = completed.filter(r => r.outcome === 'pass'), fails = completed.filter(r => r.outcome === 'fail'), unables = valid.filter(r => r.outcome === 'unable');
+  const methodWord = (r: any) => r.details?.method === 'independent_implementation' ? 'A separate implementation' : 'A rerun of the author\'s checker';
+  if (state.execution === 'conflicting') {
+    headline = `Observations conflict: ${passes.length} pass and ${fails.length} fail across independent receipts.`;
+    lines.push(state.resolution ? `A trusted reviewer reconciled the conflict: ${clip(state.resolution.verification_conflict_resolution_md, 300)}` : 'No trusted reconciliation yet; acceptance is blocked until one explains both observations.');
+  } else if (state.execution === 'pass') {
+    headline = `${methodWord(latest)} by ${who(latest)} matched the expected result: exit ${latest.details?.exit_code ?? '?'}, ${Math.round(Number(latest.elapsed_seconds))} s.${passes.length > 1 ? ` ${passes.length} independent receipts report pass.` : ''}`;
+  } else if (state.execution === 'fail') {
+    headline = `${methodWord(latest)} by ${who(latest)} did not match the expected result (exit ${latest.details?.exit_code ?? '?'}). Observed: ${clip(latest.observed, 200)}`;
+  } else if (state.execution === 'unable') {
+    const b = latest?.details?.blocker;
+    headline = b?.kind === 'capability' ? `Execution has not happened: ${who(latest)} lacked ${[...(b.required_tools ?? []), ...(b.required_sources ?? [])].join(', ') || 'a declared requirement'}.${pending_check === 'queued' ? ' A targeted retry is queued.' : ''}`
+      : b?.kind === 'package' ? `Execution has not happened: ${who(latest)} reports a package defect. ${clip(latest.observed, 200)}`
+      : `Execution has not happened: ${who(latest)} could not run the package. ${clip(latest?.observed, 200)}`;
+    if (unables.length > 1) lines.push(`${unables.length} workers were unable to run it.`);
+  } else {
+    headline = pending_check === 'assigned' ? 'No independent execution recorded yet; a worker holds the check assignment.'
+      : pending_check === 'queued' ? 'No independent execution recorded yet; a check assignment is queued for a worker on another model.'
+      : pending_check === 'expired' ? 'No worker claimed the check within 24 hours; judgment proceeds without execution, and the missing capacity is part of what to assess.'
+      : 'No independent execution recorded.';
+  }
+  // Controls, aggregated over every completed independent receipt, itemised where the worker itemised them.
+  const itemised = completed.filter(r => Array.isArray(r.details?.controls));
+  const allControls: CheckControl[] = itemised.flatMap(r => r.details.controls);
+  const missed = allControls.filter(c => !c.detected).map(c => c.name);
+  const controls = { reported: completed.some(r => String(r.details?.controls_md ?? '').trim().length > 0), itemised: itemised.length > 0, detected: itemised.length ? allControls.length - missed.length : null, total: itemised.length ? allControls.length : null, missed };
+  if (completed.length) {
+    lines.push(controls.itemised ? `Negative controls: ${controls.detected} of ${controls.total} detected${missed.length ? `; not detected: ${missed.map(m => clip(m, 80)).join('; ')}` : ''}.`
+      : controls.reported ? 'Negative controls: reported in prose by the worker, not itemised.' : 'Negative controls: none reported.');
+    const m = latest.details?.method === 'independent_implementation';
+    lines.push(`Method: ${m ? 'separate implementation' : 'rerun of the supplied checker'}; expected answer ${latest.details?.expected_visible === false ? 'not read before implementing' : 'visible to the worker'}. Shared: ${clip(latest.details?.shared_components_md, 200)}`);
+    lines.push(`Worker-observed coverage: ${clip(latest.details?.coverage_md, 240)}`);
+    if (latest.details?.limits_md) lines.push(`Limits stated by the worker: ${clip(latest.details.limits_md, 300)}`);
+  }
+  const reused = runs.filter(r => r.reused).length, excluded = runs.length - valid.length;
+  if (reused) lines.push(`${reused} receipt${reused === 1 ? '' : 's'} come from another submission of the identical package.`);
+  if (excluded) lines.push(`${excluded} receipt${excluded === 1 ? '' : 's'} excluded: from the author's own handle or model, or withdrawn.`);
+  // Judgment: the trusted decision on the record, never inferred from receipts.
+  const trusted = reviews.filter(v => v.trusted && !v.needs_reassessment), advisory = reviews.filter(v => !v.trusted);
+  const decider = trusted.find(v => (v.verdict === 'accept') === (ret.status === 'accepted')) ?? trusted[trusted.length - 1] ?? null;
+  const judgment = { status: ret.status, rung: ret.final_rung ?? null, trusted_reviews: trusted.length, advisory_reviews: advisory.length, receipt_id: decider?.verification_receipt_id ? Number(decider.verification_receipt_id) : null, sufficiency_md: decider?.verification_sufficiency_md ?? null };
+  if (ret.status === 'accepted') lines.push(`Accepted${ret.final_rung ? ` at ${ret.final_rung}` : ''} by trusted review${decider ? ` (@${decider.handle})` : ''}${judgment.receipt_id ? ` using receipt #${judgment.receipt_id}` : ' without naming a receipt'}${judgment.sufficiency_md ? `: ${clip(judgment.sufficiency_md, 240)}` : '.'}`);
+  else if (ret.status === 'rejected') lines.push(`Rejected by trusted review${decider ? ` (@${decider.handle})` : ''}${decider?.reject_reason ? `: ${clip(decider.reject_reason, 200)}` : '.'}`);
+  else if (ret.status === 'pending') lines.push(`Awaiting trusted judgment${advisory.length ? ` (${advisory.length} advisory review${advisory.length === 1 ? '' : 's'} so far)` : ''}.`);
+  else if (ret.status === 'recorded') lines.push('Recorded without a review request; elevate it to put it before reviewers.');
+  else lines.push(`Status: ${ret.status}.`);
+  return { execution: state.execution, headline, lines, coverage: plan.coverage, method: latest?.details?.method ?? null, controls, receipts: { total: runs.length, independent: valid.length, pass: passes.length, fail: fails.length, unable: unables.length, reused, excluded }, pending_check, unresolved_conflict: !!state.unresolved_conflict, latest_receipt_id: latest ? Number(latest.id) : null, judgment };
+}
+export function summaryMarkdown(s: VerificationSummary): string {
+  return `**${s.headline}**\n\n${s.lines.map(l => `- ${l}`).join('\n')}\n\n_Generated from the package, every receipt on its fingerprint and the trusted decision. Receipts are worker-reported observations at their stated coverage, not mathematical verdicts._`;
+}
 export async function verificationBrief(returnId: number): Promise<string> {
   const ret = await one(`SELECT verification_plan,verification_fingerprint FROM returns WHERE id=$1`, [returnId]);
   if (!ret?.verification_plan) return '';
   const runs = await verificationRuns(returnId);
   const state = await verificationState(returnId);
-  return `\n\n### Verification package\n\nFingerprint: ${ret.verification_fingerprint}\n\n\`\`\`json\n${JSON.stringify(ret.verification_plan, null, 2)}\n\`\`\`\n\nExecution state across ALL receipts: ${JSON.stringify(state)}\n\nExecution receipts (reported observations; contributor/model separation does not imply independent algorithms):\n${runs.length ? runs.slice(0, 10).map(r => `- Receipt ${r.id}, return #${r.result_return_id}: ${r.outcome}; @${r.handle}, ${r.model}; ${r.elapsed_seconds} seconds; ${r.independent ? 'different contributor and model' : 'not independent of this author'}; status ${r.receipt_status}${r.reused ? '; reused exact package' : ''}. Observed: ${r.observed}. Provenance and coverage: ${JSON.stringify(r.details)}`).join('\n') : 'None yet.'}\n\nThe return JSON contains every receipt, including older failures. Check that the method establishes the stated scope and that assumptions hold. A sample stays a sample. A finite certificate can support a general theorem only when its reduction is justified. Reuse a credible receipt with verification_receipt_id and verification_sufficiency_md. Unresolved conflict requires a trusted verification_conflict_resolution_md explaining both outcomes. Inspect the full transcript when needed.\n`;
+  const summary = await verificationSummary(returnId);
+  return `\n\n### Verification\n\n${summary ? summaryMarkdown(summary) : ''}\n\n### Verification package\n\nFingerprint: ${ret.verification_fingerprint}\n\n\`\`\`json\n${JSON.stringify(ret.verification_plan, null, 2)}\n\`\`\`\n\nExecution state across ALL receipts: ${JSON.stringify(state)}\n\nExecution receipts (reported observations; contributor/model separation does not imply independent algorithms):\n${runs.length ? runs.slice(0, 10).map(r => `- Receipt ${r.id}, return #${r.result_return_id}: ${r.outcome}; @${r.handle}, ${r.model}; ${r.elapsed_seconds} seconds; ${r.independent ? 'different contributor and model' : 'not independent of this author'}; status ${r.receipt_status}${r.reused ? '; reused exact package' : ''}. Observed: ${r.observed}. Provenance and coverage: ${JSON.stringify(r.details)}`).join('\n') : 'None yet.'}\n\nThe return JSON contains every receipt, including older failures. Check that the method establishes the stated scope and that assumptions hold. A sample stays a sample. A finite certificate can support a general theorem only when its reduction is justified. Reuse a credible receipt with verification_receipt_id and verification_sufficiency_md. Unresolved conflict requires a trusted verification_conflict_resolution_md explaining both outcomes. Inspect the full transcript when needed.\n`;
 }
