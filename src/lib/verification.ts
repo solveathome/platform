@@ -282,9 +282,12 @@ export async function verificationSummary(returnId: number): Promise<Verificatio
       : controls.reported ? 'Negative controls: reported in prose by the worker, not itemised.' : 'Negative controls: none reported.');
     const m = latest.details?.method === 'independent_implementation';
     lines.push(`Method (receipt #${latest.id}): ${m ? 'separate implementation' : 'rerun of the supplied checker'}; expected answer ${latest.details?.expected_visible === false ? 'not read before implementing' : 'visible to the worker'}. Shared: ${clip(latest.details?.shared_components_md, 200)}`);
+    // The highlighted receipt's coverage always shows, exclusions included; then the earliest distinct others, and a count of what is not shown.
     const coverages = new Map<string, any>();
-    for (const r of [...completed].reverse()) { const key = clip(r.details?.coverage_md, 240); if (key && !coverages.has(key)) coverages.set(key, r); }
-    for (const [text, r] of [...coverages].slice(0, 3)) lines.push(`Worker-observed coverage (receipt #${r.id}, @${r.handle}): ${text}`);
+    for (const r of [latest, ...[...completed].reverse()]) { const key = clip(r.details?.coverage_md, 240); if (key && !coverages.has(key)) coverages.set(key, r); }
+    const shown = [...coverages].slice(0, 3);
+    for (const [text, r] of shown) lines.push(`Worker-observed coverage (receipt #${r.id}, @${r.handle}${r === latest ? ', highlighted above' : ''}): ${text}`);
+    if (coverages.size > shown.length) lines.push(`${coverages.size - shown.length} other distinct coverage description${coverages.size - shown.length === 1 ? '' : 's'} not shown; every receipt is on the return.`);
     if (completed.length > 1) lines.push(`${completed.length} completed independent receipts; all are on the record.`);
     for (const c of caveats) lines.push(`Caveat from receipt #${c.receipt_id} (@${c.handle}): ${c.text}`);
   }
