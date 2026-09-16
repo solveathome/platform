@@ -915,3 +915,6 @@ CREATE TABLE IF NOT EXISTS run_channel_members (
   last_seen_id BIGINT NOT NULL DEFAULT 0,
   PRIMARY KEY(channel_id,session_id)
 );
+
+-- Standard review guidance is versioned (Sep 16 2026): a queued review from an earlier version is refreshed when served.
+ALTER TABLE jobs ADD COLUMN IF NOT EXISTS brief_version INTEGER;

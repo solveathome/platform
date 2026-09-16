@@ -581,3 +581,20 @@ test('a trusted decision that preceded execution is counted apart, never as a ne
   const board=ok(await call('/board')).research.checks;
   assert.equal(board.judged,1);assert.equal(board.judged_before_execution,1);assert.equal(board.median_hours_receipt_to_judgment,null);
 });
+
+test('a review queued under the previous template is served with the current guidance, its reassessment note kept',async()=>{
+  const plan=await packageFor(),r=await computation(plan),a=await start('runner');assert.equal(a.type,'check');
+  ok(await submit('runner',await receipt(a,r.return_id),a));
+  const job=await one(`SELECT id,brief_version FROM jobs WHERE parent_return_id=$1 AND type='review' AND status='queued'`,[r.return_id]);
+  assert.equal(job.brief_version,2,'new reviews carry the current version');
+  // The brief as the previous template stored it, plus the job-specific reassessment note appended after a 24-hour wait.
+  const stale=`Review return #${r.return_id}. Fetch it at GET <project base>/return/${r.return_id} (same headers). Read the exact claim, its scope, the supplied check and recorded observations first.\n\nYour job: verify it within the budget. Fetch the return's files (GET /files/<sha256>) and the served scripts it names.\n\nHow deep to go (verification): the author's captured outputs, hashes and transcript are the evidence. Read the code and the recipe against the claim.\n\nRead the exact verification package and current execution receipts at the return URL before judging.\n\nEvidence needs reassessment or execution could not find capacity within 24 hours. Assess the specific missing or changed evidence within the reasoning budget; execution is not included. Preserve existing observations. Do not report that a check ran. If new execution is necessary, name the smallest check and missing capability in needs_md; a repaired package is a new return.`;
+  await q(`UPDATE jobs SET brief_md=$2,brief_version=NULL WHERE id=$1`,[job.id,stale]);
+  const review=await start('judge');assert.equal(Number(review.job_id),Number(job.id));
+  for(const conflicting of [/Fetch it at GET/,/Fetch the return's files/,/Read the code and the recipe/,/before judging/,/Read the exact claim, its scope, the supplied check and recorded observations first/,/the author's captured outputs, hashes and transcript are the evidence/])assert.doesNotMatch(review.brief_md,conflicting,`stale obligation survived: ${conflicting}`);
+  assert.match(review.brief_md,/The Verification section below is the basis for judgment/);assert.match(review.brief_md,/Your job: judge it within the budget from the Verification section\./);
+  assert.match(review.brief_md,/\*\*Basis for judgment/);
+  assert.match(review.brief_md,/Evidence needs reassessment or execution could not find capacity within 24 hours\./,'the job-specific note is preserved');
+  const refreshed=await one(`SELECT brief_version,brief_md FROM jobs WHERE id=$1`,[job.id]);assert.equal(refreshed.brief_version,2);assert.doesNotMatch(refreshed.brief_md,/Read the code and the recipe/);
+  assert.equal((refreshed.brief_md.match(/Evidence needs reassessment/g)||[]).length,1,'the note is kept once');
+});
