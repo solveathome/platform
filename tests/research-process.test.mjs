@@ -456,12 +456,19 @@ test('itemised controls, stated limits and declared tools feed a summary generat
   assert.equal(s.execution,'pass');assert.deepEqual(s.controls,{reported:true,itemised:true,detected:1,total:2,missed:['comment-only edit to the checker']});
   assert.match(s.headline,/^A rerun of the author's checker by @research-runner-[a-f0-9]+ \(claude-sonnet-5\) matched the expected result: exit 0, 1 s\.$/);
   assert.ok(s.lines.some(l=>l==='Negative controls: 1 of 2 detected; not detected: comment-only edit to the checker.'),JSON.stringify(s.lines));
-  assert.ok(s.lines.some(l=>l.startsWith('Limits stated by the worker: The checker does not pin')));
-  assert.ok(s.lines.some(l=>l.startsWith('Method: rerun of the supplied checker; expected answer visible to the worker.')));
+  assert.ok(s.lines.some(l=>/^Caveat from receipt #\d+ \(@research-runner-[a-f0-9]+\): The checker does not pin/.test(l)),JSON.stringify(s.lines));
+  assert.ok(s.lines.some(l=>/^Caveat from receipt #\d+ \(@research-runner-[a-f0-9]+\): Control not detected: comment-only edit to the checker \(exit 0\)$/.test(l)));
+  assert.equal(s.caveats.length,2);assert.equal(s.caveats[0].receipt_id,Number(run.id));
+  assert.ok(s.lines.some(l=>/^Method \(receipt #\d+\): rerun of the supplied checker; expected answer visible to the worker\./.test(l)));
+  assert.match(a.brief_md,/"schema_version": 1/,'a check worker gets the package in full');
   assert.ok(s.lines.some(l=>l==='Awaiting trusted judgment.'));
   assert.deepEqual(s.receipts,{total:1,independent:1,pass:1,fail:0,unable:0,reused:0,excluded:0});
   const review=await start('judge');assert.equal(review.type,'review');
   assert.match(review.brief_md,/### Verification\n\n\*\*A rerun of the author's checker by @research-runner/);assert.match(review.brief_md,/Negative controls: 1 of 2 detected/);
+  assert.match(review.brief_md,/\*\*Judgment required\.\*\* Decide whether this method at this coverage establishes the claim at the rung requested, with the 2 caveats above/);
+  assert.match(review.brief_md,/Receipts on this package \(fingerprint [a-f0-9]{12}…\):\n- Receipt #\d+ \(return #\d+\): pass, @research-runner-[a-f0-9]+ \(claude-sonnet-5\), rerun, 1 s$/m);
+  assert.doesNotMatch(review.brief_md,/"schema_version": 1/,'a reviewer fetches the package when a specific uncertainty needs it');
+  assert.match(review.brief_md,/smallest useful next check/);
   const page=(await call(`/return/${r.return_id}`,{accept:'text/html'})).body;assert.match(page,/1 of 2 detected/);assert.match(page,/Generated from the package, every receipt/);
   const board=ok(await call('/board')).research.checks;
   assert.equal(board.packages,1);assert.equal(board.awaiting_judgment,1);assert.equal(board.awaiting_execution,0);assert.equal(board.judged,0);
@@ -485,4 +492,40 @@ test('the summary says when nothing ran and names the capability a retry needs',
   assert.equal(s.controls.itemised,false);assert.equal(s.controls.reported,false,'controls are counted on completed checks only');assert.equal(s.receipts.unable,1);
   assert.ok(!s.lines.some(l=>l.startsWith('Negative controls')),'nothing ran, so no control line');
   const board=ok(await call('/board')).research.checks;assert.equal(board.first_attempts,1);assert.equal(board.first_attempt_completed,0);assert.equal(board.awaiting_execution,1);assert.equal(board.awaiting_judgment,0);
+});
+
+test('a later passing receipt does not hide an earlier caveat, and a package that arrives with a receipt waited zero hours',async()=>{
+  const plan=await packageFor(),r=await computation(plan);
+  const first=await start('runner');assert.equal(first.type,'check');
+  const base=await receipt(first,r.return_id);
+  ok(await submit('runner',{check_receipt:{...base.check_receipt,controls:[{name:'removed term four',detected:true},{name:'producer comment edit',detected:false,note:'exit 0'}],limits_md:'The producer is not hash-pinned by the checker.'}},first));
+  const firstId=Number(ok(await call(`/return/${r.return_id}`)).verification_runs[0].id);
+  await q(`INSERT INTO jobs (problem_id,type,title,brief_md,budget_hours,min_tier,evidence_return_id,research_stage,priority) VALUES ($1,'check','Independent repeat','Run the exact package.',0.1,99,$2,'consolidate',10)`,[pid,r.return_id]);
+  const second=await start('runner');assert.equal(second.type,'check');
+  ok(await submit('runner',await receipt(second,r.return_id),second));
+  const s=ok(await call(`/return/${r.return_id}`)).verification_summary;
+  assert.equal(s.receipts.pass,2);assert.match(s.headline,/2 independent receipts report pass\.$/);
+  assert.deepEqual(s.caveats.map(c=>c.receipt_id),[firstId,firstId],'both caveats keep their source receipt');
+  assert.ok(s.lines.some(l=>l===`Caveat from receipt #${firstId} (@${s.caveats[0].handle}): The producer is not hash-pinned by the checker.`),JSON.stringify(s.lines));
+  assert.ok(s.lines.some(l=>l==='2 completed independent receipts; all are on the record.'));
+  assert.deepEqual(s.controls,{reported:true,itemised:true,detected:1,total:2,missed:['producer comment edit']},'controls aggregate across every completed receipt');
+  const later=await computation(plan,'A distinct interpretation of the same finite evidence, submitted after the receipt existed.');
+  assert.equal(later.check_requested,false,'the identical package already has completed independent execution');
+  const board=ok(await call('/board')).research.checks;assert.equal(board.packages,2);assert.equal(board.awaiting_judgment,2);
+  assert.ok(Number(board.median_hours_to_first_receipt)>=0,`a reused receipt never yields a negative wait: ${board.median_hours_to_first_receipt}`);
+});
+
+test('an advisory-only decision stays provisional in the summary and is open work on the board, never judged',async()=>{
+  const plan=await packageFor(),r=await computation(plan),a=await start('runner');assert.equal(a.type,'check');
+  ok(await submit('runner',await receipt(a,r.return_id),a));
+  // The advisory path as the server records it (three advisory reviews across two providers): status set, provisional flagged, decision row by 'advisory'.
+  await q(`INSERT INTO reviews (return_id,review_job_id,user_id,model,provider,verdict,rung,notes_md,weight,transcript,tokens,trusted) VALUES ($1,NULL,$2,$3,'openai','accept','measured','advisory pass',1,'t','{}',false)`,[r.return_id,users.astra.id,models.astra]);
+  await q(`UPDATE returns SET status='accepted',final_rung='measured',provisional=true WHERE id=$1`,[r.return_id]);
+  await q(`INSERT INTO return_decisions (return_id,status,final_rung,provisional,by,note) VALUES ($1,'accepted','measured',true,'advisory','1 advisory reviews')`,[r.return_id]);
+  const s=ok(await call(`/return/${r.return_id}`)).verification_summary;
+  assert.deepEqual({status:s.judgment.status,provisional:s.judgment.provisional,by:s.judgment.by,rung:s.judgment.rung,advisory:s.judgment.advisory_reviews,trusted:s.judgment.trusted_reviews},{status:'accepted',provisional:true,by:'advisory',rung:'measured',advisory:1,trusted:0});
+  assert.ok(s.lines.some(l=>l==='Provisional accepted (measured) on 1 advisory review only: no trusted review yet, so this counts as neither accepted nor rejected; a trusted review makes it final.'),JSON.stringify(s.lines));
+  assert.ok(!s.lines.some(l=>l.startsWith('Accepted')),'never "accepted by trusted review"');
+  const board=ok(await call('/board')).research.checks;
+  assert.equal(board.judged,0);assert.equal(board.provisional,1);assert.equal(board.awaiting_judgment,1);assert.equal(board.median_hours_receipt_to_judgment,null);
 });
