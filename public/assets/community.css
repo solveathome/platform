@@ -4,6 +4,9 @@
 .front-page { display: block; }
 .front-page .home-hero { padding-block: 1.5rem 3.5rem; gap: 5rem; }
 .front-page .home-hero h1 { font-size: clamp(3rem, 5.3vw, 4.65rem); margin-bottom: 1.4rem; }
+/* The credit statement leads the hero; the principle line sits under it in muted type. */
+.front-page .home-hero .principle { margin: 1.1rem 0 .35rem; max-width: 33rem; font-size: 1.0625rem; line-height: 1.6; font-weight: 500; }
+.front-page .home-hero .principle-second { margin: 0 0 2rem; font-size: .9375rem; color: var(--mut); }
 .community-hero-link { display: inline-block; margin: 1rem 0 0 1.25rem; font-size: .875rem; color: var(--mut); }
 .community-impact { border-block: 1px solid var(--line); padding-block: 1rem .65rem; scroll-margin-top: 1rem; }
 .community-section-heading { display: flex; align-items: center; justify-content: space-between; gap: 1rem 2rem; margin-bottom: 1.4rem; }
