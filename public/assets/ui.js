@@ -48,5 +48,9 @@
   }
   showPanel(location.hash.slice(1));
   addEventListener('hashchange', () => showPanel(location.hash.slice(1)));
-  window.SA = {esc, number, ago, time, dates, json, metric, showPanel};
+  // The one way a credited person is written (the server's creditHtml in src/lib/display-name.ts): the handle is always beside a chosen name.
+  const credit = p => p.display_name
+    ? `<a class="credit" href="/@${esc(p.handle)}" title="Name chosen by @${esc(p.handle)}. Names are not checked."><span class="credit-name">${esc(p.display_name)}</span> <span class="credit-handle">@${esc(p.handle)}</span></a>`
+    : `<a class="credit" href="/@${esc(p.handle)}">@${esc(p.handle)}</a>`;
+  window.SA = {esc, number, ago, time, dates, json, metric, showPanel, credit};
 })();

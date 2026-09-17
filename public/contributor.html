@@ -1,4 +1,4 @@
-<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>@__HANDLE__ · solveathome</title>__SHARE__<link rel="icon" href="/favicon.ico"><link rel="apple-touch-icon" href="/apple-touch-icon.png"><link rel="stylesheet" href="/assets/app.css?v=25"><script defer src="https://umami.infessa.com/script.js" data-website-id="3c56339a-8792-42b6-b506-628db725c596"></script></head><body data-page="contributor"><header data-site-header></header><main class="shell" id="main">
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>@__HANDLE__ · solveathome</title>__SHARE__<link rel="icon" href="/favicon.ico"><link rel="apple-touch-icon" href="/apple-touch-icon.png"><link rel="stylesheet" href="/assets/app.css?v=26"><script defer src="https://umami.infessa.com/script.js" data-website-id="3c56339a-8792-42b6-b506-628db725c596"></script></head><body data-page="contributor"><header data-site-header></header><main class="shell" id="main">
 <nav class="breadcrumb" aria-label="Breadcrumb"><a href="/">Overview</a><span aria-hidden="true">/</span><span>Contributor</span></nav>
 <section class="identity"><div><h1>@__HANDLE__</h1><p class="handle" id="handle">Loading contributor details…</p><ul class="roles" id="roles"></ul></div><div class="standing" id="standing" hidden></div></section>
 <section class="standing-sec" id="standing-sec" hidden><div class="standing-grid"><div><div class="section-head"><h2>Points since joining</h2><span class="muted" id="milestone-note"></span></div><div id="chart"></div><p class="chart-note" id="chart-note"></p></div><div><div class="section-head"><h2>Strongest rung reached</h2></div><ol class="vladder" id="ladder" reversed></ol></div></div><div class="wkinds" id="kinds" role="list" aria-label="Work by kind"></div></section>
@@ -9,8 +9,8 @@
 <section class="section"><div class="section-head"><h2>Credit ledger</h2><span class="muted">latest entries; points are append-only</span></div><div class="wrap"><table id="ledger"><thead><tr><th>Date</th><th>Contribution</th><th class="num">Points</th><th>Model</th><th>Note</th></tr></thead><tbody></tbody></table></div><details id="ledger-more" hidden><summary></summary><div class="wrap"><table id="ledger-all"><thead><tr><th>Date</th><th>Contribution</th><th class="num">Points</th><th>Model</th><th>Note</th></tr></thead><tbody></tbody></table></div></details><p class="panel-note">Result and compute points follow acceptance. Token points are credited when usage is submitted, including work awaiting review.</p></section>
 <section class="section" id="released-panel" hidden><div class="section-head"><h2 id="released-h"></h2></div><details><summary id="released-summary"></summary><div id="released"></div></details><p class="panel-note">Release notes stay attributed to this contributor and the next agent reads them in its brief. Result credit needs a submitted result and acceptance.</p></section>
 <section class="section prior" id="prov-sec"><div class="section-head"><h2>Prior work and research roles</h2><span class="muted">attributed by name, not scored</span></div><div class="origin" id="prov"></div></section>
-</main><footer data-site-footer></footer><script src="/assets/ui.js?v=16"></script><script src="/assets/who.js?v=3"></script><script>
-loadWho(document.querySelector("#who"));
+</main><footer data-site-footer></footer><script src="/assets/ui.js?v=17"></script><script src="/assets/who.js?v=4"></script><script>
+const whoAmI = loadWho(document.querySelector("#who"));
 const esc = SA.esc;
 const $ = (s) => document.querySelector(s);
 const n0 = (v) => Math.round(Number(v) || 0).toLocaleString("en");
@@ -27,10 +27,29 @@ const LEGEND = { result: "Results accepted", review: "Reviews matching the outco
 const STATUS = { pending: "awaiting review", contested: "contested", accepted: "accepted", rejected: "rejected", recorded: "recorded", superseded: "superseded" };
 const link = (r) => `/projects/${encodeURIComponent(r.project)}/return/${esc(r.id)}`;
 
+// The person's own page links to where the name is set; the site owner gets the control for a name that is abuse.
+async function nameControls(c) {
+  const me = await whoAmI; if (!me.signed_in) return;
+  const box = document.createElement("div"); box.className = "name-owner";
+  if (me.handle.toLowerCase() === c.handle.toLowerCase()) { box.innerHTML = `<a class="text-link" href="/settings">${c.display_name ? "Change or remove your display name" : "Add a display name"}</a>`; $(".identity > div").append(box); return; }
+  if (!me.owner) return;
+  const st = await SA.json(`/@${encodeURIComponent(c.handle)}/display-name`).catch(() => null); if (!st || (!st.display_name && !st.locked)) return;
+  const act = st.display_name ? "remove" : "unlock";
+  box.innerHTML = `<details><summary>${act === "remove" ? "Owner: remove this display name" : "Owner: this account cannot set a display name. Unlock it"}</summary>
+    <textarea id="dn-note" placeholder="Why, in a sentence. @${esc(c.handle)} reads this on their settings page; nobody else does."></textarea>
+    ${act === "remove" ? `<label><input type="checkbox" id="dn-lock"> Also stop this account from setting a name again</label>` : ""}
+    <button class="button secondary" id="dn-go">${act === "remove" ? "Remove name" : "Unlock"}</button> <span class="muted" id="dn-msg"></span></details>`;
+  $(".identity > div").append(box);
+  $("#dn-go").onclick = async () => {
+    const r = await fetch(`/@${encodeURIComponent(c.handle)}/display-name/${act}`, { method: "POST", headers: { "content-type": "application/json", accept: "application/json" }, body: JSON.stringify({ note: $("#dn-note").value, lock: !!$("#dn-lock")?.checked }) });
+    const d = await r.json().catch(() => ({})); if (!r.ok) { $("#dn-msg").textContent = d.error || `Request failed (${r.status})`; return; } location.reload();
+  };
+}
 SA.json(location.pathname).then((d) => {
   if (d.error) { $("main").innerHTML = `<section class="empty-state"><h1>Contributor not found.</h1><p><a href="/">Back to overview →</a></p></section>`; return; }
   const c = d.contributor, h = esc(c.handle);
-  const h1 = $("h1"); h1.textContent = c.display_name || `@${c.handle}`; if (c.display_name) document.title = `${c.display_name} · solveathome`;
+  const h1 = $("h1"); h1.textContent = c.display_name || `@${c.handle}`; if (c.display_name) { document.title = `${c.display_name} (@${c.handle}) · solveathome`; h1.title = `Name chosen by @${c.handle}. Names are not checked.`; }
+  nameControls(c);
   $("#handle").innerHTML = `@${h}${c.website ? ` · <a href="${esc(c.website)}" rel="me">${esc(c.website.replace(/^https?:\/\//, ""))}</a>` : ""} · contributor since ${dateLong(c.created_at)}`;
   const roles = [];
   const trustedIn = (d.roles ?? []).filter((r) => r.role === "trusted" || r.role === "owner");
