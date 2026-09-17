@@ -5,7 +5,11 @@ async function people(): Promise<Array<{ name: string; handle: string }>> {
   if (Date.now() - cache.at > 60_000) {
     // One link target per name: the owner's handle when the person has several, else the first alphabetically.
     const owners = new Set((process.env.OWNER_HANDLES ?? "").split(",").map((x) => x.trim().toLowerCase()).filter(Boolean));
-    const rows = (await q(`SELECT handle, display_name AS name FROM users WHERE display_name IS NOT NULL ORDER BY handle`)).map((r: any) => ({ name: String(r.name), handle: String(r.handle) }));
+    // Only people the owner has vouched for are linked from prose: a project's researcher, an owner, a granted trusted reviewer.
+    // Anyone can type any name on /settings (Sep 17 2026), and a self-chosen "Terence Tao" must not turn every mention in the papers into a link to that account.
+    const rows = (await q(`SELECT u.handle, u.display_name AS name FROM users u WHERE u.display_name IS NOT NULL
+      AND (lower(u.handle) = ANY($1) OR EXISTS (SELECT 1 FROM problems p WHERE p.researcher_user_id = u.id) OR EXISTS (SELECT 1 FROM project_roles r WHERE r.user_id = u.id AND r.revoked_at IS NULL))
+      ORDER BY u.handle`, [[...owners]])).map((r: any) => ({ name: String(r.name), handle: String(r.handle) }));
     const byName = new Map<string, { name: string; handle: string }>();
     for (const r of rows) { const cur = byName.get(r.name); if (!cur || (owners.has(r.handle.toLowerCase()) && !owners.has(cur.handle.toLowerCase()))) byName.set(r.name, r); }
     cache = { at: Date.now(), people: [...byName.values()].sort((a, b) => b.name.length - a.name.length) };

@@ -1,4 +1,5 @@
 import {datesForDocument, documentRecords, documentDates, recordHtml} from "../lib/document-record.js";
+import { crediter } from "../lib/display-name.js";
 import {datesHtml, timeHtml} from "../lib/timestamps.js";
 /**
  * Docs browser (scope Q43): render the research repo's documents on the site. Read-only, from a filtered copy of the
@@ -92,6 +93,7 @@ async function renderMarkdown(src: string, slug: string, rel: string, edition: E
 docs.get("/docs{/*path}", (req: any, res) => serve(req, res, "docs"));
 docs.get("/seed{/*path}", (req: any, res) => serve(req, res, "seed"));
 async function serve(req: any, res: any, edition: Edition): Promise<void> {
+  const credit = await crediter();
   const slug = String(req.params.slug);
   if (!SLUG.test(slug)) { res.status(404).type("text/plain").send("not found\n"); return; }
   const rel = Array.isArray(req.params.path) ? req.params.path.join("/") : String(req.params.path ?? "");
@@ -158,7 +160,7 @@ async function serve(req: any, res: any, edition: Edition): Promise<void> {
   if (timestamps.modified_at) res.set("X-Document-Modified-At", timestamps.modified_at);
   if (timestamps.recorded_at) res.set("X-Document-Recorded-At", timestamps.recorded_at);
   if (req.query.meta) { bytes(); res.json({path: rel, edition, timestamps, source: publication.files[rel]?.source ?? null, history_url: historyUrl}); return; }
-  const revisedNote = revised ? `<span class="muted">${revised.swarm ? `swarm edition, version ${revised.versions}: changed by <a href="/@${esc(revised.author)}">@${esc(revised.author)}</a>${revised.verified.length ? `, verified by ${revised.verified.map((h: string) => `<a href="/@${esc(h)}">@${esc(h)}</a>`).join(", ")}` : ""}` : `version ${revised.versions}, as cut from the research repository on ${timeHtml(revised.at)}`} · <a href="/projects/${esc(slug)}/history/${esc(rel)}">history and diffs</a>${revised.swarm ? ` · <a href="/projects/${esc(slug)}/docs/${esc(rel)}?original=1">current mirror</a>` : ""}</span>` : "";
+  const revisedNote = revised ? `<span class="muted">${revised.swarm ? `swarm edition, version ${revised.versions}: changed by ${credit(revised.author)}${revised.verified.length ? `, verified by ${revised.verified.map((h: string) => `${credit(h)}`).join(", ")}` : ""}` : `version ${revised.versions}, as cut from the research repository on ${timeHtml(revised.at)}`} · <a href="/projects/${esc(slug)}/history/${esc(rel)}">history and diffs</a>${revised.swarm ? ` · <a href="/projects/${esc(slug)}/docs/${esc(rel)}?original=1">current mirror</a>` : ""}</span>` : "";
   if (ext === ".md" && !browser) {
     bytes(); res.set({ "Content-Type": "text/markdown; charset=utf-8", "X-Content-Type-Options": "nosniff" }).send(content.toString("utf8")); return;
   }
@@ -170,7 +172,7 @@ async function serve(req: any, res: any, edition: Edition): Promise<void> {
     const banner = pid ? challengeBanner(await challengesFor(Number(pid), "document", rel), `/projects/${slug}`) : "";
     const fixes = pid ? await q(`SELECT r.id, u.handle, x->>'note' AS note FROM returns r JOIN users u ON u.id = r.user_id, jsonb_array_elements(r.also_fix) x WHERE r.problem_id = $1 AND r.type = 'audit' AND r.status = 'accepted' AND NOT r.provisional AND x->>'path' = $2
       UNION ALL SELECT r.id, u.handle, x->>'note' AS note FROM reviews rv JOIN returns r ON r.id = rv.return_id JOIN users u ON u.id = rv.user_id, jsonb_array_elements(rv.also_fix) x WHERE r.problem_id = $1 AND r.status = 'accepted' AND NOT r.provisional AND x->>'path' = $2 ORDER BY id DESC LIMIT 10`, [pid, rel]) : [];
-    const fixNotes = fixes.length ? `<div class="panel" style="margin:0 0 1.5rem;padding:.9rem 1.1rem;border-left:4px solid var(--line)"><p style="margin:0 0 .4rem"><b>Notes from accepted audits and their reviewers</b> <span class="muted">(corrections routed to this document; not yet applied here)</span></p><ul style="margin:0;padding-left:1.1rem">${fixes.map((f: any) => `<li><a href="/projects/${esc(slug)}/return/${f.id}">audit #${f.id}</a> by <a href="/@${esc(f.handle)}">@${esc(f.handle)}</a>: ${esc(f.note)}</li>`).join("")}</ul></div>` : "";
+    const fixNotes = fixes.length ? `<div class="panel" style="margin:0 0 1.5rem;padding:.9rem 1.1rem;border-left:4px solid var(--line)"><p style="margin:0 0 .4rem"><b>Notes from accepted audits and their reviewers</b> <span class="muted">(corrections routed to this document; not yet applied here)</span></p><ul style="margin:0;padding-left:1.1rem">${fixes.map((f: any) => `<li><a href="/projects/${esc(slug)}/return/${f.id}">audit #${f.id}</a> by ${credit(f.handle)}: ${esc(f.note)}</li>`).join("")}</ul></div>` : "";
     res.type("text/html").send(chrome(slug, r.title, crumbsFor(slug, rel), `${record}${banner}${fixNotes}${ledgerHtml(r.ledger)}${await linkPeople(r.html)}`, extra, `/projects/${slug}/docs/${rel}`));
     return;
   }
@@ -194,6 +196,7 @@ function seedNote(slug: string, rel: string): string {
 }
 /** The seed page says loudly when the body of work has moved on (Chris, Sep 10): a document changed since the seed gets a big out-of-date banner. */
 async function seedBanner(slug: string, rel: string, seedText?: string): Promise<string> {
+  const credit = await crediter();
   const live = `/projects/${esc(slug)}/docs/${esc(rel)}`;
   if (seedText !== undefined) {
     const now = await currentText(slug, rel);
@@ -201,7 +204,7 @@ async function seedBanner(slug: string, rel: string, seedText?: string): Promise
     if (sha256(now.text) !== sha256(seedText)) {
       const pid = (await one<{ id: number }>(`SELECT id FROM problems WHERE slug = $1`, [slug]))?.id;
       const rv = pid ? (await revisedPaths(Number(pid))).get(rel) : undefined;
-      const why = rv ? `${rv.versions - 1} recorded change${rv.versions - 1 === 1 ? "" : "s"} since the seed${rv.author ? `, latest by <a href="/@${esc(rv.author)}">@${esc(rv.author)}</a>` : ""} · <a href="${live.replace(/\/docs\//, "/history/")}">history and diffs</a>` : "changed in the research repository since the seed";
+      const why = rv ? `${rv.versions - 1} recorded change${rv.versions - 1 === 1 ? "" : "s"} since the seed${rv.author ? `, latest by ${credit(rv.author)}` : ""} · <a href="${live.replace(/\/docs\//, "/history/")}">history and diffs</a>` : "changed in the research repository since the seed";
       return `<div class="panel banner-stale" role="note" style="margin:0 0 1.5rem;padding:1.1rem 1.25rem;border-left:6px solid #b3261e;background:rgba(179,38,30,.08)"><p style="margin:0;font-size:1.05rem"><b>Out of date: the body of work has moved on.</b> You are reading the seed edition, the text as it was when the project began. <a href="${live}"><b>Read the current document →</b></a></p><p class="muted" style="margin:.4rem 0 0">${why}</p></div>`;
     }
   }

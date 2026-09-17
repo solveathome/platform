@@ -21,6 +21,7 @@ import { bigBody } from "./lib/body-limits.js";
 import { docs } from "./routes/docs.js";
 import { projects } from "./routes/projects.js";
 import { trust } from "./routes/trust.js";
+import { settings } from "./routes/settings.js";
 import { githubStart, githubCallback, logout } from "./lib/auth.js";
 import { splash } from "./lib/splash.js";
 import "./lib/markdown.js";   // safe link and image schemes in every Markdown render
@@ -73,6 +74,7 @@ app.use("/projects/:slug", asks);
 app.use("/projects/:slug", trust);
 app.use("/projects/:slug", docs);
 app.use(projects);
+app.use(settings);
 app.use(root);
 app.use(dumps);
 app.use(terms);
