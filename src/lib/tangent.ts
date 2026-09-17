@@ -5,6 +5,7 @@
  * (a route, an idea, a reference). Both come back as returns, get reviewed like everything else, and an accepted challenge
  * is shown on the thing it challenges.
  */
+import { creditHtml } from "./display-name.js";
 import { q } from "../db/index.js";
 
 export type TangentKind = "challenge" | "direction";
@@ -142,7 +143,7 @@ export function challengeBanner(list: ChallengeRow[], P: string): string {
   if (!list.length) return "";
   // A provisional (advisory-only) decision is "under review" here: only a trusted verdict says an objection was upheld.
   const final = (c: ChallengeRow) => c.status === "accepted" && !c.provisional;
-  const items = list.map((c) => `<li><a href="${P}/return/${c.id}">Challenge #${c.id}</a> by <a href="/@${esc(c.handle)}">${esc(c.display_name || "@" + c.handle)}</a>: <b>${final(c) ? esc(FINDING_LABEL[c.finding ?? ""] ?? c.finding ?? "accepted") : c.status === "pending" || c.provisional ? "under review" : "contested"}</b>${final(c) && c.final_rung ? ` (${esc(c.final_rung)})` : ""}</li>`).join("");
+  const items = list.map((c) => `<li><a href="${P}/return/${c.id}">Challenge #${c.id}</a> by ${creditHtml(c)}: <b>${final(c) ? esc(FINDING_LABEL[c.finding ?? ""] ?? c.finding ?? "accepted") : c.status === "pending" || c.provisional ? "under review" : "contested"}</b>${final(c) && c.final_rung ? ` (${esc(c.final_rung)})` : ""}</li>`).join("");
   const upheld = list.some((c) => final(c) && (c.finding === "holds" || c.finding === "partial"));
   return `<div class="panel challenge-banner${upheld ? " upheld" : ""}" style="margin:0 0 1.5rem;padding:.9rem 1.1rem;border-left:4px solid ${upheld ? "#b3261e" : "var(--line)"}"><p style="margin:0 0 .4rem"><b>${upheld ? "Challenged and upheld" : "Challenged"}</b> <span class="muted">(a person's objection, reviewed by other people's agents)</span></p><ul style="margin:0;padding-left:1.1rem">${items}</ul></div>`;
 }

@@ -4,6 +4,7 @@
  *   POST /projects/:slug/trust/grant                { handle, note }                         owner
  *   POST /projects/:slug/trust/revoke               { handle, note }                         owner
  */
+import { creditHtml } from "../lib/display-name.js";
 import { TRUSTED_MODEL_FAMILIES } from "../lib/roles.js";
 import { Router } from "express";
 import { wantsHtml } from "../lib/negotiate.js";
@@ -34,7 +35,7 @@ trust.get("/trust", optionalAuth, project, async (req: any, res) => {
   const me = req.user ? { handle: req.user.handle, role: await roles.roleOf(pid, Number(req.user.id), req.user.handle) } : null;
   if (!wantsHtml(req)) { res.json({ project: req.project.slug, members, history: hist, you: me }); return; }
   const P = `/projects/${req.project.slug}`;
-  const name = (m: { handle: string; display_name: string | null }) => `<a href="/@${esc(m.handle)}">${esc(m.display_name || "@" + m.handle)}</a>`;
+  const name = (m: { handle: string; display_name: string | null }) => creditHtml(m);
   const rows = members.map((m) => `<tr><td>${name(m)}${m.role === "owner" ? ' <span class="tag">owner</span>' : ""}${m.dormant ? ' <span class="tag muted">dormant</span>' : ""}</td><td class="num">${Number(m.reviews)}</td><td class="num">${Number(m.reviews) ? Math.round(100 * Number(m.agreed) / Number(m.reviews)) + "%" : "–"}</td><td>${m.last_review ? esc(String(m.last_review).slice(0, 10)) : "never"}</td><td class="muted">${esc(m.note)}${m.granted_by ? ` <span class="muted">(by @${esc(m.granted_by)}, ${esc(String(m.granted_at).slice(0, 10))})</span>` : ""}</td></tr>`).join("") || `<tr><td colspan="5" class="muted">Nobody yet.</td></tr>`;
   const isOwner = me?.role === "owner";
   const record = hist.filter((h) => h.revoked_at).map((h) => `<li>@${esc(h.handle)}: trust revoked ${esc(String(h.revoked_at).slice(0, 10))}${h.revoked_by ? ` by @${esc(h.revoked_by)}` : ""}${h.revoke_note ? `: ${esc(h.revoke_note)}` : ""}</li>`).join("");

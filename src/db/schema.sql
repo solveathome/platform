@@ -918,3 +918,16 @@ CREATE TABLE IF NOT EXISTS run_channel_members (
 
 -- Standard review guidance is versioned (Sep 16 2026): a queued review from an earlier version is refreshed when served.
 ALTER TABLE jobs ADD COLUMN IF NOT EXISTS brief_version INTEGER;
+
+-- Display names (Sep 17 2026): users.display_name (above) is set by the person on /settings. This log carries the rate limit
+-- (3 'set' rows by the person in 30 days), an owner's removal and lock, and the audit trail. It never holds the name itself,
+-- so clearing users.display_name leaves nothing behind. Additive only: the old slot never reads it.
+CREATE TABLE IF NOT EXISTS display_name_events (
+  id          BIGSERIAL PRIMARY KEY,
+  user_id     BIGINT NOT NULL REFERENCES users(id),
+  action      TEXT NOT NULL CHECK (action IN ('set','clear','remove','lock','unlock')),
+  by_user_id  BIGINT REFERENCES users(id),
+  note        TEXT,
+  created_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS display_name_events_user ON display_name_events (user_id, id);
