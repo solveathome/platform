@@ -54,7 +54,7 @@ small { font-size: .875rem; }
 .who { margin-left: auto; display: flex; gap: 1rem; align-items: center; font-size: .875rem; }
 .who a { white-space: nowrap; }
 .who .muted { display: none; }
-.who>a:last-child:not(:first-child) { color: var(--mut); }
+.who>a:not(:first-child) { color: var(--mut); }
 .site-footer { margin-top: 4rem; color: var(--mut); font-size: .8125rem; }
 .footer-involve { border-top: 1px solid var(--line); padding-block: 1.5rem 1.75rem; }
 .footer-involve .involve-title { margin: 0 0 .6rem; font-size: .75rem; text-transform: uppercase; letter-spacing: .08em; color: var(--mut); }
@@ -326,7 +326,7 @@ pre code { padding: 0; background: none; }
   .brand { width: 13rem; }
   .global-nav { order: 3; width: 100%; min-height: 44px; gap: 2rem; }
   .who { font-size: .8125rem; gap: .75rem; }
-  .who>a:last-child:not(:first-child) { font-size: .75rem; }
+  .who>a:not(:first-child) { font-size: .75rem; }
   main.shell { padding-top: 2rem; }
   .page-heading { align-items: flex-start; flex-direction: column; margin-bottom: 2.5rem; }
   .home-hero { grid-template-columns: 1fr; gap: 4rem; padding: 2rem 0 4rem; min-height: auto; }
@@ -621,3 +621,12 @@ body[data-page=contributor] summary { cursor: pointer; font-size: .9375rem; font
 @media (max-width: 1100px) { .standing-grid, .identity, .grid2 { grid-template-columns: 1fr; gap: 2.5rem; } .highlights { grid-template-columns: 1fr; } .hl { border-right: 0; margin-right: 0; padding-right: 0; border-bottom: 1px solid var(--line); margin-bottom: 1.25rem; } .hl:last-child { border-bottom: 0; } .agents, .built { grid-template-columns: 1fr; gap: 1rem; } .wkinds { grid-template-columns: repeat(3, minmax(0, 1fr)); } .wk:nth-child(3) { border-right: 0; } .facts { grid-template-columns: repeat(2, 1fr); } }
 @media (max-width: 700px) { .wkinds { grid-template-columns: repeat(2, minmax(0, 1fr)); } .wk:nth-child(3) { border-right: 1px solid var(--line); } .wk:nth-child(even) { border-right: 0; } .vladder li { grid-template-columns: 6rem 2rem minmax(0, 1fr); } .days { height: 6rem; } }
 @media (prefers-reduced-motion: no-preference) { .milestone .fill { transition: width .6s ease; } }
+
+/* A credited person: a chosen name always carries the handle beside it (src/lib/display-name.ts). */
+.credit-handle { color: var(--mut); font-size: .875em; white-space: nowrap; }
+.credit:hover { text-decoration: none; }
+.credit:hover .credit-name, a.credit:hover:not(:has(.credit-name)) { text-decoration: underline; }
+.identity .name-owner { margin-top: 1rem; font-size: .875rem; }
+.identity .name-owner summary { cursor: pointer; color: var(--mut); }
+.identity .name-owner textarea { display: block; width: min(100%, 30rem); min-height: 4.5rem; margin: .6rem 0; background: transparent; color: var(--fg); border: 1px solid var(--line); padding: .5rem .65rem; }
+.identity .name-owner label { display: flex; gap: .5rem; align-items: center; margin-bottom: .6rem; }
