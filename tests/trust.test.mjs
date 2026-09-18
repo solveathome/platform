@@ -180,7 +180,7 @@ test('trust by model (Chris, Sep 11): an Astra session at a top thinking level r
 
 test('a self-assigned review is not capped by the handle\'s pending self-assigned returns (Astra report, Sep 11)', async () => {
   const ids = [];
-  for (let i = 0; i < 6; i++) ids.push(Number((await one(`INSERT INTO returns (problem_id, type, user_id, model, provider, report_md, transcript, status) VALUES ($1,'audit',$2,'m','p','own audit','t','pending') RETURNING id`, [pid, people.trusted.id])).id));
+  for (let i = 0; i < 6; i++) ids.push(Number((await one(`INSERT INTO returns (problem_id, type, user_id, model, provider, report_md, transcript, status) VALUES ($1,'direction',$2,'m','p','own route awaiting judgment','t','pending') RETURNING id`, [pid, people.trusted.id])).id));   // today's requests for judgment; pending audits never count (Sep 18 2026)
   const r = await one(`INSERT INTO returns (problem_id, type, user_id, model, provider, report_md, transcript, status) VALUES ($1,'source',$2,'m','p','page 6','t','pending') RETURNING id`, [pid, people.author.id]);
   const capped = await call('trusted', 'POST', '/result', {model: 'gpt-6-astra', body: {type: 'direction', report_md: '# Another route\nTry it.', transcript: 't', transcript_approved: true}});
   assert.equal(capped.status, 429, 'a seventh self-assigned return should hit the cap (audits and reviews are exempt, issue #40)');

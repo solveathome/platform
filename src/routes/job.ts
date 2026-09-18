@@ -53,7 +53,7 @@ import { parseRung, RUNG_ERROR, LADDER } from "../lib/rungs.js";
 import { postRateOk, RATE_MESSAGE } from "../lib/messages.js";
 import { parseTangent, parseTarget, tangentJob, challengesFor, challengeBanner, targetUrl, targetLabel, FINDINGS, type Tangent } from "../lib/tangent.js";
 
-/** Caps on submission (Sep 10): pending self-assigned returns per handle per project, and returns per handle per hour. */
+/** Caps on submission (Sep 10; Sep 18: a day's window, never a wait for reviewers): self-assigned requests for judgment per handle per project per day, and returns per handle per hour. */
 const MAX_OPEN_SELF_ASSIGNED = Number(process.env.MAX_OPEN_SELF_ASSIGNED ?? 6), MAX_RETURNS_PER_HOUR = Number(process.env.MAX_RETURNS_PER_HOUR ?? 120);   // per handle; a person runs many agents (Chris, Sep 11 2026: 30 was too low)
 /** Per handle: live sessions (seen within a day) and assignments held at once. */
 const MAX_LIVE_SESSIONS = Number(process.env.MAX_LIVE_SESSIONS ?? 16), MAX_HELD_PER_HANDLE = Number(process.env.MAX_HELD_PER_HANDLE ?? 16);
@@ -888,8 +888,14 @@ job.post("/result", bearer, project, assignmentMutation(async (req: any, res) =>
     // daily limit and can proceed while this contributor's earlier claims await review.
     // Audits remain the uncapped record-fix path (issue #40); advisory reviews ask for no new review.
     const recordedProposal = b.type === 'direction' && researchReport?.proposal && b.request_review !== true;
-    const open = b.type === "review" || b.type === "audit" || recordedProposal ? null : await one<{ c: string }>(`SELECT count(*) AS c FROM returns WHERE user_id = $1 AND problem_id = $2 AND job_id IS NULL AND status = 'pending'`, [uid, req.project.id]);
-    if (Number(open?.c ?? 0) >= MAX_OPEN_SELF_ASSIGNED) { res.status(429).json({ error: `you already have ${open!.c} self-assigned returns under review in this project; wait for a decision before proposing more (limit ${MAX_OPEN_SELF_ASSIGNED})` }); return; }
+    // The cap limits how fast one handle asks for judgment; it never makes a contributor wait for reviewers (Chris, Sep 18 2026:
+    // "we don't want the system to ever be blocked for forward movement. Validation and verification needs trusted agents but
+    // the corpus and body of work can still be extended, researched, new ideas being proposed etc by anyone"). It used to count
+    // every self-assigned return still pending, audits included, with no window: on Sep 18 four handles, the owner among them,
+    // were refused a new paper, direction or challenge until a trusted reviewer got to returns from a week before. It now counts
+    // the capped kinds only, and only those of the last 24 hours.
+    const open = b.type === "review" || b.type === "audit" || recordedProposal ? null : await one<{ c: string }>(`SELECT count(*) AS c FROM returns WHERE user_id = $1 AND problem_id = $2 AND job_id IS NULL AND status = 'pending' AND type NOT IN ('review','audit') AND created_at > now() - interval '24 hours'`, [uid, req.project.id]);
+    if (Number(open?.c ?? 0) >= MAX_OPEN_SELF_ASSIGNED) { res.setHeader("Retry-After", "3600"); res.status(429).json({ error: `you have sent ${open!.c} self-assigned returns for review in this project in the last 24 hours (limit ${MAX_OPEN_SELF_ASSIGNED} a day; returns waiting longer than that never count). Nothing here waits for a reviewer: send it later today, or now as a recorded route proposal (type direction with research.proposal and no request_review) or an audit, which have no such limit` }); return; }
   }
   const hourly = await one<{ c: string }>(`SELECT count(*) AS c FROM returns WHERE user_id = $1 AND created_at > now() - interval '1 hour'`, [uid]);
   if (Number(hourly?.c ?? 0) >= MAX_RETURNS_PER_HOUR) { res.setHeader("Retry-After", "600"); res.status(429).json({ error: `rate limit: ${MAX_RETURNS_PER_HOUR} returns per hour per handle` }); return; }

@@ -426,12 +426,18 @@ test('a recorded route proposal is filed while the self-assigned cap is full, an
   assert.ok(Number(open.c)>=6,`the cap is full: ${open.c} pending`);
   const plain=await submit('author',{});
   assert.equal(plain.status,429,JSON.stringify(plain.body));
-  assert.match(plain.body.error,/self-assigned returns under review/);
+  assert.match(plain.body.error,/self-assigned returns for review in this project in the last 24 hours/);
   const recorded=await submit('author',{research:{...proposal(),next_step:step('recorded')}});
   assert.equal(recorded.status,200,JSON.stringify(recorded.body));
   assert.equal(recorded.body.status,'recorded','it is on the record without asking for judgment');
   const asJudgment=await submit('author',{request_review:true,research:{...proposal(),next_step:step('judged')}});
   assert.equal(asJudgment.status,429,'asking for review is what the cap is about');
+  // Sep 18 2026: the cap is a day's rate, never a wait for reviewers. The same eight proposals, a day old and still undecided,
+  // stop nothing; and pending audits were never what the cap is about.
+  await q(`UPDATE returns SET created_at=now()-interval '25 hours' WHERE user_id=$1 AND problem_id=$2 AND job_id IS NULL AND status='pending'`,[uid,pid]);
+  for(let i=0;i<8;i++)await q(`INSERT INTO returns (problem_id,type,user_id,model,provider,report_md,transcript,status) VALUES ($1,'audit',$2,$3,'anthropic','A record fix awaiting judgment.','t','pending')`,[pid,uid,users.author.model]);
+  const later=await submit('author',{});
+  assert.equal(later.status,200,`a slow review queue never refuses a new idea: ${JSON.stringify(later.body)}`);
   await q(`DELETE FROM returns WHERE user_id=$1 AND problem_id=$2 AND job_id IS NULL`,[uid,pid]);
 });
 
