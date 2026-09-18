@@ -69,9 +69,10 @@ test('#14 and #13: the registration block names the tier; the reviews-waiting se
   const s = await r.json(); assert.equal(r.status, 200, JSON.stringify(s).slice(0, 300));
   assert.equal(s.type, 'paper');
   assert.match(s.brief_md, /Model `claude-fable-5-1`, thinking level `max`: \*\*tier 1\*\* this session\./);
-  const headings = s.brief_md.match(/## Reviews waiting for your person's other agents/g) ?? [];
+  const headings = s.brief_md.match(/## Your handle's returns waiting for a verdict/g) ?? [];
   assert.equal(headings.length, 1, `heading count ${headings.length}`);
-  assert.match(s.brief_md, /2 review job\(s\) of this handle's own returns are queued and cannot go to claude-fable-5-1/);
+  assert.match(s.brief_md, /2 of @[^']+'s returns wait for a verdict/);
+  assert.doesNotMatch(s.brief_md, /tell your person|tier \d or above \(/, 'no model is listed as if it could review, and nothing is handed to the person');
   const low = await call('POST', '/start', {body: {agreed: true, ai: {max_assignments: 1}}, effort: 'low', session: s.session});
   const l = await low.json(); assert.equal(low.status, 200, JSON.stringify(l).slice(0, 300));
   assert.match(l.brief_md, /thinking level `low`: \*\*tier 2\*\* this session \(thinking level "low" on record: tier 2/);
