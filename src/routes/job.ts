@@ -10,7 +10,7 @@ import { assignmentMutation, claimAssignment, releaseAssignment } from "../lib/a
 import { parseCapabilities, researchContact, CAPABILITY_INSTRUCTIONS } from "../lib/agent-profile.js";
 import { checkInstruction, ENDED_LAUNCH_GUIDANCE, folderLaunchContract } from "../lib/launch.js";
 import { isDeepStrictEqual } from "node:util";
-import { backlogFor, selectJob, computeBlocked, discoveryShare, discoveryDue, allocation, researchPolicy, researchAllocation, portfolioOrder, researchBucket, type SchedulingAgent } from "../lib/scheduler.js";
+import { backlogFor, selectJob, computeBlocked, discoveryShare, discoveryDue, allocation, researchPolicy, researchAllocation, portfolioOrder, researchBucket, reviewPressure, unmetRequirements, STALE_REQUIREMENT_HOURS, type SchedulingAgent } from "../lib/scheduler.js";
 import { parseResearch, stageOf } from '../lib/research-format.js';
 import { recordResearch, prepareRescue, researchBrief, routeContext, reconsiderDependents } from '../lib/research.js';
 import { parseVerificationPlan, saveVerificationPlan, queueCheck, saveCheckReceipt, verificationRuns, verificationState, verificationBrief, judgmentBudget, validateReceiptUse, isCompletedCheck, expireWaitingChecks, checkWaitExpired, identicalClaim, verificationSummary, receiptId } from '../lib/verification.js';
@@ -273,6 +273,14 @@ ${ENDED_LAUNCH_GUIDANCE}
   const trustedJudgment = !row && agent.granted && tier === 1 && !preferResearch
     ? await selectJob(agent, false, false, undefined, true) : null;
   row ??= trustedJudgment;
+  // A long review queue (Sep 18 2026, platform issue #94). Only a trusted session can shorten it, so while more reviews than the
+  // project's threshold wait for this session it alternates by need as it did before the portfolio (Sep 11: a run of up to four
+  // reviews, then one research assignment). Eligibility is untouched: trusted reviewers only, never the author's own handle
+  // without a grant, never the author's model. Everyone else keeps research, and is told why (`reviewQueueNote`).
+  const pressure = reviewPressure(req.project.slug);
+  const pressed = !row && !recovery && pressure !== null && trusted && tier === 1 && !preferResearch && need.reviews >= pressure
+    ? await selectJob(agent, false, false, undefined, false, true) : null;
+  row ??= pressed;
   if (!row && portfolio && portfolioUsed) {
     for (const bucket of portfolioOrder(portfolio, portfolioUsed)) {
       if (bucket === 'rescue') await prepareRescue(agent.problemId, agent.model, lane);
@@ -286,11 +294,14 @@ ${ENDED_LAUNCH_GUIDANCE}
   if (reserveDiscovery) row = await selectJob(agent, preferResearch, true)
     ?? await synthesizeExplore(req, session, lane, maxHours, null, true);
   if (!row) row = await synthesizeExplore(req, session, lane, maxHours, await computeBlocked(agent));
-  const reason = { policy: session.direction_id ? "agent direction" : tangentFirst ? "person's tangent" : trustedJudgment ? "trusted judgment" : portfolio ? "research portfolio" : reserveDiscovery ? "reserved tier-1 discovery" : "eligible work by need and capability",
+  const unmet = row.type === 'check' ? { tools: [], sources: [] } : unmetRequirements(row, agent.capabilities);
+  const reason = { policy: session.direction_id ? "agent direction" : tangentFirst ? "person's tangent" : trustedJudgment ? "trusted judgment" : pressed ? "review pressure" : portfolio ? "research portfolio" : reserveDiscovery ? "reserved tier-1 discovery" : "eligible work by need and capability",
     tier, guidance_version: GUIDANCE_VERSION, discovery_share: share, discovery_allocation: used, eligible_backlog: { reviews: need.reviews, research: need.research }, prefer_research: preferResearch,
     ...(need.blocked_reviews ? { blocked_backlog: { reviews: need.blocked_reviews, reason: "a model never reviews its own kind; these wait for an agent on another model" } } : {}),
     research_allocation: portfolio, research_hours: portfolioUsed, research_bucket: researchBucket(row),
-    skill_matches: Number(row.skill_matches ?? 0), purpose: row.purpose ?? 'work' };
+    skill_matches: Number(row.skill_matches ?? 0), purpose: row.purpose ?? 'work',
+    ...(pressure !== null ? { review_pressure: { threshold: pressure, waiting: need.reviews } } : {}),
+    ...(unmet.tools.length || unmet.sources.length ? { relaxed_requirements: unmet } : {}) };
   row = await claimAssignment(row, session, uid, tier, reason, !tangentFirst && !session.direction_id);
   if(recovery) {
     await q(`INSERT INTO assignment_recoveries(old_attempt_id,new_attempt_id) VALUES($1,$2)`,[recovery.id,row.attempt_id]);
@@ -308,6 +319,8 @@ ${ENDED_LAUNCH_GUIDANCE}
   // Reviews this handle cannot take with this model (a model never reviews its own kind) wait for its other agents: say so, or the handle stacks returns nobody reviews.
   const waiting = row.type !== "review" ? await one<{ c: string; models: string[] }>(`SELECT count(*) AS c, array_agg(DISTINCT pr.model) AS models FROM jobs j JOIN returns pr ON pr.id = j.parent_return_id WHERE j.problem_id = $1 AND j.type = 'review' AND j.status = 'queued' AND pr.user_id = $2 AND pr.model = $3`, [req.project.id, uid, req.model ?? ""]) : null;
   if (Number(waiting?.c ?? 0) > 0) { const others = (await q<{ model: string }>(`SELECT model FROM model_tiers WHERE tier <= $1 AND model <> $2 ORDER BY tier, model`, [Number(tier), req.model ?? ""])).map((m) => m.model); md += `\n\n## Reviews waiting for your person's other agents\n\n${waiting!.c} review job(s) of this handle's own returns are queued and cannot go to ${req.model}: a model never reviews its own kind. They wait for an agent on another model at tier ${tier} or above${others.length ? ` (${others.join(", ")})` : ""}. Until one reviews them, this handle's returns stack unreviewed; tell your person when you report.`; }
+  if (unmet.tools.length || unmet.sources.length) md += requirementsNote(unmet, `${BASE()}/projects/${req.project.slug}`, row);
+  if (!trusted && row.type !== "review") md += await reviewQueueNote(Number(req.project.id), `${BASE()}/projects/${req.project.slug}`, row, reason.policy);
   // An audit of a paper with a revision still under review starts from that revision, not from the last accepted text.
   if (row.type === "audit") {
     const pslug = /paper\.slug:\s*([A-Za-z0-9-]+)/.exec(String(row.brief_md ?? ""))?.[1];   // slugs keep their case (issue #8)
@@ -365,6 +378,27 @@ job.get('/department-protocol',project,(req:any,res) => {
 });
 job.get("/start", checkInstruction, bearer, project, assignmentMutation(start, { commitErrors: true }));
 job.get("/job", checkInstruction, bearer, project, assignmentMutation(start, { commitErrors: true }));
+
+/** A pursuit step served past requirements nobody has declared (`requirementClause` in the scheduler): the names are the proposer's notes. */
+export function requirementsNote(unmet: { tools: string[]; sources: string[] }, P: string, row: any): string {
+  const names = [unmet.tools.length ? `tools ${unmet.tools.map((t) => `\`${t}\``).join(", ")}` : "", unmet.sources.length ? `sources ${unmet.sources.map((t) => `\`${t}\``).join(", ")}` : ""].filter(Boolean).join("; ");
+  return `\n\n## Names the proposer used for what this step needs\n\nThis step waited more than ${STALE_REQUIREMENT_HOURS} hours because its proposer listed requirements that no agent in this project has ever declared: ${names}. They are the proposer's own names for scripts, returns and documents, not capabilities you were found to lack. Look for them on the record first:${row.research_route_id ? ` the route (\`GET ${P}/research-routes/${row.research_route_id}\`),` : ""} the returns it cites and their files (a name like \`return-660\` is \`GET ${P}/return/660\`). Rebuild a small script when that is cheaper than finding it, and say in your report which of the two you did. If an item is something only the proposer holds (a private source, a tool you cannot install within your person's limits), ask them (\`POST ${P}/asks\`) or release the assignment with a note naming the item (\`POST ${P}/release\`). Do not return \`blocked\` for a missing tool: that would record an obstacle on the route that is not one.`;
+}
+/** Returns waiting for a verdict before a session that cannot give one is told about them. */
+const REVIEW_QUEUE_NOTE_FROM = Math.max(1, Number(process.env.REVIEW_QUEUE_NOTE_FROM) || 25);
+/** A session that cannot review is told who does, that the queue is not its to work, why it holds this assignment, and what
+ * helps from its side (platform issue #94: an agent released its rescue assignment to review instead, and could not). */
+export async function reviewQueueNote(problemId: number, P: string, row: any, policy: string): Promise<string> {
+  const waiting = Number((await one<{ c: string }>(`SELECT count(*) AS c FROM returns r WHERE r.problem_id = $1 AND r.status = 'pending' AND r.duplicate_of IS NULL`, [problemId]))?.c ?? 0);
+  if (waiting < REVIEW_QUEUE_NOTE_FROM) return "";
+  const stage = stageOf(row);
+  const why = row.type === "check" ? "An independent run of a verification package is the one piece of a verdict any agent can supply: the trusted reviewer judges with your receipt in hand instead of rerunning it"
+    : stage === "pursue" || stage === "triage" ? "A route somebody proposed showed enough to be worth its next step, and that step is what you hold; routes move on recorded evidence and do not wait for the review queue"
+    : stage === "rescue" ? "A route hit an obstacle under another model, and a second look from a different model is what decides whether it is closed or repaired; that does not wait for the review queue"
+    : stage === "discover" ? "The project keeps a fixed share of every tier's hours for new routes, and this is that share; it is recorded as it stands and adds nothing to the review queue unless you ask for review"
+    : "It was the queued work that fits this session's model, tools and limits best";
+  return `\n\n## The review queue, and why this is your assignment\n\n${waiting} returns wait for a verdict. Verdicts here come from trusted reviewers only: a person granted trust on \`${P}/trust\`, or a model trusted there at a top thinking level. This session is neither, so that queue is not yours to work, and releasing this assignment will not get you a review. ${why} (assignment policy: ${policy}).\n\nWhat shortens the queue from your side: when you return a finite claim (a count, a bound a script checked, a computation), attach a \`verification_plan\` (\`GET ${P}/research-protocol\`). Any agent on another model can then run it independently, and a return with a completed independent run goes to a trusted reviewer first, as a bounded judgment instead of a rerun. Ask for review (\`request_review\`) only for a claim somebody will build on.`;
+}
 
 /** The person's tangent as a job, assigned to this session on the spot. */
 async function synthesizeTangent(req: any, session: any, t: Tangent): Promise<any> {
