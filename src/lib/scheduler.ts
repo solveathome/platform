@@ -73,12 +73,15 @@ function eligibility(a: SchedulingAgent, omitCompute = false, sameKindOnly = fal
     `(j.type <> 'check' OR NOT EXISTS (SELECT 1 FROM verification_runs v JOIN returns worker ON worker.id=v.result_return_id WHERE v.fingerprint=er.verification_fingerprint AND worker.problem_id=j.problem_id AND worker.user_id=${uid} AND v.outcome='unable'))`,
     requirementClause('required_tools', 'tools', p(matchingTools(a.capabilities.tools)), true),
     requirementClause('required_sources', 'sources', p(a.capabilities.sources ?? []), false),
-    `(pr.id IS NULL OR pr.user_id <> ${uid} OR ${p(a.granted)}::boolean)`,
-    `(pr.id IS NULL OR ${p(a.trusted)}::boolean)`,
+    `(pr.id IS NULL OR pr.user_id <> ${uid} OR (j.type <> 'triage' AND ${p(a.granted)}::boolean))`,
+    `(pr.id IS NULL OR j.type = 'triage' OR ${p(a.trusted)}::boolean)`,
+    // Review triage (Sep 18 2026): a first read by a session that is not trusted, on another handle and model than the author's;
+    // a trusted session reviews instead, and nobody triages one return twice.
+    `(j.type <> 'triage' OR (NOT ${p(a.trusted)}::boolean AND ${p(a.reviewStreak < 4)}::boolean AND NOT EXISTS (SELECT 1 FROM triages t WHERE t.return_id = j.parent_return_id AND t.user_id = ${uid})))`,
     `NOT EXISTS (SELECT 1 FROM reviews rv WHERE rv.return_id = j.parent_return_id AND rv.user_id = ${uid} AND NOT rv.needs_reassessment)`,
     `NOT EXISTS (SELECT 1 FROM jobs j2 WHERE j2.parent_return_id = j.parent_return_id AND j2.id <> j.id AND j2.assigned_to = ${uid} AND j2.status = 'assigned')`,
     sameKindOnly ? `(pr.id IS NOT NULL AND pr.model IS NOT DISTINCT FROM ${model}::text)` : `(pr.id IS NULL OR pr.model IS DISTINCT FROM ${model}::text)`,
-    `(pr.id IS NULL OR j.min_tier >= 99 OR ${tier} <= coalesce(amt.tier, 99))`,
+    `(pr.id IS NULL OR j.type = 'triage' OR j.min_tier >= 99 OR ${tier} <= coalesce(amt.tier, 99))`,
   ];
   clauses.push(a.directionId
     ? `((j.agent_direction_id=${p(a.directionId)} AND j.agent_direction_revision=${p(a.directionRevision)}) OR (j.agent_direction_id IS NULL AND EXISTS(SELECT 1 FROM agent_direction_links dl WHERE dl.job_id=j.id AND dl.direction_id=${p(a.directionId)} AND dl.revision=${p(a.directionRevision)})))`
@@ -110,7 +113,7 @@ const DEFAULT_SKILLS = `CASE j.type WHEN 'formalize' THEN ARRAY['lean','formaliz
 /** Judgment of a packaged return that already has completed independent execution: a bounded decision, not a review-pool task. */
 const CHECKED_JUDGMENT_SQL = `j.type='review' AND pr.verification_plan IS NOT NULL AND EXISTS (SELECT 1 FROM verification_runs v JOIN returns w ON w.id=v.result_return_id
   WHERE v.fingerprint=pr.verification_fingerprint AND w.problem_id=pr.problem_id AND w.user_id<>pr.user_id AND w.model<>pr.model AND w.status IN ('recorded','accepted') AND v.outcome IN ('pass','fail'))`;
-export async function selectJob(a: SchedulingAgent, preferResearch: boolean, discoveryOnly = false, bucket?: ResearchBucket, checkedJudgment = false, reviewsOnly = false): Promise<any> {
+export async function selectJob(a: SchedulingAgent, preferResearch: boolean, discoveryOnly = false, bucket?: ResearchBucket, checkedJudgment = false, reviewsOnly = false, triageOnly = false): Promise<any> {
   const e = eligibility(a);
   const skills = e.p(a.capabilities.skills ?? []), provider = e.p(a.provider), uid = e.p(a.uid);
   const typeOrder = a.tier === 1
@@ -120,8 +123,9 @@ export async function selectJob(a: SchedulingAgent, preferResearch: boolean, dis
     : ["break", "measure", "formalize", "review", "source", "curate", "paper", "explore", "direction", "audit"];
   if (bucket === 'consolidate') typeOrder.unshift('check');
   else if (a.tier !== 1) typeOrder.unshift('check');
+  if (a.tier !== 1) typeOrder.unshift('triage');
   const order = e.p(typeOrder);
-  const bucketFilter = (bucket ? `AND CASE WHEN ${STAGE_SQL}='triage' THEN 'pursue' ELSE ${STAGE_SQL} END=${e.p(bucket)}` : '') + (checkedJudgment ? ` AND ${CHECKED_JUDGMENT_SQL}` : '') + (reviewsOnly ? ` AND j.type='review'` : '');
+  const bucketFilter = (bucket ? `AND CASE WHEN ${STAGE_SQL}='triage' THEN 'pursue' ELSE ${STAGE_SQL} END=${e.p(bucket)}` : '') + (checkedJudgment ? ` AND ${CHECKED_JUDGMENT_SQL}` : '') + (reviewsOnly ? ` AND j.type='review'` : '') + (triageOnly ? ` AND j.type='triage'` : '');
   // Prioritize judgments that further research already relies on, without changing trust or eligibility.
   // Every non-age term is bounded; one point per waiting day eventually lifts older work.
   return one(`SELECT j.*, l.slug AS lane_slug,
@@ -157,6 +161,25 @@ export function reviewPressure(slug: string, override?: unknown): number | null 
   const raw = override ?? readProjectConfig(slug)?.scheduler?.review_pressure ?? process.env.REVIEW_PRESSURE;
   const n = Number(raw);
   return raw !== undefined && raw !== null && raw !== '' && Number.isFinite(n) && n > 0 ? Math.floor(n) : null;
+}
+/** Review triage (Chris, Sep 18 2026, #sah-review-only-meaningful: "let a tier 2 agent do a first review to see if it's worth
+ * escalating"). On Sep 18 311 returns waited for a verdict while trusted reviewers decided about 15 a day, a third of the pile
+ * was failed attempts, and half the verdicts came from the owner's own sessions. With triage on, a return that asks for review
+ * first gets one bounded `triage` assignment: a session that is not trusted, at `min_tier` or better, on another handle and
+ * model than the author's, answers one question: would a trusted verdict change the record? Yes: the review jobs are made as
+ * before, with the triage note in the brief. No: the return is recorded as it stands (citable, buildable, elevation open).
+ * A triage nobody takes within `wait_hours` falls back to review as before, so nothing waits for a triager for ever.
+ * Project `scheduler.review_triage` {min_tier, wait_hours, budget_hours} -> environment REVIEW_TRIAGE_MIN_TIER / _WAIT_HOURS -> off. */
+export type ReviewTriage = { minTier: number; waitHours: number; budgetHours: number };
+export function reviewTriage(slug: string, override?: unknown): ReviewTriage | null {
+  const cfg = override !== undefined ? override : readProjectConfig(slug)?.scheduler?.review_triage;
+  if (cfg === false) return null;
+  const raw = cfg && typeof cfg === 'object' ? cfg as any : null;
+  const envTier = process.env.REVIEW_TRIAGE_MIN_TIER;
+  if (!raw && (envTier === undefined || envTier === '')) return null;
+  const minTier = Number(raw?.min_tier ?? envTier ?? 2), waitHours = Number(raw?.wait_hours ?? process.env.REVIEW_TRIAGE_WAIT_HOURS ?? 72), budgetHours = Number(raw?.budget_hours ?? 0.25);
+  if (!Number.isInteger(minTier) || minTier < 1 || minTier > 99) throw new Error('review_triage.min_tier must be a tier (1 to 99)');
+  return { minTier, waitHours: Number.isFinite(waitHours) && waitHours > 0 ? waitHours : 72, budgetHours: Number.isFinite(budgetHours) && budgetHours > 0 ? Math.min(4, budgetHours) : 0.25 };
 }
 export function discoveryShare(slug: string, databaseShare?: number | string | null): number {
   const raw = databaseShare ?? readProjectConfig(slug)?.scheduler?.discovery_share ?? process.env.TIER1_DISCOVERY_SHARE ?? 0.2;

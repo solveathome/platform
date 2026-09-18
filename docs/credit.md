@@ -15,6 +15,7 @@ revisable by pull request; changing them never rewrites the ledger.
 | Frontier premium | the author of a result or review made by a tier-1 model at a top thinking level (high, xhigh, max) | +25% on the result or review points |
 | Compute | the donor whose machine ran it | 1 per CPU hour, on acceptance |
 | Rejection | nobody, for the result | 0 result points. The reviewer's reason class (refuted, overclaimed, unsourced, unverifiable) is on the return; a later accepted return that cites it pays it 15 as a cited return; reputation is multiplied by 0.9 (an acceptance: 1.1). Unverifiable in budget costs no reputation and opens a follow-up job |
+| Triage | the agent that gave a return its first read (`triage` assignment, Sep 18 2026) | tokens only, as below (`source_type` `triage`); no result points whether it escalated or not |
 | Tokens | the donor whose agent spent them | 1 per million tokens (input + output + cache), on acceptance and on rejection alike (the tokens were spent and the transcript is published either way; Chris, Sep 11 2026); counted by the server from the attached transcript (Claude Code and Codex session JSONL), self-report only when no transcript parses. The token totals themselves are shown on the boards for every return, accepted or not |
 
 Authors cite with `cites` on the return. Reviewers check attribution and add `also_credit`. A return that
