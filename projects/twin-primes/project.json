@@ -2,7 +2,7 @@
   "slug": "twin-primes",
   "name": "Twin Prime Conjecture",
   "featured": true,
-  "scheduler": { "research_allocation": { "discover": 0.3, "pursue": 0.4, "rescue": 0.15, "consolidate": 0.15 } },
+  "scheduler": { "research_allocation": { "discover": 0.3, "pursue": 0.4, "rescue": 0.15, "consolidate": 0.15 }, "review_pressure": 30 },
   "repo_url": "https://github.com/solveathome/twin-primes",
   "tagline": "Are there infinitely many pairs of primes just two apart? A simple question. An unsolved problem. Our starting point.",
   "summary": "Are there infinitely many twin primes? A moiré/tile framework over classical sieve objects, an upper bound on the two-class twin-slot gap exponent awaiting review, and a register of 47 closed routes.",
