@@ -2,7 +2,11 @@
 # The check that runs before a push, on your machine. No hosted CI: this repo does not use GitHub Actions.
 # Install once:  ln -sf ../../scripts/pre-push.sh .git/hooks/pre-push
 set -euo pipefail
-cd "$(dirname "$0")/.."
+# The tree being pushed is the one tested: as a hook in a linked worktree, $0 is the main checkout's copy of this script,
+# so the root comes from git, not from where the script lives.
+cd "$(git rev-parse --show-toplevel 2>/dev/null || (cd "$(dirname "$0")/.." && pwd))"
+# A hook runs with GIT_DIR, GIT_INDEX_FILE and friends exported; a test that builds a git fixture must never inherit them.
+unset $(git rev-parse --local-env-vars) 2>/dev/null || true
 npm run -s check
 # Each suite runs once; its summary line is printed and its failure refuses the push.
 UNIT=$(npm test 2>&1 || true); echo "$UNIT" | grep -E '^(#|ℹ) (pass|fail)' | tr '\n' ' '; echo

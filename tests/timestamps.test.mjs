@@ -15,8 +15,12 @@ test('exact timestamps normalize offsets and Date objects, preserving millisecon
 
 test('source dates follow renames, detect uncommitted bytes, and do not use filesystem dates', () => {
   const root = mkdtempSync(join(tmpdir(), 'sah-source-dates-'));
-  const git = (...args) => execFileSync('git', ['-C', root, ...args], {encoding: 'utf8'}).trim();
-  const commit = date => execFileSync('git', ['-C', root, 'commit', '-qm', 'fixture'], {env: {...process.env, GIT_AUTHOR_DATE: date, GIT_COMMITTER_DATE: date}});
+  // Inside a git hook (the pre-push gate run from a linked worktree) git exports GIT_DIR, GIT_INDEX_FILE and friends, and
+  // `git -C <tmp>` obeys them: on Sep 18 2026 this fixture initialised, configured and committed into the real repository
+  // (core.bare = true, user "Fixture", two commits on the pushing branch). The fixture's git never sees the caller's repository.
+  const clean = Object.fromEntries(Object.entries(process.env).filter(([k]) => !k.startsWith('GIT_')));
+  const git = (...args) => execFileSync('git', ['-C', root, ...args], {encoding: 'utf8', env: clean}).trim();
+  const commit = date => execFileSync('git', ['-C', root, 'commit', '-qm', 'fixture'], {env: {...clean, GIT_AUTHOR_DATE: date, GIT_COMMITTER_DATE: date}});
   try {
     git('init', '-q'); git('config', 'user.name', 'Fixture'); git('config', 'user.email', 'fixture@example.test');
     writeFileSync(join(root, 'original.md'), '# First\n'); git('add', '.'); commit('2026-01-02T03:04:05+02:00');
