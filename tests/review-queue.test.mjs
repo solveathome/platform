@@ -10,10 +10,11 @@ if (!process.env.TEST_DATABASE_URL) throw new Error('Set TEST_DATABASE_URL to a 
 process.env.DATABASE_URL = process.env.TEST_DATABASE_URL;
 process.env.BASE_URL = 'http://localhost:0';
 process.env.REVIEW_QUEUE_NOTE_FROM = '2'; // read once at import: two pending returns are a long queue here
+process.env.OWN_WAITING_NOTE_FROM = '2'; // and two of a handle's own pending returns are a full queue behind it
 const {migrate, q, one, pool, transaction, queueFileEffect, flushFileEffects} = await import('../src/db/index.ts');
 const {issueToken} = await import('../src/lib/auth.ts');
 const {TERMS_VERSION} = await import('../src/lib/terms.ts');
-const {job} = await import('../src/routes/job.ts');
+const {job, NEXT_STEP_BRIEF, NEW_GROUND_HEADING} = await import('../src/routes/job.ts');
 const {asks} = await import('../src/routes/asks.ts');
 const {backlogFor, selectJob, reviewPressure, unmetRequirements} = await import('../src/lib/scheduler.ts');
 const {parseCapabilities, matchingMetadata} = await import('../src/lib/agent-profile.ts');
@@ -176,4 +177,47 @@ test('a short review queue adds nothing to the brief',async()=>{
   await pendingReturn(other); await pursuit();
   const a=await start({model:'deepseek-v4-flash'});
   assert.doesNotMatch(a.brief_md,/why this is your assignment/); await release(a);
+});
+
+// Chris, Sep 18 2026 (#sah-meaningful-work-new-opportunities): a full queue behind an agent means look for new opportunities,
+// and nothing about it is handed to its person. Until then the brief listed every model at the tier as if one could review.
+test('a handle whose own returns wait reads who decides and that nothing is asked of its person; from a full queue, where its work goes now, once',async()=>{
+  await pursuit(); await pursuit(); await pursuit();
+  await pendingReturn(uid,'deepseek-v4-flash','deepseek');
+  const first=await start({model:'deepseek-v4-flash'});
+  assert.match(first.brief_md,/## Your handle's returns waiting for a verdict/);
+  assert.match(first.brief_md,/1 of @\S+'s returns waits for a verdict/);
+  assert.match(first.brief_md,/No agent of your person's can decide them, on any model/);
+  assert.match(first.brief_md,/there is nothing for them to do/);
+  assert.doesNotMatch(first.brief_md,/tell your person|tier \d or above \(|Reviews waiting for your person/);
+  assert.doesNotMatch(first.brief_md,new RegExp(NEW_GROUND_HEADING),'one pending return is not a full queue');
+  await release(first);
+  await pendingReturn(uid,'claude-opus-5','anthropic');   // two own returns: a full queue here; the project queue is long too (2)
+  const full=await start({model:'deepseek-v4-flash'});
+  assert.match(full.brief_md,/2 of @\S+'s returns wait for a verdict \(1 made on deepseek-v4-flash\)/);
+  assert.equal((full.brief_md.match(new RegExp(NEW_GROUND_HEADING,'g'))??[]).length,1,'the new-ground list is written once even when the review-queue note fires as well');
+  assert.match(full.brief_md,/## The review queue, and why this is your assignment/);
+  assert.match(full.brief_md,/research\.proposal/); assert.match(full.brief_md,/GET \S+\/questions/); assert.match(full.brief_md,/as a `direction` return/);
+  assert.ok(full.brief_md.indexOf(NEW_GROUND_HEADING)<full.brief_md.indexOf('## The review queue'),'the list sits in the own-returns note');
+  await release(full);
+});
+
+test('when only the project queue is long the review-queue note carries the new-ground list, once; a granted handle reads what its grant allows',async()=>{
+  await pendingReturn(other); await pendingReturn(other); await pursuit(); await pursuit();
+  const a=await start({model:'deepseek-v4-flash'});
+  assert.doesNotMatch(a.brief_md,/## Your handle's returns waiting/);
+  assert.equal((a.brief_md.match(new RegExp(NEW_GROUND_HEADING,'g'))??[]).length,1);
+  await release(a);
+  await q(`INSERT INTO project_roles (problem_id,user_id,role,note) VALUES ($1,$2,'trusted','test')`,[pid,other]);
+  const g=await start({model:'deepseek-v4-flash',who:otherToken});
+  assert.match(g.brief_md,/2 of @\S+'s returns wait for a verdict/);
+  assert.match(g.brief_md,/Your person holds a grant on this project/);
+  assert.doesNotMatch(g.brief_md,/No agent of your person's can decide them/);
+  await release(g);
+});
+
+test('a run with a saved direction and no queued step is told that returns waiting for a verdict are no blocker',()=>{
+  assert.match(NEXT_STEP_BRIEF,/not a blocker and need nothing from your person/);
+  assert.match(NEXT_STEP_BRIEF,/record it complete rather than padding it/);
+  assert.match(NEXT_STEP_BRIEF,/POST \/run\/next-step/);
 });

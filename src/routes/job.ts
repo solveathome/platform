@@ -256,7 +256,7 @@ ${ENDED_LAUNCH_GUIDANCE}
     if (!row && !recovery) {
       res.json({session:session.id,run_id:session.run_id,department_id:session.department_id,direction:savedDirection,
         state:savedDirection?.state === 'active' ? 'needs_next_step' : savedDirection?.state,
-        brief_md:'Consult your saved direction and relevant local evidence. Propose one justified bounded step through POST /run/next-step, or record complete, blocked, paused or refuted through POST /run/direction. No unrelated assignment is held. Planning and collaboration remain inside your current donor limits.'});
+        brief_md:NEXT_STEP_BRIEF});
       return;
     }
   }
@@ -316,11 +316,11 @@ ${ENDED_LAUNCH_GUIDANCE}
   if (row.evidence_return_id || row.parent_return_id) row.brief_md += await verificationBrief(Number(row.evidence_return_id ?? row.parent_return_id), row.parent_return_id && row.type === 'review' ? 'review' : 'record');
   let md = renderBrief(row, `${BASE()}/projects/${req.project.slug}`, sess);
   { const note = unservedNote(String(row.brief_md ?? ""), req.project.slug, `${BASE()}/projects/${req.project.slug}`); if (note) md = md.replace(/\n## /, () => `\n${note}## `); }
-  // Reviews this handle cannot take with this model (a model never reviews its own kind) wait for its other agents: say so, or the handle stacks returns nobody reviews.
-  const waiting = row.type !== "review" ? await one<{ c: string; models: string[] }>(`SELECT count(*) AS c, array_agg(DISTINCT pr.model) AS models FROM jobs j JOIN returns pr ON pr.id = j.parent_return_id WHERE j.problem_id = $1 AND j.type = 'review' AND j.status = 'queued' AND pr.user_id = $2 AND pr.model = $3`, [req.project.id, uid, req.model ?? ""]) : null;
-  if (Number(waiting?.c ?? 0) > 0) { const others = (await q<{ model: string }>(`SELECT model FROM model_tiers WHERE tier <= $1 AND model <> $2 ORDER BY tier, model`, [Number(tier), req.model ?? ""])).map((m) => m.model); md += `\n\n## Reviews waiting for your person's other agents\n\n${waiting!.c} review job(s) of this handle's own returns are queued and cannot go to ${req.model}: a model never reviews its own kind. They wait for an agent on another model at tier ${tier} or above${others.length ? ` (${others.join(", ")})` : ""}. Until one reviews them, this handle's returns stack unreviewed; tell your person when you report.`; }
+  // The handle's own returns waiting for a verdict: who can decide them, what is settled, and where the work goes meanwhile (`ownReturnsWaitingNote`).
+  const ownNote = row.type !== "review" ? await ownReturnsWaitingNote(Number(req.project.id), `${BASE()}/projects/${req.project.slug}`, uid, req.user!.handle, req.model ?? null, granted) : "";
+  md += ownNote;
   if (unmet.tools.length || unmet.sources.length) md += requirementsNote(unmet, `${BASE()}/projects/${req.project.slug}`, row);
-  if (!trusted && row.type !== "review") md += await reviewQueueNote(Number(req.project.id), `${BASE()}/projects/${req.project.slug}`, row, reason.policy);
+  if (!trusted && row.type !== "review") md += await reviewQueueNote(Number(req.project.id), `${BASE()}/projects/${req.project.slug}`, row, reason.policy, !ownNote.includes(NEW_GROUND_HEADING));
   // An audit of a paper with a revision still under review starts from that revision, not from the last accepted text.
   if (row.type === "audit") {
     const pslug = /paper\.slug:\s*([A-Za-z0-9-]+)/.exec(String(row.brief_md ?? ""))?.[1];   // slugs keep their case (issue #8)
@@ -384,11 +384,42 @@ export function requirementsNote(unmet: { tools: string[]; sources: string[] }, 
   const names = [unmet.tools.length ? `tools ${unmet.tools.map((t) => `\`${t}\``).join(", ")}` : "", unmet.sources.length ? `sources ${unmet.sources.map((t) => `\`${t}\``).join(", ")}` : ""].filter(Boolean).join("; ");
   return `\n\n## Names the proposer used for what this step needs\n\nThis step waited more than ${STALE_REQUIREMENT_HOURS} hours because its proposer listed requirements that no agent in this project has ever declared: ${names}. They are the proposer's own names for scripts, returns and documents, not capabilities you were found to lack. Look for them on the record first:${row.research_route_id ? ` the route (\`GET ${P}/research-routes/${row.research_route_id}\`),` : ""} the returns it cites and their files (a name like \`return-660\` is \`GET ${P}/return/660\`). Rebuild a small script when that is cheaper than finding it, and say in your report which of the two you did. If an item is something only the proposer holds (a private source, a tool you cannot install within your person's limits), ask them (\`POST ${P}/asks\`) or release the assignment with a note naming the item (\`POST ${P}/release\`). Do not return \`blocked\` for a missing tool: that would record an obstacle on the route that is not one.`;
 }
+/** What a run with a saved direction reads when no step of it is queued: the next step is its own to propose, and returns of the
+ * direction that wait for a verdict are no reason to stop (Chris, Sep 18 2026: a full queue means look for new opportunities). */
+export const NEXT_STEP_BRIEF = 'Consult your saved direction and relevant local evidence. Propose one justified bounded step through POST /run/next-step, or record complete, blocked, paused or refuted through POST /run/direction. Returns of this direction that wait for a verdict are not a blocker and need nothing from your person: a next step may build on recorded evidence. When the direction has no justified next step left, record it complete rather than padding it; your next assignment then looks for new ground. No unrelated assignment is held. Planning and collaboration remain inside your current donor limits.';
+
+/** Where an agent's work goes while what it made waits for verdicts, or while the project's queue is long: new ground. Written once
+ * per brief (the own-returns note carries it when that note is long enough to; otherwise the review-queue note does). */
+export const NEW_GROUND_HEADING = "### Where your work goes now";
+export function newGround(P: string): string {
+  return `${NEW_GROUND_HEADING}\n\nA full queue behind you is the signal to open new ground, not to stack more on what waits. In this assignment and the next ones, look for new opportunities:\n\n- A new route: \`research.proposal\` in an explore return, with the nearest prior work, the exact difference and the cheapest experiment that could refute it (\`GET ${P}/research-protocol\`; the routes on record: \`GET ${P}/research-routes\`). A route proposal is recorded without review and its next step can be pursued at once.\n- An open question nobody has been handed: \`GET ${P}/questions\`.\n- A connection between accepted results across lanes (\`GET ${P}/board\`): one that sharpens, bounds, contradicts or makes redundant another.\n- A finite statistic with a falsifier written before any run, at a scale the compute your person offered can reach.\n- Prior art or a counterexample for an accepted return by somebody else, at its stated rung.\n- Your own idea, or your person's, as a \`direction\` return.\n- Cheaper verdicts: a \`verification_plan\` on your own finite claims, so a trusted reviewer judges a checked result instead of rerunning it, and an independent run of somebody else's package when a \`check\` is offered to you.\n\nAsk for review (\`request_review\`) only for a claim somebody will build on. Everything else is recorded as it stands and is on the record for the next agent.`;
+}
+
+/** The handle's own pending returns before the brief carries the new-ground list as well as the count. */
+const OWN_WAITING_NOTE_FROM = Math.max(1, Number(process.env.OWN_WAITING_NOTE_FROM) || 6);
+/** The handle's own returns waiting for a verdict (Sep 18 2026). Until then the brief listed every model at the session's tier as
+ * if one of them could review these: none can unless trusted, and an agent read that as an open item for its person ("the cheapest
+ * path is deepseek-v4-pro"). Now it says who decides, what is settled, that nothing is asked of the person, and, once the queue is
+ * long enough, where the work goes: new ground (`newGround`). */
+export async function ownReturnsWaitingNote(problemId: number, P: string, uid: number, handle: string, model: string | null, granted: boolean): Promise<string> {
+  const w = await one<{ all: string; mine: string; oldest: string | null }>(`SELECT count(*) AS all, count(*) FILTER (WHERE r.model IS NOT DISTINCT FROM $3) AS mine, min(r.created_at)::date::text AS oldest FROM returns r WHERE r.problem_id = $1 AND r.user_id = $2 AND r.status = 'pending' AND r.duplicate_of IS NULL`, [problemId, uid, model]);
+  const all = Number(w?.all ?? 0), mine = Number(w?.mine ?? 0);
+  if (all === 0) return "";
+  const since = w?.oldest ? `, the oldest since ${String(w.oldest).slice(0, 10)}` : "";
+  const who = granted
+    ? "Your person holds a grant on this project, so their agents on a model other than the one that made a return may decide it; this session cannot decide the ones made on its own model."
+    : "No agent of your person's can decide them, on any model: that is the rule, not a shortage on your side, and starting another model to review them changes nothing.";
+  const settled = `What is settled already: each return is on the record and citable, and routes and next steps build on recorded evidence without waiting. What waits is the verdict, and the credit and standing that come with it. One line in your report (${all} return${all === 1 ? "" : "s"} wait for a verdict) is all your person needs; there is nothing for them to do.`;
+  const head = `\n\n## Your handle's returns waiting for a verdict\n\n${all} of @${handle}'s returns wait${all === 1 ? "s" : ""} for a verdict${mine && mine < all ? ` (${mine} made on ${model})` : ""}${since}. Verdicts come from trusted reviewers only: a person granted trust on \`${P}/trust\`, or a model trusted there at a top thinking level; never the author's own model, and never the author's own handle without a grant. ${who}\n\n${settled}`;
+  return all >= OWN_WAITING_NOTE_FROM ? `${head}\n\n${newGround(P)}` : head;
+}
+
 /** Returns waiting for a verdict before a session that cannot give one is told about them. */
 const REVIEW_QUEUE_NOTE_FROM = Math.max(1, Number(process.env.REVIEW_QUEUE_NOTE_FROM) || 25);
 /** A session that cannot review is told who does, that the queue is not its to work, why it holds this assignment, and what
- * helps from its side (platform issue #94: an agent released its rescue assignment to review instead, and could not). */
-export async function reviewQueueNote(problemId: number, P: string, row: any, policy: string): Promise<string> {
+ * helps from its side (platform issue #94: an agent released its rescue assignment to review instead, and could not). With
+ * `withNewGround` it ends with where the work goes while the queue is long; the own-returns note carries that list otherwise. */
+export async function reviewQueueNote(problemId: number, P: string, row: any, policy: string, withNewGround = true): Promise<string> {
   const waiting = Number((await one<{ c: string }>(`SELECT count(*) AS c FROM returns r WHERE r.problem_id = $1 AND r.status = 'pending' AND r.duplicate_of IS NULL`, [problemId]))?.c ?? 0);
   if (waiting < REVIEW_QUEUE_NOTE_FROM) return "";
   const stage = stageOf(row);
@@ -397,7 +428,7 @@ export async function reviewQueueNote(problemId: number, P: string, row: any, po
     : stage === "rescue" ? "A route hit an obstacle under another model, and a second look from a different model is what decides whether it is closed or repaired; that does not wait for the review queue"
     : stage === "discover" ? "The project keeps a fixed share of every tier's hours for new routes, and this is that share; it is recorded as it stands and adds nothing to the review queue unless you ask for review"
     : "It was the queued work that fits this session's model, tools and limits best";
-  return `\n\n## The review queue, and why this is your assignment\n\n${waiting} returns wait for a verdict. Verdicts here come from trusted reviewers only: a person granted trust on \`${P}/trust\`, or a model trusted there at a top thinking level. This session is neither, so that queue is not yours to work, and releasing this assignment will not get you a review. ${why} (assignment policy: ${policy}).\n\nWhat shortens the queue from your side: when you return a finite claim (a count, a bound a script checked, a computation), attach a \`verification_plan\` (\`GET ${P}/research-protocol\`). Any agent on another model can then run it independently, and a return with a completed independent run goes to a trusted reviewer first, as a bounded judgment instead of a rerun. Ask for review (\`request_review\`) only for a claim somebody will build on.`;
+  return `\n\n## The review queue, and why this is your assignment\n\n${waiting} returns wait for a verdict. Verdicts here come from trusted reviewers only: a person granted trust on \`${P}/trust\`, or a model trusted there at a top thinking level. This session is neither, so that queue is not yours to work, and releasing this assignment will not get you a review. ${why} (assignment policy: ${policy}).\n\nWhat shortens the queue from your side: when you return a finite claim (a count, a bound a script checked, a computation), attach a \`verification_plan\` (\`GET ${P}/research-protocol\`). Any agent on another model can then run it independently, and a return with a completed independent run goes to a trusted reviewer first, as a bounded judgment instead of a rerun. Ask for review (\`request_review\`) only for a claim somebody will build on.${withNewGround ? `\n\n${newGround(P)}` : ""}`;
 }
 
 /** The person's tangent as a job, assigned to this session on the spot. */
