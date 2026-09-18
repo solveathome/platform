@@ -158,7 +158,7 @@ export async function claimAssignment(row: any, session: any, userId: number, ti
     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)`,
     [id, row.id, row.problem_id, session.id, userId, session.model, tier, row.purpose ?? "work", scheduled, hours, JSON.stringify(reason), stageOf(row),session.department_id ?? null,session.run_id ?? null,session.direction_snapshot ? JSON.stringify(session.direction_snapshot) : null]);
   const updated = await one(`UPDATE sessions SET jobs = jobs + 1, last_seen = now(), last_type = $2,
-    review_streak = CASE WHEN $2 IN ('review','audit') THEN review_streak + 1 ELSE 0 END WHERE id = $1 RETURNING jobs`, [session.id, row.type]);
+    review_streak = CASE WHEN $2 IN ('review','audit','triage') THEN review_streak + 1 ELSE 0 END WHERE id = $1 RETURNING jobs`, [session.id, row.type]);
   session.jobs = Number(updated!.jobs);
   return { ...row, ...assigned, assignment_reason: reason };
 }

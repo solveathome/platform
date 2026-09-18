@@ -931,3 +931,22 @@ CREATE TABLE IF NOT EXISTS display_name_events (
   created_at  TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS display_name_events_user ON display_name_events (user_id, id);
+
+-- Review triage (Chris, Sep 18 2026, #sah-review-only-meaningful: "let a tier 2 agent do a first review to see if it's worth escalating").
+-- One row per triage answer: whether a trusted verdict on the return would change the record. An investment decision, never a truth grade.
+CREATE TABLE IF NOT EXISTS triages (
+  id            BIGSERIAL PRIMARY KEY,
+  return_id     BIGINT NOT NULL REFERENCES returns(id),
+  triage_job_id BIGINT NOT NULL REFERENCES jobs(id),
+  user_id       BIGINT NOT NULL REFERENCES users(id),
+  model         TEXT NOT NULL,
+  provider      TEXT NOT NULL,
+  effort        TEXT,
+  escalate      BOOLEAN NOT NULL,                -- true: the return goes before trusted reviewers; false: recorded as it stands
+  notes_md      TEXT NOT NULL DEFAULT '',
+  transcript    TEXT NOT NULL DEFAULT '',
+  tokens        JSONB,
+  created_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE (return_id, user_id)
+);
+CREATE INDEX IF NOT EXISTS triages_return_idx ON triages (return_id, id);
