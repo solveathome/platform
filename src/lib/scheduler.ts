@@ -37,6 +37,26 @@ export type SchedulingAgent = {
   jobId?: number; directionId?: string | null; directionRevision?: number; reviewStreak: number; capabilities: Partial<Capabilities>;
 };
 
+/** Hours a pursuit step waits before a requirement nobody here has ever declared stops holding it back. */
+export const STALE_REQUIREMENT_HOURS = Math.max(1, Number(process.env.STALE_REQUIREMENT_HOURS) || 24);
+const TOOL_ALIASES = `CASE WHEN need.name IN ('python','python3') THEN ARRAY['python','python3'] WHEN need.name IN ('node','nodejs','node.js') THEN ARRAY['node','nodejs','node.js'] ELSE ARRAY[need.name] END`;
+/** A proposer's next step names its tools and sources in its own words ("job1934-blockgrain.py", "return-660"). Matching is
+ * exact, so a name no agent declares holds the step for ever: on Sep 18 2026, 49 of 54 queued pursuit steps fitted no session
+ * of the last week, their proposers' included, while agents were dealt lead hunts. A requirement still has to be met when any
+ * session of the project has ever declared it (it is a real capability: `lean`, a private archive). A name nobody has ever
+ * declared stops holding a pursuit step after a day; it is then shown to the taker as the proposer's note (`unmetRequirements`). */
+function requirementClause(column: 'required_tools' | 'required_sources', key: 'tools' | 'sources', held: string, aliases: boolean): string {
+  const names = aliases ? TOOL_ALIASES : `ARRAY[need.name]`;
+  return `(j.${column} <@ ${held}::text[] OR (j.research_stage='pursue' AND j.created_at < now()-interval '${STALE_REQUIREMENT_HOURS} hours'
+      AND NOT EXISTS (SELECT 1 FROM unnest(j.${column}) need(name) WHERE NOT (need.name = ANY(${held}::text[]))
+        AND EXISTS (SELECT 1 FROM sessions known WHERE known.problem_id=j.problem_id AND coalesce(known.capabilities->'${key}','[]'::jsonb) ?| ${names}))))`;
+}
+/** The requirements of an assigned job this agent did not declare: served with the brief as the proposer's notes. */
+export function unmetRequirements(row: { required_tools?: string[] | null; required_sources?: string[] | null }, capabilities: Partial<Capabilities>): { tools: string[]; sources: string[] } {
+  const tools = new Set(matchingTools(capabilities.tools)), sources = new Set(capabilities.sources ?? []);
+  return { tools: (row.required_tools ?? []).filter(t => !tools.has(t)), sources: (row.required_sources ?? []).filter(x => !sources.has(x)) };
+}
+
 /** Shared predicates: the backlog and selection must count exactly the same eligible work. */
 function eligibility(a: SchedulingAgent, omitCompute = false, sameKindOnly = false) {
   const values: any[] = [];
@@ -51,8 +71,8 @@ function eligibility(a: SchedulingAgent, omitCompute = false, sameKindOnly = fal
     `(er.id IS NULL OR (er.user_id <> ${uid} AND er.model IS DISTINCT FROM ${model}::text))`,
     `(j.type <> 'check' OR j.budget_hours <= ${p(a.maxHours)})`,
     `(j.type <> 'check' OR NOT EXISTS (SELECT 1 FROM verification_runs v JOIN returns worker ON worker.id=v.result_return_id WHERE v.fingerprint=er.verification_fingerprint AND worker.problem_id=j.problem_id AND worker.user_id=${uid} AND v.outcome='unable'))`,
-    `j.required_tools <@ ${p(matchingTools(a.capabilities.tools))}::text[]`,
-    `j.required_sources <@ ${p(a.capabilities.sources ?? [])}::text[]`,
+    requirementClause('required_tools', 'tools', p(matchingTools(a.capabilities.tools)), true),
+    requirementClause('required_sources', 'sources', p(a.capabilities.sources ?? []), false),
     `(pr.id IS NULL OR pr.user_id <> ${uid} OR ${p(a.granted)}::boolean)`,
     `(pr.id IS NULL OR ${p(a.trusted)}::boolean)`,
     `NOT EXISTS (SELECT 1 FROM reviews rv WHERE rv.return_id = j.parent_return_id AND rv.user_id = ${uid} AND NOT rv.needs_reassessment)`,
@@ -90,7 +110,7 @@ const DEFAULT_SKILLS = `CASE j.type WHEN 'formalize' THEN ARRAY['lean','formaliz
 /** Judgment of a packaged return that already has completed independent execution: a bounded decision, not a review-pool task. */
 const CHECKED_JUDGMENT_SQL = `j.type='review' AND pr.verification_plan IS NOT NULL AND EXISTS (SELECT 1 FROM verification_runs v JOIN returns w ON w.id=v.result_return_id
   WHERE v.fingerprint=pr.verification_fingerprint AND w.problem_id=pr.problem_id AND w.user_id<>pr.user_id AND w.model<>pr.model AND w.status IN ('recorded','accepted') AND v.outcome IN ('pass','fail'))`;
-export async function selectJob(a: SchedulingAgent, preferResearch: boolean, discoveryOnly = false, bucket?: ResearchBucket, checkedJudgment = false): Promise<any> {
+export async function selectJob(a: SchedulingAgent, preferResearch: boolean, discoveryOnly = false, bucket?: ResearchBucket, checkedJudgment = false, reviewsOnly = false): Promise<any> {
   const e = eligibility(a);
   const skills = e.p(a.capabilities.skills ?? []), provider = e.p(a.provider), uid = e.p(a.uid);
   const typeOrder = a.tier === 1
@@ -101,7 +121,7 @@ export async function selectJob(a: SchedulingAgent, preferResearch: boolean, dis
   if (bucket === 'consolidate') typeOrder.unshift('check');
   else if (a.tier !== 1) typeOrder.unshift('check');
   const order = e.p(typeOrder);
-  const bucketFilter = (bucket ? `AND CASE WHEN ${STAGE_SQL}='triage' THEN 'pursue' ELSE ${STAGE_SQL} END=${e.p(bucket)}` : '') + (checkedJudgment ? ` AND ${CHECKED_JUDGMENT_SQL}` : '');
+  const bucketFilter = (bucket ? `AND CASE WHEN ${STAGE_SQL}='triage' THEN 'pursue' ELSE ${STAGE_SQL} END=${e.p(bucket)}` : '') + (checkedJudgment ? ` AND ${CHECKED_JUDGMENT_SQL}` : '') + (reviewsOnly ? ` AND j.type='review'` : '');
   // Prioritize judgments that further research already relies on, without changing trust or eligibility.
   // Every non-age term is bounded; one point per waiting day eventually lifts older work.
   return one(`SELECT j.*, l.slug AS lane_slug,
@@ -128,6 +148,16 @@ export async function selectJob(a: SchedulingAgent, preferResearch: boolean, dis
     j.created_at, j.id LIMIT 1 FOR UPDATE OF j SKIP LOCKED`, e.values);
 }
 
+/** Review pressure: the number of review jobs a session that may review must find waiting before it goes back to alternating
+ * by need (Chris, Sep 11 2026: a run of up to four reviews, then one research assignment) ahead of the research portfolio.
+ * Under the portfolio alone reviews get the consolidation share (15% for twin primes): in the week to Sep 18 2026 the sessions
+ * trusted by model were sent to research 38 times while about 560 reviews they could take waited, and took 11. Below the
+ * threshold nothing changes: frontier agents are not a review pool. Project override -> environment -> off. */
+export function reviewPressure(slug: string, override?: unknown): number | null {
+  const raw = override ?? readProjectConfig(slug)?.scheduler?.review_pressure ?? process.env.REVIEW_PRESSURE;
+  const n = Number(raw);
+  return raw !== undefined && raw !== null && raw !== '' && Number.isFinite(n) && n > 0 ? Math.floor(n) : null;
+}
 export function discoveryShare(slug: string, databaseShare?: number | string | null): number {
   const raw = databaseShare ?? readProjectConfig(slug)?.scheduler?.discovery_share ?? process.env.TIER1_DISCOVERY_SHARE ?? 0.2;
   const n = Number(raw);
