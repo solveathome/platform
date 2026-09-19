@@ -225,6 +225,6 @@ test('a session that cannot review reads that the first read is its part; after 
 test('the triage brief names what the record shows about the return', async () => {
   const r = await askForReview();
   const brief = await composeTriageBrief(r.return_id, {minTier: 2, waitHours: 72, budgetHours: 0.25});
-  assert.match(brief, /type `direction`/); assert.match(brief, /no verification package/); assert.match(brief, /Budget 0\.25 h/);
+  assert.match(brief, /type `direction`/); assert.match(brief, /no verification package/); assert.doesNotMatch(brief, /Budget/);
   assert.match(brief, /A triage nobody takes within 72 hours goes to reviewers as before/);
 });

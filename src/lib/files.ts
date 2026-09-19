@@ -353,5 +353,5 @@ export function recipeGapNote(g: RecipeGaps): string {
   const what = g.unfetchable.length
     ? `its recipe hands out ${g.unfetchable.length} \`/files/<sha256>\` URL(s) whose bytes are not in the store (${g.unfetchable.map((s) => s.slice(0, 12) + "…").join(", ")})`
     : "its recipe says the artifacts are attached to this return, and the return attaches no files";
-  return `\n\nBefore you start: ${what}. Do not spend the budget hunting for them. If the bytes are not in the report as a verbatim block and not served in the project, the recipe cannot be carried out by anyone: reject as unverifiable in budget with \`needs_md\` naming exactly which artifacts are missing. That opens a follow-up job for the author and is not a mark against them.`;
+  return `\n\nBefore you start: ${what}. Do not spend time hunting for them. If the bytes are not in the report as a verbatim block and not served in the project, the recipe cannot be carried out by anyone: reject as unverifiable in budget with \`needs_md\` naming exactly which artifacts are missing. That opens a follow-up job for the author and is not a mark against them.`;
 }

@@ -147,13 +147,13 @@ test('every served assignment puts global prior work before older task instructi
   }
 });
 
-test("issue #4: one time budget, the person's cap wins and the brief says so; an empty compute hint reads as none", () => {
+test("no timings on a task (Chris, Sep 19 2026): the brief states no time budget and no deadline; an empty compute hint reads as none", () => {
   const md = renderBrief(job, "https://x.test/projects/p", session);
-  assert.match(md, /Budget: 2 h of your time \(your person's cap; the job's default is 3 h\)\./);
-  assert.doesNotMatch(md, /their cap is 2 h/);
+  assert.match(md, /there is no time budget or deadline on this assignment/);
+  assert.doesNotMatch(md, /Budget:|Expires:|h of your time|your person allows up to/);
   assert.match(md, /Compute hint: none\./);
   const loose = renderBrief({ ...job, budget_hours: 1 }, "https://x.test/projects/p", session);
-  assert.match(loose, /Budget: 1 h of your time \(the job's budget; your person allows up to 2 h\)/);
+  assert.doesNotMatch(loose, /Budget:|1 h/);
   const hinted = renderBrief({ ...job, compute_hint: { cpu_hours: 4 } }, "https://x.test/projects/p", session);
   assert.match(hinted, /Compute hint: `\{"cpu_hours":4\}`/);
 });
@@ -200,11 +200,11 @@ test("an explore brief names request_review and its default (issue #44); other t
   assert.doesNotMatch(renderBrief(job, "https://x.test/projects/p", session), /request_review/);
 });
 
-test("briefs distinguish session limits from per-assignment budgets and retain timed deadlines", () => {
+test("briefs distinguish session limits from assignments, which carry no time limit, and retain the person's session length", () => {
   const continuous = renderBrief(job, "https://x.test/projects/p", {...session, max: null});
   assert.match(continuous, /continuing until your person stops you/);
   assert.match(continuous, /presence or a reply between assignments is not required/);
-  assert.match(continuous, /time budget is per assignment, not the length of the session/);
+  assert.match(continuous, /There is no time limit on an assignment/);
   const timed = renderBrief(job, "https://x.test/projects/p", {...session, max: null, length: "until 2026-09-13T22:00:00Z"});
   assert.match(timed, /Session: assignment 1; until 2026-09-13T22:00:00Z/);
   assert.doesNotMatch(timed, /continuing until your person stops you/);
