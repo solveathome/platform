@@ -31,7 +31,7 @@ export function tags(raw: any, field: string): string[] {
  * the whole transcript, about a megabyte a time. The rendered route page calls these "Next experiment", "Continue if" and
  * "Stop this attempt if", which are reasonable names to guess and are not the API's, so the skeleton goes in the refusal too.
  */
-export const NEXT_STEP_SHAPE = 'next_step: {"question": "the discriminating question, <=1000 chars", "method": "how it is run, <=4000", "success": "what a positive result looks like, <=2000", "failure": "what stops this attempt, <=2000", "budget_hours": 0.1-4, "compute": {"cpu_hours": 0-32, "ram_gb": 0-32, "disk_gb": 0-10} (optional), "required_tools": [], "required_sources": []}';
+export const NEXT_STEP_SHAPE = 'next_step: {"question": "the discriminating question, <=1000 chars", "method": "how it is run, <=4000", "success": "what a positive result looks like, <=2000", "failure": "what stops this attempt, <=2000", "budget_hours": 0.1-4 (your estimate for the accounting of the portfolio; never a limit on the taker), "compute": {"cpu_hours": 0-32, "ram_gb": 0-32, "disk_gb": 0-10} (optional), "required_tools": [], "required_sources": []}';
 export const OBSTACLE_SHAPE = `obstacle: {"kind": "${OBSTACLES.join('|')}", "statement": "the exact obstruction", "assumptions": "what it rests on", "evidence": "what shows it", "revisit_when": "the condition that reopens it"}`;
 
 /** Runs every field check, then refuses once with everything that was wrong and the shape that is accepted. */

@@ -15,7 +15,7 @@ process.env.FILES_DIR=join(temp,'files');process.env.DOCS_DIR=join(temp,'docs');
 const {q,one,pool,migrate,projectTransaction}=await import('../src/db/index.ts');
 const {issueToken}=await import('../src/lib/auth.ts');
 const {TERMS_VERSION}=await import('../src/lib/terms.ts');
-const {job,resumeDeferredReviews}=await import('../src/routes/job.ts');
+const {job,resumeDeferredReviews,REVIEW_BRIEF_VERSION}=await import('../src/routes/job.ts');
 const {board}=await import('../src/routes/board.ts');
 const {filesRouter}=await import('../src/routes/files.ts');
 const files=await import('../src/lib/files.ts');
@@ -477,7 +477,7 @@ test('itemised controls, stated limits and declared tools feed a summary generat
   assert.match(review.brief_md,/Receipts on this package \(fingerprint [a-f0-9]{12}…\):\n- Receipt #\d+ \(return #\d+\): pass, @research-runner-[a-f0-9]+ \(claude-sonnet-5\), rerun, 1 s$/m);
   assert.doesNotMatch(review.brief_md,/"schema_version": 1/,'a reviewer fetches the package when a specific uncertainty needs it');
   // The complete served brief has one template: no sentence asks the reviewer to fetch or read everything first.
-  assert.match(review.brief_md,/Your job: judge it within the budget from the Verification section\./);
+  assert.match(review.brief_md,/Your job: judge it from the Verification section\./);
   for(const conflicting of [/Fetch it at GET/,/Fetch the return's files/,/Read the code and the recipe/,/before judging/,/Read the exact claim, its scope, the supplied check and recorded observations first/,/the author's captured outputs, hashes and transcript are the evidence/])assert.doesNotMatch(review.brief_md,conflicting,`conflicting obligation ${conflicting}`);
   assert.match(review.brief_md,/How deep to go \(verification\): `"verification": "read"` is judging from the Verification section/);
   assert.match(review.brief_md,/\*\*Basis for judgment \(the package's own words, immutable and fingerprinted\)\.\*\*\n\nClaim: The supplied four terms equal 1,2,3,4\.\n\nScope: Terms one through four only\.\n\nAssumptions: JSON contains integers\.\n\nWhy the check supports the claim: /);
@@ -594,16 +594,16 @@ test('a review queued under the previous template is served with the current gui
   const plan=await packageFor(),r=await computation(plan),a=await start('runner');assert.equal(a.type,'check');
   ok(await submit('runner',await receipt(a,r.return_id),a));
   const job=await one(`SELECT id,brief_version FROM jobs WHERE parent_return_id=$1 AND type='review' AND status='queued'`,[r.return_id]);
-  assert.equal(job.brief_version,2,'new reviews carry the current version');
+  assert.equal(job.brief_version,REVIEW_BRIEF_VERSION,'new reviews carry the current version');
   // The brief as the previous template stored it, plus the job-specific reassessment note appended after a 24-hour wait.
   const stale=`Review return #${r.return_id}. Fetch it at GET <project base>/return/${r.return_id} (same headers). Read the exact claim, its scope, the supplied check and recorded observations first.\n\nYour job: verify it within the budget. Fetch the return's files (GET /files/<sha256>) and the served scripts it names.\n\nHow deep to go (verification): the author's captured outputs, hashes and transcript are the evidence. Read the code and the recipe against the claim.\n\nRead the exact verification package and current execution receipts at the return URL before judging.\n\nEvidence needs reassessment or execution could not find capacity within 24 hours. Assess the specific missing or changed evidence within the reasoning budget; execution is not included. Preserve existing observations. Do not report that a check ran. If new execution is necessary, name the smallest check and missing capability in needs_md; a repaired package is a new return.`;
   await q(`UPDATE jobs SET brief_md=$2,brief_version=NULL WHERE id=$1`,[job.id,stale]);
   const review=await start('judge');assert.equal(Number(review.job_id),Number(job.id));
   for(const conflicting of [/Fetch it at GET/,/Fetch the return's files/,/Read the code and the recipe/,/before judging/,/Read the exact claim, its scope, the supplied check and recorded observations first/,/the author's captured outputs, hashes and transcript are the evidence/])assert.doesNotMatch(review.brief_md,conflicting,`stale obligation survived: ${conflicting}`);
-  assert.match(review.brief_md,/The Verification section below is the basis for judgment/);assert.match(review.brief_md,/Your job: judge it within the budget from the Verification section\./);
+  assert.match(review.brief_md,/The Verification section below is the basis for judgment/);assert.match(review.brief_md,/Your job: judge it from the Verification section\./);
   assert.match(review.brief_md,/\*\*Basis for judgment/);
   assert.match(review.brief_md,/Evidence needs reassessment or execution could not find capacity within 24 hours\./,'the job-specific note is preserved');
-  const refreshed=await one(`SELECT brief_version,brief_md FROM jobs WHERE id=$1`,[job.id]);assert.equal(refreshed.brief_version,2);assert.doesNotMatch(refreshed.brief_md,/Read the code and the recipe/);
+  const refreshed=await one(`SELECT brief_version,brief_md FROM jobs WHERE id=$1`,[job.id]);assert.equal(refreshed.brief_version,REVIEW_BRIEF_VERSION);assert.doesNotMatch(refreshed.brief_md,/Read the code and the recipe/);
   assert.equal((refreshed.brief_md.match(/Evidence needs reassessment/g)||[]).length,1,'the note is kept once');
 });
 

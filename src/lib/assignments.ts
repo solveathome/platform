@@ -4,6 +4,7 @@ import type { RequestHandler } from "express";
 import { one, q, projectTransaction } from "../db/index.js";
 import { canonicalModel, parseEffort, providerFromModel, isHarnessModel, modelIdentityError } from "./model-id.js";
 import { stageOf } from './research-format.js';
+import { ABANDON_AFTER_MIN } from './liveness.js';
 
 class Refused extends Error {}
 const canonical = (v: any): any => Array.isArray(v) ? v.map(canonical) : v && typeof v === "object"
@@ -35,7 +36,7 @@ async function staleAttemptError(aid: string, job: any, sessionId: string, userI
   if (aid && !named) return `X-Attempt names ${short(aid)}…, which is not an attempt of job #${job.id}${live ? `; its current attempt is ${live.id}` : ""}. Nothing was submitted. Use the attempt id from this assignment's brief${holding ? `, and do not fetch /start while this run still holds ${holding}` : ""}.`;
   if (aid && named && live && live.id !== aid) return `attempt ${short(aid)}… of job #${job.id} was replaced by ${live.id}${live.session_id === sessionId ? ", which this run holds: resend with that X-Attempt" : ", which another of your sessions holds: send that agent's X-Session"}. Nothing was submitted.`;
   const expired = job.expires_at && new Date(job.expires_at).getTime() <= Date.now();
-  return `job #${job.id} is ${expired ? "past its deadline" : `no longer assigned (${job.status})`}, so this result was not recorded.${holding ? ` This run still holds ${holding}: finish or release ${held.length === 1 ? "it" : "them"} first.` : " Fetch /start for current work."}`;
+  return `job #${job.id} is ${expired ? `back in the queue after ${ABANDON_AFTER_MIN} minutes without a request from its session` : `no longer assigned (${job.status})`}, so this result was not recorded.${holding ? ` This run still holds ${holding}: finish or release ${held.length === 1 ? "it" : "them"} first.` : " Fetch /start for current work."}`;
 }
 
 export function assignmentMutation(handler: (req: any, res: any) => Promise<void>, options: { completion?: boolean | "release"; historicalEvidence?: boolean; commitErrors?: boolean } = {}): RequestHandler {
@@ -151,8 +152,8 @@ export async function claimAssignment(row: any, session: any, userId: number, ti
   const id = randomBytes(16).toString("hex");
   const hours = Math.min(Number(row.budget_hours), Number(session.ai?.max_hours_per_assignment ?? 2));
   const assigned = await one(`UPDATE jobs SET status = 'assigned', assigned_to = $2, assigned_session = $3, assigned_at = now(),
-    expires_at = now() + ($4::numeric * interval '2 hours'), attempt_id = $5 WHERE id = $1 AND status = 'queued' RETURNING *`,
-    [row.id, userId, session.id, Math.max(0.25, hours), id]);
+    expires_at = now() + ($4::int * interval '1 minute'), attempt_id = $5 WHERE id = $1 AND status = 'queued' RETURNING *`,
+    [row.id, userId, session.id, ABANDON_AFTER_MIN, id]);   // the only clock is silence: every request of the session moves this forward (auth.ts)
   if (!assigned) throw new Error("assignment candidate was no longer queued");
   await q(`INSERT INTO assignment_attempts (id, job_id, problem_id, session_id, user_id, model, tier, purpose, scheduled, budget_hours, reason,research_stage,department_id,run_id,direction_snapshot)
     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)`,

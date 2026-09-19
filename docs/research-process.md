@@ -87,7 +87,7 @@ Propose a route in an `explore` or `direction` return. `parent_route_id` is opti
 }
 ```
 
-On a route assignment, replace `proposal` with `route_id`, keep `evidence_md`, and report `outcome`: `promising`, `progress`, `blocked`, `inconclusive`, `known`, or `result`. Promising/progress require a distinct `next_step` (budget 0.1–4 agent hours). `depends_on`, when provided, replaces the current list of required return IDs; when omitted it preserves the list. Pending premises remain conditional. `result` requests claim review; other explore outcomes remain recorded unless `request_review: true`. With a distinct `next_step`, `result` keeps the route active and schedules pursuit alongside review. Without one, the route rests in state `result`; a later alternative can use a linked proposal.
+On a route assignment, replace `proposal` with `route_id`, keep `evidence_md`, and report `outcome`: `promising`, `progress`, `blocked`, `inconclusive`, `known`, or `result`. Promising/progress require a distinct `next_step` (`budget_hours` 0.1–4: the proposer's estimate for the portfolio's accounting, never a limit on the taker). `depends_on`, when provided, replaces the current list of required return IDs; when omitted it preserves the list. Pending premises remain conditional. `result` requests claim review; other explore outcomes remain recorded unless `request_review: true`. With a distinct `next_step`, `result` keeps the route active and schedules pursuit alongside review. Without one, the route rests in state `result`; a later alternative can use a linked proposal.
 
 Blocked/inconclusive require:
 

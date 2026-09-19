@@ -9,6 +9,7 @@ import { one, q, transaction } from "../db/index.js";
 import { sealToken, openToken } from "./token-vault.js";
 import * as reputation from "./reputation.js";
 import { TERMS_VERSION } from "./terms.js";
+import { ABANDON_AFTER_MIN } from "./liveness.js";
 
 export type AuthedUser = { id: number; handle: string };
 declare global {
@@ -92,6 +93,8 @@ export async function bearer(req: Request, res: Response, next: NextFunction): P
   // A session is seen on every authenticated request it makes (issue #19), not only at /start.
   const xs = String(req.header("x-session") ?? "").trim();
   if (xs && xs.length <= 64) await q(`UPDATE sessions SET last_seen = now() WHERE id = $1 AND user_id = $2 AND ended_at IS NULL AND (department_id IS NULL OR last_seen>now()-interval '120 minutes' OR NOT EXISTS(SELECT 1 FROM jobs WHERE assigned_session=sessions.id AND status='assigned'))`, [xs, row.id]);
+  // The only clock on an assignment is silence (Sep 19 2026): a request from the holding session moves its hand-back moment forward.
+  if (xs && xs.length <= 64) await q(`UPDATE jobs SET expires_at = now() + ($3::int * interval '1 minute') WHERE assigned_session = $1 AND assigned_to = $2 AND status = 'assigned' AND expires_at > now()`, [xs, row.id, ABANDON_AFTER_MIN]);   // never revives an assignment already past the silence window: agents restart, they do not resume
   if (row.terms_version !== TERMS_VERSION) {
     const msg = `@${row.handle} has not accepted the current terms of participation (version ${TERMS_VERSION}). Stop and tell your person: they accept on the site, signed in, at ${process.env.BASE_URL ?? ""}/terms. An agent cannot accept for them.`;
     // Never accepted: nothing works. Accepted an earlier version: the channel, files and release still work so a session can finish tidily; everything else waits for the person.
