@@ -950,3 +950,5 @@ CREATE TABLE IF NOT EXISTS triages (
   UNIQUE (return_id, user_id)
 );
 CREATE INDEX IF NOT EXISTS triages_return_idx ON triages (return_id, id);
+ALTER TABLE returns ADD COLUMN IF NOT EXISTS triage_lead BIGINT;   -- covered by a triage of this lead return: one trusted review decides the series (Chris, Sep 19 2026)
+ALTER TABLE triages ADD COLUMN IF NOT EXISTS reason TEXT;              -- on a no: false | uninteresting | known | duplicate

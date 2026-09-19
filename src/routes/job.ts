@@ -227,7 +227,6 @@ ${ENDED_LAUNCH_GUIDANCE}
     if (!await one(`SELECT 1 FROM jobs WHERE parent_return_id=$1 AND type='review' AND status IN ('queued','assigned')`, [waiting.id]))
       await spawnReviews(Number(waiting.id), agent.problemId, waiting.lane_id, 1, { judgmentOnly: true });
   }
-  await expireWaitingTriage(agent.problemId, req.project.slug);
   let recovery: any = null;
   if(session.recovery_attempt_id) {
     recovery=await one(`SELECT a.*,j.status AS job_status,j.agent_direction_id FROM assignment_attempts a JOIN jobs j ON j.id=a.job_id WHERE a.id=$1 AND a.department_id=$2`,[session.recovery_attempt_id,session.department_id]);
@@ -309,7 +308,7 @@ ${ENDED_LAUNCH_GUIDANCE}
     research_allocation: portfolio, research_hours: portfolioUsed, research_bucket: researchBucket(row),
     skill_matches: Number(row.skill_matches ?? 0), purpose: row.purpose ?? 'work',
     ...(pressure !== null ? { review_pressure: { threshold: pressure, waiting: need.reviews } } : {}),
-    ...(triageCfg ? { review_triage: { min_tier: triageCfg.minTier, wait_hours: triageCfg.waitHours } } : {}),
+    ...(triageCfg ? { review_triage: { min_tier: triageCfg.minTier } } : {}),
     ...(unmet.tools.length || unmet.sources.length ? { relaxed_requirements: unmet } : {}) };
   row = await claimAssignment(row, session, uid, tier, reason, !tangentFirst && !session.direction_id);
   if(recovery) {
@@ -322,6 +321,8 @@ ${ENDED_LAUNCH_GUIDANCE}
   if (row.research_route_id) row.brief_md += await researchBrief(Number(row.research_route_id));
   // A check worker reconstructs the package, so it gets the record in full; a reviewer gets the summary and the judgment asked, with the record one GET away.
   row.brief_md = await refreshReviewBrief(row, Number(req.project.id));
+  // A triage brief is composed when served: the series waiting beside the return (covers) is whatever waits now, not what waited when the job was made.
+  if (row.type === 'triage' && row.parent_return_id && triageCfg) { row.brief_md = await composeTriageBrief(Number(row.parent_return_id), triageCfg); await q(`UPDATE jobs SET brief_md = $2 WHERE id = $1`, [row.id, row.brief_md]); }
   if (row.evidence_return_id || row.parent_return_id) row.brief_md += await verificationBrief(Number(row.evidence_return_id ?? row.parent_return_id), row.parent_return_id && row.type === 'review' ? 'review' : 'record');
   let md = renderBrief(row, `${BASE()}/projects/${req.project.slug}`, sess);
   { const note = unservedNote(String(row.brief_md ?? ""), req.project.slug, `${BASE()}/projects/${req.project.slug}`); if (note) md = md.replace(/\n## /, () => `\n${note}## `); }
@@ -438,7 +439,7 @@ export async function reviewQueueNote(problemId: number, P: string, row: any, po
     : stage === "discover" ? "The project keeps a fixed share of every tier's hours for new routes, and this is that share; it is recorded as it stands and adds nothing to the review queue unless you ask for review"
     : "It was the queued work that fits this session's model, tools and limits best";
   const triage = reviewTriage(P.split('/projects/')[1] ?? '');
-  const triageLine = triage ? ` What is yours: the first read. With review triage on, a return that asks for review first gets a \`triage\` assignment (tier ${triage.minTier} or better, never the author's handle or model): one bounded question, whether a trusted verdict would change the record. Those come to you before your research when any wait; you do not ask for them.` : "";
+  const triageLine = triage ? ` What is yours: the first read. Nothing reaches a trusted reviewer until a session at tier ${triage.minTier} or better (never the author's handle or model) has read it in a \`triage\` assignment and said it is worth their time: one question, whether a trusted verdict would change the record, with the option to cover a whole series of one lane or route at once. Those come to you before your research when any wait; you do not ask for them.` : "";
   return `\n\n## The review queue, and why this is your assignment\n\n${waiting} returns wait for a verdict. Verdicts here come from trusted reviewers only: a person granted trust on \`${P}/trust\`, or a model trusted there at a top thinking level. This session is neither, so that queue is not yours to work, and releasing this assignment will not get you a review.${triageLine} ${why} (assignment policy: ${policy}).\n\nWhat shortens the queue from your side: when you return a finite claim (a count, a bound a script checked, a computation), attach a \`verification_plan\` (\`GET ${P}/research-protocol\`). Any agent on another model can then run it independently, and a return with a completed independent run goes to a trusted reviewer first, as a bounded judgment instead of a rerun. Ask for review (\`request_review\`) only for a claim somebody will build on.${withNewGround ? `\n\n${newGround(P)}` : ""}`;
 }
 
@@ -1019,6 +1020,36 @@ job.post("/result", bearer, project, assignmentMutation(async (req: any, res) =>
         reviewerTrusted && b.verification_conflict_resolution_md ? executionState?.latest_receipt_id ?? null : null]);
     if (reviewerTrusted && b.verification_conflict_resolution_md) await q(`UPDATE jobs j SET status='expired' FROM returns r WHERE r.id=$1 AND j.problem_id=r.problem_id AND j.origin_key LIKE 'check-conflict:'||r.verification_fingerprint||':%' AND j.status='queued'`, [reviewOf]);
     const outcome = await resolveReturn(reviewOf);
+    // A series decided at once (Chris, Sep 19 2026): the returns a triage covered under this lead get their verdicts from this same review.
+    const seriesWarnings: string[] = []; const seriesDecided: Record<string, string> = {};
+    if (jobRow && b.also_verdicts && typeof b.also_verdicts === "object") {
+      for (const [key, raw] of Object.entries(b.also_verdicts as Record<string, any>).slice(0, 20)) {
+        const id = Number(key);
+        const o = Number.isInteger(id) ? await one(`SELECT * FROM returns WHERE id = $1 AND problem_id = $2 AND triage_lead = $3`, [id, req.project.id, reviewOf]) : null;
+        if (!o) { seriesWarnings.push(`return #${key}: not a return of the series led by #${reviewOf}; no verdict recorded`); continue; }
+        if (o.status !== "pending") { seriesWarnings.push(`return #${key} is ${o.status}; no verdict recorded`); continue; }
+        if (Number(o.user_id) === uid && !reviewerGranted) { seriesWarnings.push(`return #${key} is your own handle's; it gets its own reviewer`); continue; }
+        if (String(o.model).toLowerCase() === String(req.model ?? "").toLowerCase()) { seriesWarnings.push(`return #${key} is on your own model; it gets its own reviewer`); continue; }
+        if (await one(`SELECT 1 FROM reviews WHERE return_id = $1 AND user_id = $2`, [id, uid])) { seriesWarnings.push(`return #${key}: you already reviewed it`); continue; }
+        const v = raw && typeof raw === "object" ? raw : { verdict: raw };
+        if (!["accept", "reject"].includes(v.verdict)) { seriesWarnings.push(`return #${key}: verdict must be accept or reject; no verdict recorded`); continue; }
+        const vr = parseRung(v.rung); if (vr === undefined) { seriesWarnings.push(`return #${key}: ${RUNG_ERROR("rung", v.rung)}; no verdict recorded`); continue; }
+        const rr = v.verdict === "reject" ? (v.reject_reason !== undefined && v.reject_reason !== null ? String(v.reject_reason) : null) : null;
+        if (rr !== null && !REJECT_REASONS.includes(rr as any)) { seriesWarnings.push(`return #${key}: reject_reason must be one of ${REJECT_REASONS.join(", ")}; no verdict recorded`); continue; }
+        await q(`INSERT INTO reviews (return_id, review_job_id, user_id, model, provider, verdict, rung, notes_md, weight, transcript, tokens, verification, trusted, effort, reject_reason)
+                 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,'',$10,'read',$11,$12,$13)`,
+          [id, jobRow.id, uid, req.model ?? "unknown", req.provider ?? "unknown", v.verdict, vr, String(v.notes_md ?? b.notes_md ?? b.report_md ?? "").slice(0, 8000) || `Decided with the series led by return #${reviewOf}.`, w, JSON.stringify({ input: 0, output: 0, cache_read: 0, cache_write: 0, source: `series led by return #${reviewOf}` }), reviewerTrusted, effortEff, rr]);
+        seriesDecided[String(id)] = await resolveReturn(id);
+      }
+    }
+    // The lead is decided: a covered return this reviewer did not decide gets its own review assignment, as it would have had.
+    if (jobRow && !["pending"].includes(String((await one(`SELECT status FROM returns WHERE id = $1`, [reviewOf]))?.status))) {
+      const left = await q(`SELECT * FROM returns WHERE triage_lead = $1 AND status = 'pending' AND NOT EXISTS (SELECT 1 FROM reviews rv WHERE rv.return_id = returns.id) AND NOT EXISTS (SELECT 1 FROM jobs j WHERE j.parent_return_id = returns.id AND j.type = 'review' AND j.status IN ('queued','assigned'))`, [reviewOf]);
+      for (const o of left) {
+        await q(`INSERT INTO return_decisions (return_id, status, final_rung, provisional, by, note) VALUES ($1,'pending',NULL,false,'triage',$2)`, [o.id, `The review of the series led by #${reviewOf} gave no verdict on this return; it gets its own review assignment.`]);
+        await spawnReviews(Number(o.id), Number(o.problem_id), o.lane_id, o.verification_plan || o.research ? 1 : MIN_REVIEWS);
+      }
+    }
     // A reviewer who finds the same defect in another document routes it like an audit does (issue #36): shown on that document once the reviewed return is accepted.
     if (Array.isArray(b.also_fix)) {
       const fixes = b.also_fix.slice(0, 20).map((x: any) => ({ path: revisions.safeRel(String(x?.path ?? "")), note: String(x?.note ?? "").trim().slice(0, 1000) })).filter((x: any) => x.path && x.note);
@@ -1035,7 +1066,7 @@ job.post("/result", bearer, project, assignmentMutation(async (req: any, res) =>
     await registerEntries(uid, "review", Number(myReview?.id ?? 0), entryKeys);
     const reviewReport = tokens.log === "unknown" ? await reportHarness(String(b.transcript), { reviewId: Number(myReview?.id ?? 0) || undefined, uid, model: req.model ?? null }) : null;
     const reviewLogWarn = logWarning(tokens, `POST ${BASE()}/projects/${req.project.slug}/review/${Number(myReview?.id ?? 0)}/transcript (same headers)`, reviewReport);
-    res.json({ ok: true, review_of: reviewOf, review_id: Number(myReview?.id ?? 0) || null, outcome, advisory: !reviewerTrusted, ...(effortNote ? { effort_note: effortNote } : {}), warnings: [...(effortNote ? [effortNote] : []), ...(reviewLogWarn ? [reviewLogWarn] : []), ...onceWarning(tokens), ...scrubWarnings, ...subagentWarning(String(b.transcript ?? ""), `${BASE()}/projects/${req.project.slug}/review/${Number(myReview?.id ?? 0)}/transcript`)], trusted_by: reviewerGranted ? "grant" : reviewerTrusted ? "model" : null, return_status: after?.status ?? null, final_rung: after?.final_rung ?? null, provisional: after?.provisional ?? null, effects_applied_at: after?.effects_applied_at ?? null, tokens });
+    res.json({ ok: true, review_of: reviewOf, review_id: Number(myReview?.id ?? 0) || null, outcome, ...(Object.keys(seriesDecided).length ? { series: seriesDecided } : {}), advisory: !reviewerTrusted, ...(effortNote ? { effort_note: effortNote } : {}), warnings: [...(effortNote ? [effortNote] : []), ...(reviewLogWarn ? [reviewLogWarn] : []), ...seriesWarnings, ...onceWarning(tokens), ...scrubWarnings, ...subagentWarning(String(b.transcript ?? ""), `${BASE()}/projects/${req.project.slug}/review/${Number(myReview?.id ?? 0)}/transcript`)], trusted_by: reviewerGranted ? "grant" : reviewerTrusted ? "model" : null, return_status: after?.status ?? null, final_rung: after?.final_rung ?? null, provisional: after?.provisional ?? null, effects_applied_at: after?.effects_applied_at ?? null, tokens });
     return;
   }
 
@@ -1050,9 +1081,24 @@ job.post("/result", bearer, project, assignmentMutation(async (req: any, res) =>
     if (!subject) { res.status(404).json({ error: `return #${jobRow.parent_return_id} is gone` }); return; }
     if (Number(subject.user_id) === uid) { res.status(403).json({ error: "you do not triage your own handle's return" }); return; }
     if (await one(`SELECT 1 FROM triages WHERE return_id = $1 AND user_id = $2`, [subject.id, uid])) { res.status(409).json({ error: `you already triaged return #${subject.id}` }); return; }
-    const triage = await one<{ id: string }>(`INSERT INTO triages (return_id, triage_job_id, user_id, model, provider, effort, escalate, notes_md, transcript, tokens) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) RETURNING id`,
-      [subject.id, jobRow.id, uid, req.model ?? "unknown", req.provider ?? "unknown", effortEff, b.escalate, notes, String(b.transcript), JSON.stringify(tokens)]);
+    const reason = b.escalate ? null : ["false", "uninteresting", "known", "duplicate"].includes(String(b.reason ?? "")) ? String(b.reason) : null;
+    if (!b.escalate && b.reason !== undefined && reason === null) { res.status(400).json({ error: `reason must be one of false, uninteresting, known, duplicate (got "${String(b.reason).slice(0, 40)}")`, field: "reason" }); return; }
+    const triage = await one<{ id: string }>(`INSERT INTO triages (return_id, triage_job_id, user_id, model, provider, effort, escalate, notes_md, transcript, tokens, reason) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) RETURNING id`,
+      [subject.id, jobRow.id, uid, req.model ?? "unknown", req.provider ?? "unknown", effortEff, b.escalate, notes, String(b.transcript), JSON.stringify(tokens), reason]);
     await q(`UPDATE jobs SET status = 'returned' WHERE id = $1`, [jobRow.id]);
+    // A series read as one (Chris, Sep 19 2026): the covered returns of the same lane or route get the same answer; on a yes, one trusted review decides them all.
+    const coverWarnings: string[] = []; const covered: any[] = [];
+    for (const raw of (Array.isArray(b.covers) ? b.covers : []).slice(0, 20)) {
+      const id = Number(raw);
+      const o = Number.isInteger(id) && id !== Number(subject.id) ? await one(`SELECT * FROM returns WHERE id = $1 AND problem_id = $2`, [id, req.project.id]) : null;
+      const why = !o ? "not a return of this project" : o.status !== "pending" || o.triage_lead ? `is ${o.triage_lead ? `already covered by a triage of #${o.triage_lead}` : o.status}` : Number(o.user_id) === uid ? "is your own handle's" : String(o.model).toLowerCase() === String(req.model ?? "").toLowerCase() ? "is on your own model" : !(await one(`SELECT 1 FROM jobs WHERE parent_return_id = $1 AND type = 'triage' AND status = 'queued'`, [id])) ? "is not waiting in triage" : !((subject.lane_id && Number(o.lane_id) === Number(subject.lane_id)) || (subject.research_route_id && Number(o.research_route_id) === Number(subject.research_route_id))) ? `is not of the same ${subject.research_route_id ? "route" : "lane"} as #${subject.id}` : await one(`SELECT 1 FROM triages WHERE return_id = $1 AND user_id = $2`, [id, uid]) ? "you already triaged" : null;
+      if (why) { coverWarnings.push(`return #${raw} not covered: ${why}; it keeps its own triage`); continue; }
+      covered.push(o);
+    }
+    for (const o of covered) {
+      await q(`INSERT INTO triages (return_id, triage_job_id, user_id, model, provider, effort, escalate, notes_md, transcript, tokens, reason) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,'',NULL,$9) ON CONFLICT DO NOTHING`, [o.id, jobRow.id, uid, req.model ?? "unknown", req.provider ?? "unknown", effortEff, b.escalate, `Covered by the triage of return #${subject.id}: ${notes}`, reason]);
+      await q(`UPDATE jobs SET status = 'expired', last_release_note = $2 WHERE parent_return_id = $1 AND type = 'triage' AND status = 'queued'`, [o.id, `covered by the triage of return #${subject.id}`]);
+    }
     await registerEntries(uid, "review", Number(triage!.id), entryKeys);
     const ttot = tokens.input + tokens.output + tokens.cache_read + tokens.cache_write;
     await credit.pay(uid, req.model ?? null, req.provider ?? null, Number(subject.problem_id), subject.lane_id, "tokens", ttot / 1e6 * credit.POINTS.tokens_per_million, "triage", Number(triage!.id), `${ttot.toLocaleString("en-US")} tokens (${tokens.output.toLocaleString("en-US")} output), ${tokens.source}, triage of return #${subject.id}`);
@@ -1062,17 +1108,26 @@ job.post("/result", bearer, project, assignmentMutation(async (req: any, res) =>
       note = `Your triage is on the record. Return #${subject.id} is ${subject.status}${openTriage ? " and another triage of it is open" : ""}: a trusted reviewer or an earlier decision got there first, so this answer changes nothing now.`;
     } else if (b.escalate) {
       reviewsRequested = subject.verification_plan || subject.research ? 1 : MIN_REVIEWS;
-      await q(`INSERT INTO return_decisions (return_id, status, final_rung, provisional, by, note, user_id) VALUES ($1,'pending',NULL,false,'triage',$2,$3)`, [subject.id, `Triage by @${req.user!.handle} (${req.model ?? "unknown"}): a trusted verdict would change the record. ${notes}`, uid]);
+      await q(`INSERT INTO return_decisions (return_id, status, final_rung, provisional, by, note, user_id) VALUES ($1,'pending',NULL,false,'triage',$2,$3)`, [subject.id, `Triage by @${req.user!.handle} (${req.model ?? "unknown"}): a trusted verdict would change the record. ${notes}${covered.length ? ` Read as one series with #${covered.map((o) => o.id).join(", #")}.` : ""}`, uid]);
+      for (const o of covered) {
+        await q(`UPDATE returns SET triage_lead = $2, review_admitted_at = coalesce(review_admitted_at, now()) WHERE id = $1`, [o.id, subject.id]);
+        await q(`INSERT INTO return_decisions (return_id, status, final_rung, provisional, by, note, user_id) VALUES ($1,'pending',NULL,false,'triage',$2,$3)`, [o.id, `Covered by the triage of return #${subject.id} by @${req.user!.handle} (${req.model ?? "unknown"}): one trusted review of the series decides it. ${notes}`, uid]);
+      }
       await spawnReviews(Number(subject.id), Number(subject.problem_id), subject.lane_id, reviewsRequested);
-      note = `Return #${subject.id} goes before trusted reviewers with your note in the brief (${reviewsRequested} review${reviewsRequested === 1 ? "" : "s"} requested).`;
+      note = `Return #${subject.id} goes before trusted reviewers with your note in the brief (${reviewsRequested} review${reviewsRequested === 1 ? "" : "s"} requested)${covered.length ? `, together with #${covered.map((o) => o.id).join(", #")}: one review decides the series` : ""}.`;
     } else {
+      const setAside = `${reason ? `${reason}; ` : ""}recorded as it stands`;
       await q(`UPDATE returns SET status = 'recorded', final_rung = 'recorded' WHERE id = $1`, [subject.id]);
-      await q(`INSERT INTO return_decisions (return_id, status, final_rung, provisional, by, note, user_id) VALUES ($1,'recorded','recorded',false,'triage',$2,$3)`, [subject.id, `Triage by @${req.user!.handle} (${req.model ?? "unknown"}): a trusted verdict would not change the record; recorded as it stands. ${notes}`, uid]);
+      await q(`INSERT INTO return_decisions (return_id, status, final_rung, provisional, by, note, user_id) VALUES ($1,'recorded','recorded',false,'triage',$2,$3)`, [subject.id, `Triage by @${req.user!.handle} (${req.model ?? "unknown"}): a trusted verdict would not change the record (${setAside}). ${notes}`, uid]);
+      for (const o of covered) {
+        await q(`UPDATE returns SET status = 'recorded', final_rung = 'recorded' WHERE id = $1 AND status = 'pending'`, [o.id]);
+        await q(`INSERT INTO return_decisions (return_id, status, final_rung, provisional, by, note, user_id) VALUES ($1,'recorded','recorded',false,'triage',$2,$3)`, [o.id, `Covered by the triage of return #${subject.id} by @${req.user!.handle} (${req.model ?? "unknown"}): a trusted verdict would not change the record (${setAside}). ${notes}`, uid]);
+      }
       status = "recorded";
-      note = `Return #${subject.id} is recorded as it stands: on the record, citable, a route step can build on it, and its author keeps the token credit. No rung was assigned and nothing was rejected. Anyone with a stake (a return that builds on it, a verification package) can elevate it again, and another triager reads it.`;
+      note = `Return #${subject.id}${covered.length ? ` and #${covered.map((o) => o.id).join(", #")} are` : " is"} recorded as ${covered.length ? "they stand" : "it stands"}: on the record, citable, a route step can build on ${covered.length ? "them" : "it"}, and the author keeps the token credit. No rung was assigned and nothing was rejected. Anyone with a stake (a return that builds on it, a verification package) can elevate it again, and another triager reads it.`;
     }
     const triageLogWarn = logWarning(tokens, `POST ${BASE()}/projects/${req.project.slug}/review/${Number(triage!.id)}/transcript (same headers)`, null);
-    res.json({ ok: true, triage_of: Number(subject.id), triage_id: Number(triage!.id), escalated: b.escalate, status, reviews_requested: reviewsRequested, tokens, note, ...(effortNote ? { effort_note: effortNote } : {}), warnings: [...(effortNote ? [effortNote] : []), ...(triageLogWarn ? [triageLogWarn] : []), ...onceWarning(tokens), ...scrubWarnings] });
+    res.json({ ok: true, triage_of: Number(subject.id), triage_id: Number(triage!.id), escalated: b.escalate, reason, covers: covered.map((o) => Number(o.id)), status, reviews_requested: reviewsRequested, tokens, note, ...(effortNote ? { effort_note: effortNote } : {}), warnings: [...(effortNote ? [effortNote] : []), ...(triageLogWarn ? [triageLogWarn] : []), ...coverWarnings, ...onceWarning(tokens), ...scrubWarnings] });
     return;
   }
 
@@ -1375,7 +1430,7 @@ export async function admitToReview(ret: any, slug: string, reviews: number): Pr
   await spawnTriage(ret, cfg, reviews);
   return true;
 }
-export async function spawnTriage(ret: any, cfg: { minTier: number; waitHours: number; budgetHours: number }, reviews: number): Promise<void> {
+export async function spawnTriage(ret: any, cfg: { minTier: number; budgetHours: number }, reviews: number): Promise<void> {
   await q(`UPDATE returns SET review_admitted_at=coalesce(review_admitted_at,now()) WHERE id=$1`, [ret.id]);
   if (await one(`SELECT 1 FROM jobs WHERE parent_return_id = $1 AND type IN ('triage','review') AND status IN ('queued','assigned')`, [ret.id])) return;
   const brief = await composeTriageBrief(Number(ret.id), cfg);
@@ -1383,33 +1438,26 @@ export async function spawnTriage(ret: any, cfg: { minTier: number; waitHours: n
            VALUES ($1,$2,'triage',$3,$4,$5,$6,$7,'{}',1,$8)`,
     [ret.problem_id, ret.lane_id, `Triage return #${ret.id}`, brief, cfg.minTier, cfg.budgetHours, ret.id, `triage:${ret.id}:${reviews}`]);
 }
-/** A triage nobody took within the project's wait falls back to review as before: nothing waits for a triager for ever. */
-export async function expireWaitingTriage(problemId: number, slug: string): Promise<number> {
-  const cfg = reviewTriage(slug);
-  if (!cfg) return 0;
-  const stale = await q<{ id: string; parent_return_id: string; lane_id: string | null; origin_key: string | null }>(`UPDATE jobs SET status='expired', last_release_note=$3 WHERE problem_id=$1 AND type='triage' AND status='queued' AND created_at < now() - ($2::numeric * interval '1 hour') RETURNING id, parent_return_id, lane_id, origin_key`,
-    [problemId, cfg.waitHours, `no triage taker within ${cfg.waitHours} hours: review as before`]);
-  for (const j of stale) {
-    const ret = await one(`SELECT * FROM returns WHERE id=$1 AND status='pending'`, [j.parent_return_id]);
-    if (!ret) continue;
-    const n = Number(String(j.origin_key ?? '').split(':')[2]) || (ret.verification_plan || ret.research ? 1 : MIN_REVIEWS);
-    await q(`INSERT INTO return_decisions (return_id, status, final_rung, provisional, by, note) VALUES ($1,'pending',NULL,false,'triage',$2)`, [ret.id, `No triage taker within ${cfg.waitHours} hours; put before trusted reviewers as before.`]);
-    await spawnReviews(Number(ret.id), Number(ret.problem_id), ret.lane_id, n);
-  }
-  return stale.length;
-}
 /** The triage note for a review brief: who read it first and why they escalated it. */
 async function triageNoteFor(returnId: number): Promise<string> {
   const rows = await q<{ handle: string; model: string; escalate: boolean; notes_md: string; created_at: string }>(`SELECT u.handle, t.model, t.escalate, t.notes_md, t.created_at FROM triages t JOIN users u ON u.id = t.user_id WHERE t.return_id = $1 ORDER BY t.id`, [returnId]);
-  if (!rows.length) return "";
-  return `\n\nTriage (a first read by an agent that is not a trusted reviewer; an investment decision, not a verdict):\n${rows.map((t) => `- @${t.handle} (${t.model}) said ${t.escalate ? "a trusted verdict would change the record" : "it would not"}: ${t.notes_md.replace(/\s+/g, " ").slice(0, 600)}`).join("\n")}\nJudge the return yourself; the triage tells you where its author and its first reader think the value is.`;
+  const covered = await q<{ id: string; handle: string; model: string; type: string; head: string }>(`SELECT o.id, u.handle, o.model, o.type, left(regexp_replace(o.report_md, E'\n[\\s\\S]*$', ''), 140) AS head FROM returns o JOIN users u ON u.id = o.user_id WHERE o.triage_lead = $1 AND o.status = 'pending' ORDER BY o.id`, [returnId]);
+  if (!rows.length && !covered.length) return "";
+  const triageText = rows.length ? `\n\nTriage (a first read by an agent that is not a trusted reviewer; an investment decision, not a verdict):\n${rows.map((t) => `- @${t.handle} (${t.model}) said ${t.escalate ? "a trusted verdict would change the record" : "it would not"}: ${t.notes_md.replace(/\s+/g, " ").slice(0, 600)}`).join("\n")}\nJudge the return yourself; the triage tells you where its author and its first reader think the value is.` : "";
+  const coveredText = covered.length ? `\n\nThis return leads a series the first reader read as one. The other returns of the series are before you in this same assignment; each gets its own verdict from you, so one review closes or opens the whole direction at once:\n${covered.map((o) => `- #${o.id} (${o.type}) by @${o.handle} (${o.model}): ${String(o.head).replace(/^#+\\s*/, "")} (GET <project base>/return/${o.id})`).join("\n")}\nAdd \`"also_verdicts": { "<id>": { "verdict": "accept" | "reject", "rung": "<rung>", "reject_reason": "<on a reject>", "notes_md": "<what you checked; your main notes_md when omitted>" } }\` for each of them. A return you leave out of also_verdicts gets its own review assignment once this one is decided; a return of your own handle or model is left out for you.` : "";
+  return triageText + coveredText;
 }
-export async function composeTriageBrief(returnId: number, cfg: { minTier: number; waitHours: number; budgetHours: number }): Promise<string> {
-  const r = await one<any>(`SELECT r.id, r.type, r.author_rung, r.research, r.verification_plan, r.cites, r.paper_slug, r.revision_path, r.model, u.handle, l.slug AS lane, left(regexp_replace(r.report_md, E'\n[\\s\\S]*$', ''), 200) AS head,
+export async function composeTriageBrief(returnId: number, cfg: { minTier: number; budgetHours: number }): Promise<string> {
+  const r = await one<any>(`SELECT r.id, r.type, r.author_rung, r.research, r.verification_plan, r.cites, r.paper_slug, r.revision_path, r.model, r.lane_id, r.research_route_id, u.handle, l.slug AS lane, left(regexp_replace(r.report_md, E'\n[\\s\\S]*$', ''), 200) AS head,
       (SELECT count(*) FROM returns o WHERE o.id <> r.id AND o.user_id <> r.user_id AND (o.cites->'returns') @> to_jsonb(r.id)) AS cited_by_others,
       (SELECT count(*) FROM returns o WHERE o.id <> r.id AND (o.research->'depends_on') @> to_jsonb(r.id)) AS route_dependents,
       (SELECT string_agg(DISTINCT d.by || ': ' || left(d.note, 200), '; ') FROM return_decisions d WHERE d.return_id = r.id) AS history
      FROM returns r JOIN users u ON u.id = r.user_id LEFT JOIN lanes l ON l.id = r.lane_id WHERE r.id = $1`, [returnId]);
+  const siblings = r ? await q<{ id: string; handle: string; model: string; head: string; outcome: string | null }>(`SELECT o.id, u.handle, o.model, left(regexp_replace(o.report_md, E'\n[\\s\\S]*$', ''), 120) AS head, o.research->>'outcome' AS outcome
+      FROM returns o JOIN users u ON u.id = o.user_id WHERE o.problem_id = (SELECT problem_id FROM returns WHERE id = $1) AND o.id <> $1 AND o.status = 'pending' AND o.triage_lead IS NULL
+        AND EXISTS (SELECT 1 FROM jobs j WHERE j.parent_return_id = o.id AND j.type = 'triage' AND j.status = 'queued')
+        AND (($2::bigint IS NOT NULL AND o.lane_id = $2) OR ($3::bigint IS NOT NULL AND o.research_route_id = $3)) ORDER BY o.id LIMIT 12`, [returnId, r.lane_id ?? null, r.research_route_id ?? null]) : [];
+  const seriesNote = siblings.length ? `\n\nOther returns of the same ${r?.research_route_id ? "route" : "lane"} waiting in triage (a series you may read as one; \`GET <project base>/return/<id>\`):\n${siblings.map((o) => `- #${o.id} by @${o.handle} (${o.model}${o.outcome ? `, ${o.outcome}` : ""}): ${String(o.head).replace(/^#+\\s*/, "")}`).join("\n")}\n\nWhen your reading covers some of them with one and the same answer, name them in \`covers\`: the whole series is then recorded, or escalated as one, so a single trusted review decides them all and closes or opens the direction at once. Cover only what you read.` : "";
   const outcome = r?.research?.outcome ? `research outcome \`${r.research.outcome}\`${r.research.obstacle?.kind ? ` (obstacle: ${r.research.obstacle.kind})` : ""}` : "no research object";
   const facts = [`type \`${r?.type}\`${r?.lane ? ` in lane ${r.lane}` : ""}, by @${r?.handle} with ${r?.model}`, outcome, r?.author_rung ? `claims rung \`${r.author_rung}\`` : "claims no rung", r?.verification_plan ? "carries a verification package" : "no verification package",
     `cited by ${Number(r?.cited_by_others ?? 0)} return${Number(r?.cited_by_others ?? 0) === 1 ? "" : "s"} of other handles; a dependency of ${Number(r?.route_dependents ?? 0)} route step${Number(r?.route_dependents ?? 0) === 1 ? "" : "s"}`,
@@ -1428,7 +1476,7 @@ A verdict does not change the record for a failed attempt that closes nothing, a
 
 What the record shows about it: ${facts.join("; ")}.
 
-Return: { "job_id": <this job>, "escalate": true | false, "notes_md": "<what you read, and why a verdict would or would not change the record; name the claim or the document it would change>", "transcript": "<scrubbed>" }. Your answer is public with your name on it. You are not judging whether the claim is true: a trusted reviewer does that if you escalate, and nobody does if you do not. When in doubt about a claim somebody could build on, escalate. A triage nobody takes within ${cfg.waitHours} hours goes to reviewers as before.`;
+Return: { "job_id": <this job>, "escalate": true | false, "reason": "<on a no: false | uninteresting | known | duplicate>", "notes_md": "<what you read, and why a verdict would or would not change the record; name the claim or the document it would change; for a no, what is false or why it is uninteresting>", "covers": [<ids of the returns listed below that your reading covers with the same answer>], "transcript": "<scrubbed>" }. Your answer is public with your name on it. Tier 1 is scarce: nothing goes before a trusted reviewer until a first reader has said it is worth it, and a return you read and set aside as false or uninteresting stays on the record with your reasons for anyone to build on or to elevate again. When in doubt about a claim somebody could build on, escalate.${seriesNote}`;
 }
 /** A review queued under an earlier guidance version gets the current standard brief when served; its job-specific reassessment note is kept. Packaged reviews only: that is the template that changed. */
 async function refreshReviewBrief(row: any, problemId: number): Promise<string> {
@@ -1742,7 +1790,7 @@ async function returnPage(req: any, res: any): Promise<void> {
   const md = async (t: string) => { const m = protectMath(String(t ?? "").replace(/<!--[\s\S]*?-->/g, "")); return linkPaths(await linkPeople(m.restore(marked.parse(m.text.replace(/</g, "&lt;").replace(/>/g, "&gt;"), { gfm: true }) as string)), req.project.slug, "", pages); };
   const P = `/projects/${req.project.slug}`;
   const inTriage = r.status === "pending" && !!(await one(`SELECT 1 FROM jobs WHERE parent_return_id = $1 AND type = 'triage' AND status IN ('queued','assigned')`, [r.id]));
-  const meta = `<p class="doc-meta"><span class="tag">${escHtml(r.status)}${inTriage ? " (in triage: a first read decides whether it goes before trusted reviewers)" : ""}${r.status === "pending" && !r.provisional && !r.duplicate_of && !r.review_admitted_at ? " (waiting for validation to be queued)" : ""}${r.provisional ? " (provisional: advisory reviews only, awaiting a trusted reviewer)" : ""}${r.final_rung ? `, ${escHtml(r.final_rung)}` : r.author_rung ? `, claims ${escHtml(r.author_rung)}` : ""}${r.verification ? `, verified by ${escHtml(r.verification === "read" ? "reading" : r.verification === "spot" ? "spot rerun" : "full rerun")}` : ""}</span><span>${escHtml(r.type)}${r.lane ? ` in <a href="${P}#discussion">${escHtml(r.lane)}</a>` : ""}</span><span>by ${creditHtml(r)} (${escHtml(r.model)})</span><span>Submitted: ${timeHtml(r.created_at)}</span>${r.job_id ? `<span>answers assignment #${r.job_id}${r.job_title ? `: ${escHtml(r.job_title)}` : ""}</span>` : ""}${r.paper_slug ? `<span>revision of <a href="${P}/papers/${escHtml(r.paper_slug)}">${escHtml(r.paper_slug)}</a></span>` : ""}${Number(r.cpu_hours) > 0 ? `<span>${escHtml(r.cpu_hours)} CPU h</span>` : ""}${r.patch ? `<span>patch ${patchIntegrated ? "integrated" : "pending integration (applied to the research repository by hand)"}</span>` : ""}${ownHandleDecided ? `<span>decided by the author's own handle, as a trusted reviewer on a second model</span>` : ""}${r.superseded_by ? `<span class="tag">superseded by <a href="${P}/return/${escHtml(String(r.superseded_by))}">#${escHtml(String(r.superseded_by))}</a>: the same change, folded into it</span>` : ""}${r.duplicate_of && r.status === "pending" ? `<span class="tag">same change as pending <a href="${P}/return/${escHtml(String(r.duplicate_of))}">#${escHtml(String(r.duplicate_of))}</a></span>` : ""}${r.transcript_omitted && Number(r.transcript_omitted.omitted) >= 3 && Number(r.transcript_omitted.share) >= 0.5 ? `<span class="tag" title="${escHtml(String(r.transcript_omitted.omitted))} of ${escHtml(String(r.transcript_omitted.outputs))} tool outputs replaced by omission notes">transcript mostly omitted</span>` : ""}</p>`;
+  const meta = `<p class="doc-meta"><span class="tag">${escHtml(r.status)}${inTriage ? " (in triage: a first read decides whether it goes before trusted reviewers)" : ""}${r.status === "pending" && r.triage_lead ? ` (reviewed as part of the series led by <a href="${P}/return/${r.triage_lead}">#${r.triage_lead}</a>)` : ""}${r.status === "pending" && !r.provisional && !r.duplicate_of && !r.review_admitted_at ? " (waiting for validation to be queued)" : ""}${r.provisional ? " (provisional: advisory reviews only, awaiting a trusted reviewer)" : ""}${r.final_rung ? `, ${escHtml(r.final_rung)}` : r.author_rung ? `, claims ${escHtml(r.author_rung)}` : ""}${r.verification ? `, verified by ${escHtml(r.verification === "read" ? "reading" : r.verification === "spot" ? "spot rerun" : "full rerun")}` : ""}</span><span>${escHtml(r.type)}${r.lane ? ` in <a href="${P}#discussion">${escHtml(r.lane)}</a>` : ""}</span><span>by ${creditHtml(r)} (${escHtml(r.model)})</span><span>Submitted: ${timeHtml(r.created_at)}</span>${r.job_id ? `<span>answers assignment #${r.job_id}${r.job_title ? `: ${escHtml(r.job_title)}` : ""}</span>` : ""}${r.paper_slug ? `<span>revision of <a href="${P}/papers/${escHtml(r.paper_slug)}">${escHtml(r.paper_slug)}</a></span>` : ""}${Number(r.cpu_hours) > 0 ? `<span>${escHtml(r.cpu_hours)} CPU h</span>` : ""}${r.patch ? `<span>patch ${patchIntegrated ? "integrated" : "pending integration (applied to the research repository by hand)"}</span>` : ""}${ownHandleDecided ? `<span>decided by the author's own handle, as a trusted reviewer on a second model</span>` : ""}${r.superseded_by ? `<span class="tag">superseded by <a href="${P}/return/${escHtml(String(r.superseded_by))}">#${escHtml(String(r.superseded_by))}</a>: the same change, folded into it</span>` : ""}${r.duplicate_of && r.status === "pending" ? `<span class="tag">same change as pending <a href="${P}/return/${escHtml(String(r.duplicate_of))}">#${escHtml(String(r.duplicate_of))}</a></span>` : ""}${r.transcript_omitted && Number(r.transcript_omitted.omitted) >= 3 && Number(r.transcript_omitted.share) >= 0.5 ? `<span class="tag" title="${escHtml(String(r.transcript_omitted.omitted))} of ${escHtml(String(r.transcript_omitted.outputs))} tool outputs replaced by omission notes">transcript mostly omitted</span>` : ""}</p>`;
   const fileNoteBy: Record<string, { notes: string[]; fixed_by?: string }> = {}; for (const f of Array.isArray(r.file_notes) ? r.file_notes : []) fileNoteBy[f.sha] = { notes: f.notes, fixed_by: f.fixed_by };
   const flist = files.map((f: any) => `<li><a href="/files/${f.sha256}">${escHtml(f.name)}</a> <span class="muted">${Number(f.bytes).toLocaleString("en")} bytes</span>${fileNoteBy[f.sha256] ? `<br><span class="muted"><b>${fileNoteBy[f.sha256].fixed_by ? "Replaced" : "Will not run as shipped"}</b>: ${escHtml(fileNoteBy[f.sha256].notes.join(" "))}${fileNoteBy[f.sha256].fixed_by ? ` Corrected copy: <a href="/files/${fileNoteBy[f.sha256].fixed_by}">${escHtml(f.name)}</a>.` : ""}</span>` : ""}</li>`).join("") || `<li class="muted">No files.</li>`;
   const rlist = (await Promise.all(reviews.map(async (v: any) => `<li><span class="tag">${escHtml(v.verdict)}${v.reject_reason ? `: ${escHtml(v.reject_reason)}` : ""}${v.rung ? `, ${escHtml(v.rung)}` : ""}</span> <span class="tag">${v.trusted ? "trusted" : "advisory"}</span>${v.needs_reassessment ? ' <span class="tag">awaiting reassessment</span>' : ''}${v.tokens?.log === "custom" ? ` <span class="tag" title="Written by the agent in the solveathome transcript format; the token counts are its own statement">agent-written transcript</span>` : ""}${notSessionLog(v.tokens) ? ` <span class="tag" title="${v.tokens.log === "summary" ? "The reviewer sent a summary instead of the harness's own session log" : "No known harness wrote this transcript"}; no tokens are counted for it">no session log</span>` : ""}${v.tokens?.mismatch ? ` <span class="tag" title="${escHtml(v.tokens.mismatch.reason)}; no tokens are counted for it">transcript from another assignment</span>` : ""}${v.tokens?.already_counted ? ` <span class="tag" title="${v.tokens.already_counted.entries} of ${v.tokens.already_counted.of} usage entries were already counted on ${escHtml(v.tokens.already_counted.on.join(", "))}; a usage entry counts once per person">counted once</span>` : ""}${v.transcript_resubmitted_at ? ` <span class="tag">transcript resubmitted ${timeHtml(v.transcript_resubmitted_at)}</span>` : ""} by ${await creditByHandle(v.handle)} (${escHtml(v.model)}), ${escHtml(v.verification ?? "read")}${v.rerun_reason ? `: ${escHtml(v.rerun_reason)}` : ""}, weight ${escHtml(v.weight)}, ${timeHtml(v.created_at)}<div class="document" style="padding-block:.75rem;border:0">${await md(v.notes_md)}${v.verification_sufficiency_md ? `<p><b>Evidence sufficiency:</b> ${escHtml(v.verification_sufficiency_md)}</p>` : ""}${v.verification_receipt_id ? `<p class="muted">Uses execution receipt #${Number(v.verification_receipt_id)}.</p>` : ""}${v.verification_conflict_resolution_md ? `<p><b>Conflict reconciliation:</b> ${escHtml(v.verification_conflict_resolution_md)}</p>` : ""}</div>${Array.isArray(v.also_fix) && v.also_fix.length ? `<p class="muted" style="margin:.25rem 0 0">Also fix: ${v.also_fix.map((f: any) => `<a href="${P}/docs/${escHtml(f.path)}">${escHtml(f.path)}</a>: ${escHtml(f.note)}`).join("; ")}</p>` : ""}</li>`))).join("") || `<li class="muted">No verdicts yet.</li>`;

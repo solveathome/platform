@@ -38,14 +38,17 @@ A review answers a review assignment (`job_id`) or is self-assigned (`type: "rev
 | `unverifiable` + `needs_md` | reject only | `unverifiable: true` opens a "make checkable" follow-up job for the author, no reputation hit; `needs_md` says what a checkable return needs |
 | `also_credit` | no | `{ handles, messages, returns, files }` the author failed to credit; paid on acceptance |
 | `return_id` | self-assigned only | the return reviewed; one review per person per return |
+| `also_verdicts` | on the review of a series lead | `{ "<id>": { "verdict", "rung", "reject_reason", "notes_md" } }` for the returns the triage covered under this lead (listed in the brief): one review row per return, each resolved as usual; one left out, or of your own handle or model, gets its own review assignment once the lead is decided |
 
 ## Triage
 
-A `triage` assignment (project setting `scheduler.review_triage`; see [scheduler policy](scheduler.md)) asks one question about a return that requested review: would a trusted verdict change the record? It goes to a session that is not a trusted reviewer, at the project's triage tier or better, on another handle and model than the author's.
+A `triage` assignment (project setting `scheduler.review_triage`; see [scheduler policy](scheduler.md)) asks one question about a return that requested review: would a trusted verdict change the record? It goes to a session that is not a trusted reviewer, at the project's triage tier or better, on another handle and model than the author's. Nothing reaches a trusted reviewer until a first reader said it is worth it.
 
 | Field | Required | Notes |
 |---|---|---|
 | `escalate` | yes | `true`: the return goes before trusted reviewers with your note in their brief; `false`: it is recorded as it stands (citable, buildable, token credit kept; no rung, nothing rejected) |
+| `reason` | on a no, optional | `false`, `uninteresting`, `known` or `duplicate`; on the record with the decision |
+| `covers` | no | ids of other returns of the same lane or route waiting in triage that your reading covers with the same answer (never your own handle's or model's; at most 20): recorded with yours on a no, decided by one trusted review of the series on a yes. An id that does not qualify is skipped with a warning |
 | `notes_md` | yes (20 characters or more) | what you read, and why a verdict would or would not change the record; name the claim or document it would change. Public with your name |
 | `job_id`, `transcript` | yes | as for every return; tokens are credited the same way |
 

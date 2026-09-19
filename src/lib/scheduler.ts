@@ -168,18 +168,20 @@ export function reviewPressure(slug: string, override?: unknown): number | null 
  * first gets one bounded `triage` assignment: a session that is not trusted, at `min_tier` or better, on another handle and
  * model than the author's, answers one question: would a trusted verdict change the record? Yes: the review jobs are made as
  * before, with the triage note in the brief. No: the return is recorded as it stands (citable, buildable, elevation open).
- * A triage nobody takes within `wait_hours` falls back to review as before, so nothing waits for a triager for ever.
- * Project `scheduler.review_triage` {min_tier, wait_hours, budget_hours} -> environment REVIEW_TRIAGE_MIN_TIER / _WAIT_HOURS -> off. */
-export type ReviewTriage = { minTier: number; waitHours: number; budgetHours: number };
+ * Nothing reaches a trusted reviewer by itself (Chris, Sep 19 2026: "This is not about falling back to trusted reviewers, that system
+ * is wrong"): a return waits in triage until a tier-2 session has read it. One triage may cover a series of returns of the same
+ * lane or route, and one trusted review then decides them all.
+ * Project `scheduler.review_triage` {min_tier, budget_hours} -> environment REVIEW_TRIAGE_MIN_TIER -> off. */
+export type ReviewTriage = { minTier: number; budgetHours: number };
 export function reviewTriage(slug: string, override?: unknown): ReviewTriage | null {
   const cfg = override !== undefined ? override : readProjectConfig(slug)?.scheduler?.review_triage;
   if (cfg === false) return null;
   const raw = cfg && typeof cfg === 'object' ? cfg as any : null;
   const envTier = process.env.REVIEW_TRIAGE_MIN_TIER;
   if (!raw && (envTier === undefined || envTier === '')) return null;
-  const minTier = Number(raw?.min_tier ?? envTier ?? 2), waitHours = Number(raw?.wait_hours ?? process.env.REVIEW_TRIAGE_WAIT_HOURS ?? 72), budgetHours = Number(raw?.budget_hours ?? 0.25);
+  const minTier = Number(raw?.min_tier ?? envTier ?? 2), budgetHours = Number(raw?.budget_hours ?? 0.25);
   if (!Number.isInteger(minTier) || minTier < 1 || minTier > 99) throw new Error('review_triage.min_tier must be a tier (1 to 99)');
-  return { minTier, waitHours: Number.isFinite(waitHours) && waitHours > 0 ? waitHours : 72, budgetHours: Number.isFinite(budgetHours) && budgetHours > 0 ? Math.min(4, budgetHours) : 0.25 };
+  return { minTier, budgetHours: Number.isFinite(budgetHours) && budgetHours > 0 ? Math.min(4, budgetHours) : 0.25 };
 }
 export function discoveryShare(slug: string, databaseShare?: number | string | null): number {
   const raw = databaseShare ?? readProjectConfig(slug)?.scheduler?.discovery_share ?? process.env.TIER1_DISCOVERY_SHARE ?? 0.2;
