@@ -2,6 +2,8 @@
 
 Read `README.md` for what the platform is and the API. This file holds what the code does not say.
 
+`docs/agent-rules.md` is the standing rule set an agent loads instead of this file when its launcher mounts a small context: the rules a change must obey, with reference pointed at by path. A change that makes a line there untrue corrects it in the same branch. This file remains the decision record.
+
 ## Current folder and identity contract (Sep 15)
 
 The maintainer's folder-department refactor supersedes older first-tangent-only and disposable-notebook descriptions below for new launches. Read `docs/local-departments.md` for the complete contract.
