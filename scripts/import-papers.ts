@@ -1,12 +1,14 @@
 /**
  * Seed and refresh the papers registry from the mirror's paper/ directory, and queue one 'paper' job per paper
- * that has no open job: write it (proposal) or bring it to referee-ready (draft). Idempotent.
+ * that has no open job: write it (proposal) or bring it to referee-ready (draft). A paper whose current manuscript writes math outside
+ * TeX delimiters gets a typesetting job first (Chris, Sep 22). Idempotent.
  * Run: node dist/scripts/import-papers.js [slug]
  */
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { migrate, q, one } from "../src/db/index.js";
 import { ROOT } from "../src/lib/paths.js";
+import { queueTypesetJobs } from "../src/lib/typeset.js";
 
 import { featuredProject } from "../src/lib/projects.js";
 const slug = process.argv[2] ?? (await featuredProject())?.slug ?? "";
@@ -32,7 +34,9 @@ const reg = existsSync(join(root, "proposals", "PROPOSALS.md")) ? readFileSync(j
 for (const m of reg.matchAll(/\|\s*\[([^\]]+\.md)\]\([^)]+\)\s*\|\s*([^|]+?)\s*\|/g)) registryGrades[m[1]] = m[2].replace(/\s+/g, " ").trim().slice(0, 200);
 
 const auditBrief = (pslug: string, path: string, t: string) => `paper.slug: ${pslug}\n\nAudit "${t}" (\`${path}\`). Read it in full, then \`paper/PAPERS.md\` and \`paper/writing-style-math.md\`. Find what is wrong, unsupported or overclaimed: every theorem, lemma and measured claim checked against the research note or script it cites at the calibration that source states; every citation checked at the page or marked unverified; the abstract claiming nothing the body does not carry; prose that inflates. Then fix it: return the revised document as one uploaded Markdown file, plus a report listing each issue (where, what, why, what you changed, and the calibration you can defend). Set \`"revision": { "path": "${path}", "file": "<sha256>" }\` and \`"paper": { "slug": "${pslug}", "file": "<sha256>" }\`. Reviewers check each issue and each change; accepted, your revision becomes the paper's next version, credited to you and verified by them, with the diff on record.`;
-let seeded = 0, jobs = 0;
+let seeded = 0, jobs = 0, typeset = 0;
+// A manuscript whose math is bare ^{…}/_{…} gets a typesetting job ahead of its audit (Chris, Sep 22; src/lib/typeset.ts).
+typeset = await queueTypesetJobs(p.id, slug); jobs += typeset;
 // Proposals first, drafts last: a draft is the document of record and overwrites the wrapper proposal with the same slug.
 const entries: Array<{ file: string; path: string; kind: "draft" | "proposal" }> = [];
 const pdir = join(root, "proposals");
@@ -66,5 +70,5 @@ Return the complete manuscript as one uploaded Markdown file (LaTeX math allowed
     [p.id, `${write ? "Paper: write" : "Paper: referee-ready revision of"} "${t}"`.slice(0, 200), brief]);
   jobs++;
 }
-console.log(JSON.stringify({ slug, papers: entries.length, seeded, jobs_queued: jobs }));
+console.log(JSON.stringify({ slug, papers: entries.length, seeded, jobs_queued: jobs, typeset_queued: typeset }));
 process.exit(0);

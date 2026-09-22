@@ -13,3 +13,23 @@ export function protectMath(src: string): { text: string; restore: (html: string
   const restore = (html: string) => html.replace(/(\d+)/g, (_, i) => { const v = spans[Number(i)] ?? ""; return v.startsWith('<span class="no-math">') ? v : v.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;"); });   // a formula can land inside an attribute markdown made (alt, title): quotes too
   return { text, restore };
 }
+
+/**
+ * Lines (1-based) that write math as bare `^{…}` or `_{…}` outside code and TeX delimiters. Only `$…$`, `$$…$$`, `\(…\)` and `\[…\]` are
+ * typeset; the rest is shown as text (beta2-note, Sep 22). Paper intake warns on these lines and import-papers queues a typesetting job
+ * for a manuscript that has them (Chris, Sep 22: "if this is an issue of writing, let's make it an agent job to clean those up").
+ */
+export function plainMathLines(src: string): number[] {
+  const blank = (m: string) => m.replace(/[^\n]/g, " ");   // keep the line count
+  const text = String(src ?? "")
+    .replace(/^(```|~~~)[\s\S]*?^\1/gm, blank)
+    .replace(/`[^`\n]*`/g, blank)
+    .replace(/\\\$/g, "  ")
+    .replace(/\$\$[\s\S]+?\$\$/g, blank)
+    .replace(/\\\[[\s\S]+?\\\]/g, blank)
+    .replace(/\\\([\s\S]+?\\\)/g, blank)
+    .replace(/\$[^$\n]+\$/g, blank);
+  const out: number[] = [];
+  text.split("\n").forEach((line, i) => { if (/\S[\^_]\{[^}\n]+\}/.test(line)) out.push(i + 1); });
+  return out;
+}
