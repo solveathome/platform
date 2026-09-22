@@ -133,3 +133,27 @@ test('issue #57: file repairs submit as measure work with a recipe, including le
   assert.ok(reviews.length); assert.ok(reviews.every(r => r.min_tier === 99), 'mechanical reviews, not manuscript reviews');
   }
 });
+
+test('bare ^{…}/_{…} math: paper intake accepts and warns naming the lines; import-papers queues one typesetting job per paper', async () => {
+  // Chris, Sep 22 2026, on beta2-note: "if this is an issue of writing, let's make it an agent job to clean those up".
+  const {queueTypesetJobs} = await import('../src/lib/typeset.ts');
+  const bare = (await files.store(uid, 'claude-fable-5-1', 'bare-note.md', 'md', '# Bare note\n\nG₂(n) ≤ C · pₙ^{β₂+ε} and $x_{1}$.\n')).sha;
+  const s4 = await (await call('POST', '/start', {body: {agreed: true, ai: {max_assignments: 1}, transcript_preapproved: true}})).json();
+  const res = await call('POST', '/result', {session: s4.session, body: {type: 'paper', report_md: 'A new note.', transcript: 't', transcript_approved: true, paper: {slug: 'bare-note', title: 'Bare note', summary: 'A note.', file: bare}, files: [bare]}});
+  const g = await res.json(); assert.equal(res.status, 200, JSON.stringify(g));
+  const w = g.warnings.filter(x => /outside TeX delimiters/.test(x));
+  assert.equal(w.length, 1, JSON.stringify(g.warnings)); assert.match(w[0], /on line 3 /); assert.match(w[0], /accepted as sent/);
+  await call('POST', `/sessions/${s4.session}/end`, {body: {note: 'test'}});
+  // A registered paper whose current file is bare gets a job; a second run while it is open, or while its return is pending, adds none.
+  await q(`INSERT INTO papers (problem_id, slug, title, path, kind, status, current_file_sha) VALUES ($1,'bare-current','Bare current',NULL,'draft','reviewed',$2)`, [pid, bare]);
+  await q(`UPDATE jobs SET status = 'done' WHERE problem_id = $1 AND status IN ('queued','assigned')`, [pid]);
+  assert.equal(await queueTypesetJobs(pid, slug), 1);
+  const j = await one(`SELECT id, type, min_tier, brief_md, title FROM jobs WHERE problem_id = $1 AND origin_key = 'typeset:bare-current'`, [pid]);
+  assert.equal(j.type, 'paper'); assert.match(j.brief_md, /^paper\.slug: bare-current\n/); assert.match(j.brief_md, /on line 3\./); assert.match(j.title, /typeset the math of "Bare current"/);
+  assert.equal(await queueTypesetJobs(pid, slug), 0, 'not again while the job is open');
+  await q(`UPDATE jobs SET status = 'done' WHERE id = $1`, [j.id]);
+  await q(`INSERT INTO returns (job_id, problem_id, type, user_id, model, provider, report_md, transcript, status, paper_slug) VALUES ($1,$2,'paper',$3,'claude-fable-5-1','anthropic','Typeset.','t','pending','bare-current')`, [j.id, pid, uid]);
+  assert.equal(await queueTypesetJobs(pid, slug), 0, 'not again while its return is under review');
+  // bare-note (the proposal above) has no current file yet, so it queues nothing: only a paper's current version is typeset.
+  assert.equal(Number((await one(`SELECT count(*) AS c FROM jobs WHERE problem_id = $1 AND origin_key LIKE 'typeset:%'`, [pid])).c), 1);
+});

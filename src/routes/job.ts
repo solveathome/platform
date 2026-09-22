@@ -18,7 +18,7 @@ import { readFileSync } from 'node:fs';
 import { ROOT } from '../lib/paths.js';
 import { bearer, optionalAuth, modelTier } from "../lib/auth.js";
 import { marked } from "marked";
-import { protectMath } from "../lib/math.js";
+import { protectMath, plainMathLines } from "../lib/math.js";
 import { linkPeople } from "../lib/people.js";
 import { linkPaths, paperPages } from "../lib/paths-link.js";
 import { page, esc as escHtml } from "../lib/page.js";
@@ -1243,6 +1243,11 @@ job.post("/result", bearer, project, assignmentMutation(async (req: any, res) =>
   // Detected now, so the agent is asked to fix it now; and a fix job is queued at once for anyone, closed if the author gets there first.
   const fixWorthy = fileNotes.filter((f) => f.notes.some(files.certainNote));
   const fileFixJob = fixWorthy.length ? await spawnFileFixJob({ id: Number(ret!.id), type: rtype, problem_id: Number(problem.id), lane_id: laneId === null || laneId === undefined ? null : Number(laneId), job_id: jobRow?.id ?? null, job_title: jobRow?.title ?? null }, fixWorthy) : null;
+  // A manuscript whose math is bare ^{…}/_{…} is accepted as sent; the author is told which lines will show as text (Chris, Sep 22, beta2-note).
+  const manuscriptSha = paperPlan?.fsha ?? (rtype === "audit" ? String(b.revision?.file ?? "").toLowerCase() : "");
+  const manuscript = /^[0-9a-f]{64}$/.test(manuscriptSha) ? files.read(manuscriptSha) : null;
+  const bareMath = manuscript === null ? [] : plainMathLines(manuscript);
+  const mathWarn = bareMath.length ? [`the manuscript writes math outside TeX delimiters on line${bareMath.length > 1 ? "s" : ""} ${bareMath.slice(0, 12).join(", ")}${bareMath.length > 12 ? ` and ${bareMath.length - 12} more` : ""} (bare ^{…} or _{…}). The site typesets only $…$, $$…$$, \\(…\\) and \\[…\\]; the rest shows as text. The return is accepted as sent; in your next revision, write that math in TeX.`] : [];
   const fileWarn = fileNotes.map((f) => {
     const certain = f.notes.some(files.certainNote);
     return `file ${f.name} (${f.sha.slice(0, 12)}…)${certain ? " will not run as shipped" : ""}: it ${f.notes.join(" It also ")} The return is accepted with the file as sent. Fix it: upload a corrected copy under the same name (POST ${BASE()}/files) and attach it with POST ${BASE()}/projects/${req.project.slug}/return/${ret!.id}/files { "files": ["<sha256>"] }; the note clears${certain && fileFixJob ? ` and the queued fix job (#${fileFixJob}) closes. If you do not, that job goes to whoever comes next` : ". If the detection is wrong, say so in the report and leave the file alone; the reviewer decides, and nothing is queued for anyone else"}.`;
@@ -1319,7 +1324,7 @@ job.post("/result", bearer, project, assignmentMutation(async (req: any, res) =>
   const twinWarn = twin ? [`this change is byte-identical to pending return #${twin.id}: the two are one change; when #${twin.id} is decided this return is folded into it (accepted: superseded; rejected: rejected with it; unpaid either way), and reviewers see both as one.`] : [];
   const returnReport = tokens.log === "unknown" ? await reportHarness(String(b.transcript), { returnId: Number(ret!.id), uid, model: req.model ?? null }) : null;
   const returnLogWarn = logWarning(tokens, `POST ${BASE()}/projects/${req.project.slug}/return/${Number(ret!.id)}/transcript (same headers)`, returnReport);
-  const warnings = [...(effortNote ? [effortNote] : []), ...(returnLogWarn ? [returnLogWarn] : []), ...onceWarning(tokens), ...scrubWarnings, ...fileWarn, ...patchWarning, ...ledgerWarn, ...omissionWarn, ...subWarn, ...twinWarn, ...recipeGapWarnings(recipeGap, BASE()), ...(stray.length ? [`recipe_md names ${stray.length} sha256 value(s) that are neither in hashes, nor among your or cited files, nor a served document: ${stray.map((x: string) => x.slice(0, 12) + "…").join(", ")}. If one is an expected output hash, put it in hashes too; if it is a typo, a reviewer's rerun will not match.`] : [])];
+  const warnings = [...(effortNote ? [effortNote] : []), ...(returnLogWarn ? [returnLogWarn] : []), ...onceWarning(tokens), ...scrubWarnings, ...fileWarn, ...mathWarn, ...patchWarning, ...ledgerWarn, ...omissionWarn, ...subWarn, ...twinWarn, ...recipeGapWarnings(recipeGap, BASE()), ...(stray.length ? [`recipe_md names ${stray.length} sha256 value(s) that are neither in hashes, nor among your or cited files, nor a served document: ${stray.map((x: string) => x.slice(0, 12) + "…").join(", ")}. If one is an expected output hash, put it in hashes too; if it is a typo, a reviewer's rerun will not match.`] : [])];
   if (jobRow?.ask_id) {
     const ask = await one(`SELECT a.id, a.message_id, m.channel_id FROM asks a JOIN messages m ON m.id = a.message_id WHERE a.id = $1 AND a.status IN ('open','researching')`, [jobRow.ask_id]);
     if (ask) {

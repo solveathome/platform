@@ -41,3 +41,18 @@ test("document sources keep blockquotes and still never pass raw HTML", async ()
   assert.match(html, /<p class="display"><strong>G₂\(n\) ≤ C · pₙ<sup>β₂\+ε<\/sup><\/strong><\/p>/);
   assert.match(html, /a -&gt; b/);
 });
+
+test("plainMathLines names the lines whose math is outside TeX, and typesetBrief tells the agent to change notation only", async () => {
+  const { plainMathLines } = await import("../src/lib/math.ts");
+  const { typesetBrief } = await import("../src/lib/typeset.ts");
+  const src = "# T\n\nG₂(n) ≤ C · pₙ^{β₂+ε}\n\n$p_n^{\\beta_2}$ and $$\\sum_{m}$$ and \\(x_{1}\\)\n\n`a_{b}` code\n\n```\nx^{2}\n```\n\n  Σ_{m|P(z)} 4^{ν(m)}\nsnake_case and a price of \\$5 and x^2\n";
+  assert.deepEqual(plainMathLines(src), [3, 13]);
+  assert.deepEqual(plainMathLines("All in $x^{2}$ and\n$$\ny_{1}\n$$\n"), []);
+  const brief = typesetBrief("twin-primes", "beta2-note", "An upper bound", [3, 13]);
+  assert.match(brief, /^paper\.slug: beta2-note\n/);
+  assert.match(brief, /on lines 3, 13\./);
+  assert.match(brief, /Change the notation and nothing else/);
+  assert.match(brief, /GET \/projects\/twin-primes\/papers\/beta2-note/);
+  assert.match(brief, /\\\(…\\\) and \\\[…\\\]/);
+  assert.doesNotMatch(brief, /hour|deadline|minute/i, "no brief states a time allowance");
+});
