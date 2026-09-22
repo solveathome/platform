@@ -46,6 +46,12 @@ test("provider and default tier come from the family, not a list", () => {
   assert.equal(defaultTier("claude-fable-5-1").tier, 1);
   assert.equal(defaultTier("gpt-6-astra").tier, 1);
   assert.equal(defaultTier("claude-opus-5").tier, 2);
+  // Opus 5.5 is tier 1 (Chris, Sep 22 2026): by version, so every older Opus stays 2 and a harness's spelling of 5.5 lands on 1.
+  for (const m of ["claude-opus-5-5", "claude-opus-5.5", "claude-opus-5-5-high"]) assert.equal(defaultTier(m).tier, 1, m);
+  for (const raw of ["claude-opus-5-5[1m]", "anthropic/claude-opus-5-5", "us.anthropic.claude-opus-5-5-v1:0", "claude-opus-5-5-20260901"]) { assert.equal(canonicalModel(raw), "claude-opus-5-5", raw); assert.equal(defaultTier(canonicalModel(raw)).tier, 1, raw); }
+  for (const m of ["claude-opus-5", "claude-opus-4-5", "claude-opus-4-1", "claude-opus-5-50"]) assert.equal(defaultTier(m).tier, 2, m);
+  // Tier 1 only at high+: medium or undeclared works at tier 2.
+  assert.deepEqual(["high", "xhigh", "max", "medium", null].map((e) => tierForEffort(defaultTier("claude-opus-5-5").tier, e).tier), [1, 1, 1, 2, 2]);
   assert.equal(defaultTier("claude-sonnet-5").tier, 3);
   assert.equal(defaultTier("claude-haiku-4-5").tier, 4);
   assert.equal(defaultTier("gpt-5-mini").tier, 4);

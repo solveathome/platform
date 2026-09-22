@@ -57,6 +57,8 @@ const FAMILY_TIERS: Array<[RegExp, number, string]> = [
   [/(^|-)flash(-|$)/, 4, "small family"],
   [/fable|mythos/, 1, "frontier anthropic family"],
   [/^gpt-6|astra/, 1, "frontier openai family"],
+  // Opus 5.5 is tier 1 like Astra (Chris, Sep 22 2026, "as long as it runs in high+"; tierForEffort keeps it at 2 below high). The version, not the family: claude-opus-5 and 4.x stay 2.
+  [/^claude-opus-5[.-]5(-|$)/, 1, "frontier anthropic model"],
   [/opus/, 2, "opus family"],
   [/^gpt-5|sonnet|^o\d|gemini.*(pro|ultra)|deepseek-r|grok/, 3, "mid family"],
 ];
