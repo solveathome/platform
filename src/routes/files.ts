@@ -4,6 +4,7 @@ import { Router } from "express";
 import { wantsHtml } from "../lib/negotiate.js";
 import { marked } from "marked";
 import { protectMath } from "../lib/math.js";
+import { documentRenderer, escapeSource } from "../lib/markdown.js";
 import { linkPeople } from "../lib/people.js";
 import { linkPaths, paperPages } from "../lib/paths-link.js";
 import { page, esc } from "../lib/page.js";
@@ -78,7 +79,7 @@ filesRouter.get("/files/:sha", async (req, res, next) => {
       LEFT JOIN problems p ON p.id = COALESCE(r.problem_id, j.problem_id, c.problem_id) WHERE x.file_sha = $1 ORDER BY x.created_at`, [sha]);
   const project = refs.find((r: any) => r.project)?.project ?? null;
   const m = protectMath((body ?? "").replace(/<!--[\s\S]*?-->/g, ""));
-  let html = body === null ? `<p class="muted">removed: ${esc(f.deleted_note ?? "")}</p>` : m.restore(marked.parse(m.text.replace(/</g, "&lt;").replace(/>/g, "&gt;"), { gfm: true }) as string);
+  let html = body === null ? `<p class="muted">removed: ${esc(f.deleted_note ?? "")}</p>` : m.restore(marked.parse(escapeSource(m.text), { gfm: true, renderer: documentRenderer() }) as string);
   if (f.ext !== "md" && body !== null) html = `<pre><code>${esc(body)}</code></pre>`;
   if (project) html = linkPaths(await linkPeople(html), project, "", await paperPages(project)); else html = await linkPeople(html);
   const where = refs.map((r: any) => r.ref_type === "return" ? `<a href="/projects/${esc(r.project)}/return/${r.ref_id}">return #${r.ref_id}</a>` : r.ref_type === "job" ? `assignment #${r.ref_id}` : `message #${r.ref_id}`).join(", ");

@@ -296,6 +296,8 @@ pre code { padding: 0; background: none; }
 .document img { max-width: 100%; height: auto; }
 .document table { display: block; overflow: auto; }
 .document blockquote { margin: 1.5rem 0; border-left: 1px solid var(--fg); padding: .1rem 1.5rem; color: var(--mut); }
+.document p.display { white-space: pre-wrap; margin-left: 2rem; }   /* an indented formula line in a plain-text manuscript keeps its breaks */
+.document sub, .document sup { line-height: 0; }
 .document hr { border: 0; border-top: 1px solid var(--line); margin: 2.5rem 0; }
 .ledger { padding: 1.25rem 0; border-block: 1px solid var(--line); margin-bottom: 2rem; font-size: .875rem; }
 .ledger b { margin-right: .75rem; text-transform: capitalize; }

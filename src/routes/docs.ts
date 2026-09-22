@@ -11,7 +11,7 @@ import { wantsHtml } from "../lib/negotiate.js";
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { join, extname, dirname, posix } from "node:path";
 import { marked } from "marked";
-import { safeRenderer } from "../lib/markdown.js";
+import { documentRenderer, escapeSource } from "../lib/markdown.js";
 import { challengesFor, challengeBanner } from "../lib/tangent.js";
 import { one, q } from "../db/index.js";
 import { ROOT } from "../lib/paths.js";
@@ -53,7 +53,7 @@ function safePath(root: string, rel: string): string | null {
 }
 
 function chrome(slug: string, title: string, crumbs: string, body: string, extra = "", path = ""): string {
-  return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>${esc(title)} · ${esc(slug)} · solveathome</title>${shareMeta({ title: `${title} · ${slug}`, description: `A research document served by solveathome, with accepted revisions in place and the record one click away.`, path: path || `/projects/${slug}/docs`, type: "article" })}<link rel="icon" href="/favicon.ico"><link rel="stylesheet" href="/assets/app.css?v=26"><script defer src="https://umami.infessa.com/script.js" data-website-id="3c56339a-8792-42b6-b506-628db725c596"></script></head><body data-page="docs"><header data-site-header></header><main class="shell document-main" id="main"><nav class="breadcrumb" aria-label="Breadcrumb"><a href="/projects/${esc(slug)}">${esc(slug)}</a><span>/ documents /</span>${crumbs}</nav>${extra ? `<p class="panel-note">${extra}</p>` : ""}<article class="document">${body}</article></main><footer data-site-footer></footer><script src="/assets/ui.js?v=18"></script><script src="/assets/who.js?v=4"></script><script src="/assets/math.js?v=1"></script><script>loadWho(document.querySelector("#who"));</script></body></html>`;
+  return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>${esc(title)} · ${esc(slug)} · solveathome</title>${shareMeta({ title: `${title} · ${slug}`, description: `A research document served by solveathome, with accepted revisions in place and the record one click away.`, path: path || `/projects/${slug}/docs`, type: "article" })}<link rel="icon" href="/favicon.ico"><link rel="stylesheet" href="/assets/app.css?v=27"><script defer src="https://umami.infessa.com/script.js" data-website-id="3c56339a-8792-42b6-b506-628db725c596"></script></head><body data-page="docs"><header data-site-header></header><main class="shell document-main" id="main"><nav class="breadcrumb" aria-label="Breadcrumb"><a href="/projects/${esc(slug)}">${esc(slug)}</a><span>/ documents /</span>${crumbs}</nav>${extra ? `<p class="panel-note">${extra}</p>` : ""}<article class="document">${body}</article></main><footer data-site-footer></footer><script src="/assets/ui.js?v=18"></script><script src="/assets/who.js?v=4"></script><script src="/assets/math.js?v=1"></script><script>loadWho(document.querySelector("#who"));</script></body></html>`;
 }
 
 function crumbsFor(slug: string, rel: string, edition: Edition = "docs"): string {
@@ -70,10 +70,10 @@ async function renderMarkdown(src: string, slug: string, rel: string, edition: E
   if (m) { for (const line of m[1].split("\n")) { const i = line.indexOf(":"); if (i > 0) ledger[line.slice(0, i).trim()] = line.slice(i + 1).trim(); } src = src.replace(m[0], ""); }
   const title = (/^#\s+(.+)$/m.exec(src)?.[1] ?? rel.split("/").pop() ?? rel).trim();
   const math = protectMath(src);
-  const safe = math.text.replace(/</g, "&lt;").replace(/>/g, "&gt;");
+  const safe = escapeSource(math.text);
   const base = `/projects/${slug}/${edition}/`;
   const dir = posix.dirname(rel);
-  const renderer = safeRenderer();
+  const renderer = documentRenderer();
   const linkFn = renderer.link.bind(renderer);
   renderer.link = ({ href, title, tokens }: any) => {
     let h = String(href ?? "");

@@ -46,6 +46,67 @@ export function safeRenderer(): Renderer {
   return r;
 }
 
+/**
+ * Source text for a render site: `<` always escaped, so raw HTML never gets through; `>` escaped except as a blockquote marker at the start of a line.
+ * Escaping every `>` turned each quoted theorem into literal "&gt;" text (beta2-note, Sep 22); a `>` alone cannot open a tag.
+ */
+export function escapeSource(src: string): string {
+  return src.replace(/</g, "&lt;").replace(/^((?: {0,3}>[ \t]?)+)|>/gm, (m, quote) => quote ?? "&gt;");
+}
+
+const WORD = /[\p{L}\p{N}_]/u;
+/**
+ * Plain-text math as manuscripts write it without TeX delimiters: `p^{β₂+ε}`, `Σ_{m|P(z)}`, `(log w)^κ`, `r_A(m)`, `≪_ε`.
+ * KaTeX only sees `$…$` and `\[…\]`, so this notation showed its braces raw (Chris, Sep 22: beta2-note "does not seem to render as math").
+ * Runs on rendered text, never in code, links' targets or TeX spans (protectMath has taken those out). A single unbraced character is
+ * lifted only when no word character follows it, so `snake_case` stays as written.
+ */
+export function plainNotation(html: string): string {
+  let out = "";
+  for (let i = 0; i < html.length; i++) {
+    const c = html[i];
+    const prev = html[i - 1];
+    if ((c === "^" || c === "_") && prev !== undefined && !/\s/.test(prev) && prev !== "_" && prev !== "^") {
+      const tag = c === "^" ? "sup" : "sub";
+      if (html[i + 1] === "{") {
+        let depth = 0, j = i + 1;
+        for (; j < html.length && j - i < 120; j++) { const d = html[j]; if (d === "\n") break; if (d === "{") depth++; else if (d === "}" && --depth === 0) break; }
+        if (depth === 0 && html[j] === "}" && j > i + 2) { out += `<${tag}>${plainNotation(html.slice(i + 2, j))}</${tag}>`; i = j; continue; }
+      } else {
+        const ch = String.fromCodePoint(html.codePointAt(i + 1) ?? 32);
+        const after = html[i + 1 + ch.length];
+        const next = html[i + 2 + ch.length];
+        // a file name ("run_2.log", "a_b-c") is not notation: the character must end a word, not start a dotted or hyphenated one
+        const ends = after === undefined || (!WORD.test(after) && !((after === "." || after === "-") && next !== undefined && WORD.test(next)));
+        if (/[\p{L}\p{N}]/u.test(ch) && ends) { out += `<${tag}>${ch}</${tag}>`; i += ch.length; continue; }
+      }
+    }
+    out += c;
+  }
+  return out;
+}
+
+/**
+ * The renderer a manuscript or served document is read with: `safeRenderer` plus plain-text math. A paragraph indented by two or three
+ * spaces is a display line (a formula set apart in the source); it keeps its line breaks instead of running into prose. Headings keep
+ * their notation as written, so section ids and the links into them do not move.
+ */
+export function documentRenderer(): Renderer {
+  const r = safeRenderer();
+  const text = r.text.bind(r), heading = r.heading.bind(r);
+  let inHeading = false;
+  r.text = (t: any) => { const html = text(t); return inHeading || ("tokens" in t && t.tokens) ? html : plainNotation(html); };
+  r.heading = (t: any) => { inHeading = true; try { return heading(t); } finally { inHeading = false; } };
+  r.paragraph = (t: any) => {
+    const inner = r.parser.parseInline(t.tokens);
+    if (!/^ {2,3}\S/.test(t.raw)) return `<p>${inner}</p>\n`;
+    const lines = inner.split("\n");
+    const indent = Math.min(...lines.filter((l: string) => l.trim()).map((l: string) => /^ */.exec(l)![0].length));
+    return `<p class="display">${lines.map((l: string) => l.slice(indent).trimEnd()).join("\n")}</p>\n`;
+  };
+  return r;
+}
+
 // Every parse that does not pass its own renderer goes through these.
 marked.use({
   renderer: {

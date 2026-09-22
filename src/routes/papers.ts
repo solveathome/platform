@@ -11,7 +11,7 @@ import { wantsHtml } from "../lib/negotiate.js";
 import { readFileSync, existsSync } from "node:fs";
 import { join } from "node:path";
 import { marked } from "marked";
-import { safeRenderer } from "../lib/markdown.js";
+import { documentRenderer, escapeSource } from "../lib/markdown.js";
 import { challengesFor, challengeBanner } from "../lib/tangent.js";
 import { q, one } from "../db/index.js";
 import { ROOT, PUBLIC_DIR } from "../lib/paths.js";
@@ -40,7 +40,7 @@ export async function listPapers(problemId: number, slug: string) {
     FROM papers p LEFT JOIN returns r ON r.id = p.current_return_id LEFT JOIN users u ON u.id = r.user_id
     WHERE p.problem_id = $1
     ORDER BY CASE p.status WHEN 'reviewed' THEN 0 WHEN 'under_review' THEN 1 WHEN 'draft' THEN 2 ELSE 3 END, p.updated_at DESC`, [problemId]);
-  const inline = (t: string) => { const m = protectMath(String(t ?? "")); return m.restore(marked.parseInline(m.text.replace(/</g, "&lt;").replace(/>/g, "&gt;"), { gfm: true }) as string); };
+  const inline = (t: string) => { const m = protectMath(String(t ?? "")); return m.restore(marked.parseInline(m.text.replace(/</g, "&lt;").replace(/>/g, "&gt;"), { gfm: true, renderer: documentRenderer() }) as string); };
   const records = await documentRecords(problemId);
   const root = join(REPOS, slug), publication = readPublication(root);
   return rows.map((p) => {
@@ -132,10 +132,10 @@ papers.get("/papers/:paper", async (req: any, res) => {
   const baseDir = paper.path ? posix.dirname(paper.path) : "paper";
   const pages = await paperPages(p.slug);
   const docsBase = `/projects/${p.slug}/docs/`;
-  const renderer = safeRenderer();
+  const renderer = documentRenderer();
   const linkFn = renderer.link.bind(renderer);
   renderer.link = ({ href, title, tokens }: any) => { let h = String(href ?? ""); if (!/^(?:[a-z]+:|\/|#)/i.test(h)) { const rel = posix.normalize(posix.join(baseDir, h)).replace(/^\/+/, ""); h = pages.get(rel) ?? docsBase + rel; } return linkFn({ href: h, title, tokens } as any); };
-  const md = (t: string) => { const m = protectMath(t.replace(/<!--[\s\S]*?-->/g, "")); return linkPaths(m.restore(marked.parse(m.text.replace(/</g, "&lt;").replace(/>/g, "&gt;"), { gfm: true, renderer }) as string), p.slug, baseDir, pages); };
+  const md = (t: string) => { const m = protectMath(t.replace(/<!--[\s\S]*?-->/g, "")); return linkPaths(m.restore(marked.parse(escapeSource(m.text), { gfm: true, renderer }) as string), p.slug, baseDir, pages); };
   const body = challengeBanner(await challengesFor(Number(p.id), "paper", paper.slug), `/projects/${p.slug}`) + (source ? await linkPeople(md(source)) : "<p class=\"muted\">No manuscript yet.</p>");
   const page = readFileSync(join(PUBLIC_DIR, "paper.html"), "utf8");
   const meta = recordHtml(paper.timestamps, paper.history_url) + `<p class="paper-meta"><span>Registered: ${timeHtml(paper.created_at)}</span><span>Registry updated: ${timeHtml(paper.updated_at)}</span><span class="paper-status ${esc(paper.status)}">${esc(paper.status_label)}</span>${paper.grade ? `<span>${esc(paper.grade)}</span>` : ""}${paper.version_by ? `<span>current version by @${esc(paper.version_by)}, ${timeHtml(paper.version_at)}${paper.final_rung ? `, ${esc(paper.final_rung)}` : ""}</span>` : ""}<span>${esc(from)}</span></p>`;
