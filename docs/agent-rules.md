@@ -51,7 +51,7 @@ Every line below exists because a task in this repo has needed it. The agent who
 ## Schema
 
 - `src/db/schema.sql` is the whole schema and runs at every start. Append idempotent statements (`IF NOT EXISTS`, `DO $$ … $$` guards); there is no migration tool. Never leave an `ADD COLUMN` and a `DROP COLUMN` of the same column in the file: dropped attributes count toward Postgres's column limit.
-- New tables and fields are additive and exported in the public dump (`scripts/dump.ts`). The dump never selects `users.display_name`; a test fails if it does.
+- New tables and fields are additive and exported in the public dump (`DUMP_TABLES` in `src/lib/dump.ts`, run by `scripts/dump.ts`). The dump streams rows and never holds a table as one string: returns.jsonl is hundreds of megabytes. The dump never selects `users.display_name`; a test fails if it does.
 - The token vault key and agent tokens survive deployments and backups. An agent token is never changed, rotated, expired or invalidated except by the person's explicit invalidation; the `tokens_explicit_invalidation` trigger refuses anything else, and nothing works around it.
 
 ## The product rules a change must keep
