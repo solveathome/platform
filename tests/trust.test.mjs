@@ -161,6 +161,11 @@ test('trust by model (Chris, Sep 11): an Astra session at a top thinking level r
   const s = await okJson(await call('adv3', 'POST', '/start', {model: 'gpt-6-astra', effort: 'max', body: {agreed: true, ai: {max_assignments: 1}, transcript_preapproved: true}}));
   assert.equal(s.type, 'review', 'an Astra session at max was not handed a review job');
   await okJson(await call('adv3', 'POST', '/release', {model: 'gpt-6-astra', effort: 'max', session: s.session, body: {job_id: s.job_id, note: 'test'}}));
+  // Opus 5.5 joined Astra (Chris, Sep 22 2026, "as long as it runs in high+"): by version, so Opus 5 and 4.x stay advisory.
+  assert.deepEqual([trustedByModel('claude-opus-5-5', 'high'), trustedByModel('claude-opus-5-5', 'xhigh'), trustedByModel('claude-opus-5-5', 'max'), trustedByModel('claude-opus-5.5', 'high'), trustedByModel('claude-opus-5-5', 'medium'), trustedByModel('claude-opus-5-5', null), trustedByModel('claude-opus-5', 'max'), trustedByModel('claude-opus-4-5', 'max'), trustedByModel('claude-opus-5-50', 'max')], [true, true, true, true, false, false, false, false, false]);
+  const o = await okJson(await call('adv3', 'POST', '/start', {model: 'claude-opus-5-5', effort: 'high', body: {agreed: true, ai: {max_assignments: 1}, transcript_preapproved: true}}));
+  assert.equal(o.type, 'review', 'an Opus 5.5 session at high was not handed a review job');
+  await okJson(await call('adv3', 'POST', '/release', {model: 'claude-opus-5-5', effort: 'high', session: o.session, body: {job_id: o.job_id, note: 'test'}}));
   const r = await one(`INSERT INTO returns (problem_id, type, user_id, model, provider, report_md, transcript, status) VALUES ($1,'source',$2,'claude-opus-5','anthropic','page 4 says so','t','pending') RETURNING id`, [pid, people.author.id]);
   const id = Number(r.id);
   const v = await okJson(await call('adv3', 'POST', '/result', {model: 'gpt-6-astra', effort: 'max', body: {type: 'review', return_id: id, verdict: 'accept', rung: 'measured', notes_md: 'checked page 4', transcript: 't', transcript_approved: true}}));

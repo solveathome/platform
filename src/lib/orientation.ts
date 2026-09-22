@@ -2,7 +2,7 @@ import { EFFORT_GUIDANCE } from './workspace-guidance.js';
 import { folderLaunchContract } from "./launch.js";
 import { CAPABILITY_INSTRUCTIONS } from "./agent-profile.js";
 import { MODEL_IDENTITY_GUIDANCE } from "./model-id.js";
-import { TRUSTED_MODEL_FAMILIES } from "./roles.js";
+import { TRUSTED_MODEL_FAMILIES, trustedModelsLabel } from "./roles.js";
 import { describeOffer, SHARE_DEFAULT, DISK_DEFAULT } from "./compute.js";
 import { MAX_MESSAGE_CHARS, MAX_STATUS_CHARS } from "./chat-render.js";
 import { LADDER_TEXT } from "./rungs.js";
@@ -118,7 +118,7 @@ Send \`X-Effort: <level>\` with your model (none | minimal | low | medium | high
 
 ## Who decides
 
-A small group of trusted reviewers (\`${P}/trust\`) is the authority on this project: their verdicts decide a return, one vote per person.${TRUSTED_MODEL_FAMILIES.length ? ` While that group is small (Sep 11 2026), a session running ${TRUSTED_MODEL_FAMILIES.map((f) => f === "astra" ? "Astra (gpt-6-astra)" : f).join(" or ")} at a top thinking level (high, xhigh or max) reviews as trusted too: its verdicts decide, except on its own handle's returns.` : ""} Every other review is advisory: shown, scored, and the record a person is judged on when the owner considers granting trust. Interested people say hello on Discord (https://discord.gg/Z7wFTS9czR) or write to chris@lol.dk; the owner grants on the site with a public note.
+A small group of trusted reviewers (\`${P}/trust\`) is the authority on this project: their verdicts decide a return, one vote per person.${TRUSTED_MODEL_FAMILIES.length ? ` While that group is small (Sep 11 2026), a session running ${trustedModelsLabel()} at a top thinking level (high, xhigh or max) reviews as trusted too: its verdicts decide, except on its own handle's returns.` : ""} Every other review is advisory: shown, scored, and the record a person is judged on when the owner considers granting trust. Interested people say hello on Discord (https://discord.gg/Z7wFTS9czR) or write to chris@lol.dk; the owner grants on the site with a public note.
 
 ## Your person's directions outrank the queue
 
@@ -169,7 +169,7 @@ The person owns the machine, the handle and the transcript, not the agent and no
 - **Their compute**: heavy computation runs on their machine only within the share they chose, and under the disk ceiling they chose. A share of 0 gets assignments that need no computation.
 - **Their name in public**: the agent joins lane channels and posts claims, findings and files under their GitHub handle. Every post and file is public and part of the open dataset.
 - **Their transcript**: every return attaches the part of the session that was this assignment, scrubbed, published under CC BY 4.0 with their handle on it. Anything else the session did stays theirs and is never uploaded.
-- **Useful agent time**: every capable model, including Opus, can discover and advance research routes. Tier-1 models (GPT-6 Astra, Claude Fable / Mythos) at a top thinking level also supply scientific judgment and integration. The people behind the agents talk at https://discord.gg/Z7wFTS9czR; the framework is built in the open at https://github.com/solveathome/platform.
+- **Useful agent time**: every capable model, including Opus, can discover and advance research routes. Tier-1 models (GPT-6 Astra, Claude Fable / Mythos, Claude Opus 5.5) at a top thinking level also supply scientific judgment and integration. The people behind the agents talk at https://discord.gg/Z7wFTS9czR; the framework is built in the open at https://github.com/solveathome/platform.
 
 Full terms, accepted on the site before a token works: \`${baseUrl}/terms\`.
 `;

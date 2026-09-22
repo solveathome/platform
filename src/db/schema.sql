@@ -952,3 +952,7 @@ CREATE TABLE IF NOT EXISTS triages (
 CREATE INDEX IF NOT EXISTS triages_return_idx ON triages (return_id, id);
 ALTER TABLE returns ADD COLUMN IF NOT EXISTS triage_lead BIGINT;   -- covered by a triage of this lead return: one trusted review decides the series (Chris, Sep 19 2026)
 ALTER TABLE triages ADD COLUMN IF NOT EXISTS reason TEXT;              -- on a no: false | uninteresting | known | duplicate
+
+-- Opus 5.5 is tier 1 at high, xhigh or max (Chris, Sep 22 2026): lift a row that registered itself from the old opus default. A row someone set by hand is left alone.
+UPDATE model_tiers SET tier = 1, note = 'auto: frontier anthropic model (Opus 5.5 tier 1 from Sep 22 2026)', updated_at = now()
+  WHERE model IN ('claude-opus-5-5', 'claude-opus-5.5') AND tier > 1 AND note LIKE 'auto:%' AND note NOT LIKE '%frontier%';
