@@ -1,9 +1,10 @@
 import { Router } from "express";
 import { wantsHtml } from "../lib/negotiate.js";
 import express from "express";
-import { existsSync, readdirSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { ROOT } from "../lib/paths.js";
+import { dumpDays } from "../lib/dump.js";
 
 /** /dumps : the open dataset. Static files plus a small index. */
 export const dumps = Router();
@@ -18,7 +19,8 @@ dumps.use("/dumps", (req, res, next) => {
   res.status(404).json({ error: "the dataset is not published yet", license: "CC BY 4.0", dumps: [] });
 });
 dumps.get("/dumps", (req, res) => {
-  const days = existsSync(DIR) ? readdirSync(DIR).filter((d) => /^\d{4}-\d{2}-\d{2}$/.test(d)).sort().reverse() : [];
+  // Only days with a manifest are snapshots: a directory without one is a dump run that died and must not list as an empty entry.
+  const days = dumpDays(DIR);
   const entries = days.map((d) => {
     let m: any; try { m = JSON.parse(readFileSync(join(DIR, d, "manifest.json"), "utf8")); } catch { m = { day: d }; }
     // OpenTimestamps proof of the manifest (scripts/attest-dumps.sh on the host): pending until the Bitcoin block is in, then upgraded.

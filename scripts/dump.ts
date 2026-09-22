@@ -1,81 +1,44 @@
 /**
- * Open dataset dump (scope Q16, Q26). Writes data/dumps/<YYYY-MM-DD>/ with one JSONL file per table
- * plus manifest.json (row counts, sha256 per file, license, attribution). Idempotent per day.
- * Run: node dist/scripts/dump.js   (cron on server01, daily)
+ * Open dataset dump: node dist/scripts/dump.js [YYYY-MM-DD]   (cron on the host, daily, inside the live slot via scripts/prod-exec.sh)
+ * Writes data/dumps/<day>/ through src/lib/dump.ts. Rows stream from one REPEATABLE READ transaction, so every table is cut from
+ * the same snapshot and no table is ever held in memory (the export died daily from 2026-09-18 once returns.jsonl outgrew a JS string).
  */
-import { createHash } from "node:crypto";
-import { mkdirSync, writeFileSync, readFileSync, existsSync } from "node:fs";
 import { join } from "node:path";
-import { migrate, q } from "../src/db/index.js";
+import pg from "pg";
+import { migrate } from "../src/db/index.js";
 import { ROOT } from "../src/lib/paths.js";
-import { needsSourceReview } from "../src/lib/document-publication.js";
+import { writeDump } from "../src/lib/dump.js";
 
 const day = process.argv[2] ?? new Date().toISOString().slice(0, 10);
-const dir = join(process.env.DUMP_DIR ?? join(ROOT, "data", "dumps"), day);
+const dumpDir = process.env.DUMP_DIR ?? join(ROOT, "data", "dumps");
 await migrate();
 
-const tables: Record<string, string> = {
-  departments: `SELECT d.id,u.handle,d.created_at FROM departments d JOIN users u ON u.id=d.user_id ORDER BY d.id`,
-  runs: `SELECT s.run_id,s.department_id,p.slug AS project,u.handle,s.model,s.started_at,s.ended_at FROM sessions s JOIN users u ON u.id=s.user_id JOIN problems p ON p.id=s.problem_id WHERE s.run_id IS NOT NULL ORDER BY s.started_at`,
-  asks: `SELECT a.id,p.slug AS project,u.handle AS from_handle,t.handle AS to_handle,a.from_department,a.from_run,a.to_department,a.to_run,a.routing,a.handoff,a.body_md,a.message_id,a.status,a.answer_message_id FROM asks a JOIN problems p ON p.id=a.problem_id JOIN users u ON u.id=a.from_user_id LEFT JOIN users t ON t.id=a.to_user_id ORDER BY a.id`,
-  problems:  `SELECT id, slug, name, repo_url, status_md, discovery_share, research_allocation, created_at FROM problems ORDER BY id`,
-  lanes:     `SELECT l.id, p.slug AS project, l.slug, l.title, l.variant, u.handle AS origin, l.status, l.created_at FROM lanes l JOIN problems p ON p.id = l.problem_id LEFT JOIN users u ON u.id = l.origin_user_id ORDER BY l.id`,
-  jobs:      `SELECT j.id, p.slug AS project, l.slug AS lane, j.type, j.title, j.brief_md, j.git_ref, j.compute_hint, j.budget_hours, j.min_tier, j.quorum, j.parent_return_id, j.purpose, j.research_stage, j.research_route_id, j.research_revision, j.research_source_return_id, j.evidence_return_id, j.check_wait_expired_at, j.avoid_model, j.required_tools, j.required_sources, j.status, u.handle AS assigned_to, j.assigned_at, j.expires_at, j.created_at FROM jobs j JOIN problems p ON p.id = j.problem_id LEFT JOIN lanes l ON l.id = j.lane_id LEFT JOIN users u ON u.id = j.assigned_to ORDER BY j.id`,
-  returns:   `SELECT r.id, r.job_id, p.slug AS project, l.slug AS lane, r.type, u.handle, r.department_id,r.run_id,r.model, r.provider, r.report_md, r.patch, r.transcript, r.cpu_hours, r.hashes, r.author_rung, r.research, r.research_route_id, r.verification_plan, r.verification_fingerprint, r.duplicate_of, r.superseded_by, r.status, r.final_rung, r.created_at FROM returns r JOIN problems p ON p.id = r.problem_id LEFT JOIN lanes l ON l.id = r.lane_id JOIN users u ON u.id = r.user_id ORDER BY r.id`,
-  reviews:   `SELECT rv.id, rv.return_id, rv.review_job_id, u.handle, rv.department_id,rv.run_id,rv.model, rv.provider, rv.verdict, rv.rung, rv.notes_md, rv.trusted, rv.verification, rv.verification_receipt_id, rv.verification_sufficiency_md, rv.verification_conflict_through, rv.verification_conflict_resolution_md, rv.needs_reassessment, rv.weight, rv.agreed_with_outcome, rv.created_at FROM reviews rv JOIN users u ON u.id = rv.user_id ORDER BY rv.id`,
-  channels:  `SELECT c.id, p.slug AS project, c.path, c.title, c.purpose, u.handle AS created_by, c.status, c.created_at FROM channels c JOIN problems p ON p.id = c.problem_id LEFT JOIN users u ON u.id = c.created_by ORDER BY c.id`,
-  messages:  `SELECT m.id, c.path AS channel, u.handle,m.department_id,m.run_id,m.model, m.kind, m.reply_to, m.body_md, m.job_id, m.return_id, m.created_at FROM messages m JOIN channels c ON c.id = m.channel_id JOIN users u ON u.id = m.user_id ORDER BY m.id`,
-  thread_notes: `SELECT n.id, l.slug AS lane, u.handle, n.return_id, n.body_md, n.created_at FROM thread_notes n JOIN lanes l ON l.id = n.lane_id JOIN users u ON u.id = n.user_id ORDER BY n.id`,
-  contributors: `SELECT u.handle, u.created_at, rp.score, rp.accepted, rp.rejected, rp.review_agree, rp.review_disagree, rp.cpu_hours, rp.directions_accepted FROM users u LEFT JOIN reputation rp ON rp.user_id = u.id ORDER BY u.id`,
-  model_tiers: `SELECT model, provider, tier, note, updated_at FROM model_tiers ORDER BY tier, model`,
-  claims:    `SELECT p.slug AS project, c.ledger_id, c.path, c.kind, c.status, c.question, c.verdict, c.origin_handle, c.origin_role, c.origin_model, c.origin_model_role, c.origin_note, c.first_commit, c.last_commit, c.commits, c.corpus, c.model_commits, c.scored FROM claims c JOIN problems p ON p.id = c.problem_id ORDER BY c.path`,
-  credits:   `SELECT c.id, u.handle, c.model, c.provider, c.kind, c.points, c.source_type, c.source_id, c.note, c.created_at FROM credits c JOIN users u ON u.id = c.user_id ORDER BY c.id`,
-  papers: `SELECT p.slug AS project, a.slug, a.title, a.path, a.status, a.current_file_sha, a.current_return_id, a.created_at, a.updated_at FROM papers a JOIN problems p ON p.id = a.problem_id ORDER BY a.id`,
-  document_publications: `SELECT p.slug AS project, d.path, d.sha256, d.prepared_at, d.source, d.recorded_at FROM document_publications d JOIN problems p ON p.id = d.problem_id ORDER BY d.id`,
-  document_versions: `SELECT p.slug AS project, d.path, d.version, d.content_sha, d.base_sha, d.return_id, d.created_at, u.handle AS author, d.author_model, d.verified_by, d.verified_models FROM document_versions d JOIN problems p ON p.id = d.problem_id LEFT JOIN users u ON u.id = d.author_user_id ORDER BY d.id`,
-  research_routes: `SELECT rr.*,p.slug AS project FROM research_routes rr JOIN problems p ON p.id=rr.problem_id ORDER BY rr.id`,
-  research_events: `SELECT e.* FROM research_events e ORDER BY e.id`,
-  research_dependencies: `SELECT d.* FROM research_dependencies d ORDER BY d.route_id,d.return_id`,
-  return_dependencies: `SELECT * FROM return_dependencies ORDER BY return_id,depends_on_id`,
-  review_history: `SELECT * FROM review_history ORDER BY id`,
-  verification_runs: `SELECT v.* FROM verification_runs v ORDER BY v.id`,
-  files:     `SELECT f.sha256, u.handle, f.model, f.name, f.ext, f.bytes, f.created_at, f.deleted_at, f.deleted_note, (SELECT json_agg(json_build_object('type', r.ref_type, 'id', r.ref_id)) FROM file_refs r WHERE r.file_sha = f.sha256) AS refs FROM files f JOIN users u ON u.id = f.user_id ORDER BY f.created_at`,
-};
-
-const files: Record<string, { rows: number; bytes: number; sha256: string }> = {};
-const snapshot: Record<string, any[]> = {};
-// Review all public prose before writing any files, so a rejected export cannot partially replace a day's dump.
-const prose = new Set(["status_md", "brief_md", "report_md", "patch", "transcript", "notes_md", "body_md", "question", "verdict", "contribution_md", "prior_art_md", "uncertainty_md", "evidence_md", "observed", "verification_sufficiency_md", "verification_conflict_resolution_md"]);
-const structuredProse = new Set(["research", "verification_plan", "next_step", "obstacle", "detail", "details", "review"]);
-for (const [name, sql] of Object.entries(tables)) {
-  const rows = await q(sql);
-  for (const row of rows) for (const [field, value] of Object.entries(row)) {
-    if ((prose.has(field) && typeof value === "string" && needsSourceReview(value)) || (structuredProse.has(field) && value != null && needsSourceReview(JSON.stringify(value)))) {
-      throw new Error(`Export withheld pending source review: ${name} ${row.id ?? row.path ?? ""} ${field}`);
-    }
-  }
-  snapshot[name] = rows;
+// A client of its own: the pool's 15 s statement timeout is for public requests, and a cursor needs one connection for the whole run.
+const client = new pg.Client({ connectionString: process.env.DATABASE_URL });
+await client.connect();
+try {
+  await client.query("BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY");
+  await client.query("SET LOCAL statement_timeout = '10min'");
+  const manifest = await writeDump({
+    day, dumpDir,
+    rows: async function* (sql) {
+      await client.query(`DECLARE dump_rows NO SCROLL CURSOR FOR ${sql}`);
+      try {
+        for (;;) {
+          const { rows } = await client.query("FETCH FORWARD 50 FROM dump_rows");
+          if (!rows.length) break;
+          yield* rows;
+        }
+      } finally { await client.query("CLOSE dump_rows"); }
+    },
+  });
+  await client.query("COMMIT");
+  console.log(`dump ${day}: ` + Object.entries(manifest.files).map(([k, v]) => `${k}=${v.rows}`).join(" "));
+} catch (error) {
+  await client.query("ROLLBACK").catch(() => {});
+  console.error(`dump ${day} failed: ${error instanceof Error ? error.message : String(error)}`);
+  process.exitCode = 1;
+} finally {
+  await client.end();
 }
-mkdirSync(dir, { recursive: true });
-for (const [name, rows] of Object.entries(snapshot)) {
-  const body = rows.map((r) => JSON.stringify(r)).join("\n") + (rows.length ? "\n" : "");
-  const file = join(dir, `${name}.jsonl`);
-  writeFileSync(file, body);
-  files[name] = { rows: rows.length, bytes: Buffer.byteLength(body), sha256: createHash("sha256").update(body).digest("hex") };
-}
-const manifest = {
-  dataset: "solveathome",
-  day,
-  generated_at: new Date().toISOString(),
-  license: "CC BY 4.0",
-  attribution: "solveathome.org and the handles named on each entry (fields: handle, assigned_to, origin, created_by)",
-  homepage: "https://solveathome.org",
-  note: "Every job brief, return (with scrubbed transcript), review verdict and chat message, including attempts that failed. Rungs: proven > verified > measured > heuristic > conjectured > refuted; a return's final_rung is assigned by trusted review; research investment state and worker-reported execution receipts are separate, author_rung is the author's claim.",
-  files,
-};
-writeFileSync(join(dir, "manifest.json"), JSON.stringify(manifest, null, 2) + "\n");
-// latest pointer
-const latest = join(dir, "..", "latest.json");
-writeFileSync(latest, JSON.stringify({ day, manifest: `${day}/manifest.json` }) + "\n");
-console.log(`dump ${day}: ` + Object.entries(files).map(([k, v]) => `${k}=${v.rows}`).join(" "));
-process.exit(0);
+process.exit();

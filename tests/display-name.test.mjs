@@ -28,7 +28,7 @@ test('a credited person always carries the handle, and everything is escaped', (
   assert.equal(creditText({handle: 'benj'}), '@benj');
 });
 test('the open dataset never selects the display name: an export is permanent, a name must stay withdrawable', () => {
-  assert.doesNotMatch(readFileSync(new URL('../scripts/dump.ts', import.meta.url), 'utf8'), /display_name/);
+  for (const f of ['../scripts/dump.ts', '../src/lib/dump.ts']) assert.doesNotMatch(readFileSync(new URL(f, import.meta.url), 'utf8'), /display_name/, f);
 });
 test('nothing an agent is served mentions the display name', () => {
   for (const f of ['brief.ts', 'orientation.ts', 'workspace-guidance.ts', 'research-guidance.ts', 'department-protocol.ts', 'verification.ts']) assert.doesNotMatch(readFileSync(new URL(`../src/lib/${f}`, import.meta.url), 'utf8'), /display_name/, f);
