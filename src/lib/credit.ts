@@ -150,6 +150,18 @@ export async function payReviewers(ret: any, reviews: Array<{ user_id: number; v
     if (ret.status === "accepted" && r.verdict === "accept" && r.also_credit && Object.values(r.also_credit).some((v) => Array.isArray(v) && v.length)) await pay(r.user_id, r.model, r.provider, pid, lid, "review", POINTS.review_also_credit_bonus, "return", rid, "restored missing attribution");
   }
 }
+/**
+ * A triage is paid like a read review of the return it read, whatever its answer (Chris, Sep 23 2026, #sah-triage-close-and-reward:
+ * "Pay each triage like a read review of the return, whatever the answer (10 for an explore; each covered return at the floor of 5)"):
+ * a triage no closes a path as a verdict would. The return it read pays its review share at read depth; each return its answer covered
+ * pays the floor. Once per triager per return; a later review of the same return by the same person is paid on its own.
+ */
+export async function payTriage(ret: any, t: { user_id: number; model: string | null; provider: string | null; effort?: string | null }, covered: boolean, escalated: boolean): Promise<void> {
+  if (await one(`SELECT 1 FROM credits WHERE source_type = 'return' AND source_id = $1 AND kind = 'review' AND user_id = $2 AND note LIKE 'triage%'`, [String(ret.id), t.user_id])) return;
+  const base = POINTS.result[ret.type] ?? 20;
+  const points = covered ? POINTS.review_min : Math.max(POINTS.review_min, Math.round(base * POINTS.review_share * POINTS.review_depth.read * (await frontierMultiplier(t.model, t.effort))));
+  await pay(t.user_id, t.model, t.provider, ret.problem_id, ret.lane_id, "review", points, "return", ret.id, `triage of ${/^[aeiou]/.test(String(ret.type)) ? "an" : "a"} ${ret.type}${covered ? " (covered by the series answer)" : ""}, ${escalated ? "escalated" : "recorded as it stands"}`);
+}
 /** A final rejection pays the reviewers who called it; the author gets nothing. */
 export async function payRejectedReturn(ret: any, reviews: Parameters<typeof payReviewers>[1]): Promise<void> {
   await payReviewers({ ...ret, status: "rejected" }, reviews);

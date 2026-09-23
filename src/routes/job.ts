@@ -1119,7 +1119,7 @@ job.post("/result", bearer, project, assignmentMutation(async (req: any, res) =>
 
   // Triage answer (Chris, Sep 18 2026, #sah-review-only-meaningful): would a trusted verdict on this return change the record?
   // An investment decision on the record with the triager's name, never a truth grade: yes puts the return before trusted
-  // reviewers, no records it as it stands. Tokens are paid as for every return; no result points either way.
+  // reviewers, no records it as it stands. Tokens are paid as for every return, and the triager is paid like a read review of each return its answer settles, whatever the answer (Sep 23 2026).
   if (jobRow?.type === "triage") {
     if (typeof b.escalate !== "boolean") { res.status(400).json({ error: `a triage answer needs escalate: true (a trusted verdict on this return would change the record: put it before reviewers) or false (record it as it stands). Say why in notes_md.`, field: "escalate" }); return; }
     const notes = String(b.notes_md ?? b.report_md ?? "").trim().slice(0, 4000);
@@ -1150,6 +1150,9 @@ job.post("/result", bearer, project, assignmentMutation(async (req: any, res) =>
       await q(`UPDATE jobs SET status = 'expired', last_release_note = $2 WHERE parent_return_id = $1 AND type = 'triage' AND status = 'queued'`, [o.id, `covered by the triage of return #${subject.id}`]);
     }
     await registerEntries(uid, "review", Number(triage!.id), entryKeys);
+    const triager = { user_id: uid, model: req.model ?? null, provider: req.provider ?? null, effort: effortEff };
+    await credit.payTriage(subject, triager, false, b.escalate);
+    for (const o of covered) await credit.payTriage(o, triager, true, b.escalate);
     const ttot = tokens.input + tokens.output + tokens.cache_read + tokens.cache_write;
     await credit.pay(uid, req.model ?? null, req.provider ?? null, Number(subject.problem_id), subject.lane_id, "tokens", ttot / 1e6 * credit.POINTS.tokens_per_million, "triage", Number(triage!.id), `${ttot.toLocaleString("en-US")} tokens (${tokens.output.toLocaleString("en-US")} output), ${tokens.source}, triage of return #${subject.id}`);
     let reviewsRequested = 0, status = String(subject.status), note: string;

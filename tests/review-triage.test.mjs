@@ -137,7 +137,7 @@ test('who triages: tier 2 or better, never trusted, never the author\'s handle o
   assert.notEqual(tr.type, 'triage'); await release(tr);
 });
 
-test('escalate: the review jobs are made and the review brief carries the triage note; the triager is paid tokens only', async () => {
+test('escalate: the review jobs are made and the review brief carries the triage note; the triager is paid like a read review, plus tokens', async () => {
   const r = await askForReview();
   const a = await start({who: tokens.triager, model: 'claude-opus-5', effort: 'high'});
   assert.equal(a.type, 'triage');
@@ -155,8 +155,12 @@ test('escalate: the review jobs are made and the review brief carries the triage
   const page = ok(await call(`/return/${r.return_id}?json=1`));
   assert.equal(page.in_triage, false); assert.equal(page.triage.length, 1); assert.equal(page.triage[0].escalate, true);
   assert.ok(page.decisions.some(d => d.by === 'triage' && d.status === 'pending'));
-  const paid = await q(`SELECT kind, points, source_type FROM credits WHERE user_id=$1 AND problem_id=$2`, [triager, pid]);
-  assert.ok(paid.every(c => c.kind === 'tokens' && c.source_type === 'triage'), JSON.stringify(paid));
+  // Chris, Sep 23 2026: "Pay each triage like a read review of the return, whatever the answer".
+  const paid = await q(`SELECT kind, points, source_type, source_id, note FROM credits WHERE user_id=$1 AND problem_id=$2`, [triager, pid]);
+  assert.ok(paid.every(c => (c.kind === 'tokens' && c.source_type === 'triage') || c.kind === 'review'), JSON.stringify(paid));
+  const share = paid.filter(c => c.kind === 'review');
+  assert.equal(share.length, 1); assert.equal(Number(share[0].points), 15, 'a quarter of a direction\'s 60'); assert.equal(share[0].source_id, String(r.return_id)); assert.match(share[0].note, /^triage of a direction, escalated/);
+  assert.equal((await q(`SELECT 1 FROM credits WHERE source_type='return' AND source_id=$1 AND kind='result'`, [String(r.return_id)])).length, 0, 'no result points from a triage');
   // The trusted reviewer now finds the review.
   const t = await start({who: tokens.trusted, model: 'claude-fable-5-1', effort: 'max'});
   assert.equal(t.type, 'review'); assert.equal(Number((await one(`SELECT parent_return_id FROM jobs WHERE id=$1`, [t.job_id])).parent_return_id), r.return_id);
@@ -257,6 +261,11 @@ test('a series read as one: a triage covers other returns of the same lane; one 
     assert.ok((await q(`SELECT note FROM return_decisions WHERE return_id=$1`, [id])).some(d => /uninteresting; recorded as it stands/.test(d.note)));
   }
   assert.equal((await jobsOf(five.return_id, 'triage'))[0].status, 'expired');
+  // A no pays the triager as a yes does: the lead its read-review share, each covered return the floor.
+  const pts = async id => (await q(`SELECT points FROM credits WHERE source_type='return' AND source_id=$1 AND kind='review' AND user_id=$2 AND note LIKE 'triage%'`, [String(id), second])).map(c => Number(c.points));
+  assert.deepEqual(await pts(leadId), [15]); assert.deepEqual(await pts(five.return_id), [5]);
+  assert.deepEqual(await pts(two.return_id), [], 'the second triager did not read #two');
+  assert.deepEqual((await q(`SELECT points FROM credits WHERE source_type='return' AND source_id=$1 AND kind='review' AND user_id=$2 AND note LIKE 'triage%'`, [String(two.return_id), triager])).map(c => Number(c.points)), [5], 'the first triager was paid the floor for each return it covered');
   assert.equal((await answer(b, {escalate: false, reason: 'boring', notes_md: 'A second answer with a made-up reason is refused before anything.'}, tokens.second)).status, 409);
 });
 
@@ -277,7 +286,9 @@ test('a triage no closes what the return held: its job is recorded, what was ope
   assert.equal((await one(`SELECT status FROM jobs WHERE id=$1`, [stray.id])).status, 'expired', 'nothing stays queued on a settled return');
   const paper = await one(`SELECT status FROM papers WHERE problem_id=$1 AND slug='p-triage'`, [pid]);
   assert.ok(paper, 'a recorded paper keeps its registry entry'); assert.equal(paper.status, 'proposed');
-  assert.equal((await q(`SELECT 1 FROM credits WHERE source_type='return' AND source_id=$1 AND kind IN ('result','review')`, [String(r.return_id)])).length, 0);
+  assert.equal((await q(`SELECT 1 FROM credits WHERE source_type='return' AND source_id=$1 AND kind='result'`, [String(r.return_id)])).length, 0, 'no result points for the author');
+  const share = await q(`SELECT user_id, points, note FROM credits WHERE source_type='return' AND source_id=$1 AND kind='review'`, [String(r.return_id)]);
+  assert.deepEqual(share.map(c => [Number(c.user_id), Number(c.points)]), [[triager, 25]], 'only the triager, a read review of a paper'); assert.match(share[0].note, /recorded as it stands/);
   assert.deepEqual(await one(`SELECT accepted, rejected, score FROM reputation WHERE user_id=$1`, [author]), repBefore);
 });
 
@@ -393,4 +404,14 @@ test('ready: a session that is not trusted gets 0 for reviews only; work is all 
   const b = await ready(tokens.second, 'claude-opus-5');
   assert.equal(b.ready, 0); assert.equal(b.trusted, false);
   assert.equal((await call('/ready?work=everything', {who: tokens.second, model: 'claude-opus-5-5', effort: 'high'})).status, 400);
+});
+
+test('a triage is paid once per triager per return, whatever calls it again (the backfill relies on it)', async () => {
+  const {payTriage} = await import('../src/lib/credit.ts');
+  const r = await askForReview();
+  const ret = await one(`SELECT * FROM returns WHERE id=$1`, [r.return_id]);
+  const t = {user_id: second, model: 'claude-opus-5', provider: 'anthropic', effort: 'high'};
+  await payTriage(ret, t, false, false); await payTriage(ret, t, true, true);
+  const rows = await q(`SELECT points, note FROM credits WHERE source_type='return' AND source_id=$1 AND user_id=$2`, [String(r.return_id), second]);
+  assert.equal(rows.length, 1); assert.equal(Number(rows[0].points), 15); assert.match(rows[0].note, /recorded as it stands/);
 });
