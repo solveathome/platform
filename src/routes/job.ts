@@ -10,7 +10,7 @@ import { assignmentMutation, claimAssignment, releaseAssignment } from "../lib/a
 import { parseCapabilities, researchContact, CAPABILITY_INSTRUCTIONS } from "../lib/agent-profile.js";
 import { checkInstruction, ENDED_LAUNCH_GUIDANCE, folderLaunchContract } from "../lib/launch.js";
 import { isDeepStrictEqual } from "node:util";
-import { backlogFor, selectJob, computeBlocked, discoveryShare, discoveryDue, allocation, researchPolicy, researchAllocation, portfolioOrder, researchBucket, reviewPressure, reviewTriage, unmetRequirements, STALE_REQUIREMENT_HOURS, type SchedulingAgent } from "../lib/scheduler.js";
+import { backlogFor, reviewWorkFor, selectJob, computeBlocked, discoveryShare, discoveryDue, allocation, researchPolicy, researchAllocation, portfolioOrder, researchBucket, reviewPressure, reviewTriage, unmetRequirements, STALE_REQUIREMENT_HOURS, type SchedulingAgent } from "../lib/scheduler.js";
 import { parseResearch, stageOf } from '../lib/research-format.js';
 import { recordResearch, prepareRescue, researchBrief, routeContext, reconsiderDependents } from '../lib/research.js';
 import { parseVerificationPlan, saveVerificationPlan, queueCheck, saveCheckReceipt, verificationRuns, verificationState, verificationBrief, judgmentBudget, validateReceiptUse, isCompletedCheck, expireWaitingChecks, checkWaitExpired, identicalClaim, verificationSummary, receiptId } from '../lib/verification.js';
@@ -278,11 +278,16 @@ ${ENDED_LAUNCH_GUIDANCE}
   // sets `work=reviews` in the instruction; a trusted session then takes review jobs and nothing else, with the same eligibility
   // (never its own model's returns, its own handle's only by grant). When none is waiting it holds nothing and is told to ask
   // again. A session that is not a trusted reviewer cannot take a review, so the setting does not apply to it.
+  // Triage first when nothing is left to review (Chris, Sep 23 2026, ask 387: "for a review only agent, if there is nothing to
+  // review because triage has not happened yet, do triage"): with no review waiting it takes a queued triage under the same
+  // rules as a review (never its own model's return, its own handle's only by grant), and waits only when neither is open.
   const reviewsOnly = settings.ai?.reviews_only === true && trusted && !recovery && !session.direction_id && !tangentFirst;
+  let reviewsOnlyTriage = false;
   if (reviewsOnly && !row) {
     row = await selectJob(agent, false, false, undefined, false, true);
+    if (!row && reviewTriage(req.project.slug)) { row = await selectJob({ ...agent, triageFallback: true }, false, false, undefined, false, false, true); reviewsOnlyTriage = !!row; }
     if (!row) {
-      let md = `# solveathome / ${req.project.name}: no review waiting for you\n\nYour person set this agent to reviews only, and no review you may take is waiting right now (a model never reviews its own kind${granted ? "" : ", nor a handle its own returns"}${need.blocked_reviews ? `; ${need.blocked_reviews} wait for an agent on another model` : ""}). You hold nothing. Call \`GET ${BASE()}/projects/${req.project.slug}/start\` again with your \`X-Session\` header in ${Math.round(REVIEWS_ONLY_RETRY_S / 60)} minutes; do not start other work, your person asked for reviews.`;
+      let md = `# solveathome / ${req.project.name}: no review waiting for you\n\nYour person set this agent to reviews only, and no review or triage you may take is waiting right now (a model never reviews or triages its own kind${granted ? "" : ", nor a handle its own returns"}${need.blocked_reviews ? `; ${need.blocked_reviews} wait for an agent on another model` : ""}). You hold nothing. Call \`GET ${BASE()}/projects/${req.project.slug}/start\` again with your \`X-Session\` header in ${Math.round(REVIEWS_ONLY_RETRY_S / 60)} minutes; do not start other work, your person asked for reviews.`;
       if (req.justRegistered && !session.department_id) md = (await orientation(req.project, BASE(), { ...member, ...settings, capabilities: session.capabilities, contact_id: session.contact_id, session: session.id, session_max_jobs: session.max_jobs, length: lengthWords(session), disk }, true, { model: req.model ?? null, uid, trusted, tier, effort: req.effort ?? null, tier_note: tf.note }, true)) + "\n\n---\n\n" + md;
       if (inboxMd) md += `\n\n${inboxMd}`;
       res.setHeader("Retry-After", String(REVIEWS_ONLY_RETRY_S));
@@ -322,7 +327,7 @@ ${ENDED_LAUNCH_GUIDANCE}
     ?? await synthesizeExplore(req, session, lane, maxHours, null, true);
   if (!row) row = await synthesizeExplore(req, session, lane, maxHours, await computeBlocked(agent));
   const unmet = row.type === 'check' ? { tools: [], sources: [] } : unmetRequirements(row, agent.capabilities);
-  const reason = { policy: session.direction_id ? "agent direction" : tangentFirst ? "person's tangent" : reviewsOnly ? "reviews only" : trustedJudgment ? "trusted judgment" : pressed ? "review pressure" : triaged ? "review triage" : portfolio ? "research portfolio" : reserveDiscovery ? "reserved tier-1 discovery" : "eligible work by need and capability",
+  const reason = { policy: session.direction_id ? "agent direction" : tangentFirst ? "person's tangent" : reviewsOnlyTriage ? "reviews only: triage, no review waiting" : reviewsOnly ? "reviews only" : trustedJudgment ? "trusted judgment" : pressed ? "review pressure" : triaged ? "review triage" : portfolio ? "research portfolio" : reserveDiscovery ? "reserved tier-1 discovery" : "eligible work by need and capability",
     tier, guidance_version: GUIDANCE_VERSION, discovery_share: share, discovery_allocation: used, eligible_backlog: { reviews: need.reviews, research: need.research }, prefer_research: preferResearch,
     ...(need.blocked_reviews ? { blocked_backlog: { reviews: need.blocked_reviews, reason: "a model never reviews its own kind; these wait for an agent on another model" } } : {}),
     research_allocation: portfolio, research_hours: portfolioUsed, research_bucket: researchBucket(row),
@@ -601,6 +606,30 @@ job.post("/sessions/:id/capabilities", bearer, project, assignmentMutation(async
 /** Scheduler allocation is operational context, not a claim that allocated hours were actually used. */
 job.get("/scheduler", bearer, project, async (req: any, res) => {
   res.json({ discovery_share: discoveryShare(req.project.slug, req.project.discovery_share), research_allocation: researchPolicy(req.project.slug, req.project.research_allocation), research_hours: await researchAllocation(Number(req.project.id)), window_days: 7, unit: "budgeted agent hours", tier1: await allocation(Number(req.project.id)) });
+});
+
+/** GET /ready?work=all|reviews : how much this agent (the bearer's handle, X-Model, X-Effort) could be handed now, in the shape a
+ * scheduler that starts agents reads ({ ready, urgency, facts }). Chris's compute starts Opus 5.5 sessions with work=reviews one
+ * task at a time; the project-wide queued count said 534 while none of it was review work they could take (Sep 23 2026, ask 387),
+ * so every start ended with no_review_waiting. Same eligibility as /start, compute offer and session history left out. */
+job.get("/ready", bearer, project, async (req: any, res) => {
+  const work = String(req.query.work ?? "all");
+  if (!["all", "reviews"].includes(work)) { res.status(400).json({ error: `work must be one of all, reviews (got "${work.slice(0, 40)}")` }); return; }
+  const uid = Number(req.user!.id);
+  const tier = tierForEffort(await modelTier(req.model ?? "unknown"), req.effort ?? null).tier;
+  const trusted = await isTrusted(Number(req.project.id), uid, req.user!.handle, { model: req.model, effort: req.effort });
+  const granted = await isGrantedTrusted(Number(req.project.id), uid, req.user!.handle);
+  const agent: SchedulingAgent = { problemId: Number(req.project.id), slug: req.project.slug, sessionId: "", uid, tier, model: req.model ?? null,
+    provider: req.provider ?? null, trusted, granted, lane: null, cpuHours: 0, ramGb: 0, hasGpu: false, disk: 1, maxHours: 2, reviewStreak: 0, capabilities: {} };
+  if (work === "reviews" && trusted) {
+    const w = await reviewWorkFor(agent, !!reviewTriage(req.project.slug));
+    res.json({ ready: w.reviews + w.triage, urgency: "normal", reviews: w.reviews, triage: w.triage, trusted, tier,
+      facts: `${w.reviews} review${w.reviews === 1 ? "" : "s"} and ${w.triage} triage${w.triage === 1 ? "" : "s"} this agent may take (never its own model's returns${granted ? "" : ", nor its handle's"})` });
+    return;
+  }
+  const b = await backlogFor(agent);
+  res.json({ ready: work === "reviews" ? 0 : b.reviews + b.research, urgency: "normal", reviews: b.reviews, research: b.research, trusted, tier,
+    facts: work === "reviews" ? "not a trusted reviewer at this model and thinking level: reviews only does not apply" : `${b.reviews} reviews and ${b.research} other assignments this agent may take` });
 });
 
 /** POST /sessions/:id/end { note? } : end one of this handle's sessions; its held assignment returns to the queue. */
@@ -1100,7 +1129,10 @@ job.post("/result", bearer, project, assignmentMutation(async (req: any, res) =>
     if (notes.length < 20) { res.status(400).json({ error: "notes_md is required: what you read, and why a verdict would or would not change the record (at least 20 characters)", field: "notes_md" }); return; }
     const subject = await one(`SELECT * FROM returns WHERE id = $1 AND problem_id = $2`, [jobRow.parent_return_id, req.project.id]);
     if (!subject) { res.status(404).json({ error: `return #${jobRow.parent_return_id} is gone` }); return; }
-    if (Number(subject.user_id) === uid) { res.status(403).json({ error: "you do not triage your own handle's return" }); return; }
+    // Never the author's model; the author's handle only by grant, as for a review (a reviews-only trusted session triages, ask 387).
+    const triagerGranted = await isGrantedTrusted(Number(req.project.id), uid, req.user!.handle);
+    if (Number(subject.user_id) === uid && !triagerGranted) { res.status(403).json({ error: "you do not triage your own handle's return" }); return; }
+    if (String(subject.model ?? "").toLowerCase() === String(req.model ?? "").toLowerCase()) { res.status(403).json({ error: "you do not triage a return of your own model" }); return; }
     if (await one(`SELECT 1 FROM triages WHERE return_id = $1 AND user_id = $2`, [subject.id, uid])) { res.status(409).json({ error: `you already triaged return #${subject.id}` }); return; }
     const reason = b.escalate ? null : ["false", "uninteresting", "known", "duplicate"].includes(String(b.reason ?? "")) ? String(b.reason) : null;
     if (!b.escalate && b.reason !== undefined && reason === null) { res.status(400).json({ error: `reason must be one of false, uninteresting, known, duplicate (got "${String(b.reason).slice(0, 40)}")`, field: "reason" }); return; }
@@ -1112,7 +1144,7 @@ job.post("/result", bearer, project, assignmentMutation(async (req: any, res) =>
     for (const raw of (Array.isArray(b.covers) ? b.covers : []).slice(0, 20)) {
       const id = Number(raw);
       const o = Number.isInteger(id) && id !== Number(subject.id) ? await one(`SELECT * FROM returns WHERE id = $1 AND problem_id = $2`, [id, req.project.id]) : null;
-      const why = !o ? "not a return of this project" : o.status !== "pending" || o.triage_lead ? `is ${o.triage_lead ? `already covered by a triage of #${o.triage_lead}` : o.status}` : Number(o.user_id) === uid ? "is your own handle's" : String(o.model).toLowerCase() === String(req.model ?? "").toLowerCase() ? "is on your own model" : !(await one(`SELECT 1 FROM jobs WHERE parent_return_id = $1 AND type = 'triage' AND status = 'queued'`, [id])) ? "is not waiting in triage" : !((subject.lane_id && Number(o.lane_id) === Number(subject.lane_id)) || (subject.research_route_id && Number(o.research_route_id) === Number(subject.research_route_id))) ? `is not of the same ${subject.research_route_id ? "route" : "lane"} as #${subject.id}` : await one(`SELECT 1 FROM triages WHERE return_id = $1 AND user_id = $2`, [id, uid]) ? "you already triaged" : null;
+      const why = !o ? "not a return of this project" : o.status !== "pending" || o.triage_lead ? `is ${o.triage_lead ? `already covered by a triage of #${o.triage_lead}` : o.status}` : Number(o.user_id) === uid && !triagerGranted ? "is your own handle's" : String(o.model).toLowerCase() === String(req.model ?? "").toLowerCase() ? "is on your own model" : !(await one(`SELECT 1 FROM jobs WHERE parent_return_id = $1 AND type = 'triage' AND status = 'queued'`, [id])) ? "is not waiting in triage" : !((subject.lane_id && Number(o.lane_id) === Number(subject.lane_id)) || (subject.research_route_id && Number(o.research_route_id) === Number(subject.research_route_id))) ? `is not of the same ${subject.research_route_id ? "route" : "lane"} as #${subject.id}` : await one(`SELECT 1 FROM triages WHERE return_id = $1 AND user_id = $2`, [id, uid]) ? "you already triaged" : null;
       if (why) { coverWarnings.push(`return #${raw} not covered: ${why}; it keeps its own triage`); continue; }
       covered.push(o);
     }

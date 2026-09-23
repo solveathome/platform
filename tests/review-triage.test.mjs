@@ -282,3 +282,42 @@ test('the triage brief names what the record shows about the return', async () =
   assert.match(brief, /type `direction`/); assert.match(brief, /no verification package/); assert.doesNotMatch(brief, /Budget/);
   assert.match(brief, /nothing goes before a trusted reviewer until a first reader has said it is worth it/); assert.match(brief, /"covers": \[/);
 });
+
+// Reviews only falls back to triage (Chris, Sep 23 2026, ask 387: "for a review only agent, if there is nothing to review because
+// triage has not happened yet, do triage"). Under the review rules: never the author's model, the author's handle only by grant.
+const reviewsOnly = async (who, model = 'claude-opus-5-5') => ({...ok(await call('/start?share=0&work=reviews', {launch: randomUUID(), who, model, effort: 'high'})), _as: {who, model, effort: 'high'}});
+const ready = async (who, model = 'claude-opus-5-5') => ok(await call('/ready?work=reviews', {who, model, effort: 'high'}));
+
+test('reviews only: with no review waiting a trusted session takes the triage, answers it, and then the review it opened', async () => {
+  const r = await askForReview();
+  assert.deepEqual(await ready(tokens.second), {ready: 1, urgency: 'normal', reviews: 0, triage: 1, trusted: true, tier: 1, facts: '0 reviews and 1 triage this agent may take (never its own model\'s returns, nor its handle\'s)'});
+  const a = await reviewsOnly(tokens.second);
+  assert.equal(a.type, 'triage'); assert.equal(a.assignment_reason.policy, 'reviews only: triage, no review waiting');
+  ok(await answer(a, {escalate: true, notes_md: 'A finite claim a later route step would cite; a verdict decides it.'}, tokens.second));
+  assert.equal((await jobsOf(r.return_id, 'review')).length > 0, true, 'the yes opened the review');
+  const b = await reviewsOnly(tokens.trusted);
+  assert.equal(b.type, 'review'); assert.equal(b.assignment_reason.policy, 'reviews only');
+});
+
+test('reviews only: never a triage of its own model; its own handle only by grant; nothing to take is still no_review_waiting and ready 0', async () => {
+  await askForReview(tokens.author, 'claude-opus-5-5');
+  const own = await reviewsOnly(tokens.second);
+  assert.equal(own.state, 'no_review_waiting'); assert.equal(own.job_id, undefined);
+  assert.equal((await ready(tokens.second)).ready, 0);
+  const mine = await askForReview(tokens.second);
+  assert.equal((await ready(tokens.second)).ready, 0, 'no grant: its own handle is not its to triage');
+  await q(`UPDATE jobs SET status='expired' WHERE parent_return_id=$1`, [mine.return_id]);
+  const granted = await askForReview(tokens.trusted);
+  assert.equal((await ready(tokens.trusted)).triage, 1, 'a grant triages its own handle\'s return');
+  const t = await reviewsOnly(tokens.trusted);
+  assert.equal(t.type, 'triage'); assert.equal(Number((await one(`SELECT parent_return_id FROM jobs WHERE id=$1`, [t.job_id])).parent_return_id), Number(granted.return_id));
+  ok(await answer(t, {escalate: false, reason: 'uninteresting', notes_md: 'A progress note that closes nothing; the record stands as it is.'}, tokens.trusted));
+  assert.equal((await one(`SELECT status FROM returns WHERE id=$1`, [granted.return_id])).status, 'recorded');
+});
+
+test('ready: a session that is not trusted gets 0 for reviews only; work is all or reviews', async () => {
+  await askForReview();
+  const b = await ready(tokens.second, 'claude-opus-5');
+  assert.equal(b.ready, 0); assert.equal(b.trusted, false);
+  assert.equal((await call('/ready?work=everything', {who: tokens.second, model: 'claude-opus-5-5', effort: 'high'})).status, 400);
+});
