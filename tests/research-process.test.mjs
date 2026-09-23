@@ -458,11 +458,11 @@ test('itemised controls, stated limits and declared tools feed a summary generat
   assert.equal((await submit('runner',{check_receipt:{...base.check_receipt,controls:[{name:'x',detected:'yes'}]}},a)).status,400);
   assert.equal((await submit('runner',{check_receipt:{...base.check_receipt,controls:[]}},a)).status,400);
   assert.equal((await submit('runner',{check_receipt:{...base.check_receipt,expected_visible:'no'}},a)).status,400);
-  ok(await submit('runner',{check_receipt:{...base.check_receipt,expected_visible:false,controls:[{name:'term three changed to 9',detected:true,note:'exit 1: mismatch'},{name:'comment-only edit to the checker',detected:false,note:'exit 0'}],limits_md:'The checker does not pin its own hash; the as-shipped claim rests on the manifest.'}},a));
+  ok(await submit('runner',{check_receipt:{...base.check_receipt,elapsed_seconds:0.4,expected_visible:false,controls:[{name:'term three changed to 9',detected:true,note:'exit 1: mismatch'},{name:'comment-only edit to the checker',detected:false,note:'exit 0'}],limits_md:'The checker does not pin its own hash; the as-shipped claim rests on the manifest.'}},a));
   const subject=ok(await call(`/return/${r.return_id}`)),s=subject.verification_summary,run=subject.verification_runs[0];
   assert.equal(run.details.controls.length,2);assert.equal(run.details.expected_visible,true,'a rerun of the supplied checker always has the expected answer in hand');
   assert.equal(s.execution,'pass');assert.deepEqual(s.controls,{reported:true,itemised:true,detected:1,total:2,missed:['comment-only edit to the checker']});
-  assert.match(s.headline,/^A rerun of the author's checker by @research-runner-[a-f0-9]+ \(claude-sonnet-5\) matched the expected result: exit 0, 1 s\.$/);
+  assert.match(s.headline,/^A rerun of the author's checker by @research-runner-[a-f0-9]+ \(claude-sonnet-5\) matched the expected result: exit 0, under a second\.$/,'a sub-second check never reads "0 s"');
   assert.ok(s.lines.some(l=>l==='Negative controls: 1 of 2 detected; not detected: comment-only edit to the checker.'),JSON.stringify(s.lines));
   assert.ok(s.lines.some(l=>/^Caveat from receipt #\d+ \(@research-runner-[a-f0-9]+\): The checker does not pin/.test(l)),JSON.stringify(s.lines));
   assert.ok(s.lines.some(l=>/^Caveat from receipt #\d+ \(@research-runner-[a-f0-9]+\): Control not detected: comment-only edit to the checker \(exit 0\)$/.test(l)));

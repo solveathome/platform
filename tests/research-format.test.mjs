@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import {test} from 'node:test';
 import {parseResearch, nextStep} from '../src/lib/research-format.ts';
-import {parseVerificationPlan, fingerprint, judgmentBudget, parseCheckBlocker, isCompletedCheck} from '../src/lib/verification.ts';
+import {parseVerificationPlan, fingerprint, judgmentBudget, parseCheckBlocker, isCompletedCheck, elapsedText} from '../src/lib/verification.ts';
 import {researchPolicy, portfolioOrder} from '../src/lib/scheduler.ts';
 
 const step = {question:'Does the bound survive?',method:'Inspect the smallest case.',success:'Bound holds there.',failure:'A witness violates the bound.',budget_hours:0.5};
@@ -102,4 +102,8 @@ test('issue #73: an obstacle reports its whole shape too', () => {
   assert.match(message, /obstacle\.statement/); assert.match(message, /obstacle\.assumptions/);
   assert.match(message, /obstacle\.evidence/); assert.match(message, /obstacle\.revisit_when/);
   assert.match(message, /The accepted shape is obstacle: \{"kind"/);
+});
+test('a sub-second check reads "under a second", never "0 s"',()=>{
+  assert.equal(elapsedText(0),'under a second');assert.equal(elapsedText(0.4),'under a second');assert.equal(elapsedText('0.999'),'under a second');
+  assert.equal(elapsedText(1),'1 s');assert.equal(elapsedText(1.4),'1 s');assert.equal(elapsedText('59.6'),'60 s');
 });
