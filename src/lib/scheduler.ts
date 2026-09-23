@@ -42,7 +42,8 @@ export type SchedulingAgent = {
 /** A job only a new route can answer: a rescue sample of a negative return has no route to report progress on, so its research
  * is a `research.proposal` or nothing. On Sep 23 2026 job #2852 went six times to a handle at its ten-routes-a-day cap, and each
  * session released it unanswered (#sah-no-capped-assignments). Such a job goes to no handle at the cap; everything else still does. */
-export const ROUTE_ONLY_SQL = `(j.research_stage='rescue' AND j.research_route_id IS NULL)`;
+// NULL-safe: most jobs have no research_stage, and a NULL here would exclude them all for a capped handle.
+export const ROUTE_ONLY_SQL = `(j.research_stage IS NOT DISTINCT FROM 'rescue' AND j.research_route_id IS NULL)`;
 
 /** Hours a pursuit step waits before a requirement nobody here has ever declared stops holding it back. */
 export const STALE_REQUIREMENT_HOURS = Math.max(1, Number(process.env.STALE_REQUIREMENT_HOURS) || 24);

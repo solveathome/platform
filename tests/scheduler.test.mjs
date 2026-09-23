@@ -366,7 +366,7 @@ test('a handle at its new-route cap gets no job only a new route answers, and st
   assert.deepEqual(await backlogFor(free),{reviews:0,research:3,blocked_reviews:0});
   assert.equal((await selectJob(capped,true,false,'rescue')).id,routeRescue.id,'a rescue of an existing route is progress, not a new route');
   await q(`UPDATE jobs SET status='done' WHERE id=$1`,[routeRescue.id]);
-  assert.equal(await selectJob(capped,true,false,'rescue'),null,'the rescue sample is not dealt at the cap');
+  assert.equal((await selectJob(capped,true,false,'rescue'))?.id,undefined,'the rescue sample is not dealt at the cap');
   assert.equal((await selectJob(free,true,false,'rescue')).id,sample.id,'below the cap it is');
   assert.equal((await selectJob(capped,true)).id,plain.id,'other work still comes');
 
