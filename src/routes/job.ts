@@ -1072,7 +1072,10 @@ job.post("/result", bearer, project, assignmentMutation(async (req: any, res) =>
     const outcome = await resolveReturn(reviewOf);
     // A series decided at once (Chris, Sep 19 2026): the returns a triage covered under this lead get their verdicts from this same review.
     const seriesWarnings: string[] = []; const seriesDecided: Record<string, string> = {};
-    if (jobRow && b.also_verdicts && typeof b.also_verdicts === "object") {
+    // Series verdicts are decisions, so they come from a trusted reviewer (#sah-triage-close-and-reward): an advisory one would leave a covered
+    // return provisional with no review job of its own for a trusted reviewer to take.
+    if (jobRow && b.also_verdicts && typeof b.also_verdicts === "object" && !reviewerTrusted) seriesWarnings.push(`also_verdicts: your review is advisory, so it decides no return of the series; the covered returns wait for the trusted decision on #${reviewOf}`);
+    if (jobRow && b.also_verdicts && typeof b.also_verdicts === "object" && reviewerTrusted) {
       for (const [key, raw] of Object.entries(b.also_verdicts as Record<string, any>).slice(0, 20)) {
         const id = Number(key);
         const o = Number.isInteger(id) ? await one(`SELECT * FROM returns WHERE id = $1 AND problem_id = $2 AND triage_lead = $3`, [id, req.project.id, reviewOf]) : null;
@@ -1092,14 +1095,8 @@ job.post("/result", bearer, project, assignmentMutation(async (req: any, res) =>
         seriesDecided[String(id)] = await resolveReturn(id);
       }
     }
-    // The lead is decided: a covered return this reviewer did not decide gets its own review assignment, as it would have had.
-    if (jobRow && !["pending"].includes(String((await one(`SELECT status FROM returns WHERE id = $1`, [reviewOf]))?.status))) {
-      const left = await q(`SELECT * FROM returns WHERE triage_lead = $1 AND status = 'pending' AND NOT EXISTS (SELECT 1 FROM reviews rv WHERE rv.return_id = returns.id) AND NOT EXISTS (SELECT 1 FROM jobs j WHERE j.parent_return_id = returns.id AND j.type = 'review' AND j.status IN ('queued','assigned'))`, [reviewOf]);
-      for (const o of left) {
-        await q(`INSERT INTO return_decisions (return_id, status, final_rung, provisional, by, note) VALUES ($1,'pending',NULL,false,'triage',$2)`, [o.id, `The review of the series led by #${reviewOf} gave no verdict on this return; it gets its own review assignment.`]);
-        await spawnReviews(Number(o.id), Number(o.problem_id), o.lane_id, o.verification_plan || o.research ? 1 : MIN_REVIEWS);
-      }
-    }
+    // The lead is decided: a covered return this reviewer did not decide gets its own review assignment, as it would have had, whichever review decided the lead.
+    await releaseSeries(reviewOf);
     // A reviewer who finds the same defect in another document routes it like an audit does (issue #36): shown on that document once the reviewed return is accepted.
     if (Array.isArray(b.also_fix)) {
       const fixes = b.also_fix.slice(0, 20).map((x: any) => ({ path: revisions.safeRel(String(x?.path ?? "")), note: String(x?.note ?? "").trim().slice(0, 1000) })).filter((x: any) => x.path && x.note);
@@ -1176,6 +1173,7 @@ job.post("/result", bearer, project, assignmentMutation(async (req: any, res) =>
         await q(`UPDATE returns SET status = 'recorded', final_rung = 'recorded' WHERE id = $1 AND status = 'pending'`, [o.id]);
         await q(`INSERT INTO return_decisions (return_id, status, final_rung, provisional, by, note, user_id) VALUES ($1,'recorded','recorded',false,'triage',$2,$3)`, [o.id, `Covered by the triage of return #${subject.id} by @${req.user!.handle} (${req.model ?? "unknown"}): a trusted verdict would not change the record (${setAside}). ${notes}`, uid]);
       }
+      for (const id of [subject.id, ...covered.map((o) => o.id)]) await settleRecorded(Number(id));
       status = "recorded";
       note = `Return #${subject.id}${covered.length ? ` and #${covered.map((o) => o.id).join(", #")} are` : " is"} recorded as ${covered.length ? "they stand" : "it stands"}: on the record, citable, a route step can build on ${covered.length ? "them" : "it"}, and the author keeps the token credit. No rung was assigned and nothing was rejected. Anyone with a stake (a return that builds on it, a verification package) can elevate it again, and another triager reads it.`;
     }
@@ -1414,7 +1412,7 @@ export async function resumeDeferredReviews(problemId: number): Promise<number> 
 
 /** Create review jobs for a return. Reviews require tier 1 (scope Q7/Q13). */
 /** Bumped whenever the standard review guidance changes; a queued review from an earlier version is refreshed when served. */
-export const REVIEW_BRIEF_VERSION = 3;   // 3: no time budget in the review brief (Chris, Sep 19 2026)
+export const REVIEW_BRIEF_VERSION = 4;   // 3: no time budget in the review brief (Chris, Sep 19 2026); 4: series verdicts are decisions with their usual effects, from a trusted reviewer only (Sep 23 2026)
 const REASSESSMENT_NOTE = '\n\nEvidence needs reassessment or execution could not find capacity within 24 hours. Assess the specific missing or changed evidence from the record; execution is not included. Preserve existing observations. Do not report that a check ran. If new execution is necessary, name the smallest check and missing capability in needs_md; a repaired package is a new return.';
 /** The standard review brief for a return as it stands now, with the tier, budget and compute hint that go with it. Job-specific text (the reassessment note) is the caller's. */
 export async function composeReviewBrief(returnId: number, problemId: number, options: { judgmentOnly?: boolean } = {}): Promise<{ brief: string; tier: number; budget: number; compute: any; judgmentOnly: boolean; packaged: boolean }> {
@@ -1502,8 +1500,38 @@ async function triageNoteFor(returnId: number): Promise<string> {
   const covered = await q<{ id: string; handle: string; model: string; type: string; head: string }>(`SELECT o.id, u.handle, o.model, o.type, left(regexp_replace(o.report_md, E'\n[\\s\\S]*$', ''), 140) AS head FROM returns o JOIN users u ON u.id = o.user_id WHERE o.triage_lead = $1 AND o.status = 'pending' ORDER BY o.id`, [returnId]);
   if (!rows.length && !covered.length) return "";
   const triageText = rows.length ? `\n\nTriage (a first read by an agent that is not a trusted reviewer; an investment decision, not a verdict):\n${rows.map((t) => `- @${t.handle} (${t.model}) said ${t.escalate ? "a trusted verdict would change the record" : "it would not"}: ${t.notes_md.replace(/\s+/g, " ").slice(0, 600)}`).join("\n")}\nJudge the return yourself; the triage tells you where its author and its first reader think the value is.` : "";
-  const coveredText = covered.length ? `\n\nThis return leads a series the first reader read as one. The other returns of the series are before you in this same assignment; each gets its own verdict from you, so one review closes or opens the whole direction at once:\n${covered.map((o) => `- #${o.id} (${o.type}) by @${o.handle} (${o.model}): ${String(o.head).replace(/^#+\\s*/, "")} (GET <project base>/return/${o.id})`).join("\n")}\nAdd \`"also_verdicts": { "<id>": { "verdict": "accept" | "reject", "rung": "<rung>", "reject_reason": "<on a reject>", "notes_md": "<what you checked; your main notes_md when omitted>" } }\` for each of them. A return you leave out of also_verdicts gets its own review assignment once this one is decided; a return of your own handle or model is left out for you.` : "";
+  const coveredText = covered.length ? `\n\nThis return leads a series the first reader read as one. The other returns of the series are before you in this same assignment; each gets its own verdict from you, so one review closes or opens the whole direction at once:\n${covered.map((o) => `- #${o.id} (${o.type}) by @${o.handle} (${o.model}): ${String(o.head).replace(/^#+\\s*/, "")} (GET <project base>/return/${o.id})`).join("\n")}\nAdd \`"also_verdicts": { "<id>": { "verdict": "accept" | "reject", "rung": "<rung>", "reject_reason": "<on a reject>", "notes_md": "<what you checked; your main notes_md when omitted>" } }\` for each of them. Each is a decision like any verdict: an acceptance pays its author and the chain, a rejection records its reason, and you are paid for each as a review of that return. Only a trusted review decides the series; an advisory review's also_verdicts are not recorded. A return you leave out of also_verdicts gets its own review assignment once this one is decided; a return of your own handle or model is left out for you.` : "";
   return triageText + coveredText;
+}
+/**
+ * A triage no settles the return as it stands (Chris, Sep 23 2026, #sah-triage-close-and-reward: "when we do triage, we also ofc need to ensure
+ * we close issues, reward points etc"): the job it answered closes as recorded (a fix or curate job no longer counts as open), whatever was
+ * still queued or held on it closes, and a paper it revised leaves "under review". Not a verdict: no result points, no reputation either way,
+ * and the author's token points were paid at intake. Elevation puts it back before a triager.
+ */
+export async function settleRecorded(returnId: number): Promise<void> {
+  const ret = await one(`SELECT * FROM returns WHERE id = $1`, [returnId]);
+  if (!ret || ret.status !== "recorded") return;
+  if (ret.job_id) await q(`UPDATE jobs SET status = 'recorded' WHERE id = $1 AND status = 'returned'`, [ret.job_id]);
+  await q(`UPDATE jobs SET status = 'expired', last_release_note = $2 WHERE parent_return_id = $1 AND status IN ('queued','assigned')`, [returnId, `return #${returnId} recorded as it stands by triage`]);
+  if (ret.type === "paper" && ret.paper_slug) await settlePaper(ret, "recorded");
+}
+/**
+ * A series waits on its lead (Chris, Sep 19 2026): once the lead has a trusted decision, each covered return no trusted reviewer decided gets
+ * its own review assignment, however the lead was decided (its review job, a self-assigned review). Before Sep 23 2026 only the lead's own
+ * review job did this, so a lead decided any other way left its series pending with no job at all (#sah-triage-close-and-reward).
+ */
+export async function releaseSeries(leadId: number): Promise<number> {
+  const lead = await one<{ status: string; provisional: boolean }>(`SELECT status, provisional FROM returns WHERE id = $1`, [leadId]);
+  if (!lead || lead.status === "pending" || lead.provisional) return 0;
+  const left = await q(`SELECT * FROM returns r WHERE r.triage_lead = $1 AND (r.status = 'pending' OR r.provisional)
+    AND NOT EXISTS (SELECT 1 FROM reviews rv WHERE rv.return_id = r.id AND rv.trusted AND NOT rv.needs_reassessment)
+    AND NOT EXISTS (SELECT 1 FROM jobs j WHERE j.parent_return_id = r.id AND j.type = 'review' AND j.status IN ('queued','assigned'))`, [leadId]);
+  for (const o of left) {
+    await q(`INSERT INTO return_decisions (return_id, status, final_rung, provisional, by, note) VALUES ($1,'pending',NULL,false,'triage',$2)`, [o.id, `The review of the series led by #${leadId} gave no verdict on this return; it gets its own review assignment.`]);
+    await spawnReviews(Number(o.id), Number(o.problem_id), o.lane_id, o.verification_plan || o.research ? 1 : MIN_REVIEWS);
+  }
+  return left.length;
 }
 export async function composeTriageBrief(returnId: number, cfg: { minTier: number; budgetHours: number }): Promise<string> {
   const r = await one<any>(`SELECT r.id, r.type, r.author_rung, r.research, r.verification_plan, r.cites, r.paper_slug, r.revision_path, r.model, r.lane_id, r.research_route_id, u.handle, l.slug AS lane, left(regexp_replace(r.report_md, E'\n[\\s\\S]*$', ''), 200) AS head,
@@ -1696,7 +1724,8 @@ async function settlePaper(ret: any, status: string): Promise<void> {
     await q(`UPDATE papers SET status = 'reviewed', current_return_id = $3, current_file_sha = COALESCE($4, current_file_sha), updated_at = now() WHERE problem_id = $1 AND slug = $2`, [ret.problem_id, ret.paper_slug, ret.id, ret.revision_sha ?? f?.sha256 ?? null]);
   } else {
     // An agent-proposed paper that was never accepted leaves the registry when its proposal is rejected; the return stays in the record.
-    await q(`DELETE FROM papers WHERE problem_id = $1 AND slug = $2 AND current_return_id IS NULL AND path IS NULL AND kind = 'draft'`, [ret.problem_id, ret.paper_slug]);
+    // A recorded one (a triage no) stays on the record and keeps its registry entry: only the "under review" state goes.
+    if (status !== "recorded") await q(`DELETE FROM papers WHERE problem_id = $1 AND slug = $2 AND current_return_id IS NULL AND path IS NULL AND kind = 'draft'`, [ret.problem_id, ret.paper_slug]);
     await q(`UPDATE papers SET status = CASE WHEN current_return_id IS NULL THEN (CASE WHEN kind = 'proposal' OR path IS NULL THEN 'proposed' ELSE 'draft' END) ELSE 'reviewed' END, updated_at = now() WHERE problem_id = $1 AND slug = $2 AND status = 'under_review'`, [ret.problem_id, ret.paper_slug]);
   }
 }

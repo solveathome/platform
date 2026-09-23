@@ -15,6 +15,7 @@ const {issueToken} = await import('../src/lib/auth.ts');
 const {TERMS_VERSION} = await import('../src/lib/terms.ts');
 const {job, composeTriageBrief} = await import('../src/routes/job.ts');
 const {reviewTriage} = await import('../src/lib/scheduler.ts');
+const reputation = await import('../src/lib/reputation.ts');
 let server, base, author, triager, second, trusted, tokens = {}, pid, slug;
 const tag = `triage-${Date.now().toString(36)}`;
 
@@ -25,6 +26,7 @@ before(async () => {
     tokens[name] = await issueToken(id);
     if (name === 'author') author = id; if (name === 'triager') triager = id; if (name === 'second') second = id; if (name === 'trusted') trusted = id;
   }
+  for (const id of [author, triager, second, trusted]) await reputation.ensure(id);
   const app = express(); app.use(express.json()); app.use('/projects/:slug', job);
   app.use((error, req, res, next) => res.status(500).json({error: error.message}));
   server = app.listen(0, '127.0.0.1'); await new Promise(r => server.once('listening', r));
@@ -47,6 +49,7 @@ afterEach(async () => {
   await q(`DELETE FROM reviews WHERE return_id IN (SELECT id FROM returns WHERE problem_id=$1)`, [pid]);
   await q(`DELETE FROM return_decisions WHERE return_id IN (SELECT id FROM returns WHERE problem_id=$1)`, [pid]);
   await q(`DELETE FROM research_events WHERE route_id IN (SELECT id FROM research_routes WHERE problem_id=$1)`, [pid]).catch(() => {});
+  await q(`DELETE FROM papers WHERE problem_id=$1`, [pid]);
   await q(`UPDATE returns SET job_id=NULL WHERE problem_id=$1`, [pid]);
   await q(`DELETE FROM assignment_attempts WHERE problem_id=$1`, [pid]);
   await q(`DELETE FROM jobs WHERE problem_id=$1`, [pid]);
@@ -255,6 +258,74 @@ test('a series read as one: a triage covers other returns of the same lane; one 
   }
   assert.equal((await jobsOf(five.return_id, 'triage'))[0].status, 'expired');
   assert.equal((await answer(b, {escalate: false, reason: 'boring', notes_md: 'A second answer with a made-up reason is refused before anything.'}, tokens.second)).status, 409);
+});
+
+// Every way a return is settled carries the usual consequences (Chris, Sep 23 2026, #sah-triage-close-and-reward: "when we do triage, we
+// also ofc need to ensure we close issues, reward points etc").
+test('a triage no closes what the return held: its job is recorded, what was open on it expires, a paper leaves under review; no result points, no reputation', async () => {
+  const r = await askForReview();
+  const held = await one(`INSERT INTO jobs (problem_id,type,title,brief_md,status) VALUES ($1,'measure','Fix files of return #1: x.py','brief','returned') RETURNING id`, [pid]);
+  await q(`UPDATE returns SET job_id=$2, type='paper', paper_slug='p-triage' WHERE id=$1`, [r.return_id, held.id]);
+  await q(`INSERT INTO papers (problem_id,slug,title,kind,status) VALUES ($1,'p-triage','A draft','draft','under_review')`, [pid]);
+  const repBefore = await one(`SELECT accepted, rejected, score FROM reputation WHERE user_id=$1`, [author]);
+  const a = await start({who: tokens.triager, model: 'claude-opus-5', effort: 'high'});
+  assert.equal(a.type, 'triage');
+  const stray = await one(`INSERT INTO jobs (problem_id,type,title,brief_md,parent_return_id,min_tier) VALUES ($1,'review','Review return','brief',$2,1) RETURNING id`, [pid, r.return_id]);
+  ok(await answer(a, {escalate: false, reason: 'false', notes_md: 'The statistic fails at 29# by the report\'s own table; nothing a verdict would add.'}, tokens.triager));
+  assert.equal((await one(`SELECT status FROM returns WHERE id=$1`, [r.return_id])).status, 'recorded');
+  assert.equal((await one(`SELECT status FROM jobs WHERE id=$1`, [held.id])).status, 'recorded', 'the job the return answered is closed');
+  assert.equal((await one(`SELECT status FROM jobs WHERE id=$1`, [stray.id])).status, 'expired', 'nothing stays queued on a settled return');
+  const paper = await one(`SELECT status FROM papers WHERE problem_id=$1 AND slug='p-triage'`, [pid]);
+  assert.ok(paper, 'a recorded paper keeps its registry entry'); assert.equal(paper.status, 'proposed');
+  assert.equal((await q(`SELECT 1 FROM credits WHERE source_type='return' AND source_id=$1 AND kind IN ('result','review')`, [String(r.return_id)])).length, 0);
+  assert.deepEqual(await one(`SELECT accepted, rejected, score FROM reputation WHERE user_id=$1`, [author]), repBefore);
+});
+
+test('a series decided through also_verdicts pays and scores each return as its own verdict would; an advisory series verdict decides nothing', async () => {
+  await q(`INSERT INTO lanes (problem_id,slug,title) VALUES ($1,'d','Direction D')`, [pid]);
+  const wait = async (who, model) => ok(await call('/result', {method: 'POST', who, model, effort: 'max', body: {type: 'direction', lane: 'd', report_md: 'One step of direction D: the shift family spans the stated interval at this fold.', transcript: 't', transcript_approved: true, request_review: true}}));
+  const lead = await wait(tokens.author, 'deepseek-v4-flash');
+  const two = await wait(tokens.author, 'deepseek-v4-flash');
+  const three = await wait(tokens.second, 'gemini-3.8-flash');
+  const a = await start({who: tokens.triager, model: 'claude-opus-5', effort: 'high'});
+  ok(await answer(a, {escalate: true, notes_md: 'Direction D as a whole: one verdict settles the three steps.', covers: [two.return_id, three.return_id]}, tokens.triager));
+  const [job] = await jobsOf(lead.return_id, 'review');
+  // An advisory reviewer answering the lead's review job: its also_verdicts are refused with a warning and the series keeps waiting.
+  await q(`UPDATE jobs SET status='assigned', assigned_to=$2 WHERE id=$1`, [job.id, triager]);
+  const adv = ok(await call('/result', {method: 'POST', who: tokens.triager, model: 'claude-opus-5', effort: 'high', body: {job_id: job.id, transcript: 't', transcript_approved: true, verdict: 'accept', rung: 'measured', notes_md: 'Reads right to me.', also_verdicts: {[two.return_id]: 'accept'}}}));
+  assert.equal(adv.advisory, true); assert.ok(adv.warnings.some(w => /also_verdicts: your review is advisory/.test(w)), JSON.stringify(adv.warnings));
+  assert.equal(adv.series, undefined);
+  assert.equal((await q(`SELECT 1 FROM reviews WHERE return_id=$1`, [two.return_id])).length, 0);
+  const repBefore = await one(`SELECT accepted, rejected FROM reputation WHERE user_id=$1`, [author]);
+  const tr = await start({who: tokens.trusted, model: 'claude-fable-5-1', effort: 'max'});
+  assert.equal(Number((await one(`SELECT parent_return_id FROM jobs WHERE id=$1`, [tr.job_id])).parent_return_id), lead.return_id);
+  const d = ok(await answer(tr, {verdict: 'accept', rung: 'measured', notes_md: 'The series stands as measured, except the third step, whose bound fails.', also_verdicts: {[two.return_id]: {verdict: 'accept', rung: 'measured'}, [three.return_id]: {verdict: 'reject', reject_reason: 'refuted'}}}, tokens.trusted));
+  assert.deepEqual(d.series, {[two.return_id]: 'accepted', [three.return_id]: 'rejected'});
+  const credit = async (id, kind, user) => (await q(`SELECT points FROM credits WHERE source_type='return' AND source_id=$1 AND kind=$2 AND user_id=$3`, [String(id), kind, user])).map(c => Number(c.points));
+  assert.equal((await credit(two.return_id, 'result', author)).length, 1, 'the covered author is paid the result as for any acceptance');
+  assert.equal((await credit(two.return_id, 'review', trusted)).length, 1, 'the reviewer is paid for the covered acceptance');
+  assert.equal((await credit(three.return_id, 'review', trusted)).length, 1, 'and for the covered rejection');
+  assert.equal((await credit(three.return_id, 'result', second)).length, 0);
+  assert.equal((await one(`SELECT effects_applied_at FROM returns WHERE id=$1`, [two.return_id])).effects_applied_at !== null, true);
+  const repAfter = await one(`SELECT accepted, rejected FROM reputation WHERE user_id=$1`, [author]);
+  assert.equal(repAfter.accepted - repBefore.accepted, 2, 'the lead and the covered acceptance both count for the author');
+  assert.equal((await one(`SELECT rejected FROM reputation WHERE user_id=$1`, [second])).rejected >= 1, true);
+  for (const id of [two.return_id, three.return_id]) assert.equal((await q(`SELECT 1 FROM jobs WHERE parent_return_id=$1 AND status IN ('queued','assigned')`, [id])).length, 0);
+});
+
+test('a lead decided by a review outside its review job still releases its series: each covered return gets its own review', async () => {
+  await q(`INSERT INTO lanes (problem_id,slug,title) VALUES ($1,'d','Direction D')`, [pid]);
+  const wait = async (who, model) => ok(await call('/result', {method: 'POST', who, model, effort: 'max', body: {type: 'direction', lane: 'd', report_md: 'One step of direction D: the shift family spans the stated interval at this fold.', transcript: 't', transcript_approved: true, request_review: true}}));
+  const lead = await wait(tokens.author, 'deepseek-v4-flash');
+  const two = await wait(tokens.second, 'gemini-3.8-flash');
+  const a = await start({who: tokens.triager, model: 'claude-opus-5', effort: 'high'});
+  ok(await answer(a, {escalate: true, notes_md: 'Two steps of D: one verdict settles both.', covers: [two.return_id]}, tokens.triager));
+  assert.equal((await jobsOf(two.return_id, 'review')).length, 0);
+  const self = ok(await call('/result', {method: 'POST', who: tokens.trusted, model: 'claude-fable-5-1', effort: 'max', body: {type: 'review', return_id: lead.return_id, verdict: 'accept', rung: 'measured', notes_md: 'The interval bound holds at this fold.', transcript: 't', transcript_approved: true}}));
+  assert.equal(self.return_status, 'accepted');
+  assert.equal((await jobsOf(lead.return_id, 'review')).every(j => j.status === 'expired'), true);
+  assert.ok((await jobsOf(two.return_id, 'review')).some(j => j.status === 'queued'), 'the covered return is not left pending with no job');
+  assert.ok((await q(`SELECT note FROM return_decisions WHERE return_id=$1`, [two.return_id])).some(x => /gave no verdict on this return/.test(x.note)));
 });
 
 test('a session that cannot review reads that the first read is its part; after a run of four triages it gets research', async () => {
