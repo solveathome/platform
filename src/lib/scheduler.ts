@@ -35,6 +35,8 @@ export type SchedulingAgent = {
   provider: string | null; trusted: boolean; granted: boolean; lane: string | null;
   cpuHours: number; ramGb: number; hasGpu: boolean; disk: number; maxHours: number;
   jobId?: number; directionId?: string | null; directionRevision?: number; reviewStreak: number; capabilities: Partial<Capabilities>;
+  /** A reviews-only trusted session with no review waiting (Chris, Sep 23 2026, ask 387): it may take a triage, under the review rules. */
+  triageFallback?: boolean;
 };
 
 /** Hours a pursuit step waits before a requirement nobody here has ever declared stops holding it back. */
@@ -61,7 +63,7 @@ export function unmetRequirements(row: { required_tools?: string[] | null; requi
 function eligibility(a: SchedulingAgent, omitCompute = false, sameKindOnly = false) {
   const values: any[] = [];
   const p = (v: any) => { values.push(v); return `$${values.length}`; };
-  const pid = p(a.problemId), tier = p(a.tier), sid = p(a.sessionId), uid = p(a.uid), model = p(a.model);
+  const pid = p(a.problemId), tier = p(a.tier), sid = p(a.sessionId), uid = p(a.uid), model = p(a.model), fallback = p(a.triageFallback === true && a.trusted);
   const clauses = [
     `j.problem_id = ${pid} AND j.status = 'queued' AND j.min_tier >= ${tier}`,
     `j.last_released_session IS DISTINCT FROM ${sid}::text`,
@@ -73,11 +75,13 @@ function eligibility(a: SchedulingAgent, omitCompute = false, sameKindOnly = fal
     `(j.type <> 'check' OR NOT EXISTS (SELECT 1 FROM verification_runs v JOIN returns worker ON worker.id=v.result_return_id WHERE v.fingerprint=er.verification_fingerprint AND worker.problem_id=j.problem_id AND worker.user_id=${uid} AND v.outcome='unable'))`,
     requirementClause('required_tools', 'tools', p(matchingTools(a.capabilities.tools)), true),
     requirementClause('required_sources', 'sources', p(a.capabilities.sources ?? []), false),
-    `(pr.id IS NULL OR pr.user_id <> ${uid} OR (j.type <> 'triage' AND ${p(a.granted)}::boolean))`,
+    `(pr.id IS NULL OR pr.user_id <> ${uid} OR ((j.type <> 'triage' OR ${fallback}::boolean) AND ${p(a.granted)}::boolean))`,
     `(pr.id IS NULL OR j.type = 'triage' OR ${p(a.trusted)}::boolean)`,
     // Review triage (Sep 18 2026): a first read by a session that is not trusted, on another handle and model than the author's;
-    // a trusted session reviews instead, and nobody triages one return twice.
-    `(j.type <> 'triage' OR (NOT ${p(a.trusted)}::boolean AND ${p(a.reviewStreak < 4)}::boolean AND NOT EXISTS (SELECT 1 FROM triages t WHERE t.return_id = j.parent_return_id AND t.user_id = ${uid})))`,
+    // a trusted session reviews instead, and nobody triages one return twice. A reviews-only trusted session with no review
+    // waiting takes a triage under the review rules (Chris, Sep 23 2026, ask 387: "for a review only agent, if there is nothing
+    // to review because triage has not happened yet, do triage"): never its own model's return, its own handle's only by grant.
+    `(j.type <> 'triage' OR ((${fallback}::boolean OR (NOT ${p(a.trusted)}::boolean AND ${p(a.reviewStreak < 4)}::boolean)) AND NOT EXISTS (SELECT 1 FROM triages t WHERE t.return_id = j.parent_return_id AND t.user_id = ${uid})))`,
     `NOT EXISTS (SELECT 1 FROM reviews rv WHERE rv.return_id = j.parent_return_id AND rv.user_id = ${uid} AND NOT rv.needs_reassessment)`,
     `NOT EXISTS (SELECT 1 FROM jobs j2 WHERE j2.parent_return_id = j.parent_return_id AND j2.id <> j.id AND j2.assigned_to = ${uid} AND j2.status = 'assigned')`,
     sameKindOnly ? `(pr.id IS NOT NULL AND pr.model IS NOT DISTINCT FROM ${model}::text)` : `(pr.id IS NULL OR pr.model IS DISTINCT FROM ${model}::text)`,
@@ -107,6 +111,14 @@ export async function backlogFor(a: SchedulingAgent) {
   const k = eligibility(a, false, true);
   const blocked = await one(`SELECT count(*) FILTER (WHERE j.type IN ('review','audit')) AS reviews ${k.joins} WHERE ${k.where}`, k.values);
   return { reviews: Number(row?.reviews ?? 0), research: Number(row?.research ?? 0), blocked_reviews: Number(blocked?.reviews ?? 0) };
+}
+
+/** What a reviews-only agent could take now (Chris, Sep 23 2026, ask 387): reviews, and the triages it falls back to when none
+ * waits. The same eligibility as selection, compute offer left out; a series one triage covers still counts one each. */
+export async function reviewWorkFor(a: SchedulingAgent, triage: boolean) {
+  const e = eligibility({ ...a, triageFallback: triage }, true);
+  const row = await one(`SELECT count(*) FILTER (WHERE j.type = 'review') AS reviews, count(*) FILTER (WHERE j.type = 'triage') AS triage ${e.joins} WHERE ${e.where}`, e.values);
+  return { reviews: Number(row?.reviews ?? 0), triage: triage ? Number(row?.triage ?? 0) : 0 };
 }
 
 const DEFAULT_SKILLS = `CASE j.type WHEN 'formalize' THEN ARRAY['lean','formalize'] WHEN 'measure' THEN ARRAY['python','computation'] WHEN 'source' THEN ARRAY['literature-search'] WHEN 'break' THEN ARRAY['proof-analysis','counterexamples'] WHEN 'review' THEN ARRAY['verification','proof-analysis'] WHEN 'explore' THEN ARRAY['proof-analysis','research'] ELSE ARRAY[]::text[] END`;
