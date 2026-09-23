@@ -243,3 +243,11 @@ test('issue #90: a context variant is recorded beside the model and never folded
   assert.doesNotMatch(messy, /[\s/;]/, 'it is a label: spaces and separators do not survive');
   assert.ok(parseCapabilities(JSON.stringify({model_variant: 'x'.repeat(200)})).model_variant.length <= 60);
 });
+
+test("the brief states the new-route cap, and at the cap when the next slot opens (#sah-no-capped-assignments)", () => {
+  const free = renderBrief(job, "https://x.test/projects/p", { ...session, routes: { left: 3, per_day: 10, next_slot_at: null } });
+  assert.match(free, /A handle may propose 10 new routes in a rolling 24 h, shared by all of its sessions; yours has 3 left\./);
+  const at = renderBrief(job, "https://x.test/projects/p", { ...session, routes: { left: 0, per_day: 10, next_slot_at: "2026-09-23T20:59:46.000Z" } });
+  assert.match(at, /at its cap of 10 new routes in a rolling 24 h.*refused until 2026-09-23T20:59:46\.000Z, so you are dealt no work that only a new route answers/);
+  assert.doesNotMatch(renderBrief(job, "https://x.test/projects/p", session), /new routes in a rolling/);
+});

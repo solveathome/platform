@@ -83,6 +83,14 @@ async function queueInvestigation(route: any, stage: ResearchStage, source: any)
       stage === 'pursue' ? step?.required_tools ?? [] : [], stage === 'pursue' ? step?.required_sources ?? [] : [], stage === 'pursue' ? 3 : 1, route.revision]);
 }
 
+/** New routes one handle may propose per project in a rolling 24 h. The scheduler reads the same count (#sah-no-capped-assignments). */
+export const ROUTES_PER_DAY = 10;
+export async function routeQuota(problemId: number, userId: number): Promise<{ used: number; left: number; per_day: number; next_slot_at: string | null }> {
+  const r = await one<{ n: number; oldest: Date | null }>(`SELECT count(*)::int AS n, min(rr.created_at) AS oldest FROM research_routes rr JOIN returns r ON r.id=rr.origin_return_id WHERE rr.problem_id=$1 AND r.user_id=$2 AND rr.created_at>now()-interval '1 day'`, [problemId, userId]);
+  // The window rolls like the file quota: the next slot opens when the oldest counted route ages past 24 h.
+  const next_slot_at = r?.oldest ? new Date(new Date(r.oldest).getTime() + 86_400_000).toISOString() : null;
+  return { used: r!.n, left: ROUTES_PER_DAY - r!.n, per_day: ROUTES_PER_DAY, next_slot_at };
+}
 export async function recordResearch(ret: any, job: any, report: ResearchReport | null): Promise<any> {
   if (job?.research_route_id && ['triage', 'pursue', 'rescue'].includes(job.research_stage) && !report) bad('this route assignment requires research with outcome, evidence and its next step or obstacle');
   if (!report) return null;
@@ -95,8 +103,8 @@ export async function recordResearch(ret: any, job: any, report: ResearchReport 
     if (report.parent_route_id && !(await one(`SELECT 1 FROM research_routes WHERE id=$1 AND problem_id=$2`, [report.parent_route_id, ret.problem_id]))) bad('parent route is not in this project');
     const p = report.proposal;
     // A contributor may offer many ideas, but cannot turn them into an unbounded immediate job fan-out.
-    const n = await one(`SELECT count(*)::int AS n FROM research_routes rr JOIN returns r ON r.id=rr.origin_return_id WHERE rr.problem_id=$1 AND r.user_id=$2 AND rr.created_at>now()-interval '1 day'`, [ret.problem_id, ret.user_id]);
-    if (n!.n >= 10) bad('at most ten new routes per contributor per day; build on an existing route');
+    const cap = await routeQuota(ret.problem_id, ret.user_id);
+    if (cap.left <= 0) bad(`at most ${ROUTES_PER_DAY} new routes per contributor per rolling 24 h; the next slot opens at ${cap.next_slot_at}. Build on an existing route`);
     route = await one(`INSERT INTO research_routes (problem_id,lane_id,origin_return_id,parent_route_id,title,contribution_md,prior_art_md,uncertainty_md,next_step,last_return_id)
       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$3) RETURNING *`, [ret.problem_id, ret.lane_id, ret.id, report.parent_route_id ?? null, p.title, p.contribution_md, p.prior_art_md, p.uncertainty_md, JSON.stringify(report.next_step)]);
   } else {

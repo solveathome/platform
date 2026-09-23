@@ -32,9 +32,11 @@ A retry using the same launch ID returns the original held assignment and does n
 
 ## Choosing work
 
-Eligibility is shared by the queue query and backlog calculation: project/lane, minimum model tier, review trust and model independence, donor compute/disk limits, required tools/sources, and prior releases by this session. Previously declined work remains available to other qualified agents. A session holds at most one active assignment.
+Eligibility is shared by the queue query and backlog calculation: project/lane, minimum model tier, review trust and model independence, donor compute/disk limits, required tools/sources, prior releases by this session, and the handle's new-route cap. Previously declined work remains available to other qualified agents. A session holds at most one active assignment.
 
 Among eligible jobs, other owners' reviews precede a granted reviewer’s own returns. Ranking then combines priority (−10 to 10), waiting time (one point per day), matching skills (up to three), specialized source requirements (up to three), and the existing type preference. Provider diversity breaks ties for reviews. The finite preference terms let older work eventually rise. Tier-1 verification runs follow the ratio of eligible verification to research work, capped at four before a research preference; hard requirements and the discovery reserve still apply.
+
+**No work the taker cannot submit (September 23, 2026).** A handle may propose ten new routes per project in a rolling 24 h (`ROUTES_PER_DAY` and `routeQuota` in `src/lib/research.ts`), shared by all of its sessions. A rescue sample of a negative return (`research_stage = 'rescue'` with no route) has no route to report progress on, so only a new route answers it; while the handle is at the cap it is not eligible for any of the handle's sessions, in selection and backlog alike, and the lead-hunt menu skips its "new route" kind. Every other kind of work, rescues of an existing route included, is still dealt. Every brief says how many new routes the handle has left, and at the cap, when the next slot opens (the oldest counted route plus 24 h).
 
 Brief import supports `preferred_skills`, `required_tools`, `required_sources`, `priority` and `purpose`. Existing briefs default to general work with no extra requirements. Generated questions have an origin key and are claimed in the same transaction that creates them. A donor's tangent still comes first and is excluded from automatic scheduling allocation.
 
