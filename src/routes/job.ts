@@ -12,7 +12,7 @@ import { checkInstruction, ENDED_LAUNCH_GUIDANCE, folderLaunchContract } from ".
 import { isDeepStrictEqual } from "node:util";
 import { backlogFor, selectJob, computeBlocked, discoveryShare, discoveryDue, allocation, researchPolicy, researchAllocation, portfolioOrder, researchBucket, reviewPressure, reviewTriage, unmetRequirements, STALE_REQUIREMENT_HOURS, type SchedulingAgent } from "../lib/scheduler.js";
 import { parseResearch, stageOf } from '../lib/research-format.js';
-import { recordResearch, prepareRescue, routeQuota, researchBrief, routeContext, reconsiderDependents } from '../lib/research.js';
+import { recordResearch, prepareRescue, researchBrief, routeContext, reconsiderDependents } from '../lib/research.js';
 import { parseVerificationPlan, saveVerificationPlan, queueCheck, saveCheckReceipt, verificationRuns, verificationState, verificationBrief, judgmentBudget, validateReceiptUse, isCompletedCheck, expireWaitingChecks, checkWaitExpired, identicalClaim, verificationSummary, receiptId } from '../lib/verification.js';
 import { readFileSync } from 'node:fs';
 import { ROOT } from '../lib/paths.js';
@@ -56,6 +56,8 @@ import { parseTangent, parseTarget, tangentJob, challengesFor, challengeBanner, 
 /** Caps on submission (Sep 10; Sep 18: a day's window, never a wait for reviewers): self-assigned requests for judgment per handle per project per day, and returns per handle per hour. */
 const MAX_OPEN_SELF_ASSIGNED = Number(process.env.MAX_OPEN_SELF_ASSIGNED ?? 6), MAX_RETURNS_PER_HOUR = Number(process.env.MAX_RETURNS_PER_HOUR ?? 120);   // per handle; a person runs many agents (Chris, Sep 11 2026: 30 was too low)
 /** Per handle: live sessions (seen within a day) and assignments held at once. */
+/** How long a reviews-only session with no review waiting is told to wait before asking again. */
+const REVIEWS_ONLY_RETRY_S = Math.max(60, Number(process.env.REVIEWS_ONLY_RETRY_S) || 600);
 const MAX_LIVE_SESSIONS = Number(process.env.MAX_LIVE_SESSIONS ?? 16), MAX_HELD_PER_HANDLE = Number(process.env.MAX_HELD_PER_HANDLE ?? 16);
 export const job = Router({ mergeParams: true });
 job.use(departments);
@@ -218,12 +220,10 @@ ${ENDED_LAUNCH_GUIDANCE}
 
   const savedDirection = await directionFor(session);
   session.direction_snapshot = savedDirection;
-  const routes = await routeQuota(Number(req.project.id), uid);
-  req.routeQuota = routes;   // synthesizeExplore deals no new-route lead hunt to a capped handle
   const agent: SchedulingAgent = { problemId: Number(req.project.id), slug: req.project.slug, sessionId: session.id, uid,
     tier, model: req.model ?? null, provider: req.provider ?? null, trusted, granted, lane, cpuHours: maxHours,
     ramGb: prefs.ramGb, hasGpu: prefs.hasGpu, disk, maxHours: Number(settings.ai?.max_hours_per_assignment ?? 2),
-    directionId: session.direction_id, directionRevision: savedDirection?.revision, reviewStreak: Number(session.review_streak ?? 0), capabilities: session.capabilities ?? {}, routeCapped: routes.left <= 0 };
+    directionId: session.direction_id, directionRevision: savedDirection?.revision, reviewStreak: Number(session.review_streak ?? 0), capabilities: session.capabilities ?? {} };
   await resumeDeferredReviews(agent.problemId);
   for (const waiting of await expireWaitingChecks(agent.problemId)) {
     if (!await one(`SELECT 1 FROM jobs WHERE parent_return_id=$1 AND type='review' AND status IN ('queued','assigned')`, [waiting.id]))
@@ -273,6 +273,24 @@ ${ENDED_LAUNCH_GUIDANCE}
   // consolidation hours were over their share. Plain reviews still follow the portfolio (frontier agents are not a review pool,
   // Sep 11; the ecosystem simulation holds research at 60% of frontier time). The alternation still applies: after a run of
   // reviews the session goes to research.
+  // Reviews only (Chris, Sep 23 2026, ask 328: "a trusted reviewer toggle I can toggle on for the opus 5.5 agents I run such that
+  // they only do review jobs. The intent is that I am the main reviewer and there is a long queue that needs solving"). The person
+  // sets `work=reviews` in the instruction; a trusted session then takes review jobs and nothing else, with the same eligibility
+  // (never its own model's returns, its own handle's only by grant). When none is waiting it holds nothing and is told to ask
+  // again. A session that is not a trusted reviewer cannot take a review, so the setting does not apply to it.
+  const reviewsOnly = settings.ai?.reviews_only === true && trusted && !recovery && !session.direction_id && !tangentFirst;
+  if (reviewsOnly && !row) {
+    row = await selectJob(agent, false, false, undefined, false, true);
+    if (!row) {
+      let md = `# solveathome / ${req.project.name}: no review waiting for you\n\nYour person set this agent to reviews only, and no review you may take is waiting right now (a model never reviews its own kind${granted ? "" : ", nor a handle its own returns"}${need.blocked_reviews ? `; ${need.blocked_reviews} wait for an agent on another model` : ""}). You hold nothing. Call \`GET ${BASE()}/projects/${req.project.slug}/start\` again with your \`X-Session\` header in ${Math.round(REVIEWS_ONLY_RETRY_S / 60)} minutes; do not start other work, your person asked for reviews.`;
+      if (req.justRegistered && !session.department_id) md = (await orientation(req.project, BASE(), { ...member, ...settings, capabilities: session.capabilities, contact_id: session.contact_id, session: session.id, session_max_jobs: session.max_jobs, length: lengthWords(session), disk }, true, { model: req.model ?? null, uid, trusted, tier, effort: req.effort ?? null, tier_note: tf.note }, true)) + "\n\n---\n\n" + md;
+      if (inboxMd) md += `\n\n${inboxMd}`;
+      res.setHeader("Retry-After", String(REVIEWS_ONLY_RETRY_S));
+      if (wantsJson) res.json({ session: session.id, state: "no_review_waiting", retry_after_s: REVIEWS_ONLY_RETRY_S, brief_md: md, inbox: ib });
+      else res.type("text/markdown").send(md);
+      return;
+    }
+  }
   const trustedJudgment = !row && agent.granted && tier === 1 && !preferResearch
     ? await selectJob(agent, false, false, undefined, true) : null;
   row ??= trustedJudgment;
@@ -304,13 +322,14 @@ ${ENDED_LAUNCH_GUIDANCE}
     ?? await synthesizeExplore(req, session, lane, maxHours, null, true);
   if (!row) row = await synthesizeExplore(req, session, lane, maxHours, await computeBlocked(agent));
   const unmet = row.type === 'check' ? { tools: [], sources: [] } : unmetRequirements(row, agent.capabilities);
-  const reason = { policy: session.direction_id ? "agent direction" : tangentFirst ? "person's tangent" : trustedJudgment ? "trusted judgment" : pressed ? "review pressure" : triaged ? "review triage" : portfolio ? "research portfolio" : reserveDiscovery ? "reserved tier-1 discovery" : "eligible work by need and capability",
+  const reason = { policy: session.direction_id ? "agent direction" : tangentFirst ? "person's tangent" : reviewsOnly ? "reviews only" : trustedJudgment ? "trusted judgment" : pressed ? "review pressure" : triaged ? "review triage" : portfolio ? "research portfolio" : reserveDiscovery ? "reserved tier-1 discovery" : "eligible work by need and capability",
     tier, guidance_version: GUIDANCE_VERSION, discovery_share: share, discovery_allocation: used, eligible_backlog: { reviews: need.reviews, research: need.research }, prefer_research: preferResearch,
     ...(need.blocked_reviews ? { blocked_backlog: { reviews: need.blocked_reviews, reason: "a model never reviews its own kind; these wait for an agent on another model" } } : {}),
     research_allocation: portfolio, research_hours: portfolioUsed, research_bucket: researchBucket(row),
     skill_matches: Number(row.skill_matches ?? 0), purpose: row.purpose ?? 'work',
     ...(pressure !== null ? { review_pressure: { threshold: pressure, waiting: need.reviews } } : {}),
     ...(triageCfg ? { review_triage: { min_tier: triageCfg.minTier } } : {}),
+    ...(settings.ai?.reviews_only === true && !reviewsOnly ? { reviews_only: trusted ? "not applied to this assignment (recovery, direction or tangent)" : "ignored: this session is not a trusted reviewer" } : {}),
     ...(unmet.tools.length || unmet.sources.length ? { relaxed_requirements: unmet } : {}) };
   row = await claimAssignment(row, session, uid, tier, reason, !tangentFirst && !session.direction_id);
   if(recovery) {
@@ -318,7 +337,7 @@ ${ENDED_LAUNCH_GUIDANCE}
     await q(`UPDATE sessions SET recovery_attempt_id=NULL WHERE id=$1`,[session.id]);
   }
   row.repo_url = req.project.repo_url;
-  const sess = { id: String(session.id), jobs: Number(session.jobs), max: session.max_jobs === null ? null : Number(session.max_jobs), length: lengthWords(session), disk, abandonAfterMin: ABANDON_AFTER_MIN, maxHours: agent.maxHours, compute: describeOffer(offer), transcriptPreapproved: settings.ai?.transcript_preapproved === true, subagents: settings.ai?.subagents?.allowed === false ? "not allowed" : settings.ai?.subagents?.max_parallel ? `allowed, up to ${settings.ai.subagents.max_parallel} at a time` : "allowed", files: await files.quota(uid).then((f) => ({ left: f.files_left, bytes_left: f.bytes_left, per_day: f.files_per_day })), routes: { left: routes.left, per_day: routes.per_day, next_slot_at: routes.next_slot_at } };
+  const sess = { id: String(session.id), jobs: Number(session.jobs), max: session.max_jobs === null ? null : Number(session.max_jobs), length: lengthWords(session), disk, abandonAfterMin: ABANDON_AFTER_MIN, maxHours: agent.maxHours, compute: describeOffer(offer), transcriptPreapproved: settings.ai?.transcript_preapproved === true, subagents: settings.ai?.subagents?.allowed === false ? "not allowed" : settings.ai?.subagents?.max_parallel ? `allowed, up to ${settings.ai.subagents.max_parallel} at a time` : "allowed", files: await files.quota(uid).then((f) => ({ left: f.files_left, bytes_left: f.bytes_left, per_day: f.files_per_day })) };
   if (Number(row.release_count ?? 0) > 0) row.prior_claims = await q(`SELECT m.id, u.handle, m.model, m.created_at FROM messages m JOIN users u ON u.id = m.user_id WHERE m.job_id = $1 AND m.kind = 'claim' ORDER BY m.id`, [row.id]);
   if (row.research_route_id) row.brief_md += await researchBrief(Number(row.research_route_id));
   // A check worker reconstructs the package, so it gets the record in full; a reviewer gets the summary and the judgment asked, with the record one GET away.
@@ -494,9 +513,7 @@ async function synthesizeExplore(req: any, session: any, laneSlug: string | null
   } else {
     const n = Number((await one<{ c: string }>(`SELECT count(*) AS c FROM jobs WHERE problem_id = $1 AND type = 'explore' AND (origin_key LIKE 'lead:%' OR title LIKE 'Leads: %') AND created_at > now() - interval '${SERVED_WINDOW}'`, [req.project.id]))?.c ?? 0);
     const menu = discovery && researchPolicy(req.project.slug, req.project.research_allocation) ? (["route", "synthesis", "route", "statistic", "prior-art"] as const) : discovery ? (["prior-art", "break", "synthesis", "route", "statistic"] as const) : LEAD_KINDS;
-    // A handle at its new-route cap cannot send the proposal a "new route" hunt asks for (#sah-no-capped-assignments).
-    const dealt = req.routeQuota?.left <= 0 ? menu.filter((k) => k !== "route") : menu;
-    const kind = dealt[n % dealt.length];
+    const kind = menu[n % menu.length];
     const recent = await q<{ id: number; type: string; handle: string; final_rung: string | null; head: string }>(`SELECT r.id, r.type, u.handle, r.final_rung, left(regexp_replace(r.report_md, E'\\n[\\\\s\\\\S]*$', ''), 140) AS head FROM returns r JOIN users u ON u.id = r.user_id WHERE r.problem_id = $1 AND r.status = 'accepted' AND r.type <> 'explore' AND r.user_id <> $2
       -- A return that answers a file-fix job repaired another return's scripts; it makes no claim of its own, so it is not a
       -- target for a prior-art hunt or an adversarial re-check (platform issue #69: return #176 repaired a comparator's
@@ -677,7 +694,7 @@ job.post("/release", bearer, project, assignmentMutation(async (req: any, res: a
  */
 /** The person's configuration, as the query string of the instruction they pasted (Chris, Sep 12 2026). Only what differs from the defaults travels. */
 const TIMES = ["continuous", "4h", "2h", "1task"] as const;
-export const INSTRUCTION_ARGS = { time: TIMES as readonly string[], subagents: ["yes", "no"], share: SHARES.map(String), disk: DISKS.map(String), directions: ["1", "0"] };
+export const INSTRUCTION_ARGS = { time: TIMES as readonly string[], subagents: ["yes", "no"], share: SHARES.map(String), disk: DISKS.map(String), directions: ["1", "0"], work: ["all", "reviews"] };
 const DIRECTIONS_PLACEHOLDER = "Your person wrote their directions in the instruction that started you. Those words are the assignment: quote them verbatim in human_md and work from them.";
 export function parseInstruction(qs: Record<string, unknown>): { ai: any; maxJobs: number | null; endsIn: string | null; compute: ComputeOffer | null; input: any } | { error: string; valid: typeof INSTRUCTION_ARGS } {
   const pick = (k: keyof typeof INSTRUCTION_ARGS, dflt: string): string | { bad: string } => {
@@ -687,12 +704,12 @@ export function parseInstruction(qs: Record<string, unknown>): { ai: any; maxJob
     return INSTRUCTION_ARGS[k].includes(norm) ? norm : { bad: `${k} must be one of ${INSTRUCTION_ARGS[k].join(", ")} (got "${str.slice(0, 40)}")` };
   };
   const got: Record<string, string> = {};
-  for (const k of ["time", "subagents", "share", "disk", "directions"] as const) {
-    const v = pick(k, k === "time" ? "continuous" : k === "subagents" ? "yes" : k === "share" ? String(SHARE_DEFAULT) : k === "disk" ? String(DISK_DEFAULT) : "0");
+  for (const k of ["time", "subagents", "share", "disk", "directions", "work"] as const) {
+    const v = pick(k, k === "time" ? "continuous" : k === "subagents" ? "yes" : k === "share" ? String(SHARE_DEFAULT) : k === "disk" ? String(DISK_DEFAULT) : k === "work" ? "all" : "0");
     if (typeof v !== "string") return { error: v.bad, valid: INSTRUCTION_ARGS };
     got[k] = v;
   }
-  const ai = { max_hours_per_assignment: got.time === '4h' ? 4 : 2, subagents: got.subagents === "no" ? { allowed: false, max_parallel: null } : { allowed: true, max_parallel: null }, transcript_preapproved: true };
+  const ai = { max_hours_per_assignment: got.time === '4h' ? 4 : 2, subagents: got.subagents === "no" ? { allowed: false, max_parallel: null } : { allowed: true, max_parallel: null }, transcript_preapproved: true, ...(got.work === "reviews" ? { reviews_only: true } : {}) };
   return {
     ai, maxJobs: got.time === "1task" ? 1 : null, endsIn: got.time === "4h" ? "4 hours" : got.time === "2h" ? "2 hours" : null,
     compute: shareOffer(Number(got.share), Number(got.disk)),

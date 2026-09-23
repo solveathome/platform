@@ -627,3 +627,28 @@ test('a handle trusted by grant is handed waiting judgment before the research p
   await q(`UPDATE jobs SET status='expired' WHERE parent_return_id=$1 AND type='review'`,[r.return_id]);
   const again=await start('judge',judge);assert.notEqual(again.assignment_reason.policy,'trusted judgment','with only plain reviews waiting, the portfolio decides');
 });
+
+test('no cap on new routes: an eleventh proposal from one handle in a day is recorded (Chris, Sep 23 2026)',async()=>{
+  for(let i=0;i<11;i++){const r=await proposed();assert.equal(r.status,'recorded');assert.ok(r.research.route_id);}
+  assert.equal((await one(`SELECT count(*)::int AS n FROM research_routes WHERE problem_id=$1`,[pid])).n,11);
+});
+
+test('reviews only: a trusted session takes reviews and nothing else, waits when none is open; an untrusted one ignores it',async()=>{
+  const {parseInstruction}=await import('../src/routes/job.ts');
+  assert.equal(parseInstruction({work:'reviews'}).ai.reviews_only,true);
+  assert.equal('reviews_only' in parseInstruction({}).ai,false,'the default leaves stored settings as they were');
+  assert.match(parseInstruction({work:'everything'}).error,/work must be one of all, reviews/);
+  await q(`INSERT INTO jobs (problem_id,type,title,brief_md,budget_hours,min_tier,priority) VALUES ($1,'source','Research waiting','Find the evidence.',1,99,10)`,[pid]);
+  const get=async(who,session)=>{const u=users[who],h={authorization:`Bearer ${u.token}`,'x-model':u.model,'x-effort':'max',accept:'application/json'};
+    if(session)h['x-session']=session;else h['x-launch-id']=randomUUID();
+    const res=await fetch(base+'/start?share=25&work=reviews',{headers:h});return {status:res.status,retry:res.headers.get('retry-after'),body:await res.json()};};
+  const idle=await get('judge');assert.equal(idle.status,200,JSON.stringify(idle.body));
+  assert.equal(idle.body.state,'no_review_waiting');assert.equal(idle.body.job_id,undefined,'research is waiting, and it is not handed out');
+  assert.equal(idle.retry,'600');assert.equal(idle.body.retry_after_s,600);assert.match(idle.body.brief_md,/reviews only/);
+  const ret=await one(`INSERT INTO returns (problem_id,type,user_id,model,provider,report_md,transcript,status) VALUES ($1,'explore',$2,'claude-opus-5','anthropic','A claim to judge.','t','pending') RETURNING id`,[pid,users.author.id]);
+  const rj=await one(`INSERT INTO jobs (problem_id,type,title,brief_md,budget_hours,min_tier,parent_return_id) VALUES ($1,'review',$2,'Check it.',1,99,$3) RETURNING id`,[pid,`Review return #${ret.id}`,ret.id]);
+  const busy=await get('judge',idle.body.session);assert.equal(busy.status,200,JSON.stringify(busy.body));
+  assert.equal(Number(busy.body.job_id),Number(rj.id));assert.equal(busy.body.assignment_reason.policy,'reviews only');
+  const other=await get('runner');assert.equal(other.status,200,JSON.stringify(other.body));
+  assert.notEqual(other.body.type,'review');assert.match(other.body.assignment_reason.reviews_only,/ignored/);
+});
