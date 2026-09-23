@@ -12,7 +12,7 @@ import { checkInstruction, ENDED_LAUNCH_GUIDANCE, folderLaunchContract } from ".
 import { isDeepStrictEqual } from "node:util";
 import { backlogFor, selectJob, computeBlocked, discoveryShare, discoveryDue, allocation, researchPolicy, researchAllocation, portfolioOrder, researchBucket, reviewPressure, reviewTriage, unmetRequirements, STALE_REQUIREMENT_HOURS, type SchedulingAgent } from "../lib/scheduler.js";
 import { parseResearch, stageOf } from '../lib/research-format.js';
-import { recordResearch, prepareRescue, researchBrief, routeContext, reconsiderDependents } from '../lib/research.js';
+import { recordResearch, prepareRescue, routeQuota, researchBrief, routeContext, reconsiderDependents } from '../lib/research.js';
 import { parseVerificationPlan, saveVerificationPlan, queueCheck, saveCheckReceipt, verificationRuns, verificationState, verificationBrief, judgmentBudget, validateReceiptUse, isCompletedCheck, expireWaitingChecks, checkWaitExpired, identicalClaim, verificationSummary, receiptId } from '../lib/verification.js';
 import { readFileSync } from 'node:fs';
 import { ROOT } from '../lib/paths.js';
@@ -218,10 +218,12 @@ ${ENDED_LAUNCH_GUIDANCE}
 
   const savedDirection = await directionFor(session);
   session.direction_snapshot = savedDirection;
+  const routes = await routeQuota(Number(req.project.id), uid);
+  req.routeQuota = routes;   // synthesizeExplore deals no new-route lead hunt to a capped handle
   const agent: SchedulingAgent = { problemId: Number(req.project.id), slug: req.project.slug, sessionId: session.id, uid,
     tier, model: req.model ?? null, provider: req.provider ?? null, trusted, granted, lane, cpuHours: maxHours,
     ramGb: prefs.ramGb, hasGpu: prefs.hasGpu, disk, maxHours: Number(settings.ai?.max_hours_per_assignment ?? 2),
-    directionId: session.direction_id, directionRevision: savedDirection?.revision, reviewStreak: Number(session.review_streak ?? 0), capabilities: session.capabilities ?? {} };
+    directionId: session.direction_id, directionRevision: savedDirection?.revision, reviewStreak: Number(session.review_streak ?? 0), capabilities: session.capabilities ?? {}, routeCapped: routes.left <= 0 };
   await resumeDeferredReviews(agent.problemId);
   for (const waiting of await expireWaitingChecks(agent.problemId)) {
     if (!await one(`SELECT 1 FROM jobs WHERE parent_return_id=$1 AND type='review' AND status IN ('queued','assigned')`, [waiting.id]))
@@ -316,7 +318,7 @@ ${ENDED_LAUNCH_GUIDANCE}
     await q(`UPDATE sessions SET recovery_attempt_id=NULL WHERE id=$1`,[session.id]);
   }
   row.repo_url = req.project.repo_url;
-  const sess = { id: String(session.id), jobs: Number(session.jobs), max: session.max_jobs === null ? null : Number(session.max_jobs), length: lengthWords(session), disk, abandonAfterMin: ABANDON_AFTER_MIN, maxHours: agent.maxHours, compute: describeOffer(offer), transcriptPreapproved: settings.ai?.transcript_preapproved === true, subagents: settings.ai?.subagents?.allowed === false ? "not allowed" : settings.ai?.subagents?.max_parallel ? `allowed, up to ${settings.ai.subagents.max_parallel} at a time` : "allowed", files: await files.quota(uid).then((f) => ({ left: f.files_left, bytes_left: f.bytes_left, per_day: f.files_per_day })) };
+  const sess = { id: String(session.id), jobs: Number(session.jobs), max: session.max_jobs === null ? null : Number(session.max_jobs), length: lengthWords(session), disk, abandonAfterMin: ABANDON_AFTER_MIN, maxHours: agent.maxHours, compute: describeOffer(offer), transcriptPreapproved: settings.ai?.transcript_preapproved === true, subagents: settings.ai?.subagents?.allowed === false ? "not allowed" : settings.ai?.subagents?.max_parallel ? `allowed, up to ${settings.ai.subagents.max_parallel} at a time` : "allowed", files: await files.quota(uid).then((f) => ({ left: f.files_left, bytes_left: f.bytes_left, per_day: f.files_per_day })), routes: { left: routes.left, per_day: routes.per_day, next_slot_at: routes.next_slot_at } };
   if (Number(row.release_count ?? 0) > 0) row.prior_claims = await q(`SELECT m.id, u.handle, m.model, m.created_at FROM messages m JOIN users u ON u.id = m.user_id WHERE m.job_id = $1 AND m.kind = 'claim' ORDER BY m.id`, [row.id]);
   if (row.research_route_id) row.brief_md += await researchBrief(Number(row.research_route_id));
   // A check worker reconstructs the package, so it gets the record in full; a reviewer gets the summary and the judgment asked, with the record one GET away.
@@ -492,7 +494,9 @@ async function synthesizeExplore(req: any, session: any, laneSlug: string | null
   } else {
     const n = Number((await one<{ c: string }>(`SELECT count(*) AS c FROM jobs WHERE problem_id = $1 AND type = 'explore' AND (origin_key LIKE 'lead:%' OR title LIKE 'Leads: %') AND created_at > now() - interval '${SERVED_WINDOW}'`, [req.project.id]))?.c ?? 0);
     const menu = discovery && researchPolicy(req.project.slug, req.project.research_allocation) ? (["route", "synthesis", "route", "statistic", "prior-art"] as const) : discovery ? (["prior-art", "break", "synthesis", "route", "statistic"] as const) : LEAD_KINDS;
-    const kind = menu[n % menu.length];
+    // A handle at its new-route cap cannot send the proposal a "new route" hunt asks for (#sah-no-capped-assignments).
+    const dealt = req.routeQuota?.left <= 0 ? menu.filter((k) => k !== "route") : menu;
+    const kind = dealt[n % dealt.length];
     const recent = await q<{ id: number; type: string; handle: string; final_rung: string | null; head: string }>(`SELECT r.id, r.type, u.handle, r.final_rung, left(regexp_replace(r.report_md, E'\\n[\\\\s\\\\S]*$', ''), 140) AS head FROM returns r JOIN users u ON u.id = r.user_id WHERE r.problem_id = $1 AND r.status = 'accepted' AND r.type <> 'explore' AND r.user_id <> $2
       -- A return that answers a file-fix job repaired another return's scripts; it makes no claim of its own, so it is not a
       -- target for a prior-art hunt or an adversarial re-check (platform issue #69: return #176 repaired a comparator's

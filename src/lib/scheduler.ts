@@ -35,7 +35,14 @@ export type SchedulingAgent = {
   provider: string | null; trusted: boolean; granted: boolean; lane: string | null;
   cpuHours: number; ramGb: number; hasGpu: boolean; disk: number; maxHours: number;
   jobId?: number; directionId?: string | null; directionRevision?: number; reviewStreak: number; capabilities: Partial<Capabilities>;
+  /** The handle is at its new-route cap (`routeQuota` in research.ts). */
+  routeCapped?: boolean;
 };
+
+/** A job only a new route can answer: a rescue sample of a negative return has no route to report progress on, so its research
+ * is a `research.proposal` or nothing. On Sep 23 2026 job #2852 went six times to a handle at its ten-routes-a-day cap, and each
+ * session released it unanswered (#sah-no-capped-assignments). Such a job goes to no handle at the cap; everything else still does. */
+export const ROUTE_ONLY_SQL = `(j.research_stage='rescue' AND j.research_route_id IS NULL)`;
 
 /** Hours a pursuit step waits before a requirement nobody here has ever declared stops holding it back. */
 export const STALE_REQUIREMENT_HOURS = Math.max(1, Number(process.env.STALE_REQUIREMENT_HOURS) || 24);
@@ -82,6 +89,7 @@ function eligibility(a: SchedulingAgent, omitCompute = false, sameKindOnly = fal
     `NOT EXISTS (SELECT 1 FROM jobs j2 WHERE j2.parent_return_id = j.parent_return_id AND j2.id <> j.id AND j2.assigned_to = ${uid} AND j2.status = 'assigned')`,
     sameKindOnly ? `(pr.id IS NOT NULL AND pr.model IS NOT DISTINCT FROM ${model}::text)` : `(pr.id IS NULL OR pr.model IS DISTINCT FROM ${model}::text)`,
     `(pr.id IS NULL OR j.type = 'triage' OR j.min_tier >= 99 OR ${tier} <= coalesce(amt.tier, 99))`,
+    `(NOT ${p(!!a.routeCapped)}::boolean OR NOT ${ROUTE_ONLY_SQL})`,
   ];
   clauses.push(a.directionId
     ? `((j.agent_direction_id=${p(a.directionId)} AND j.agent_direction_revision=${p(a.directionRevision)}) OR (j.agent_direction_id IS NULL AND EXISTS(SELECT 1 FROM agent_direction_links dl WHERE dl.job_id=j.id AND dl.direction_id=${p(a.directionId)} AND dl.revision=${p(a.directionRevision)})))`

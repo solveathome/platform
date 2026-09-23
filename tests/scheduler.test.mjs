@@ -349,3 +349,37 @@ test('review jobs blocked only by the same-kind rule are counted as blocked, not
   await q(`DELETE FROM jobs WHERE parent_return_id=$1`,[ret.id]);
   await q(`DELETE FROM returns WHERE id=$1`,[ret.id]);
 });
+
+test('a handle at its new-route cap gets no job only a new route answers, and still gets every other kind of work',async()=>{
+  // Ten routes proposed by `uid` in the rolling window: the cap in research.ts (#sah-no-capped-assignments, job #2852).
+  const origin=await one(`INSERT INTO returns (problem_id,type,user_id,model,provider,report_md,transcript,status) VALUES ($1,'direction',$2,'claude-opus-5-5','anthropic','Ten proposals.','t','recorded') RETURNING id`,[pid,uid]);
+  const routeIds=[];
+  for(let i=0;i<10;i++) routeIds.push(Number((await one(`INSERT INTO research_routes (problem_id,origin_return_id,title,contribution_md,prior_art_md,uncertainty_md,state,last_return_id,created_at) VALUES ($1,$2,$3,'c','p','u','blocked',$2,now()-($4::int*interval '1 minute')) RETURNING id`,[pid,origin.id,`Route ${i}`,60-i])).id));
+  const negative=await one(`INSERT INTO returns (problem_id,type,user_id,model,provider,report_md,transcript,status) VALUES ($1,'explore',$2,'gpt-6-astra','openai','A refuted attempt.','t','rejected') RETURNING id`,[pid,other]);
+  const research=(stage,route,title)=>one(`INSERT INTO jobs (problem_id,type,title,brief_md,git_ref,budget_hours,min_tier,purpose,research_stage,research_route_id,research_source_return_id) VALUES ($1,'explore',$2,'Look again.','main',0.5,99,'discovery',$3,$4,$5) RETURNING id`,[pid,title,stage,route,negative.id]);
+  const sample=await research('rescue',null,'Rescue investigation: sample');
+  const routeRescue=await research('rescue',routeIds[0],'Rescue: an existing route');
+  const plain=await queued();
+  const capped={problemId:pid,slug,sessionId:'synthetic-cap',uid,tier:1,model:'claude-opus-5-5',provider:'anthropic',trusted:false,granted:false,lane:null,cpuHours:0,ramGb:0,hasGpu:false,disk:1,maxHours:2,reviewStreak:0,capabilities:{},routeCapped:true};
+  const free={...capped,routeCapped:false};
+  assert.deepEqual(await backlogFor(capped),{reviews:0,research:2,blocked_reviews:0},'the backlog counts what selection can hand out');
+  assert.deepEqual(await backlogFor(free),{reviews:0,research:3,blocked_reviews:0});
+  assert.equal((await selectJob(capped,true,false,'rescue')).id,routeRescue.id,'a rescue of an existing route is progress, not a new route');
+  await q(`UPDATE jobs SET status='done' WHERE id=$1`,[routeRescue.id]);
+  assert.equal(await selectJob(capped,true,false,'rescue'),null,'the rescue sample is not dealt at the cap');
+  assert.equal((await selectJob(free,true,false,'rescue')).id,sample.id,'below the cap it is');
+  assert.equal((await selectJob(capped,true)).id,plain.id,'other work still comes');
+
+  // Through /start: the real quota decides, the brief says when the cap clears, and the lead menu skips "new route".
+  await q(`UPDATE jobs SET status='done' WHERE id=$1`,[plain.id]);
+  for(let i=0;i<5;i++) await queued({type:'explore'}).then(j=>q(`UPDATE jobs SET status='done',origin_key=$2 WHERE id=$1`,[j.id,`lead:test:${i}`]));   // the sixth lead dealt would be "route"
+  const a=await start({model:'claude-opus-5-5'});
+  assert.notEqual(a.job_id,sample.id,'the capped handle is never handed the sample');
+  assert.doesNotMatch(a.brief_md,/Leads: new route/);
+  const oldest=await one(`SELECT min(created_at) AS o FROM research_routes WHERE problem_id=$1`,[pid]);
+  assert.match(a.brief_md,/at its cap of 10 new routes in a rolling 24 h/);
+  assert.ok(a.brief_md.includes(new Date(new Date(oldest.o).getTime()+86_400_000).toISOString()),'the brief names when the next slot opens');
+  const b=await start({model:'claude-opus-5-5',who:otherToken});
+  assert.equal(b.job_id,sample.id,'a handle below the cap takes it');
+  assert.match(b.brief_md,/yours has 10 left/);
+});
