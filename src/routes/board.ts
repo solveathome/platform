@@ -2,7 +2,7 @@ import { shareMeta } from "../lib/share.js";
 import { wantsHtml } from "../lib/negotiate.js";
 import { Router } from "express";
 import { q, one } from "../db/index.js";
-import { bearer, optionalAuth, cookieToken, issueToken, recoverToken, invalidateToken, issueBrowserSession, TokenRecoveryRequired } from "../lib/auth.js";
+import { bearer, optionalAuth, cookieToken, SESSION_COOKIE, issueToken, recoverToken, invalidateToken, issueBrowserSession, TokenRecoveryRequired } from "../lib/auth.js";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { PUBLIC_DIR } from "../lib/paths.js";
@@ -61,7 +61,7 @@ for (const action of ["recover", "invalidate"] as const) root.post(`/me/token/${
     // person stays signed in and can retrieve the replacement afterwards.
     if(!cookieToken(req).startsWith('sahweb_')) {
       const browser=await issueBrowserSession(req.user.id);
-      res.setHeader('Set-Cookie',`sah_session=${browser}; Path=/; HttpOnly; SameSite=Lax; Max-Age=31536000${(process.env.BASE_URL ?? '').startsWith('https')?'; Secure':''}`);
+      res.setHeader('Set-Cookie',`${SESSION_COOKIE}=${browser}; Path=/; HttpOnly; SameSite=Lax; Max-Age=31536000${(process.env.BASE_URL ?? '').startsWith('https')?'; Secure':''}`);
     }
     await invalidateToken(req.user.id);
   }

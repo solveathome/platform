@@ -7,6 +7,9 @@ set -euo pipefail
 cd "$(git rev-parse --show-toplevel 2>/dev/null || (cd "$(dirname "$0")/.." && pwd))"
 # A hook runs with GIT_DIR, GIT_INDEX_FILE and friends exported; a test that builds a git fixture must never inherit them.
 unset $(git rev-parse --local-env-vars) 2>/dev/null || true
+# An agent's worktree (Align) carries TEST_DATABASE_URL in its .env, pointed at its own stack's test database: that one, when none is set.
+if [ -z "${TEST_DATABASE_URL:-}" ] && [ -f .env ]; then TEST_DATABASE_URL=$(sed -n 's/^TEST_DATABASE_URL=//p' .env | tail -1); if [ -n "$TEST_DATABASE_URL" ]; then export TEST_DATABASE_URL; else unset TEST_DATABASE_URL; fi; fi
+case "${TEST_DATABASE_URL:-}" in *@127.0.0.1:1/*) echo "your agent stack is not up (.env points the tests at port 1): run tools/align/stack up (mba repo) and push again"; exit 1;; esac
 npm run -s check
 # Each suite runs once; its summary line is printed and its failure refuses the push.
 UNIT=$(npm test 2>&1 || true); echo "$UNIT" | grep -E '^(#|ℹ) (pass|fail)' | tr '\n' ' '; echo

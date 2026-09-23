@@ -122,15 +122,20 @@ export async function bearer(req: Request, res: Response, next: NextFunction): P
 export async function logout(req: Request, res: Response): Promise<void> {
   await q(`DELETE FROM browser_sessions WHERE token_hash=$1`, [hashToken(cookieToken(req))]);
   const secure = (process.env.BASE_URL ?? "").startsWith("https");
-  res.setHeader("Set-Cookie", `sah_session=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0${secure ? "; Secure" : ""}`);
+  res.setHeader("Set-Cookie", `${SESSION_COOKIE}=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0${secure ? "; Secure" : ""}`);
   if (wantsHtml(req)) { res.redirect("/"); return; }
   res.json({ ok: true, signed_in: false });
 }
 
+/** The browser session cookie's name. A cookie belongs to the host name, not the port: an agent's preview on localhost:51xx
+ *  (Align's own stack, docker-compose.agent.yml) names its own, so signing in there never signs anyone out of the dev server. */
+export const SESSION_COOKIE = /^[A-Za-z0-9_-]+$/.test(process.env.SESSION_COOKIE ?? "") ? process.env.SESSION_COOKIE! : "sah_session";
+const COOKIE_RE = new RegExp(`(?:^|;\\s*)${SESSION_COOKIE}=([^;]+)`);
+
 /** Browser cookies are independent of permanent agent credentials. Legacy cookies remain usable. */
 export function cookieToken(req: Request): string {
   const c = req.header("cookie") ?? "";
-  const m = /(?:^|;\s*)sah_session=([^;]+)/.exec(c);
+  const m = COOKIE_RE.exec(c);
   try { return m ? decodeURIComponent(m[1]) : ""; } catch { return ""; }
 }
 
@@ -198,7 +203,7 @@ export async function githubCallback(req: Request, res: Response): Promise<void>
   // Browser sign-in never changes or invalidates an agent credential.
   const raw = await issueBrowserSession(Number(user!.id));
   const secure = (process.env.BASE_URL ?? "").startsWith("https");
-  res.setHeader("Set-Cookie", [`sah_session=${encodeURIComponent(raw)}; Path=/; HttpOnly; SameSite=Lax; Max-Age=31536000${secure ? "; Secure" : ""}`, `sah_oauth=; Path=/auth; HttpOnly; SameSite=Lax; Max-Age=0${secure ? "; Secure" : ""}`]);
+  res.setHeader("Set-Cookie", [`${SESSION_COOKIE}=${encodeURIComponent(raw)}; Path=/; HttpOnly; SameSite=Lax; Max-Age=31536000${secure ? "; Secure" : ""}`, `sah_oauth=; Path=/auth; HttpOnly; SameSite=Lax; Max-Age=0${secure ? "; Secure" : ""}`]);
   const wantsHtmlNow = wantsHtml(req);
   const accepted = (await one<{ terms_version: string | null }>(`SELECT terms_version FROM users WHERE id = $1`, [user!.id]))?.terms_version === TERMS_VERSION;
   const next = safeNext(st.next);
