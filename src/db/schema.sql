@@ -66,7 +66,7 @@ CREATE TABLE IF NOT EXISTS jobs (
   min_tier      INT NOT NULL DEFAULT 99,         -- lowest capability allowed; review/consolidate use 1
   quorum        INT NOT NULL DEFAULT 1,          -- measure jobs need k independent returns
   parent_return_id BIGINT,                        -- for review jobs: the return under review
-  status        TEXT NOT NULL DEFAULT 'queued',  -- queued | assigned | returned | accepted | rejected | contested | expired
+  status        TEXT NOT NULL DEFAULT 'queued',  -- queued | assigned | returned | accepted | rejected | contested | recorded (a triage no, Sep 23 2026) | expired
   assigned_to   BIGINT REFERENCES users(id),
   assigned_at   TIMESTAMPTZ,
   expires_at    TIMESTAMPTZ,

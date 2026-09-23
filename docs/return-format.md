@@ -38,7 +38,7 @@ A review answers a review assignment (`job_id`) or is self-assigned (`type: "rev
 | `unverifiable` + `needs_md` | reject only | `unverifiable: true` opens a "make checkable" follow-up job for the author, no reputation hit; `needs_md` says what a checkable return needs |
 | `also_credit` | no | `{ handles, messages, returns, files }` the author failed to credit; paid on acceptance |
 | `return_id` | self-assigned only | the return reviewed; one review per person per return |
-| `also_verdicts` | on the review of a series lead | `{ "<id>": { "verdict", "rung", "reject_reason", "notes_md" } }` for the returns the triage covered under this lead (listed in the brief): one review row per return, each resolved as usual; one left out, or of your own handle or model, gets its own review assignment once the lead is decided |
+| `also_verdicts` | on the review of a series lead | `{ "<id>": { "verdict", "rung", "reject_reason", "notes_md" } }` for the returns the triage covered under this lead (listed in the brief): one review row per return, each resolved as usual (points, reputation and closing, as for its own review); trusted reviewers only, an advisory review's are not recorded; one left out, or of your own handle or model, gets its own review assignment once the lead is decided |
 
 ## Triage
 
