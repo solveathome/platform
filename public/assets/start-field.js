@@ -3,8 +3,8 @@
    differs from the defaults goes in the URL. Tokens stay masked until revealed and are never stored. */
 (function () {
   const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
-  const KEYS = ['time', 'subagents', 'share', 'disk'];
-  const DEFAULTS = {time: 'continuous', subagents: 'yes', share: '75', disk: '5'};
+  const KEYS = ['time', 'subagents', 'share', 'disk', 'work'];
+  const DEFAULTS = {time: 'continuous', subagents: 'yes', share: '75', disk: '5', work: 'all'};
   const ROWS = [
     {k: 'time', h: 'Max session length', opts: [['continuous', 'Until I stop it'], ['4h', '4 hours'], ['2h', '2 hours'], ['1task', 'One assignment']], m: {
       continuous: 'Keeps taking assignments until you stop it. Stopping costs nothing.',
@@ -24,12 +24,16 @@
       '1': 'Documents and scripts only. No local data runs.',
       '5': 'Room for data runs, sieve tables and census outputs.',
       '10': 'Room for a Lean 4 toolchain and Mathlib cache, so formalize assignments are on the table.'}},
+    {k: 'work', h: 'Work', opts: [['all', 'Any work'], ['reviews', 'Reviews only']], m: {
+      all: 'The scheduler picks: research, reviews and the rest, by what the project needs.',
+      reviews: 'Trusted reviewers only: the agent takes review jobs and nothing else, and waits when none is open. An agent that is not a trusted reviewer ignores this.'}},
   ];
   const WORDS = {
     share: v => v === '0' ? 'no compute' : `${v}% of the machine`,
     time: v => ({continuous: 'until you stop it', '4h': 'for 4 hours', '2h': 'for 2 hours', '1task': 'for one assignment'})[v],
     disk: v => `up to ${v} GB of disk`,
     subagents: v => v === 'yes' ? 'sub-agents allowed' : 'a single agent',
+    work: v => v === 'reviews' ? 'reviews only' : 'any work',
   };
   const mask = token => token.slice(0, 4) + '•'.repeat(Math.max(8, token.length - 4));
 
@@ -99,7 +103,7 @@
       const qs = ks.length ? '<span class="sf-url">?</span>' + ks.map(k => `<span class="sf-chip${flashKey === k ? ' flash' : ''}" data-k="${k}"><span class="k">${k}=</span>${esc(argv(v, k))}</span>`).join('<span class="sf-url">&amp;</span>') : '';
       instr.innerHTML = `<span class="sf-tail">${esc(plain(v,shown ? me.token : mask(me.token)))}</span>`;
       for (const r of ROWS) form.querySelector(`[data-meaning="${r.k}"]`).textContent = r.m[v[r.k]];
-      reply.innerHTML = `<span class="rh"># ${esc(document.title.split(' · ')[0])}: local run ready</span>\n\nDepartment <span class="rid">&lt;department&gt;</span> · Run <span class="rid">&lt;run&gt;</span>\nKeep your own run identity, direction and assignment across tasks.\n\nSettings: <span class="hl">${WORDS.time(v.time)}</span> · <span class="hl">${WORDS.subagents(v.subagents)}</span> · <span class="hl">${WORDS.share(v.share)}</span> · <span class="hl">${WORDS.disk(v.disk)}</span>.\n\n${dir.value.trim() ? 'Your original direction is saved for this run and applies across assignments.' : 'Scope: general project research.'}\n\nYour assignment includes its question, evidence requirements and stopping condition. Relevant local findings and the cached research protocol are available beside it. Before requesting the first assignment, reuse compatible shared tools with separate run state. Test model/thinking-level discovery, the publication scrubber, process limits and completion/outstanding-work checks. An issued task with no submission must fail an all-complete check. Self-review before every assignment and reconcile all issued attempts before reporting completion or taking more work. Reuse the folder’s evidence and tools; keep this run’s direction separate from its siblings.\n\nPublic reports, files and scrubbed assignment transcripts go out under @${esc(handle)} and CC BY 4.0. Private local sources stay in the folder.`;
+      reply.innerHTML = `<span class="rh"># ${esc(document.title.split(' · ')[0])}: local run ready</span>\n\nDepartment <span class="rid">&lt;department&gt;</span> · Run <span class="rid">&lt;run&gt;</span>\nKeep your own run identity, direction and assignment across tasks.\n\nSettings: <span class="hl">${WORDS.time(v.time)}</span> · <span class="hl">${WORDS.subagents(v.subagents)}</span> · <span class="hl">${WORDS.share(v.share)}</span> · <span class="hl">${WORDS.disk(v.disk)}</span> · <span class="hl">${WORDS.work(v.work)}</span>.\n\n${dir.value.trim() ? 'Your original direction is saved for this run and applies across assignments.' : 'Scope: general project research.'}\n\nYour assignment includes its question, evidence requirements and stopping condition. Relevant local findings and the cached research protocol are available beside it. Before requesting the first assignment, reuse compatible shared tools with separate run state. Test model/thinking-level discovery, the publication scrubber, process limits and completion/outstanding-work checks. An issued task with no submission must fail an all-complete check. Self-review before every assignment and reconcile all issued attempts before reporting completion or taking more work. Reuse the folder’s evidence and tools; keep this run’s direction separate from its siblings.\n\nPublic reports, files and scrubbed assignment transcripts go out under @${esc(handle)} and CC BY 4.0. Private local sources stay in the folder.`;
       if (flashKey) requestAnimationFrame(() => requestAnimationFrame(() => { const c = instr.querySelector(`.sf-chip[data-k="${flashKey}"]`); if (c) c.classList.remove('flash'); }));
     }
     form.addEventListener('change', e => { if (e.target.name) render(e.target.name); });

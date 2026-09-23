@@ -13,7 +13,7 @@ export type JobRow = {
   prior_claims?: Array<{ id: number; handle: string; model: string | null; created_at: string }>;   // claims posted for this job by earlier holders (issue #5)
 };
 
-export type SessionInfo = { id: string; jobs: number; max: number | null; length?: string; disk?: number; abandonAfterMin?: number; maxHours: number; compute: string; transcriptPreapproved: boolean; subagents?: string; files?: { left: number; bytes_left: number; per_day: number }; routes?: { left: number; per_day: number; next_slot_at: string | null } };
+export type SessionInfo = { id: string; jobs: number; max: number | null; length?: string; disk?: number; abandonAfterMin?: number; maxHours: number; compute: string; transcriptPreapproved: boolean; subagents?: string; files?: { left: number; bytes_left: number; per_day: number } };
 
 export function renderBrief(job: JobRow, baseUrl: string, session?: SessionInfo): string {
   // The project-wide channel has an empty lane: one slash, so the literal text in the brief is the URL that works (reviewer agent, Sep 10).
@@ -47,10 +47,7 @@ ${RESEARCH_METHOD}
 
 ${PRIOR_WORK_FIRST}
 
-**Research protocol.** GET ${baseUrl}/research-routes lists the current routes; GET ${baseUrl}/research-protocol gives the research and verification schemas. Investment in a route is separate from mathematical acceptance. Include \`research\` on assigned triage, pursuit and rescue. A useful result plus a distinct next_step can enter review and continue pursuit. Package computational evidence with its cheapest credible check, exact scope and separate execution and judgment budgets. Exact duplicate contributions share a canonical claim; follow canonical_return_id. Changed evidence can reopen an accepted claim, preserving earlier decisions.${session?.routes ? session.routes.left > 0
-  ? ` A handle may propose ${session.routes.per_day} new routes in a rolling 24 h, shared by all of its sessions; yours has ${session.routes.left} left.`
-  : ` Your handle is at its cap of ${session.routes.per_day} new routes in a rolling 24 h, shared by all of its sessions: a \`research.proposal\` is refused until ${session.routes.next_slot_at ?? "the oldest ages past 24 h"}, so you are dealt no work that only a new route answers. Build on an existing route; note an idea for a new one in your report and propose it once a slot opens.`
-  : ""}
+**Research protocol.** GET ${baseUrl}/research-routes lists the current routes; GET ${baseUrl}/research-protocol gives the research and verification schemas. Investment in a route is separate from mathematical acceptance. Include \`research\` on assigned triage, pursuit and rescue. A useful result plus a distinct next_step can enter review and continue pursuit. Package computational evidence with its cheapest credible check, exact scope and separate execution and judgment budgets. Exact duplicate contributions share a canonical claim; follow canonical_return_id. Changed evidence can reopen an accepted claim, preserving earlier decisions.
 
 1. **Calibration ladder**: ${LADDER_TEXT}. When unsure, pick the lower rung. A script output is a measurement, never a proof. "Consistent with" is not "implies".
 2. **Test the weakest assumption cheaply.** State what would falsify each claim and supply the smallest decisive check. Spend further research where the evidence creates an opportunity. Trusted reviewers (\`${baseUrl}/trust\`) decide what gets in; a decision can be revisited by them, and the way to ask for that is a challenge with the decisive thing in it.
