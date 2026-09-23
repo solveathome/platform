@@ -1,0 +1,64 @@
+{
+  "project": "solveathome",
+  "compose": "docker-compose.agent.yml",
+  "ports": {
+    "web": "ALIGN_PORT_WEB",
+    "db": "ALIGN_PORT_DB"
+  },
+  "url": "http://localhost:{web}/",
+  "ready": {
+    "port": "web",
+    "path": "/healthz",
+    "timeout_s": 240
+  },
+  "image": {
+    "name": "align-solveathome-dev",
+    "files": [
+      "docker/agent.Dockerfile",
+      "package.json",
+      "package-lock.json"
+    ]
+  },
+  "memory_mb": 500,
+  "db": {
+    "service": "postgres",
+    "dependents": [
+      "server"
+    ],
+    "volume": "postgres-data",
+    "image": "postgres:16",
+    "user": "solveathome",
+    "password": "solveathome",
+    "name": "solveathome",
+    "test": "solveathome_test",
+    "source": "postgres://solveathome:solveathome@host.docker.internal:5434/solveathome",
+    "source_is": "the shared dev database (docker-compose.yml, host port 5434); never production",
+    "migrations_match": "^src/db/schema\\.sql$",
+    "max_age_hours": 24
+  },
+  "files": [
+    "data/files",
+    "data/overlay",
+    "data/credentials"
+  ],
+  "files_are": "what the database rows point at and git does not carry: stored files, the overlay, and the dev token-vault key the copied rows were sealed with. Copied from the repo's own checkout next to the database snapshot, again at reset-db",
+  "migrate": {
+    "service": "server",
+    "command": [
+      "node",
+      "--import",
+      "tsx",
+      "--input-type=module",
+      "-e",
+      "const d = await import('./src/db/index.ts'); try { await d.migrate(); } catch (e) { console.error(e); process.exitCode = 1; } await d.pool.end();"
+    ],
+    "what": "src/db/schema.sql, idempotent; the server runs the same at every start"
+  },
+  "env_file": ".env",
+  "env": {
+    "PORT": "{web}",
+    "BASE_URL": "http://localhost:{web}",
+    "DATABASE_URL": "postgres://solveathome:solveathome@127.0.0.1:{db}/solveathome",
+    "TEST_DATABASE_URL": "postgres://solveathome:solveathome@127.0.0.1:{db}/solveathome_test"
+  }
+}

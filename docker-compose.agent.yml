@@ -1,0 +1,75 @@
+# An agent's own copy of the solveathome dev setup (Align isolation): its own server and Postgres as a compose project of its
+# own, next to the shared dev database of docker-compose.yml and the :8600 dev server, never instead of them.
+#
+# Never run by hand. `tools/align/stack up` (mba repo) runs it from the agent's own checkout with `-p <agent>`, so every
+# container, network and volume carries the agent's name, and with host ports leased from the Align daemon. That is why there
+# is no `name:`, no `container_name` and no fixed host port in this file: any of the three would make a second copy collide.
+# Inside the stack the ports are the same everywhere: 8600 and 5432.
+#
+# The server runs inside the stack, so its 30 s outbox replay (flushFileEffects) writes only this stack's database and only
+# files under the agent's own checkout. The DB suites use solveathome_test, a database of their own beside the server's
+# (db.test in align-stack.json), so that replay never runs under a test. Settings: align-stack.json.
+#
+# Everything this file makes carries the label align.stack (services, volumes, the network), and nothing it makes is anonymous:
+# `stack down` removes only what carries BOTH the agent's compose project label and this one. Keep the label on anything you add.
+
+services:
+  server:
+    labels:
+      align.stack: solveathome
+    # one image per package-lock.json, shared by every agent's stack: the first `stack up` builds it, the rest start from it
+    image: align-solveathome-dev:${ALIGN_IMAGE_TAG:?run this through tools/align/stack, never by hand}
+    build:
+      context: .
+      dockerfile: docker/agent.Dockerfile
+    ports:
+      - "127.0.0.1:${ALIGN_PORT_WEB:?run this through tools/align/stack, never by hand}:8600"
+    volumes:
+      - .:/app                             # the agent's own checkout
+      - node-modules:/app/node_modules     # the container's own packages (Linux builds), filled from the image, gone with the stack
+    environment:
+      - PORT=8600
+      - DATABASE_URL=postgres://solveathome:solveathome@postgres:5432/solveathome
+      - BASE_URL=http://localhost:${ALIGN_PORT_WEB}
+      - SESSION_SECRET=agent-stack-dev-only
+      - STACK_NAME=${ALIGN_STACK:?run this through tools/align/stack, never by hand}
+      # GitHub sign-in stays with the dev server (its callback is registered for :8600); sign in here with scripts/dev-users.ts tokens
+      - GITHUB_CLIENT_ID=
+      - GITHUB_CLIENT_SECRET=
+    # the cookie name is set for the server process only: a cookie belongs to the host name, not the port, and a preview that
+    # used sah_session would sign Chris out of :8600 (tests run by `stack exec` keep the default name they are written for)
+    command: sh -c "SESSION_COOKIE=sah_session_$${STACK_NAME} exec npx tsx watch src/server.ts"
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  postgres:
+    labels:
+      align.stack: solveathome
+    image: postgres:16
+    ports:
+      - "127.0.0.1:${ALIGN_PORT_DB:?run this through tools/align/stack, never by hand}:5432"   # for tests on the host: the worktree's .env points here
+    environment:
+      - POSTGRES_USER=solveathome
+      - POSTGRES_PASSWORD=solveathome
+      - POSTGRES_DB=solveathome
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -U solveathome -d solveathome"]
+      interval: 2s
+      timeout: 5s
+      retries: 30
+
+volumes:
+  postgres-data:
+    labels:
+      align.stack: solveathome
+  node-modules:
+    labels:
+      align.stack: solveathome
+
+networks:
+  default:
+    labels:
+      align.stack: solveathome

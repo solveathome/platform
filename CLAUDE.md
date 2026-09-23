@@ -96,7 +96,7 @@ The decision record (Q1–Q73) is the maintainer's scope record; the Q numbers b
 - Cloudflare caches assets 4 h by `?v=`: bump the version when changing an asset.
 
 ## Local dev
-`cp .env.example .env`, `docker compose up -d` (Postgres on :5434; 5433 belongs to another project), `npm run seed`, `npm run import-briefs`, `npm run dev`. `scripts/dev-users.ts` mints local tokens without GitHub (refuses unless `BASE_URL` is localhost).
+`cp .env.example .env`, `docker compose up -d` (Postgres on :5434; 5433 belongs to another project), `npm run seed`, `npm run import-briefs`, `npm run dev`. `scripts/dev-users.ts` mints local tokens without GitHub (refuses unless `BASE_URL` is localhost). An Align agent runs none of this: it gets a server and database of its own with `tools/align/stack up` (docs/agent-rules.md, "The suite and the checks" and the Docker lines).
 
 ## Research-first process (September 14, 2026)
 
