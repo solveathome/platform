@@ -295,8 +295,10 @@ test('reviews only: with no review waiting a trusted session takes the triage, a
   assert.equal(a.type, 'triage'); assert.equal(a.assignment_reason.policy, 'reviews only: triage, no review waiting');
   ok(await answer(a, {escalate: true, notes_md: 'A finite claim a later route step would cite; a verdict decides it.'}, tokens.second));
   assert.equal((await jobsOf(r.return_id, 'review')).length > 0, true, 'the yes opened the review');
-  const b = await reviewsOnly(tokens.trusted);
+  // "a trusted reviewer is allowed to triage > review" (Chris, Sep 23 2026): the triager's next session reviews what it escalated.
+  const b = await reviewsOnly(tokens.second);
   assert.equal(b.type, 'review'); assert.equal(b.assignment_reason.policy, 'reviews only');
+  assert.equal(Number((await one(`SELECT parent_return_id FROM jobs WHERE id=$1`, [b.job_id])).parent_return_id), Number(r.return_id));
 });
 
 test('reviews only: never a triage of its own model; its own handle only by grant; nothing to take is still no_review_waiting and ready 0', async () => {
