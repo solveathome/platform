@@ -59,6 +59,8 @@
     "PORT": "{web}",
     "BASE_URL": "http://localhost:{web}",
     "DATABASE_URL": "postgres://solveathome:solveathome@127.0.0.1:{db}/solveathome",
-    "TEST_DATABASE_URL": "postgres://solveathome:solveathome@127.0.0.1:{db}/solveathome_test"
+    "TEST_DATABASE_URL": "postgres://solveathome:solveathome@127.0.0.1:{db}/solveathome_test",
+    "GITHUB_CLIENT_ID": "",
+    "GITHUB_CLIENT_SECRET": ""
   }
 }
