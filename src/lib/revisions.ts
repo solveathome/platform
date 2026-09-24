@@ -11,6 +11,7 @@ import { createTwoFilesPatch } from "diff";
 import { q, one, queueFileEffect, pendingFileText, projectTransaction } from "../db/index.js";
 import { ROOT } from "./paths.js";
 import * as files from "./files.js";
+import { reopenRegressed } from "./findings.js";
 
 export const REPOS = process.env.DOCS_DIR ?? join(ROOT, "data", "repos");
 export const OVERLAY = process.env.OVERLAY_DIR ?? join(ROOT, "data", "overlay");
@@ -36,16 +37,31 @@ export async function currentText(slug: string, rel: string, problemId?: number)
 }
 export async function exists(slug: string, rel: string, problemId?: number): Promise<boolean> { return (await currentText(slug, rel, problemId)) !== null; }
 
+/**
+ * What integrating an accepted revision did (Sep 24 2026, paper review integrity), kept on the return and shown with it:
+ * applied (the next version), unchanged (the document already is that text), conflict (the document moved on from the text the revision
+ * was made against; nothing is overwritten and a rebase job carries it forward), missing (the revised file is not in the store).
+ */
+export type Integration = "applied" | "unchanged" | "conflict" | "missing";
 /** Integrate an accepted return's revision. Idempotent per return. */
-export async function integrate(ret: any, slug: string, votes: Array<{ verdict: string; user_id: number; model?: string; verification?: string }>): Promise<void> {
+export async function integrate(ret: any, slug: string, votes: Array<{ verdict: string; user_id: number; model?: string; verification?: string }>): Promise<Integration | null> {
   return projectTransaction(ret.problem_id, () => integrateLocked(ret, slug, votes));
 }
-async function integrateLocked(ret: any, slug: string, votes: Array<{ verdict: string; user_id: number; model?: string; verification?: string }>): Promise<void> {
-  const rel = safeRel(ret.revision_path); if (!rel || !ret.revision_sha) return;
-  if (await one(`SELECT 1 FROM document_versions WHERE return_id = $1`, [ret.id])) return;
-  const next = files.read(ret.revision_sha); if (next === null) return;
+async function integrateLocked(ret: any, slug: string, votes: Array<{ verdict: string; user_id: number; model?: string; verification?: string }>): Promise<Integration | null> {
+  const rel = safeRel(ret.revision_path); if (!rel || !ret.revision_sha) return null;
+  if (await one(`SELECT 1 FROM document_versions WHERE return_id = $1`, [ret.id])) return "applied";
+  const outcome = async (o: Integration) => { await q(`UPDATE returns SET integration = $2 WHERE id = $1`, [ret.id, o]); return o; };
+  const next = files.read(ret.revision_sha); if (next === null) return outcome("missing");
   const base = await currentText(slug, rel, Number(ret.problem_id));
   const baseText = base?.text ?? "";
+  const head = base ? files.sha256(baseText) : null;
+  if (head === ret.revision_sha) {
+    await q(`UPDATE papers SET current_return_id = $3, current_file_sha = $4, updated_at = now() WHERE problem_id = $1 AND (path = $2 OR (path IS NULL AND 'paper/' || slug || '.md' = $2)) AND COALESCE(current_file_sha, $4) = $4`, [ret.problem_id, rel, ret.id, ret.revision_sha]);
+    return outcome("unchanged");
+  }
+  // Compare and set on the text the author and reviewers worked from: a revision made against an older text never replaces a newer one.
+  // An older return without a recorded base is integrated as before; its base is unknown and is not filled in with the current head.
+  if (head && ret.revision_base_sha && head !== ret.revision_base_sha) return outcome("conflict");
   const last = await one<{ version: string }>(`SELECT max(version) AS version FROM document_versions WHERE problem_id = $1 AND path = $2`, [ret.problem_id, rel]);
   let version = Number(last?.version ?? 0);
   if (version === 0 && base && base.from !== "paper") {
@@ -70,6 +86,8 @@ async function integrateLocked(ret: any, slug: string, votes: Array<{ verdict: s
   await pin(String(ret.revision_sha), Number(row!.id));
   await queueFileEffect(overlayPath(slug, rel), next);
   await q(`UPDATE papers SET current_return_id = $3, current_file_sha = $4, status = 'reviewed', updated_at = now() WHERE problem_id = $1 AND (path = $2 OR (path IS NULL AND 'paper/' || slug || '.md' = $2))`, [ret.problem_id, rel, ret.id, ret.revision_sha]);
+  await reopenRegressed(Number(ret.problem_id), rel, String(ret.revision_sha));
+  return outcome("applied");
 }
 
 export async function history(problemId: number, rel: string) {
@@ -96,17 +114,23 @@ async function pin(sha: string, versionId: number): Promise<void> {
  * has already revised. For every document with history: if the new mirror equals the latest version, the repository has caught up and
  * the overlay is dropped (the served text does not change); if it differs, the cut is recorded as the next version (author: the
  * researcher, no reviewers, diff against the latest) and served in place of the overlay. The trail never loses its base.
+ *
+ * A cut equal to an older version is stale (Sep 24 2026, paper review integrity): the repository has not pulled the accepted revisions
+ * yet, and recording it would silently undo them, as a cut of Sep 16 did to an accepted correction of beta2-note. It is reported and the
+ * served version stays. The owner who means to go back names the path in `promote`, and the cut is recorded as usual. A recorded cut
+ * never carries a review: the paper's pointer to the accepted return is cleared and its summary names the accepted version it replaces.
  */
-export async function recordMirrorCut(slug: string, problemId: number, note = ""): Promise<Array<{ path: string; action: "unchanged" | "caught-up" | "recorded" | "missing"; version?: number }>> {
+export type CutAction = "unchanged" | "caught-up" | "recorded" | "stale" | "missing";
+export async function recordMirrorCut(slug: string, problemId: number, note = "", options: { promote?: string[] } = {}): Promise<Array<{ path: string; action: CutAction; version?: number; matches?: number }>> {
   return projectTransaction(problemId, async () => {
     await recordPublication(slug, problemId);
-    return recordMirrorCutLocked(slug, problemId, note);
+    return recordMirrorCutLocked(slug, problemId, note, new Set(options.promote ?? []));
   });
 }
-async function recordMirrorCutLocked(slug: string, problemId: number, note: string): Promise<Array<{ path: string; action: "unchanged" | "caught-up" | "recorded" | "missing"; version?: number }>> {
-  const out: Array<{ path: string; action: "unchanged" | "caught-up" | "recorded" | "missing"; version?: number }> = [];
-  const latest = await q<{ path: string; version: string; content_sha: string | null; id: number }>(
-    `SELECT DISTINCT ON (path) path, version, content_sha, id FROM document_versions WHERE problem_id = $1 ORDER BY path, version DESC`, [problemId]);
+async function recordMirrorCutLocked(slug: string, problemId: number, note: string, promote: Set<string>): Promise<Array<{ path: string; action: CutAction; version?: number; matches?: number }>> {
+  const out: Array<{ path: string; action: CutAction; version?: number; matches?: number }> = [];
+  const latest = await q<{ path: string; version: string; content_sha: string | null; id: number; return_id: string | null }>(
+    `SELECT DISTINCT ON (path) path, version, content_sha, id, return_id FROM document_versions WHERE problem_id = $1 ORDER BY path, version DESC`, [problemId]);
   const keeper = await keeperFor(problemId, 0);
   for (const l of latest) {
     const mp = mirrorPath(slug, l.path);
@@ -118,18 +142,55 @@ async function recordMirrorCutLocked(slug: string, problemId: number, note: stri
       else out.push({ path: l.path, action: "unchanged", version: Number(l.version) });
       continue;
     }
+    const older = await one<{ version: string }>(`SELECT max(version) AS version FROM document_versions WHERE problem_id = $1 AND path = $2 AND content_sha = $3 AND version < $4`, [problemId, l.path, sha, l.version]);
+    if (older?.version && !promote.has(l.path)) { out.push({ path: l.path, action: "stale", version: Number(l.version), matches: Number(older.version) }); continue; }
     // Version 1 of a document nobody has revised since may simply have moved on in the repository: still a new version, so the link trail holds.
     const prevText = (l.content_sha ? files.read(l.content_sha) : null) ?? "";
     const version = Number(l.version) + 1;
     const diff = createTwoFilesPatch(`a/${l.path}`, `b/${l.path}`, prevText, text, `version ${l.version}`, `version ${version}`);
     if (!keeper) throw new Error(`project ${slug} has no researcher to hold the version blob`);
     await files.store(keeper, undefined, l.path.split("/").pop() ?? l.path, ext(l.path), text);
+    const replaces = l.return_id ? `; replaces version ${l.version}, accepted in return #${l.return_id}` : "";
+    const how = promote.has(l.path) ? "promoted by the owner from the research repository" : "as mirrored from the research repository";
     const row = await one<{ id: number }>(`INSERT INTO document_versions (problem_id, path, version, content_sha, base_sha, return_id, author_user_id, verified_by, summary, diff) VALUES ($1,$2,$3,$4,$5,NULL,$6,'[]',$7,$8) RETURNING id`,
-      [problemId, l.path, version, sha, l.content_sha, keeper, `as mirrored from the research repository, cut of ${new Date().toISOString().slice(0, 10)}${note ? ` (${note})` : ""}`, diff]);
+      [problemId, l.path, version, sha, l.content_sha, keeper, `${how}, cut of ${new Date().toISOString().slice(0, 10)}${note ? ` (${note})` : ""}${replaces}`, diff]);
     await pin(sha, Number(row!.id));
     await queueFileEffect(ov, null);
-    await q(`UPDATE papers SET current_return_id = NULL, current_file_sha = $3, updated_at = now() WHERE problem_id = $1 AND (path = $2 OR (path IS NULL AND 'paper/' || slug || '.md' = $2))`, [problemId, l.path, sha]);
+    await q(`UPDATE papers SET current_return_id = NULL, current_file_sha = $3, status = CASE WHEN status = 'reviewed' THEN 'draft' ELSE status END, updated_at = now() WHERE problem_id = $1 AND (path = $2 OR (path IS NULL AND 'paper/' || slug || '.md' = $2))`, [problemId, l.path, sha]);
+    await reopenRegressed(problemId, l.path, sha);
     out.push({ path: l.path, action: "recorded", version });
   }
   return out;
+}
+
+/**
+ * Serve an earlier version again, as a recorded version of its own (recovery, Sep 24 2026): the history keeps every step, including the
+ * one being undone, and nothing is paid or re-reviewed. The paper points at the accepted return whose text it is, if any. Idempotent:
+ * a document already serving that text is left alone. `apply: false` reports what it would do.
+ */
+export async function restoreVersion(slug: string, problemId: number, rel: string, version: number, reason: string, apply: boolean): Promise<{ action: "restored" | "unchanged" | "would-restore"; version?: number; sha: string; return_id: number | null }> {
+  return projectTransaction(problemId, async () => {
+    const v = await one<{ content_sha: string | null; return_id: string | null }>(`SELECT content_sha, return_id FROM document_versions WHERE problem_id = $1 AND path = $2 AND version = $3`, [problemId, rel, version]);
+    if (!v?.content_sha) throw new Error(`${rel} has no stored version ${version}`);
+    const text = files.read(v.content_sha); if (text === null) throw new Error(`the blob of ${rel} version ${version} is missing`);
+    const accepted = await one<{ id: string }>(`SELECT id FROM returns WHERE problem_id = $1 AND revision_path = $2 AND revision_sha = $3 AND status = 'accepted' AND NOT provisional ORDER BY id DESC LIMIT 1`, [problemId, rel, v.content_sha]);
+    const rid = v.return_id ? Number(v.return_id) : accepted ? Number(accepted.id) : null;
+    const cur = await currentText(slug, rel, problemId);
+    if (cur && files.sha256(cur.text) === v.content_sha) return { action: "unchanged", sha: v.content_sha, return_id: rid };
+    const last = await one<{ version: string; content_sha: string | null }>(`SELECT version, content_sha FROM document_versions WHERE problem_id = $1 AND path = $2 ORDER BY version DESC LIMIT 1`, [problemId, rel]);
+    const next = Number(last?.version ?? 0) + 1;
+    if (!apply) return { action: "would-restore", version: next, sha: v.content_sha, return_id: rid };
+    const keeper = await keeperFor(problemId, 0);
+    if (!keeper) throw new Error(`project ${slug} has no researcher to author the restore`);
+    const diff = createTwoFilesPatch(`a/${rel}`, `b/${rel}`, cur?.text ?? "", text, `version ${last?.version ?? 0}`, `version ${next}`);
+    const row = await one<{ id: number }>(`INSERT INTO document_versions (problem_id, path, version, content_sha, base_sha, return_id, author_user_id, verified_by, summary, diff) VALUES ($1,$2,$3,$4,$5,NULL,$6,'[]',$7,$8) RETURNING id`,
+      [problemId, rel, next, v.content_sha, cur ? files.sha256(cur.text) : null, keeper, `restored version ${version}${rid ? ` (accepted in return #${rid})` : ""}: ${reason}`.slice(0, 300), diff]);
+    await pin(v.content_sha, Number(row!.id));
+    // Served from the overlay unless the mirror already is this text.
+    const mp = mirrorPath(slug, rel);
+    await queueFileEffect(overlayPath(slug, rel), existsSync(mp) && files.sha256(readFileSync(mp, "utf8")) === v.content_sha ? null : text);
+    await q(`UPDATE papers SET current_return_id = $3, current_file_sha = $4, updated_at = now() WHERE problem_id = $1 AND (path = $2 OR (path IS NULL AND 'paper/' || slug || '.md' = $2))`, [problemId, rel, rid, v.content_sha]);
+    await reopenRegressed(problemId, rel, v.content_sha);
+    return { action: "restored", version: next, sha: v.content_sha, return_id: rid };
+  });
 }

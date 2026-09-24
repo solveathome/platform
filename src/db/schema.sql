@@ -956,3 +956,47 @@ ALTER TABLE triages ADD COLUMN IF NOT EXISTS reason TEXT;              -- on a n
 -- Opus 5.5 is tier 1 at high, xhigh or max (Chris, Sep 22 2026): lift a row that registered itself from the old opus default. A row someone set by hand is left alone.
 UPDATE model_tiers SET tier = 1, note = 'auto: frontier anthropic model (Opus 5.5 tier 1 from Sep 22 2026)', updated_at = now()
   WHERE model IN ('claude-opus-5-5', 'claude-opus-5.5') AND tier > 1 AND note LIKE 'auto:%' AND note NOT LIKE '%frontier%';
+
+-- Review follows the served text (Sep 24 2026, paper review integrity): an accepted correction was integrated and then replaced by an
+-- older mirror cut while the paper kept its "reviewed" label, and a required correction lived only in a review's also_fix.
+-- A revision records the text it was made against; integration records what became of it; a correction is a finding with a lifecycle.
+ALTER TABLE returns ADD COLUMN IF NOT EXISTS revision_base_sha TEXT;   -- sha256 of the document text the revision edits, taken at submission; NULL on older returns (unknown)
+ALTER TABLE returns ADD COLUMN IF NOT EXISTS integration TEXT;         -- applied | unchanged | conflict | missing: what integrating the accepted revision did
+ALTER TABLE returns ADD COLUMN IF NOT EXISTS resolves JSONB;           -- finding ids a repair return says it addresses (default: the findings its job carried when it was taken)
+CREATE TABLE IF NOT EXISTS findings (
+  id          BIGSERIAL PRIMARY KEY,
+  problem_id  BIGINT NOT NULL REFERENCES problems(id) ON DELETE CASCADE,
+  path        TEXT NOT NULL,                                   -- the document to correct
+  content_sha TEXT,                                            -- the text the finding was made against (NULL: recorded before findings were tracked)
+  return_id   BIGINT REFERENCES returns(id) ON DELETE CASCADE, -- the return under review, or the accepted audit that routed it
+  review_id   BIGINT REFERENCES reviews(id) ON DELETE SET NULL,-- the trusted review that made it, if one did
+  note        TEXT NOT NULL,
+  scope       TEXT NOT NULL DEFAULT 'unspecified',             -- before_circulation | advisory | unspecified
+  status      TEXT NOT NULL DEFAULT 'open',                    -- open | resolved
+  job_id      BIGINT REFERENCES jobs(id) ON DELETE SET NULL,   -- the fix job carrying it now
+  linked_at   TIMESTAMPTZ,                                     -- when it was put on that job
+  resolved_by_return_id BIGINT REFERENCES returns(id) ON DELETE SET NULL,
+  resolved_sha TEXT,                                           -- the text on which it was resolved
+  resolved_at TIMESTAMPTZ,
+  created_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE UNIQUE INDEX IF NOT EXISTS findings_origin ON findings (COALESCE(return_id, 0), path, md5(note));
+CREATE INDEX IF NOT EXISTS findings_open ON findings (problem_id, path) WHERE status = 'open';
+CREATE TABLE IF NOT EXISTS finding_events (
+  id          BIGSERIAL PRIMARY KEY,
+  finding_id  BIGINT NOT NULL REFERENCES findings(id) ON DELETE CASCADE,
+  status      TEXT NOT NULL,                                   -- the state it moved to
+  note        TEXT NOT NULL DEFAULT '',
+  return_id   BIGINT REFERENCES returns(id) ON DELETE SET NULL,
+  created_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+-- Corrections recorded before findings existed: a trusted reviewer's also_fix and an accepted audit's also_fix become open findings of
+-- unspecified scope against unknown text. Nothing is presumed fixed; an agent or a reviewer closes them.
+INSERT INTO findings (problem_id, path, return_id, review_id, note, created_at)
+  SELECT r.problem_id, x->>'path', r.id, rv.id, x->>'note', rv.created_at FROM reviews rv JOIN returns r ON r.id = rv.return_id, jsonb_array_elements(rv.also_fix) x
+  WHERE rv.trusted AND jsonb_typeof(rv.also_fix) = 'array' AND coalesce(x->>'path', '') <> '' AND coalesce(x->>'note', '') <> ''
+  ON CONFLICT (COALESCE(return_id, 0), path, md5(note)) DO NOTHING;
+INSERT INTO findings (problem_id, path, return_id, note, created_at)
+  SELECT r.problem_id, x->>'path', r.id, x->>'note', r.created_at FROM returns r, jsonb_array_elements(r.also_fix) x
+  WHERE r.type = 'audit' AND r.status = 'accepted' AND NOT r.provisional AND jsonb_typeof(r.also_fix) = 'array' AND coalesce(x->>'path', '') <> '' AND coalesce(x->>'note', '') <> ''
+  ON CONFLICT (COALESCE(return_id, 0), path, md5(note)) DO NOTHING;
