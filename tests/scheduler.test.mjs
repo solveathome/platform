@@ -14,7 +14,8 @@ const {issueToken} = await import('../src/lib/auth.ts');
 const {TERMS_VERSION} = await import('../src/lib/terms.ts');
 const {job} = await import('../src/routes/job.ts');
 const {asks} = await import('../src/routes/asks.ts');
-const {backlogFor, selectJob, allocation, discoveryDue, discoveryShare} = await import('../src/lib/scheduler.ts');
+const {board} = await import('../src/routes/board.ts');
+const {backlogFor, selectJob, allocation, discoveryDue, discoveryShare, workConcentration, ROUTE_REPEAT_PENALTY} = await import('../src/lib/scheduler.ts');
 const {parseCapabilities, matchingMetadata} = await import('../src/lib/agent-profile.ts');
 let server, base, uid, other, token, otherToken, pid, slug;
 const tag = `scheduler-${Date.now().toString(36)}`;
@@ -24,7 +25,7 @@ before(async () => {
   uid = Number((await one(`INSERT INTO users (github_id,handle,terms_version,terms_accepted_at) VALUES ($1,$2,$3,now()) RETURNING id`, [900_000_000+Math.floor(Math.random()*1e8),tag,TERMS_VERSION])).id);
   other = Number((await one(`INSERT INTO users (github_id,handle,terms_version,terms_accepted_at) VALUES ($1,$2,$3,now()) RETURNING id`, [900_000_000+Math.floor(Math.random()*1e8),tag+'-other',TERMS_VERSION])).id);
   token = await issueToken(uid); otherToken = await issueToken(other);
-  const app = express(); app.use(express.json()); app.use('/projects/:slug',job,asks);
+  const app = express(); app.use(express.json()); app.use('/projects/:slug',job,asks,board);
   app.use((error,req,res,next) => res.status(500).json({error: error.message}));
   server = app.listen(0,'127.0.0.1'); await new Promise(r=>server.once('listening',r));
 });
@@ -348,4 +349,31 @@ test('review jobs blocked only by the same-kind rule are counted as blocked, not
   assert.equal(other.blocked_reviews,0,'and has nothing blocked by kind');
   await q(`DELETE FROM jobs WHERE parent_return_id=$1`,[ret.id]);
   await q(`DELETE FROM returns WHERE id=$1`,[ret.id]);
+});
+
+test('a research job on a route this handle and model worked recently ranks lower but is never refused; the board names the busiest handle and model',async()=>{
+  const origin=await one(`INSERT INTO returns (problem_id,type,user_id,model,provider,report_md,transcript,status) VALUES ($1,'explore',$2,'claude-fable-5-1','test','Origin.','t','accepted') RETURNING id`,[pid,other]);
+  const route=async title=>Number((await one(`INSERT INTO research_routes (problem_id,origin_return_id,title,contribution_md,prior_art_md,uncertainty_md,state) VALUES ($1,$2,$3,'c','p','u','active') RETURNING id`,[pid,origin.id,title])).id);
+  const worked=await route('worked'),fresh=await route('fresh');
+  const onRoute=async(routeId,age)=>{const j=await queued({type:'explore',age});await q(`UPDATE jobs SET research_route_id=$2 WHERE id=$1`,[j.id,routeId]);return j;};
+  // Older by far less than the penalty: without history the worked route's job wins on waiting time.
+  const onWorked=await onRoute(worked,5),onFresh=await onRoute(fresh,0);
+  assert.ok(ROUTE_REPEAT_PENALTY>5);
+  const a={problemId:pid,slug,sessionId:'synthetic',uid,tier:2,model:'claude-fable-5-1',provider:'test',trusted:false,granted:false,lane:null,cpuHours:0,ramGb:0,hasGpu:false,disk:1,maxHours:2,reviewStreak:0,capabilities:{}};
+  assert.equal((await selectJob(a,false)).id,onWorked.id,'no history: plain ranking');
+  // This handle and model worked the route in a recent assignment (from another session: several sessions of one model under one handle count as one).
+  const past=await onRoute(worked,0);await q(`UPDATE jobs SET status='returned' WHERE id=$1`,[past.id]);
+  await q(`INSERT INTO assignment_attempts (id,job_id,problem_id,session_id,user_id,model,budget_hours,status,ended_at) VALUES ($1,$2,$3,'synthetic-earlier',$4,'claude-fable-5-1',2,'returned',now())`,[randomUUID(),past.id,pid,uid]);
+  const picked=await selectJob(a,false);assert.equal(picked.id,onFresh.id,'the route worked recently ranks lower');assert.equal(picked.route_repeat,false);
+  assert.equal((await selectJob({...a,model:'claude-sonnet-5'},false)).id,onWorked.id,'another model of the same handle is a different view and keeps the plain order');
+  // A preference, never a refusal: with nothing else eligible the same route is handed out, and the reason says so.
+  await q(`UPDATE jobs SET status='expired' WHERE id=$1`,[onFresh.id]);
+  const only=await selectJob(a,false);assert.equal(only.id,onWorked.id);assert.equal(only.route_repeat,true);
+  const live=await start();assert.equal(Number(live.job_id),Number(onWorked.id));
+  assert.match(live.assignment_reason?.route_repeat ?? '',/ranked lower to spread work across routes/);
+  // The board's concentration figure: this handle and model hold every budgeted hour of the week; no trusted decision yet.
+  const c=await workConcentration(pid);
+  assert.equal(c.window_days,7);assert.equal(c.hours.handle.name,tag);assert.equal(c.hours.handle.share,1);assert.equal(c.hours.model.name,'claude-fable-5-1');
+  assert.equal(c.trusted_decisions.total,0);assert.equal(c.trusted_decisions.handle,null);
+  const b=ok(await call('/board'));assert.equal(b.research.concentration.hours.handle.name,tag);
 });

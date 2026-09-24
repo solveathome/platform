@@ -602,6 +602,7 @@ test('a review queued under the previous template is served with the current gui
   for(const conflicting of [/Fetch it at GET/,/Fetch the return's files/,/Read the code and the recipe/,/before judging/,/Read the exact claim, its scope, the supplied check and recorded observations first/,/the author's captured outputs, hashes and transcript are the evidence/])assert.doesNotMatch(review.brief_md,conflicting,`stale obligation survived: ${conflicting}`);
   assert.match(review.brief_md,/The Verification section below is the basis for judgment/);assert.match(review.brief_md,/Your job: judge it from the Verification section\./);
   assert.match(review.brief_md,/\*\*Basis for judgment/);
+  assert.match(review.brief_md,/does this return earn credit, a rung or a citation without the work\?/,'a refreshed review asks what the return earns (brief version 6)');
   assert.match(review.brief_md,/Evidence needs reassessment or execution could not find capacity within 24 hours\./,'the job-specific note is preserved');
   const refreshed=await one(`SELECT brief_version,brief_md FROM jobs WHERE id=$1`,[job.id]);assert.equal(refreshed.brief_version,REVIEW_BRIEF_VERSION);assert.doesNotMatch(refreshed.brief_md,/Read the code and the recipe/);
   assert.equal((refreshed.brief_md.match(/Evidence needs reassessment/g)||[]).length,1,'the note is kept once');
