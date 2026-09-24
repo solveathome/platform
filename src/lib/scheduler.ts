@@ -30,6 +30,32 @@ export async function researchAllocation(problemId: number, tier = 1): Promise<R
   return used;
 }
 
+/** Who did the work (Chris, Sep 24 2026, #sah-gemma-mvp): over the last 7 days, the share of budgeted assignment hours and of
+ * trusted review decisions held by the busiest handle and the busiest model. With one agent of one model running all day, this is
+ * the number that shows whether the swarm is becoming that agent (the Gemma Challenge's agents converged without anyone seeing it
+ * until afterwards), and the board says openly how much of the record one contributor's agent holds. Hours are allocation
+ * accounting, as in researchAllocation, never a limit. A share is null when nothing happened in the window. */
+export type Busiest = { name: string; share: number } | null;
+export type WorkConcentration = { window_days: number; hours: { total: number; handle: Busiest; model: Busiest }; trusted_decisions: { total: number; handle: Busiest; model: Busiest } };
+export async function workConcentration(problemId: number): Promise<WorkConcentration> {
+  const top = async (sql: string): Promise<{ total: number; handle: Busiest; model: Busiest }> => {
+    const rows = await q<{ handle: string; model: string | null; n: string }>(sql, [problemId]);
+    const total = rows.reduce((t, r) => t + Number(r.n), 0);
+    const busiest = (key: 'handle' | 'model'): Busiest => {
+      const by = new Map<string, number>();
+      for (const r of rows) { const k = r[key] ?? 'unknown'; by.set(k, (by.get(k) ?? 0) + Number(r.n)); }
+      const [name, n] = [...by.entries()].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))[0] ?? [];
+      return total > 0 && name !== undefined ? { name, share: Math.round(1000 * Number(n) / total) / 1000 } : null;
+    };
+    return { total: Math.round(total * 100) / 100, handle: busiest('handle'), model: busiest('model') };
+  };
+  const hours = await top(`SELECT u.handle, a.model, sum(a.budget_hours) AS n FROM assignment_attempts a JOIN users u ON u.id = a.user_id
+    WHERE a.problem_id = $1 AND a.started_at > now() - interval '7 days' AND a.status <> 'cancelled' GROUP BY 1, 2`);
+  const decisions = await top(`SELECT u.handle, rv.model, count(*) AS n FROM reviews rv JOIN returns r ON r.id = rv.return_id JOIN users u ON u.id = rv.user_id
+    WHERE r.problem_id = $1 AND rv.trusted AND rv.created_at > now() - interval '7 days' GROUP BY 1, 2`);
+  return { window_days: 7, hours, trusted_decisions: decisions };
+}
+
 export type SchedulingAgent = {
   problemId: number; slug: string; sessionId: string; uid: number; tier: number; model: string | null;
   provider: string | null; trusted: boolean; granted: boolean; lane: string | null;
@@ -125,9 +151,23 @@ const DEFAULT_SKILLS = `CASE j.type WHEN 'formalize' THEN ARRAY['lean','formaliz
 /** Judgment of a packaged return that already has completed independent execution: a bounded decision, not a review-pool task. */
 const CHECKED_JUDGMENT_SQL = `j.type='review' AND pr.verification_plan IS NOT NULL AND EXISTS (SELECT 1 FROM verification_runs v JOIN returns w ON w.id=v.result_return_id
   WHERE v.fingerprint=pr.verification_fingerprint AND w.problem_id=pr.problem_id AND w.user_id<>pr.user_id AND w.model<>pr.model AND w.status IN ('recorded','accepted') AND v.outcome IN ('pass','fail'))`;
+/** Route spread (Chris, Sep 24 2026, #sah-gemma-mvp). A research job on a route this handle and model worked in their last
+ * ROUTE_REPEAT_WINDOW assignments ranks ROUTE_REPEAT_PENALTY points lower: one agent running all day otherwise keeps extending
+ * its own recent routes, the loop the Gemma Challenge's agents fell into ("quickly converged on a small set of axes"). Keyed on
+ * handle and model, not session, so several sessions of one model under one handle count as one. A preference only: never a
+ * refusal or a cap (docs/scheduler.md, "No cap on how much one agent does"); with nothing else eligible it gets the same route.
+ * 24 points is two matching skills, or 24 days of waiting. Reviews, audits, triage and checks judge a return and keep their order. */
+export const ROUTE_REPEAT_WINDOW = 3;
+export const ROUTE_REPEAT_PENALTY = 24;
+function routeRepeatSql(uid: string, model: string): string {
+  return `(j.research_route_id IS NOT NULL AND j.type NOT IN ('review','audit','triage','check') AND j.research_route_id IN (
+    SELECT rj.research_route_id FROM (SELECT ra.job_id FROM assignment_attempts ra WHERE ra.problem_id=j.problem_id AND ra.user_id=${uid} AND ra.model IS NOT DISTINCT FROM ${model}::text
+      ORDER BY ra.started_at DESC,ra.id DESC LIMIT ${ROUTE_REPEAT_WINDOW}) recent JOIN jobs rj ON rj.id=recent.job_id WHERE rj.research_route_id IS NOT NULL))`;
+}
 export async function selectJob(a: SchedulingAgent, preferResearch: boolean, discoveryOnly = false, bucket?: ResearchBucket, checkedJudgment = false, reviewsOnly = false, triageOnly = false): Promise<any> {
   const e = eligibility(a);
   const skills = e.p(a.capabilities.skills ?? []), provider = e.p(a.provider), uid = e.p(a.uid);
+  const routeRepeat = routeRepeatSql(uid, e.p(a.model));
   const typeOrder = a.tier === 1
     ? preferResearch
       ? ["paper", "explore", "direction", "break", "audit", "review", "curate", "source", "formalize", "measure"]
@@ -141,7 +181,8 @@ export async function selectJob(a: SchedulingAgent, preferResearch: boolean, dis
   // Prioritize judgments that further research already relies on, without changing trust or eligibility.
   // Every non-age term is bounded; one point per waiting day eventually lifts older work.
   return one(`SELECT j.*, l.slug AS lane_slug,
-    (SELECT count(*) FROM unnest(CASE WHEN cardinality(j.preferred_skills) > 0 THEN j.preferred_skills ELSE ${DEFAULT_SKILLS} END) tag WHERE tag = ANY(${skills}::text[])) AS skill_matches
+    (SELECT count(*) FROM unnest(CASE WHEN cardinality(j.preferred_skills) > 0 THEN j.preferred_skills ELSE ${DEFAULT_SKILLS} END) tag WHERE tag = ANY(${skills}::text[])) AS skill_matches,
+    ${routeRepeat} AS route_repeat
     ${e.joins} WHERE ${e.where} ${bucketFilter} ${discoveryOnly ? "AND j.purpose = 'discovery' AND j.type IN ('explore','direction','break','measure','formalize','source')" : ""}
     ORDER BY CASE WHEN pr.id IS NOT NULL AND pr.user_id = ${uid} THEN 1 ELSE 0 END,
     CASE WHEN j.research_stage='triage' AND (
@@ -159,6 +200,7 @@ export async function selectJob(a: SchedulingAgent, preferResearch: boolean, dis
       + LEAST(3, (SELECT count(*) FROM unnest(CASE WHEN cardinality(j.preferred_skills) > 0 THEN j.preferred_skills ELSE ${DEFAULT_SKILLS} END) tag WHERE tag = ANY(${skills}::text[]))) * 12
       + LEAST(3, cardinality(j.required_sources)) * 12
       - coalesce(array_position(${order}::text[], j.type), 10) * 4
+      - CASE WHEN ${routeRepeat} THEN ${ROUTE_REPEAT_PENALTY} ELSE 0 END
     ) DESC,
     CASE WHEN pr.id IS NOT NULL AND pr.provider <> ${provider} THEN 0 ELSE 1 END,
     j.created_at, j.id LIMIT 1 FOR UPDATE OF j SKIP LOCKED`, e.values);

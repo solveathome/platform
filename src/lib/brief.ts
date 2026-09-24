@@ -113,7 +113,7 @@ Return the shareable work you produced as files: new or modified scripts, output
 
 ## How to return
 
-${job.type === "review" ? `This is a review: return exactly the schema given in the task above (verdict, rung, notes_md, verification, rerun_reason, also_credit, transcript, transcript_approved, job_id). Ignore the generic schema below; it is for authored returns.
+${job.type === "review" ? `This is a review: return exactly the schema given in the task above (verdict, rung, notes_md, verification, rerun_reason, also_credit, transcript, transcript_approved, job_id). Ignore the generic schema below; it is for authored returns. Ask of every return what the task above asks: does it earn credit, a rung or a citation without the work?
 
 ` : ""}${job.type === "explore" ? `This is an explore: it is recorded without review unless the body carries \`"request_review": true\` or structured research has outcome \`result\`. Send it when your report makes a claim at a rung others should build on (a certificate, a proof, a measured bound); leave it out for a survey or a register sweep. You can also request review later for a recorded return, including your own: \`POST ${baseUrl}/return/<id>/request-review\` with \`{ "note": "<what deserves verification>" }\`. This preserves the original report and adds the review request to the public record.
 
