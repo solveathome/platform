@@ -9,6 +9,7 @@ import { join } from "node:path";
 import { migrate, q, one } from "../src/db/index.js";
 import { ROOT } from "../src/lib/paths.js";
 import { queueTypesetJobs } from "../src/lib/typeset.js";
+import { currentText } from "../src/lib/revisions.js";
 
 import { featuredProject } from "../src/lib/projects.js";
 const slug = process.argv[2] ?? (await featuredProject())?.slug ?? "";
@@ -44,7 +45,8 @@ if (existsSync(pdir)) for (const f of readdirSync(pdir).sort()) if (f.endsWith("
 for (const f of readdirSync(root).sort()) if (f.endsWith(".md") && !SKIP.has(f)) entries.push({ file: f, path: `paper/${f}`, kind: "draft" });
 
 for (const e of entries) {
-  const text = readFileSync(join(REPOS, slug, e.path), "utf8");
+  // Title, summary and grade come from the text the site serves (the swarm edition over the mirror), so they describe the body readers get.
+  const text = (await currentText(slug, e.path, Number(p.id)))?.text ?? readFileSync(join(REPOS, slug, e.path), "utf8");
   const t = title(text); if (!t) continue;
   const pslug = e.file.replace(/\.md$/, "").replace(/^prop-/, "");
   const g = e.kind === "proposal" ? (registryGrades[e.file] ?? grade(text)) : grade(text);
