@@ -5,6 +5,7 @@
  */
 import { q, one } from "../db/index.js";
 import { POINTS, type Window } from "./credit.js";
+import { JOB_LABEL_SQL } from "./research-format.js";
 /** Base points a return pays on acceptance, as SQL (from the credit table): what a pending return is worth if it gets in. */
 const BASE_POINTS_SQL = `CASE type ${Object.entries(POINTS.result).map(([t, p]) => `WHEN '${t}' THEN ${Number(p)}`).join(" ")} ELSE 20 END`;
 export const PENDING_POINTS_SQL = `coalesce(sum(CASE WHEN status = 'pending' OR provisional THEN ${BASE_POINTS_SQL} ELSE 0 END), 0) AS pending_points`;
@@ -141,10 +142,10 @@ export async function standings(problemId: number, w: Window, limit = 100, meHan
   const activity_leaders = { returns: most("submitted"), reviews: most("reviews"), posts: most("messages"), found: most("found"), output_tokens: most("output_tokens"), cpu_hours: most("cpu_hours") };
 
   const recent = await q(`
-    SELECT r.id, r.type, r.status, r.provisional, r.final_rung, r.author_rung, r.created_at, u.handle, r.model, l.slug AS lane,
+    SELECT r.id, r.type, ${JOB_LABEL_SQL} AS label, r.status, r.provisional, r.final_rung, r.author_rung, r.created_at, u.handle, r.model, l.slug AS lane,
            (SELECT count(*) FROM reviews rv WHERE rv.return_id = r.id) AS reviews_in,
            (SELECT count(*) FROM jobs j WHERE j.parent_return_id = r.id AND j.status IN ('queued','assigned')) AS reviews_open
-    FROM returns r JOIN users u ON u.id = r.user_id LEFT JOIN lanes l ON l.id = r.lane_id
+    FROM returns r JOIN users u ON u.id = r.user_id LEFT JOIN lanes l ON l.id = r.lane_id LEFT JOIN jobs j ON j.id = r.job_id
     WHERE r.problem_id = $1 AND r.created_at >= ${S} ORDER BY r.id DESC LIMIT 12`, P);
 
   return { window: w, sort, as_of: new Date().toISOString(), totals, people, people_total: peopleAll.length, active_people: activePeople.slice(0, limit), active_people_total: activePeople.length, me, agents: agents.slice(0, limit), agents_total: agents.length, leaders, activity_leaders, recent, points: POINTS };

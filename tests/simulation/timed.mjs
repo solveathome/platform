@@ -17,7 +17,7 @@ export async function timedResearch(w) {
       if(actor===limited&&!injected){await actor.submit(await w.unable(actor));injected=true;}
       else await actor.submit(await w.execute(actor));
     } else if(a.type==='review')await w.finish(actor);
-    else if(a.research_stage==='probe')await actor.submit({research:{route_id:Number(a.research_route_id),outcome:'promising',evidence_md:'Scripted literature and feasibility comparison found a distinct finite lead.',next_step:{...step(`route-${a.research_route_id}`),budget_hours:1,required_tools:['research']}}});
+    else if(a.research_stage==='first_look')await actor.submit({research:{route_id:Number(a.research_route_id),outcome:'promising',evidence_md:'Scripted literature and feasibility comparison found a distinct finite lead.',next_step:{...step(`route-${a.research_route_id}`),budget_hours:1,required_tools:['research']}}});
     else if(a.research_stage==='pursue') {
       const r=await actor.submit({research:{route_id:Number(a.research_route_id),outcome:'result',evidence_md:`New finite result for route ${a.research_route_id}.`},verification_plan:await w.package(publisher,60+claims.length)});
       claims.push({id:r.return_id,submitted:w.minutes});
@@ -32,7 +32,7 @@ export async function timedResearch(w) {
       if(!actor.held&&!([judge,secondJudge].includes(actor)&&w.minutes>=240&&w.minutes<720)) {
         const a=await actor.start();
         const kind=a.type==='check'?'execution':a.type==='review'?'judgment':a.research_route_id?'research':'other';
-        const duration=a.type==='check'?15:a.type==='review'?15:a.research_stage==='probe'?30:60;
+        const duration=a.type==='check'?15:a.type==='review'?15:a.research_stage==='first_look'?30:60;
         cost[kind]+=duration;pending.set(actor.name,{due:w.minutes+duration});
         w.record('virtual_start',{actor:actor.name,job:a.job_id,minutes:w.minutes,duration,kind});
       }

@@ -14,7 +14,7 @@ export function researchPolicy(slug: string, override?: unknown): ResearchAlloca
       || Math.abs(RESEARCH_BUCKETS.reduce((n, k) => n + (raw as any)[k], 0) - 1) > 1e-6) throw new Error('research_allocation needs discover, pursue, rescue, consolidate fractions summing to one');
   return Object.fromEntries(RESEARCH_BUCKETS.map(k => [k, (raw as any)[k]])) as ResearchAllocation;
 }
-export function researchBucket(row: Parameters<typeof stageOf>[0]): ResearchBucket { const s = stageOf(row); return s === 'probe' ? 'pursue' : s; }
+export function researchBucket(row: Parameters<typeof stageOf>[0]): ResearchBucket { const s = stageOf(row); return s === 'first_look' ? 'pursue' : s; }
 export const STAGE_SQL = `coalesce(j.research_stage,CASE WHEN j.purpose='discovery' THEN CASE WHEN j.type IN ('explore','direction') THEN 'discover' ELSE 'pursue' END ELSE 'consolidate' END)`;
 export function portfolioOrder(policy: ResearchAllocation, used: Record<string, number>): ResearchBucket[] {
   return RESEARCH_BUCKETS.filter(k => policy[k] > 0).sort((a, b) => (policy[b] * (used.total + 1) - (used[b] ?? 0)) - (policy[a] * (used.total + 1) - (used[a] ?? 0)));
@@ -26,7 +26,7 @@ export async function researchAllocation(problemId: number, tier = 1): Promise<R
     sum(a.budget_hours) AS hours,sum(a.budget_hours) FILTER (WHERE a.status IN ('released','cancelled')) AS abandoned
     FROM assignment_attempts a WHERE a.problem_id=$1 AND a.tier=$2 AND a.scheduled AND (a.started_at>now()-interval '7 days' OR a.status='assigned') GROUP BY 1`, [problemId, tier]);
   const used: Record<string, number> = { total: 0, abandoned: 0, discover: 0, pursue: 0, rescue: 0, consolidate: 0 };
-  for (const r of rows) { const key = r.stage === 'probe' ? 'pursue' : r.stage; used[key] = (used[key] ?? 0) + Number(r.hours); used.total += Number(r.hours); used.abandoned += Number(r.abandoned ?? 0); }
+  for (const r of rows) { const key = r.stage === 'first_look' ? 'pursue' : r.stage; used[key] = (used[key] ?? 0) + Number(r.hours); used.total += Number(r.hours); used.abandoned += Number(r.abandoned ?? 0); }
   return used;
 }
 
@@ -177,7 +177,7 @@ export async function selectJob(a: SchedulingAgent, preferResearch: boolean, dis
   else if (a.tier !== 1) typeOrder.unshift('check');
   if (a.tier !== 1) typeOrder.unshift('triage');
   const order = e.p(typeOrder);
-  const bucketFilter = (bucket ? `AND CASE WHEN ${STAGE_SQL}='probe' THEN 'pursue' ELSE ${STAGE_SQL} END=${e.p(bucket)}` : '') + (checkedJudgment ? ` AND ${CHECKED_JUDGMENT_SQL}` : '') + (reviewsOnly ? ` AND j.type='review'` : '') + (triageOnly ? ` AND j.type='triage'` : '');
+  const bucketFilter = (bucket ? `AND CASE WHEN ${STAGE_SQL}='first_look' THEN 'pursue' ELSE ${STAGE_SQL} END=${e.p(bucket)}` : '') + (checkedJudgment ? ` AND ${CHECKED_JUDGMENT_SQL}` : '') + (reviewsOnly ? ` AND j.type='review'` : '') + (triageOnly ? ` AND j.type='triage'` : '');
   // Prioritize judgments that further research already relies on, without changing trust or eligibility.
   // Every non-age term is bounded; one point per waiting day eventually lifts older work.
   return one(`SELECT j.*, l.slug AS lane_slug,
@@ -185,10 +185,10 @@ export async function selectJob(a: SchedulingAgent, preferResearch: boolean, dis
     ${routeRepeat} AS route_repeat
     ${e.joins} WHERE ${e.where} ${bucketFilter} ${discoveryOnly ? "AND j.purpose = 'discovery' AND j.type IN ('explore','direction','break','measure','formalize','source')" : ""}
     ORDER BY CASE WHEN pr.id IS NOT NULL AND pr.user_id = ${uid} THEN 1 ELSE 0 END,
-    CASE WHEN j.research_stage='probe' AND (
+    CASE WHEN j.research_stage='first_look' AND (
       j.created_at < now()-interval '1 hour' OR
       (SELECT count(*) FROM (SELECT research_stage FROM assignment_attempts
-        WHERE problem_id=j.problem_id AND scheduled AND research_stage IN ('probe','pursue')
+        WHERE problem_id=j.problem_id AND scheduled AND research_stage IN ('first_look','pursue')
         ORDER BY started_at DESC,id DESC LIMIT 3) recent WHERE recent.research_stage='pursue')=3
     ) THEN 0 ELSE 1 END,
     (

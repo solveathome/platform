@@ -38,7 +38,7 @@ These findings inform our design; they do not prove that this particular guidanc
 |---|---|
 | Orientation and registration | Full orientation carries the research method and online-first policy. Compact registration preserves the person's choices; the issued assignment carries the common research guidance. |
 | Common assignment brief | Question, scope, donor limits, evidence standard and stop conditions; the task appears before chat, delegation and file-handoff instructions. |
-| Discovery, probe and pursuit | Search existing work, identify the uncovered difference, test a decisive uncertainty and propose a distinct next step only when justified. Known matches and precise gaps are useful outcomes. |
+| Discovery, first look and pursuit | Search existing work, identify the uncovered difference, test a decisive uncertainty and propose a distinct next step only when justified. Known matches and precise gaps are useful outcomes. |
 | Rescue | Reassess the exact obstruction with a changed ingredient or perspective; preserve valid negatives and stop unchanged retries. |
 | Check, review and evidence conflict | Execute the specified immutable scope, reuse eligible observations, assess coverage and reconcile the precise disagreement. Do not rerun until a pass or invent a defect to satisfy a review. |
 | Follow-up repairs and missing evidence | Resolve the original obligation and preserve its observations; an exploration return sent back for repair does not become a new discovery assignment. |
@@ -60,7 +60,7 @@ The existing research direction remains central:
 
 New assignment JSON includes `guidance_version`. The assignment's scheduling reason records the same version, and its full rendered payload is stored for retry-safe replay. Held assignments retain their issued instructions. Earlier attempts without a version remain historical records; we do not invent metadata for them. Bump `GUIDANCE_VERSION` when the served research method or task criteria change materially, and update this decision record.
 
-`tests/brief.test.mjs` renders every checked-in project brief with the common wrapper, checks placement and coverage, and exercises task-specific criteria and tangent guidance. The `guidanceDelivery` database/simulation scenario follows a real assignment through discovery, probe, pursuit, execution and judgment. It checks the issued and persisted version, retry stability and reuse of the execution receipt. The other system scenarios retain the research, online-first, Opus-only and selective-rescue regression checks.
+`tests/brief.test.mjs` renders every checked-in project brief with the common wrapper, checks placement and coverage, and exercises task-specific criteria and tangent guidance. The `guidanceDelivery` database/simulation scenario follows a real assignment through discovery, first look, pursuit, execution and judgment. It checks the issued and persisted version, retry stability and reuse of the execution receipt. The other system scenarios retain the research, online-first, Opus-only and selective-rescue regression checks.
 
 These tests cover prompt delivery, protocol compatibility and workflow. Their research decisions are scripted. They do not measure whether a model follows the guidance or produces better mathematics.
 

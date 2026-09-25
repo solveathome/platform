@@ -1000,23 +1000,23 @@ INSERT INTO findings (problem_id, path, return_id, note, created_at)
   SELECT r.problem_id, x->>'path', r.id, x->>'note', r.created_at FROM returns r, jsonb_array_elements(r.also_fix) x
   WHERE r.type = 'audit' AND r.status = 'accepted' AND NOT r.provisional AND jsonb_typeof(r.also_fix) = 'array' AND coalesce(x->>'path', '') <> '' AND coalesce(x->>'note', '') <> ''
   ON CONFLICT (COALESCE(return_id, 0), path, md5(note)) DO NOTHING;
--- The first step on a new route is a probe, not a triage (Chris, Sep 25 2026, #sah-route-triage-title: "If this was not a triage task, it
+-- The first step on a new route is a first look, not a triage (Chris, Sep 25 2026, #sah-route-triage-title: "If this was not a triage task, it
 -- should not show up as such"). Triage is the review bookkeeping job only. The check keeps 'triage' for the previous container during a
--- deploy; every start relabels what it wrote, and a queued brief says probe.
+-- deploy; every start relabels what it wrote, and a queued brief says first look.
 DO $$ BEGIN
-  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'jobs_research_stage_check' AND pg_get_constraintdef(oid) LIKE '%probe%') THEN
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'jobs_research_stage_check' AND pg_get_constraintdef(oid) LIKE '%first_look%') THEN
     ALTER TABLE jobs DROP CONSTRAINT IF EXISTS jobs_research_stage_check;
-    ALTER TABLE jobs ADD CONSTRAINT jobs_research_stage_check CHECK (research_stage IN ('discover','probe','triage','pursue','rescue','consolidate'));
+    ALTER TABLE jobs ADD CONSTRAINT jobs_research_stage_check CHECK (research_stage IN ('discover','first_look','triage','pursue','rescue','consolidate'));
   END IF;
 END $$;
-UPDATE jobs SET research_stage = 'probe' WHERE research_stage = 'triage';
-UPDATE assignment_attempts SET research_stage = 'probe' WHERE research_stage = 'triage';
-UPDATE jobs SET brief_md = replace(brief_md, 'do not reproduce them in triage.', 'do not reproduce them in a probe.') WHERE research_stage = 'probe' AND status = 'queued' AND brief_md LIKE '%do not reproduce them in triage.%';
-CREATE UNIQUE INDEX IF NOT EXISTS jobs_one_route_probe_idx ON jobs (research_route_id) WHERE research_route_id IS NOT NULL AND research_stage IN ('probe','pursue','rescue') AND status IN ('queued','assigned');
+UPDATE jobs SET research_stage = 'first_look' WHERE research_stage = 'triage';
+UPDATE assignment_attempts SET research_stage = 'first_look' WHERE research_stage = 'triage';
+UPDATE jobs SET brief_md = replace(brief_md, 'do not reproduce them in triage.', 'do not reproduce them in a first look.') WHERE research_stage = 'first_look' AND status = 'queued' AND brief_md LIKE '%do not reproduce them in triage.%';
+CREATE UNIQUE INDEX IF NOT EXISTS jobs_one_route_first_look_idx ON jobs (research_route_id) WHERE research_route_id IS NOT NULL AND research_stage IN ('first_look','pursue','rescue') AND status IN ('queued','assigned');
 -- No "<type>: " in a title (Chris, Sep 25 2026, #sah-route-triage-title: "We don't want our tiles to have <type>: Text. We can add a type
 -- data to an entry and then render a label"). The type, the route stage and the follow-up are columns and render as a badge (jobLabel).
 -- A job made for one session was known by its title prefix; it gets its marker first. Then one rule takes off a prefix that names the
--- job's own type, route stage, lead hunt or follow-up, and keeps the title as written in title_before: a row is rewritten once, and a
+-- job's own type (a paper's or an audit's included), route stage, lead hunt or follow-up, and keeps the title as written in title_before: a row is rewritten once, and a
 -- title the previous container writes during a deploy is taken at the next start.
 ALTER TABLE jobs ADD COLUMN IF NOT EXISTS title_before TEXT;
 UPDATE jobs SET origin_key = 'tangent:legacy:' || id WHERE origin_key IS NULL AND parent_return_id IS NULL AND ((type = 'challenge' AND title LIKE 'Challenge: %') OR (type = 'direction' AND title LIKE 'Direction: %'));
@@ -1024,7 +1024,7 @@ UPDATE jobs SET origin_key = 'open-questions:legacy:' || id WHERE origin_key IS 
 UPDATE jobs j SET title_before = j.title, title = x.t FROM (
     SELECT id, CASE WHEN type IN ('challenge', 'direction') THEN s ELSE upper(left(s, 1)) || substr(s, 2) END AS t FROM (
       SELECT id, type, regexp_replace(regexp_replace(regexp_replace(regexp_replace(title, '^Rescue investigation: return #', 'Reassess return #'),
-        '^(Make checkable|Leads): ', ''), '^(Triage|Probe|Pursue|Rescue): ', ''), '^' || initcap(type) || ': ', '') AS s
+        '^(Make checkable|Leads): ', ''), '^(Triage|Pursue|Rescue|Paper|Audit): ', ''), '^' || initcap(type) || ': ', '') AS s
       FROM jobs WHERE title_before IS NULL AND type <> 'triage'
-        AND (title ~ '^(Leads|Rescue investigation|Make checkable|Triage|Probe|Pursue|Rescue): ' OR title LIKE initcap(type) || ': %')) a) x
+        AND (title ~ '^(Leads|Rescue investigation|Make checkable|Triage|Pursue|Rescue|Paper|Audit): ' OR title LIKE initcap(type) || ': %')) a) x
   WHERE j.id = x.id;

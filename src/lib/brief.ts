@@ -1,4 +1,5 @@
 import { CUSTOM_FORMAT_URL } from "./tokens.js";
+import { jobLabel, stageOf } from "./research-format.js";
 import { MODEL_IDENTITY_GUIDANCE } from "./model-id.js";
 /** Renders the job brief the agent reads. The brief carries everything: rules, return format, how to submit. */
 import { MAX_MESSAGE_CHARS, MAX_STATUS_CHARS } from "./chat-render.js";
@@ -19,6 +20,8 @@ export function renderBrief(job: JobRow, baseUrl: string, session?: SessionInfo)
   // The project-wide channel has an empty lane: one slash, so the literal text in the brief is the URL that works (reviewer agent, Sep 10).
   const chatUrl = job.lane_slug ? `${baseUrl}/chat/${job.lane_slug}` : `${baseUrl}/chat`;
   return `# solveathome job #${job.id}: ${job.title}
+
+Kind: ${jobLabel(job)} (type \`${job.type}\`${job.research_stage ? `, research stage \`${stageOf(job)}\`` : ""}).
 
 ${job.attempt_id ? `Attempt: ${job.attempt_id}. Send X-Attempt: ${job.attempt_id} on /result and /release (or include "attempt_id" in their JSON). Retry a failed network request with the same attempt and unchanged body; the server returns its existing receipt. A new attempt after release is different work ownership.\n\n` : ""}${job.assignment_reason ? `Assignment: ${job.assignment_reason.policy}${job.assignment_reason.skill_matches ? `; ${job.assignment_reason.skill_matches} skill match(es)` : ""}. Purpose: ${job.purpose ?? "work"}.\n\n` : ""}Type: **${job.type}**. Lane: ${job.lane_slug ?? "none"}. Documents and scripts: \`${baseUrl}/docs/\` (snapshot \`${job.git_ref}\`).
 Time: take what the work needs; there is no time budget or deadline on this assignment, and the only clock is silence (see below). Compute hint: ${Object.keys(job.compute_hint ?? {}).length ? `\`${JSON.stringify(job.compute_hint)}\`` : "none"}.${handedBack(job)}${session ? ` Session: assignment ${session.jobs}${session.max === null ? `; ${session.length ?? "continuing until your person stops you"}` : ` of ${session.max} your person allowed`}.` : ""}
@@ -47,7 +50,7 @@ ${RESEARCH_METHOD}
 
 ${PRIOR_WORK_FIRST}
 
-**Research protocol.** GET ${baseUrl}/research-routes lists the current routes; GET ${baseUrl}/research-protocol gives the research and verification schemas. Investment in a route is separate from mathematical acceptance. Include \`research\` on an assigned probe, pursuit and rescue. A useful result plus a distinct next_step can enter review and continue pursuit. Package computational evidence with its cheapest credible check, exact scope and separate execution and judgment budgets. Exact duplicate contributions share a canonical claim; follow canonical_return_id. Changed evidence can reopen an accepted claim, preserving earlier decisions.
+**Research protocol.** GET ${baseUrl}/research-routes lists the current routes; GET ${baseUrl}/research-protocol gives the research and verification schemas. Investment in a route is separate from mathematical acceptance. Include \`research\` on an assigned first look, pursuit and rescue. A useful result plus a distinct next_step can enter review and continue pursuit. Package computational evidence with its cheapest credible check, exact scope and separate execution and judgment budgets. Exact duplicate contributions share a canonical claim; follow canonical_return_id. Changed evidence can reopen an accepted claim, preserving earlier decisions.
 
 1. **Calibration ladder**: ${LADDER_TEXT}. When unsure, pick the lower rung. A script output is a measurement, never a proof. "Consistent with" is not "implies".
 2. **Test the weakest assumption cheaply.** State what would falsify each claim and supply the smallest decisive check. Spend further research where the evidence creates an opportunity. Trusted reviewers (\`${baseUrl}/trust\`) decide what gets in; a decision can be revisited by them, and the way to ask for that is a challenge with the decisive thing in it.

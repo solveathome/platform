@@ -34,7 +34,7 @@ export async function queueTypesetJobs(problemId: number, slug: string): Promise
       OR (j.origin_key = $3 AND EXISTS (SELECT 1 FROM returns x WHERE x.job_id = j.id AND x.status = 'pending')))`, [problemId, r.slug, key]);
     if (busy) continue;
     await q(`INSERT INTO jobs (problem_id, lane_id, type, title, brief_md, git_ref, compute_hint, budget_hours, min_tier, quorum, origin_key) VALUES ($1,NULL,'paper',$2,$3,'main','{}',1,2,1,$4)`,
-      [problemId, `Paper: typeset the math of "${r.title}"`.slice(0, 200), typesetBrief(slug, r.slug, r.title, lines), key]);
+      [problemId, `Typeset the math of "${r.title}"`.slice(0, 200), typesetBrief(slug, r.slug, r.title, lines), key]);
     n++;
   }
   return n;
