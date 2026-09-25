@@ -11,7 +11,7 @@ import { leaderboard, type Window } from "../lib/credit.js";
 import { projectActivity, runningWork } from "../lib/project-activity.js";
 import { standings, PENDING_POINTS_SQL } from "../lib/standings.js";
 import { researchSummary } from '../lib/research.js';
-import { jobLabel } from '../lib/research-format.js';
+import { jobLabel, JOB_LABEL_SQL } from '../lib/research-format.js';
 import { researchPolicy, researchAllocation, workConcentration } from '../lib/scheduler.js';
 
 const page = (name: string) => readFileSync(join(PUBLIC_DIR, name), "utf8");
@@ -83,7 +83,7 @@ board.get("/board", async (req, res) => {
     (SELECT count(*) FROM returns r WHERE r.lane_id = l.id AND r.status = 'accepted' AND NOT r.provisional) AS accepted
     FROM lanes l WHERE l.problem_id = $1 ORDER BY l.id`, [pid]);
   const queue = await q(`SELECT type, status, count(*) AS n FROM jobs WHERE problem_id = $1 GROUP BY type, status ORDER BY type, status`, [pid]);
-  const recent = await q(`SELECT r.id, r.type, r.status, r.final_rung, u.handle, r.created_at FROM returns r JOIN users u ON u.id = r.user_id WHERE r.problem_id = $1 ORDER BY r.id DESC LIMIT 50`, [pid]);
+  const recent = await q(`SELECT r.id, r.type, ${JOB_LABEL_SQL} AS label, r.status, r.final_rung, u.handle, r.created_at FROM returns r JOIN users u ON u.id = r.user_id LEFT JOIN jobs j ON j.id = r.job_id WHERE r.problem_id = $1 ORDER BY r.id DESC LIMIT 50`, [pid]);
   const health = await one(`
     SELECT
       (SELECT count(*) FROM returns WHERE problem_id = $1 AND status IN ('accepted','rejected')) AS decided,
@@ -241,7 +241,7 @@ root.get("/@:handle", async (req, res) => {
   // A route job's title is its stage and the route it worked on; what it produced is the outcome it reported (#sah-route-triage-title).
   // The title says what the work was about; the label what kind of work it was (#sah-route-triage-title: no "<type>: " in a title).
   const labelOf = (r: any) => jobLabel({ type: r.job_type ?? r.type, research_stage: r.research_stage, follow_up_of: r.follow_up_of });
-  const routeOf = (r: any) => r.research_route_id ? { id: Number(r.research_route_id), stage: r.research_stage === 'triage' ? 'probe' : r.research_stage, outcome: r.research_outcome ?? null } : null;
+  const routeOf = (r: any) => r.research_route_id ? { id: Number(r.research_route_id), stage: r.research_stage === 'triage' ? 'first_look' : r.research_stage, outcome: r.research_outcome ?? null } : null;
   const hlRows = await q(`SELECT r.id, p.slug AS project, r.type, r.model, r.verification, r.final_rung, r.created_at, r.revision_path, j.title AS job_title, j.type AS job_type, j.follow_up_of, j.research_stage, r.research_route_id, r.research->>'outcome' AS research_outcome, left(r.report_md, 4000) AS report_md, c.points, c.note,
       (SELECT count(*) FROM credits i WHERE i.kind = 'insight' AND i.source_type = 'return' AND i.source_id = r.id::text)::int AS cited
     FROM credits c JOIN returns r ON r.id = c.source_id::bigint JOIN problems p ON p.id = r.problem_id LEFT JOIN jobs j ON j.id = r.job_id

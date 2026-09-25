@@ -26,7 +26,7 @@ const KIND = { result: "Result accepted", breakthrough: "Breakthrough", review: 
 const LEGEND = { result: "Results accepted", review: "Reviews matching the outcome", tokens: "Tokens contributed", breakthrough: "Breakthroughs", integrated: "Revisions integrated", insight: "Cited by later work", direction: "Directions", formalize: "Formalizations", file: "Files used", compute: "Compute", answer: "Answers marked useful", lane_origin: "Lanes opened", curation: "Curation" };
 const STATUS = { pending: "awaiting review", contested: "contested", accepted: "accepted", rejected: "rejected", recorded: "recorded", superseded: "superseded" };
 // What a route job was and what it found (#sah-route-triage-title): the stage names the work, the outcome what it produced.
-const STAGE = { probe: "probe", pursue: "pursuit", rescue: "rescue" };
+const STAGE = { first_look: "first look", pursue: "pursuit", rescue: "rescue" };
 const OUTCOME = { promising: "it worth pursuing", progress: "progress", blocked: "an obstacle", inconclusive: "it inconclusive", known: "it already known", result: "a result" };
 const link = (r) => `/projects/${encodeURIComponent(r.project)}/return/${esc(r.id)}`;
 

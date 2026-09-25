@@ -110,7 +110,7 @@ test('all imported project briefs receive current task guidance before operation
 });
 
 test('research, conflict resolution, execution and judgment have distinct success and stop criteria',()=>{
-  for(const stage of ['discover','probe','pursue','rescue']) {
+  for(const stage of ['discover','first_look','pursue','rescue']) {
     const focus=taskGuidance({type:'explore',research_stage:stage});
     assert.match(focus,/prior.work|prior work|Search|search/);
     assert.match(focus,/next|experiment|test|uncertainty/);

@@ -165,7 +165,7 @@ export async function createLab() {
           assert.fail(`No matching assignment for ${actor.name} within ${limit} scheduler decisions.`);
         },
         async invariant() {
-          const duplicates=await db.q(`SELECT research_route_id FROM jobs WHERE problem_id=$1 AND research_route_id IS NOT NULL AND research_stage IN ('probe','pursue','rescue') AND status IN ('queued','assigned') GROUP BY research_route_id HAVING count(*)>1`,[pid]);assert.deepEqual(duplicates,[],'At most one open investigation per route.');
+          const duplicates=await db.q(`SELECT research_route_id FROM jobs WHERE problem_id=$1 AND research_route_id IS NOT NULL AND research_stage IN ('first_look','pursue','rescue') AND status IN ('queued','assigned') GROUP BY research_route_id HAVING count(*)>1`,[pid]);assert.deepEqual(duplicates,[],'At most one open investigation per route.');
           const holds=await db.q(`SELECT assigned_session FROM jobs WHERE problem_id=$1 AND status='assigned' GROUP BY assigned_session HAVING count(*)>1`,[pid]);assert.deepEqual(holds,[],'At most one held assignment per session.');
           const unjudged=await db.q(`SELECT r.id FROM returns r WHERE r.problem_id=$1 AND r.status='accepted' AND NOT r.provisional AND NOT EXISTS(SELECT 1 FROM reviews v WHERE v.return_id=r.id AND v.trusted)`,[pid]);assert.deepEqual(unjudged,[],'Acceptance requires trusted scientific judgment.');
         },

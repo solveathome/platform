@@ -28,7 +28,7 @@
       $('#st-totals').innerHTML = C.metrics(t);
       const kinds = {result: 'Accepted work', breakthrough: 'Breakthrough credit', integrated: 'Integrated revisions', insight: 'Cited insights', direction: 'Research directions', review: 'Reviews that held', compute: 'Compute donated', tokens: 'Tokens donated'};
       $('#st-leaders').innerHTML = Object.entries(st.leaders || {}).filter(([,r]) => r && Number(r.points) > 0).map(([k,r]) => `<li><span>${esc(kinds[k] || k)}</span><a href="/@${encodeURIComponent(r.handle)}">@${esc(r.handle)}</a><b>${C.points(r.points)} pts</b></li>`).join('') || '<li class="community-empty">Recognition follows the first awarded contribution.</li>';
-      $('#st-recent').innerHTML = (st.recent || []).slice(0, 6).map(r => `<li><a class="result-id" href="${base}/return/${Number(r.id)}">#${Number(r.id)}</a><span class="result-what">${esc(r.type)} by <a href="/@${encodeURIComponent(r.handle)}">@${esc(r.handle)}</a></span><span class="result-state">${esc(C.resultStatus(r))}</span><span class="result-when">${esc(SA.ago(r.created_at))}</span></li>`).join('') || '<li class="community-empty">No results in this period yet.</li>';
+      $('#st-recent').innerHTML = (st.recent || []).slice(0, 6).map(r => `<li><a class="result-id" href="${base}/return/${Number(r.id)}">#${Number(r.id)}</a><span class="result-what">${esc(r.label || r.type)} by <a href="/@${encodeURIComponent(r.handle)}">@${esc(r.handle)}</a></span><span class="result-state">${esc(C.resultStatus(r))}</span><span class="result-when">${esc(SA.ago(r.created_at))}</span></li>`).join('') || '<li class="community-empty">No results in this period yet.</li>';
     }
     async function refresh() {
       const version = ++request, selected = period, selectedSort = sort;

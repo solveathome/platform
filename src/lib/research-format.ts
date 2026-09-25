@@ -1,7 +1,7 @@
 /** Structured research reports are investment proposals, never mathematical verdicts. */
-// The first bounded step on a new route is a probe (Chris, Sep 25 2026, #sah-route-triage-title: "If this was not a triage task, it should
+// The first bounded step on a new route is a first look (Chris, Sep 25 2026, #sah-route-triage-title: "If this was not a triage task, it should
 // not show up as such"): it was called triage, a name that belongs to the review bookkeeping job. Rows from before read 'triage'.
-export const STAGES = ['discover', 'probe', 'pursue', 'rescue', 'consolidate'] as const;
+export const STAGES = ['discover', 'first_look', 'pursue', 'rescue', 'consolidate'] as const;
 export type ResearchStage = typeof STAGES[number];
 export const OUTCOMES = ['proposed', 'promising', 'progress', 'blocked', 'inconclusive', 'known', 'result'] as const;
 export const OBSTACLES = ['unresolved', 'attempt_failed', 'claim_refuted', 'scoped_obstruction'] as const;
@@ -100,19 +100,29 @@ export function parseResearch(raw: unknown): ResearchReport | null {
   return r;
 }
 
-/** What a job was, as one word for a badge beside its title (Chris, Sep 25 2026, #sah-route-triage-title: "We don't want our tiles to
- *  have <type>: Text. We can add a type data to an entry and then render a label"). Titles carry no type prefix; this is the label. */
-export function jobLabel(job: { type?: string | null; research_stage?: string | null; follow_up_of?: unknown }): string {
-  const stage = job.research_stage === 'triage' ? 'probe' : job.research_stage;
-  if (stage === 'probe' || stage === 'rescue') return stage;
-  if (stage === 'pursue') return 'pursuit';
-  if (job.follow_up_of != null) return 'follow-up';
+/** Every kind of job or step the platform makes, and its label (Chris, Sep 25 2026, #sah-route-triage-title: "Make sure we have step labels
+ *  types and apply those. Never ever prefix tiles with <type>:"). A title says what the work is about; the kind is data and renders as
+ *  this label beside it. The route stages and a follow-up name the step; otherwise the job's type does. "Triage" is the review-queue step
+ *  only: the first step on a route is a first look. */
+export const JOB_KIND_LABELS: Record<string, string> = {
+  first_look: 'First look', pursuit: 'Pursuit', rescue: 'Rescue', follow_up: 'Follow-up',
+  explore: 'Explore', direction: 'Direction', challenge: 'Challenge', break: 'Break', measure: 'Measure', formalize: 'Formalize',
+  source: 'Source', audit: 'Audit', paper: 'Paper', curate: 'Curate', consolidate: 'Consolidate',
+  review: 'Review', triage: 'Review triage', check: 'Verification',
+};
+export function jobKind(job: { type?: string | null; research_stage?: string | null; follow_up_of?: unknown }): string {
+  if (job.research_stage === 'first_look' || job.research_stage === 'triage') return 'first_look';
+  if (job.research_stage === 'pursue') return 'pursuit';
+  if (job.research_stage === 'rescue') return 'rescue';
+  if (job.follow_up_of != null) return 'follow_up';
   return String(job.type ?? '');
 }
-/** jobLabel in SQL, for rows the page renders as they come (the running-work tiles). */
-export const JOB_LABEL_SQL = `CASE WHEN j.research_stage IN ('probe','triage') THEN 'probe' WHEN j.research_stage = 'rescue' THEN 'rescue' WHEN j.research_stage = 'pursue' THEN 'pursuit' WHEN j.follow_up_of IS NOT NULL THEN 'follow-up' ELSE j.type END`;
+export function jobLabel(job: Parameters<typeof jobKind>[0]): string { const k = jobKind(job); return JOB_KIND_LABELS[k] ?? k; }
+/** jobKind and jobLabel in SQL, for rows a page renders as they come (the running-work tiles). */
+export const JOB_KIND_SQL = `CASE WHEN j.research_stage IN ('first_look','triage') THEN 'first_look' WHEN j.research_stage = 'pursue' THEN 'pursuit' WHEN j.research_stage = 'rescue' THEN 'rescue' WHEN j.follow_up_of IS NOT NULL THEN 'follow_up' ELSE j.type END`;
+export const JOB_LABEL_SQL = `CASE ${JOB_KIND_SQL} ${Object.entries(JOB_KIND_LABELS).map(([k, v]) => `WHEN '${k}' THEN '${v}'`).join(' ')} ELSE ${JOB_KIND_SQL} END`;
 export function stageOf(job: { research_stage?: string | null; purpose?: string; type?: string }): ResearchStage {
-  if (job.research_stage === 'triage') return 'probe';
+  if (job.research_stage === 'triage') return 'first_look';
   if (STAGES.includes(job.research_stage as ResearchStage)) return job.research_stage as ResearchStage;
   return job.purpose === 'discovery' ? (['explore', 'direction'].includes(job.type ?? '') ? 'discover' : 'pursue') : 'consolidate';
 }

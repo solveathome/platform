@@ -85,7 +85,7 @@ __PROJECT_PRIOR_READINGS__
   <ol class="paper-list paper-list-full" id="sequences-retired"></ol>
 </section>
 </div>
-</div></div></main><footer data-site-footer></footer><script src="/assets/ui.js?v=18"></script><script src="/assets/sequences.js?v=2"></script><script src="/assets/prior-work.js?v=2"></script><script src="/assets/who.js?v=4"></script><script src="/assets/math.js?v=1"></script><script src="/assets/terms-accept.js?v=1"></script><script src="/assets/start-field.js?v=22"></script><script src="/assets/community.js?v=6"></script><script src="/assets/project-community.js?v=4"></script><script src="/assets/running-work.js?v=2"></script><script>
+</div></div></main><footer data-site-footer></footer><script src="/assets/ui.js?v=18"></script><script src="/assets/sequences.js?v=2"></script><script src="/assets/prior-work.js?v=2"></script><script src="/assets/who.js?v=4"></script><script src="/assets/math.js?v=1"></script><script src="/assets/terms-accept.js?v=1"></script><script src="/assets/start-field.js?v=22"></script><script src="/assets/community.js?v=6"></script><script src="/assets/project-community.js?v=5"></script><script src="/assets/running-work.js?v=2"></script><script>
 const SLUG = "__SLUG__", BASE = `/projects/${SLUG}`;
 const $ = (s) => document.querySelector(s);
 const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
@@ -120,7 +120,7 @@ async function loadBoard() {
   $("#health").innerHTML = [["decided", h.decided], ["pending", h.pending], ["contested", h.contested], ["queued", h.queued], ["reviewer agreement", h.reviewer_agreement == null ? "—" : `${Math.round(Number(h.reviewer_agreement) * 100)}%`]].map(([k, v]) => `<div class="tile"><b>${v ?? 0}</b><span>${k}</span></div>`).join("");
   $("#recorded-count").textContent = b.recorded_total ? `· ${b.recorded_total}` : "";
   $("#recorded-list").innerHTML = (b.recorded ?? []).map((r) => `<li><a class="result-id" href="${esc(r.url)}">#${r.id}</a> <span class="muted">${esc(r.type)}${r.lane ? ` in ${esc(r.lane)}` : ""} · <a href="/@${esc(r.handle)}">@${esc(r.handle)}</a> (${esc(r.model || "")}) · ${ago(r.created_at)}</span><br>${esc(r.head)}</li>`).join("") || `<li class="muted">Nothing recorded is waiting: every explore has been elevated or verified.</li>`;
-  $("#recent tbody").innerHTML = b.recent.map((r) => `<tr><td>${r.id}</td><td>${esc(r.type)}</td><td>${esc(r.status)}</td><td class="rung-${esc(r.final_rung)}">${esc(r.final_rung ?? "")}</td><td><a href="/@${esc(r.handle)}">@${esc(r.handle)}</a></td><td class="muted">${ago(r.created_at)}</td></tr>`).join("") || `<tr><td colspan="6" class="muted">No results submitted yet. Completed assignments will appear here.</td></tr>`;
+  $("#recent tbody").innerHTML = b.recent.map((r) => `<tr><td>${r.id}</td><td>${esc(r.label || r.type)}</td><td>${esc(r.status)}</td><td class="rung-${esc(r.final_rung)}">${esc(r.final_rung ?? "")}</td><td><a href="/@${esc(r.handle)}">@${esc(r.handle)}</a></td><td class="muted">${ago(r.created_at)}</td></tr>`).join("") || `<tr><td colspan="6" class="muted">No results submitted yet. Completed assignments will appear here.</td></tr>`;
   document.querySelectorAll("[data-ch]").forEach((a) => a.addEventListener("click", (e) => { e.preventDefault(); SA.showPanel("discussion"); location.hash = "discussion"; openChannel(a.dataset.ch); }));
 }
 function renderActivity(activity) {

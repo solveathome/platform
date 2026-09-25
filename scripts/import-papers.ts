@@ -54,13 +54,13 @@ for (const e of entries) {
   if (existing) await q(`UPDATE papers SET title = $3, path = $4, kind = $5, grade = $6, summary = $7, status = CASE WHEN status = 'proposed' AND $5 = 'draft' THEN 'draft' ELSE status END WHERE problem_id = $1 AND slug = $2`, [p.id, pslug, t, e.path, e.kind, g, summary(text)]);
   else { await q(`INSERT INTO papers (problem_id, slug, title, path, kind, status, grade, summary) VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`, [p.id, pslug, t, e.path, e.kind, e.kind === "proposal" ? "proposed" : "draft", g, summary(text)]); seeded++; }
   // Drafts get audit jobs (find issues, propose the change); proposals get write jobs. Earlier queued "referee-ready revision" paper jobs become audits.
-  await q(`UPDATE jobs SET type = 'audit', title = regexp_replace(title, '^Paper: referee-ready revision of', 'Audit:'), budget_hours = 3, brief_md = $3 WHERE problem_id = $1 AND type = 'paper' AND status = 'queued' AND brief_md LIKE '%paper.slug: ' || $2 || '%' AND title LIKE 'Paper: referee-ready revision%'`,
+  await q(`UPDATE jobs SET type = 'audit', title = regexp_replace(title, '^(Paper: referee-ready revision of|Referee-ready revision of) ', ''), budget_hours = 3, brief_md = $3 WHERE problem_id = $1 AND type = 'paper' AND status = 'queued' AND brief_md LIKE '%paper.slug: ' || $2 || '%' AND title LIKE 'Paper: referee-ready revision%'`,
     [p.id, pslug, auditBrief(pslug, e.path, t)]);
   const open = await one(`SELECT 1 FROM jobs WHERE problem_id = $1 AND type IN ('paper','audit') AND status IN ('queued','assigned') AND brief_md LIKE '%paper.slug: ' || $2 || '%'`, [p.id, pslug]);
   if (open) continue;
   const write = e.kind === "proposal";
   if (!write) {
-    await q(`INSERT INTO jobs (problem_id, lane_id, type, title, brief_md, git_ref, compute_hint, budget_hours, min_tier, quorum) VALUES ($1,NULL,'audit',$2,$3,'main','{}',3,1,1)`, [p.id, `Audit: "${t}"`.slice(0, 200), auditBrief(pslug, e.path, t)]);
+    await q(`INSERT INTO jobs (problem_id, lane_id, type, title, brief_md, git_ref, compute_hint, budget_hours, min_tier, quorum) VALUES ($1,NULL,'audit',$2,$3,'main','{}',3,1,1)`, [p.id, `"${t}"`.slice(0, 200), auditBrief(pslug, e.path, t)]);
     jobs++; continue;
   }
   const brief = `paper.slug: ${pslug}\n\n${write
@@ -69,7 +69,7 @@ for (const e of entries) {
 
 Return the complete manuscript as one uploaded Markdown file (LaTeX math allowed), plus your report: what changed, what you verified and how, what you could not verify, and the calibration of every headline claim. In the return set \`"paper": { "slug": "${pslug}", "file": "<sha256 of the manuscript>" }\`. Reviewers will write referee reports; an accepted revision becomes the paper's current version at /projects/${slug}/papers/${pslug}.`;
   await q(`INSERT INTO jobs (problem_id, lane_id, type, title, brief_md, git_ref, compute_hint, budget_hours, min_tier, quorum) VALUES ($1,NULL,'paper',$2,$3,'main','{}',4,1,1)`,
-    [p.id, `${write ? "Paper: write" : "Paper: referee-ready revision of"} "${t}"`.slice(0, 200), brief]);
+    [p.id, `${write ? "Write" : "Referee-ready revision of"} "${t}"`.slice(0, 200), brief]);
   jobs++;
 }
 console.log(JSON.stringify({ slug, papers: entries.length, seeded, jobs_queued: jobs, typeset_queued: typeset }));

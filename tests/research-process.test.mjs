@@ -80,9 +80,9 @@ const obstacle={kind:'attempt_failed',statement:'The uniform bound fails.',assum
 async function proposed() {return ok(await submit('author',{research:proposal()}));}
 async function activeRoute(){const r=await proposed(),a=await start();const p=ok(await submit('astra',{research:{route_id:r.research.route_id,outcome:'promising',evidence_md:'The first test leaves a specific viable implication.',next_step:step()}},a));return {r,a,p};}
 
-test('proposal → probe → pursuit → scoped obstacle → different-model rescue, with replay-safe follow-ups',async()=>{
+test('proposal → first look → pursuit → scoped obstacle → different-model rescue, with replay-safe follow-ups',async()=>{
   const r=await proposed();assert.equal(r.status,'recorded');assert.equal(r.reviews_requested,0);
-  const a=await start();assert.equal(a.research_stage,'probe');assert.match(a.brief_md,/Investment state: proposed/);{const j=await one(`SELECT j.title,rr.title AS route FROM jobs j JOIN research_routes rr ON rr.id=j.research_route_id WHERE j.id=$1`,[a.job_id]);assert.equal(j.title,j.route,'a probe is titled with its route, no type prefix');}
+  const a=await start();assert.equal(a.research_stage,'first_look');assert.match(a.brief_md,/Investment state: proposed/);{const j=await one(`SELECT j.title,rr.title AS route FROM jobs j JOIN research_routes rr ON rr.id=j.research_route_id WHERE j.id=$1`,[a.job_id]);assert.equal(j.title,j.route,'a probe is titled with its route, no type prefix');}
   const missing=await submit('astra',{},a);assert.equal(missing.status,400);assert.match(missing.body.error,/requires research/);
   assert.equal((await submit('astra',{research:proposal()},a)).status,400);
   assert.equal((await one(`SELECT status FROM jobs WHERE id=$1`,[a.job_id])).status,'assigned');
@@ -131,7 +131,7 @@ test('a changed trusted premise flags dependents and cancels queued pursuit with
 
 test('late rejection follows the investment chain even when no dependencies were declared',async()=>{
   const {r,p}=await activeRoute(),held=await start('author');
-  const progress=ok(await submit('author',{research:{route_id:r.research.route_id,outcome:'progress',evidence_md:'The probe finding supports a second bounded step.',next_step:step('second'),depends_on:[]}},held));
+  const progress=ok(await submit('author',{research:{route_id:r.research.route_id,outcome:'progress',evidence_md:'The first-look finding supports a second bounded step.',next_step:step('second'),depends_on:[]}},held));
   let route=ok(await call(`/research-routes/${r.research.route_id}`));
   assert.deepEqual(route.basis.map(x=>Number(x.id)),[r.return_id,p.return_id,progress.return_id]);
   assert.equal(route.dependencies.length,0);
@@ -177,12 +177,12 @@ test('reviews of evidence used by continued pursuit get a bounded advantage over
 });
 
 // #sah-route-triage-title (Chris, Sep 25 2026): "We don't want our tiles to have <type>: Text." At start a route job the previous container
-// recorded as triage becomes a probe, and a title that opens with its own type, stage, lead hunt or follow-up loses the prefix, kept in
+// recorded as triage becomes a first look, and a title that opens with its own type, stage, lead hunt or follow-up loses the prefix, kept in
 // title_before. Twice gives the same rows; review triage and a person's words after the prefix are left as they are.
 test('titles lose their type prefix at start, once, and review triage keeps its name',async()=>{
   const add=(type,title,extra={})=>one(`INSERT INTO jobs (problem_id,type,title,brief_md,budget_hours,research_stage,follow_up_of,status) VALUES ($1,$2,$3,$4,0.5,$5,$6,$7) RETURNING id`,
     [pid,type,title,extra.brief??'Do the work.',extra.stage??null,extra.follow??null,extra.status??'queued']);
-  const probe=await add('explore','Triage: A route',{stage:'triage',brief:'Use published numbers with citations; do not reproduce them in triage. Seek the smallest experiment.'});
+  const look=await add('explore','Triage: A route',{stage:'triage',brief:'Use published numbers with citations; do not reproduce them in triage. Seek the smallest experiment.'});
   const done=await add('explore','Triage: Another route',{stage:'triage',brief:'do not reproduce them in triage.',status:'accepted'});
   const pursue=await add('explore','Pursue: A route',{stage:'pursue'});
   const measure=await add('measure','Measure: reproduce the census at @29');
@@ -192,13 +192,15 @@ test('titles lose their type prefix at start, once, and review triage keeps its 
   const fix=await add('measure','Make checkable: Measure: the census',{follow:orig.id});
   const rescue=await add('explore','Rescue investigation: return #7',{stage:'rescue'});
   const plain=await add('break','Break the bound: Lemma 2');
+  const typeset=await add('paper','Paper: typeset the math of "A note"');
+  const audit=await add('audit','Audit: "A note"');
   const review=await add('triage','Triage return #1');
   await migrate();const first=await q(`SELECT * FROM jobs WHERE problem_id=$1 ORDER BY id`,[pid]);
   await migrate();assert.deepEqual(await q(`SELECT * FROM jobs WHERE problem_id=$1 ORDER BY id`,[pid]),first,'the relabel runs twice to the same rows');
   const row=Object.fromEntries(first.map(r=>[r.id,r]));
   const title=(x)=>row[x.id].title;
-  assert.deepEqual([row[probe.id].research_stage,title(probe),row[probe.id].title_before],['probe','A route','Triage: A route']);
-  assert.match(row[probe.id].brief_md,/do not reproduce them in a probe\./);
+  assert.deepEqual([row[look.id].research_stage,title(look),row[look.id].title_before],['first_look','A route','Triage: A route']);
+  assert.match(row[look.id].brief_md,/do not reproduce them in a first look\./);
   assert.equal(row[done.id].brief_md,'do not reproduce them in triage.','a brief already handed out is the record of what the agent read');
   assert.equal(title(pursue),'A route');
   assert.equal(title(measure),'Reproduce the census at @29');
@@ -206,14 +208,15 @@ test('titles lose their type prefix at start, once, and review triage keeps its 
   assert.equal(title(leads),'New route');
   assert.equal(title(fix),'The census');
   assert.equal(title(rescue),'Reassess return #7');
+  assert.deepEqual([title(typeset),title(audit)],['Typeset the math of "A note"','"A note"']);
   assert.deepEqual([title(plain),row[plain.id].title_before],['Break the bound: Lemma 2',null],'a title that only begins with a type word keeps it');
   assert.deepEqual([row[review.id].type,title(review),row[review.id].title_before,row[review.id].research_stage],['triage','Triage return #1',null,null]);
   const {jobLabel}=await import('../src/lib/research-format.ts');
-  assert.deepEqual([row[probe.id],row[pursue.id],row[fix.id],row[rescue.id],row[measure.id],row[review.id]].map(jobLabel),['probe','pursuit','follow-up','rescue','measure','triage']);
+  assert.deepEqual([row[look.id],row[pursue.id],row[fix.id],row[rescue.id],row[measure.id],row[review.id]].map(jobLabel),['First look','Pursuit','Follow-up','Rescue','Measure','Review triage']);
 });
-for(const who of ['astra','author','runner'])test(`lightweight probe of an Astra proposal is available to ${who}`,async()=>{
+for(const who of ['astra','author','runner'])test(`lightweight first look of an Astra proposal is available to ${who}`,async()=>{
   const r=ok(await submit('astra',{research:proposal()}));
-  const a=await start(who);assert.equal(a.research_stage,'probe');
+  const a=await start(who);assert.equal(a.research_stage,'first_look');
   assert.equal(Number(a.research_route_id),r.research.route_id);
   const queued=await one('SELECT min_tier,avoid_model,budget_hours FROM jobs WHERE id=$1',[a.job_id]);
   assert.equal(queued.min_tier,99);assert.equal(queued.avoid_model,null);assert.equal(Number(queued.budget_hours),0.5);
