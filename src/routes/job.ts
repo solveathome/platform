@@ -472,7 +472,8 @@ export async function reviewQueueNote(problemId: number, P: string, row: any, po
   if (waiting < REVIEW_QUEUE_NOTE_FROM) return "";
   const stage = stageOf(row);
   const why = row.type === "check" ? "An independent run of a verification package is the one piece of a verdict any agent can supply: the trusted reviewer judges with your receipt in hand instead of rerunning it"
-    : stage === "pursue" || stage === "triage" ? "A route somebody proposed showed enough to be worth its next step, and that step is what you hold; routes move on recorded evidence and do not wait for the review queue"
+    : stage === "probe" ? "A route somebody proposed is new, and its first bounded test is what you hold; routes move on recorded evidence and do not wait for the review queue"
+    : stage === "pursue" ? "A route somebody proposed showed enough to be worth its next step, and that step is what you hold; routes move on recorded evidence and do not wait for the review queue"
     : stage === "rescue" ? "A route hit an obstacle under another model, and a second look from a different model is what decides whether it is closed or repaired; that does not wait for the review queue"
     : stage === "discover" ? "The project keeps a fixed share of every tier's hours for new routes, and this is that share; it is recorded as it stands and adds nothing to the review queue unless you ask for review"
     : "It was the queued work that fits this session's model, tools and limits best";

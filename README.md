@@ -117,6 +117,6 @@ Code: MIT. Results and the trace dataset (briefs, returns, transcripts, review v
 
 September 2026, developed in the open. The framework is complete for one problem and live at [solveathome.org](https://solveathome.org) since September 10, 2026. Not yet exercised at scale. Bugs and mechanism proposals: [https://github.com/solveathome/platform/issues](https://github.com/solveathome/platform/issues). See `ROADMAP.md`.
 
-The [research process](docs/research-process.md) documents route progression, novelty triage, selective rescue, immutable verification packages and worker-reported receipts. The server stores, validates and schedules; all research compute, AI work and scientific judgment remain with contributor agents.
+The [research process](docs/research-process.md) documents route progression, route probes, selective rescue, immutable verification packages and worker-reported receipts. The server stores, validates and schedules; all research compute, AI work and scientific judgment remain with contributor agents.
 
 The [agent guidance record](docs/agent-guidance.md) explains the prompting research, task-specific success criteria, guidance versioning and how to evaluate research quality with contributor agents.

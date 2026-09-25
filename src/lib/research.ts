@@ -16,7 +16,7 @@ export async function routeContext(id: number): Promise<any> {
       UNION
       SELECT prior.id,prior.job_id FROM basis b JOIN jobs j ON j.id=b.job_id
       JOIN returns prior ON prior.id=j.research_source_return_id
-      WHERE j.research_route_id=$2 AND j.research_stage IN ('triage','pursue')
+      WHERE j.research_route_id=$2 AND j.research_stage IN ('probe','pursue')
     ) SELECT r.id,r.status,r.final_rung,r.provisional FROM basis b JOIN returns r ON r.id=b.id ORDER BY r.id`, [route.last_return_id, id]);
   const events = await q(`SELECT e.*,r.model,u.handle,r.status AS evidence_status,r.final_rung FROM research_events e LEFT JOIN returns r ON r.id=e.return_id LEFT JOIN users u ON u.id=r.user_id WHERE route_id=$1 ORDER BY e.id DESC`, [id]);
   const jobs = await q(`SELECT id,type,research_stage,title,status,budget_hours FROM jobs WHERE research_route_id=$1 ORDER BY id DESC LIMIT 20`, [id]);
@@ -64,18 +64,18 @@ export async function researchBrief(id: number): Promise<string> {
   return `\n\n### Research route #${r.id}: ${r.title}\n\nInvestment state: ${r.state}; this is not a truth grade. Revision ${r.revision}.\n\nContribution: ${r.contribution_md}\n\nPrior art and exact difference: ${r.prior_art_md}\n\nCentral uncertainty: ${r.uncertainty_md}\n\nNext experiment: ${JSON.stringify(r.next_step)}\n\nObstacle: ${JSON.stringify(r.obstacle)}\n\nEvidence behind continued investment: ${JSON.stringify(r.basis)}.\n\nDeclared dependencies: ${JSON.stringify(r.dependencies)}. Pending, recorded, rejected or provisional premises remain conditional; inspect the evidence before building on them.\n\nRecent investigations:\n${r.events.slice(0, 5).map((e: any) => `- Return #${e.return_id ?? '—'} (${e.model ?? 'system'}): ${e.outcome}. ${e.evidence_md}`).join('\n')}\n\nFull route and event record: GET <project base>/research-routes/${r.id}.\n`;
 }
 async function queueInvestigation(route: any, stage: ResearchStage, source: any): Promise<any> {
-  if (await one(`SELECT 1 FROM jobs WHERE research_route_id=$1 AND research_stage IN ('triage','pursue','rescue') AND status IN ('queued','assigned')`, [route.id])) return null;
+  if (await one(`SELECT 1 FROM jobs WHERE research_route_id=$1 AND research_stage IN ('probe','pursue','rescue') AND status IN ('queued','assigned')`, [route.id])) return null;
   const step: NextStep | null = route.next_step;
   const origin = stage === 'pursue' && step ? `pursue:${route.id}:${experimentKey(step)}` : `${stage}:${route.id}:${route.revision}`;
   if (await one(`SELECT 1 FROM jobs WHERE problem_id=$1 AND origin_key=$2`, [route.problem_id, origin])) return null;
-  const task = stage === 'triage'
-    ? 'Search online for existing attempts, results, tables and datasets before testing feasibility. Reuse the recorded search and inspect the closest sources and weakest assumption. Use published numbers with citations; do not reproduce them in triage. Seek the smallest experiment on the uncovered step. Recommend promising only with specific evidence and a bounded next step; do not claim the route is proved. Map the assumptions of any borrowed method onto this problem.'
+  const task = stage === 'probe'
+    ? 'Search online for existing attempts, results, tables and datasets before testing feasibility. Reuse the recorded search and inspect the closest sources and weakest assumption. Use published numbers with citations; do not reproduce them in a probe. Seek the smallest experiment on the uncovered step. Recommend promising only with specific evidence and a bounded next step; do not claim the route is proved. Map the assumptions of any borrowed method onto this problem.'
     : stage === 'rescue'
       ? 'Inspect the decisive obstruction with a fresh perspective. Distinguish an unresolved task, failed attempt, refuted statement and scoped obstruction. Seek a repair, weaker requirement, new ingredient or alternate method. Preserve valid counterexamples and their exact scope. A successful rescue needs a distinct next experiment and evidence that the alternative avoids the obstruction. Reuse the prior search and search online for the changed ingredient, including failures in the source field. Do not rerun published computations here. Your findings start a new investment basis; explicitly list any earlier return still required in depends_on.'
       : 'First update the online prior-work search for this experiment. If existing work covers it, record that and stop; otherwise run this bounded sprint on the uncovered uncertainty. Use cited published numbers during pursuit; their reproduction belongs in later validation. Build on the supplied findings; do not reconstruct earlier research. Return concrete progress and its cheapest credible check, a useful result for review, or a precisely scoped obstacle. Continued investment requires a distinct experiment.';
   return one(`INSERT INTO jobs (problem_id,lane_id,type,title,brief_md,budget_hours,min_tier,compute_hint,purpose,research_stage,research_route_id,research_source_return_id,avoid_model,origin_key,required_tools,required_sources,priority,research_revision)
     VALUES ($1,$2,'explore',$3,$4,$5,$6,$7,'discovery',$8,$9,$10,$11,$12,$13,$14,$15,$16) RETURNING *`,
-    [route.problem_id, route.lane_id, `${stage === 'triage' ? 'Triage' : stage === 'rescue' ? 'Rescue' : 'Pursue'}: ${route.title}`.slice(0, 200),
+    [route.problem_id, route.lane_id, `${stage === 'probe' ? 'Probe' : stage === 'rescue' ? 'Rescue' : 'Pursue'}: ${route.title}`.slice(0, 200),
       `${task}\n\nRead GET <project base>/research-routes/${route.id} and return #${source.id}. Return the ordinary report and transcript plus research: {route_id: ${route.id}, outcome: "promising|progress|blocked|inconclusive|known|result", evidence_md: "what the evidence changes, <=4000 chars", prior_art_md: "updated online search record, sources and exact remaining gap, <=4000", next_step: {question, method, success, failure, budget_hours} <only for continued pursuit>, obstacle: {kind, statement, assumptions, evidence, revisit_when} <for blocked/inconclusive>, depends_on: [<return ids actually required>]}. A result with a distinct next_step requests review and continues pursuit concurrently; omit next_step when no further experiment is warranted. Use known with prior_art_md and no next_step or obstacle when cited prior work already covers the proposed contribution; it stops automatic investigation without requesting review. The evidence grade is separate. Do not close a broad route because one proof attempt failed.`,
       stage === 'pursue' ? step?.budget_hours ?? 1 : 0.5, 99,
       JSON.stringify(stage === 'pursue' ? step?.compute ?? {} : {}), stage, route.id, source.id,
@@ -84,7 +84,7 @@ async function queueInvestigation(route: any, stage: ResearchStage, source: any)
 }
 
 export async function recordResearch(ret: any, job: any, report: ResearchReport | null): Promise<any> {
-  if (job?.research_route_id && ['triage', 'pursue', 'rescue'].includes(job.research_stage) && !report) bad('this route assignment requires research with outcome, evidence and its next step or obstacle');
+  if (job?.research_route_id && ['probe', 'pursue', 'rescue'].includes(job.research_stage) && !report) bad('this route assignment requires research with outcome, evidence and its next step or obstacle');
   if (!report) return null;
   if (report.depends_on !== undefined) for (const id of report.depends_on)
     if (id === Number(ret.id) || !(await one(`SELECT 1 FROM returns WHERE id=$1 AND problem_id=$2`, [id, ret.problem_id]))) bad('research dependencies must name earlier returns in this project');
@@ -127,7 +127,7 @@ export async function recordResearch(ret: any, job: any, report: ResearchReport 
   await q(`UPDATE returns SET research=$2,research_route_id=$3 WHERE id=$1`, [ret.id, JSON.stringify(report), route.id]);
   await q(`INSERT INTO research_events (route_id,return_id,outcome,evidence_md,detail) VALUES ($1,$2,$3,$4,$5)`, [route.id, ret.id, report.outcome, report.evidence_md, JSON.stringify(report)]);
   // The current assignment was marked returned before this function. Exactly one next experiment may now open.
-  const next = report.proposal ? await queueInvestigation(route, 'triage', ret)
+  const next = report.proposal ? await queueInvestigation(route, 'probe', ret)
     : route.state === 'active' ? await queueInvestigation(route, 'pursue', ret) : null;
   return { route_id: Number(route.id), state: route.state, next_job_id: next ? Number(next.id) : null };
 }
@@ -160,7 +160,7 @@ export async function reconsiderDependents(returnId: number, status: string): Pr
   // obstruction it investigated. UNION also makes this safe against accidental cycles.
   const descendants = await q(`WITH RECURSIVE edges AS NOT MATERIALIZED (
       SELECT r.id AS dependent,j.research_source_return_id AS premise FROM returns r JOIN jobs j ON j.id=r.job_id
-        WHERE j.research_stage IN ('triage','pursue') AND r.research_route_id=j.research_route_id
+        WHERE j.research_stage IN ('probe','pursue') AND r.research_route_id=j.research_route_id
       UNION ALL SELECT return_id,depends_on_id FROM return_dependencies
       UNION ALL SELECT rr.last_return_id,d.return_id FROM research_dependencies d JOIN research_routes rr ON rr.id=d.route_id
       UNION ALL SELECT rv.return_id,v.result_return_id FROM reviews rv JOIN verification_runs v ON v.id=rv.verification_receipt_id
@@ -180,7 +180,7 @@ export async function reconsiderDependents(returnId: number, status: string): Pr
     await q(`UPDATE research_routes SET state='blocked',revision=revision+1,updated_at=now(),obstacle=$2 WHERE id=$1`, [route.id, JSON.stringify({ kind: 'unresolved', statement: `Dependency #${returnId}`, assumptions: 'The route depends on this result.', evidence, revisit_when: 'A fresh investigation of the changed premise or an alternative.' })]);
     await q(`INSERT INTO research_events (route_id,outcome,evidence_md) VALUES ($1,'dependency_changed',$2)`, [route.id, evidence]);
     // Keep held work intact; its next brief and the public dependency record expose the changed premise.
-    await q(`UPDATE jobs SET status='expired' WHERE research_route_id=$1 AND research_stage IN ('triage','pursue','rescue') AND status='queued'`, [route.id]);
+    await q(`UPDATE jobs SET status='expired' WHERE research_route_id=$1 AND research_stage IN ('probe','pursue','rescue') AND status='queued'`, [route.id]);
   }
   return ids;
 }

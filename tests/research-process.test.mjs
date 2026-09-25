@@ -80,9 +80,9 @@ const obstacle={kind:'attempt_failed',statement:'The uniform bound fails.',assum
 async function proposed() {return ok(await submit('author',{research:proposal()}));}
 async function activeRoute(){const r=await proposed(),a=await start();const p=ok(await submit('astra',{research:{route_id:r.research.route_id,outcome:'promising',evidence_md:'The first test leaves a specific viable implication.',next_step:step()}},a));return {r,a,p};}
 
-test('proposal → triage → pursuit → scoped obstacle → different-model rescue, with replay-safe follow-ups',async()=>{
+test('proposal → probe → pursuit → scoped obstacle → different-model rescue, with replay-safe follow-ups',async()=>{
   const r=await proposed();assert.equal(r.status,'recorded');assert.equal(r.reviews_requested,0);
-  const a=await start();assert.equal(a.research_stage,'triage');assert.match(a.brief_md,/Investment state: proposed/);
+  const a=await start();assert.equal(a.research_stage,'probe');assert.match(a.brief_md,/Investment state: proposed/);
   const missing=await submit('astra',{},a);assert.equal(missing.status,400);assert.match(missing.body.error,/requires research/);
   assert.equal((await submit('astra',{research:proposal()},a)).status,400);
   assert.equal((await one(`SELECT status FROM jobs WHERE id=$1`,[a.job_id])).status,'assigned');
@@ -131,7 +131,7 @@ test('a changed trusted premise flags dependents and cancels queued pursuit with
 
 test('late rejection follows the investment chain even when no dependencies were declared',async()=>{
   const {r,p}=await activeRoute(),held=await start('author');
-  const progress=ok(await submit('author',{research:{route_id:r.research.route_id,outcome:'progress',evidence_md:'The triage finding supports a second bounded step.',next_step:step('second'),depends_on:[]}},held));
+  const progress=ok(await submit('author',{research:{route_id:r.research.route_id,outcome:'progress',evidence_md:'The probe finding supports a second bounded step.',next_step:step('second'),depends_on:[]}},held));
   let route=ok(await call(`/research-routes/${r.research.route_id}`));
   assert.deepEqual(route.basis.map(x=>Number(x.id)),[r.return_id,p.return_id,progress.return_id]);
   assert.equal(route.dependencies.length,0);
@@ -176,9 +176,9 @@ test('reviews of evidence used by continued pursuit get a bounded advantage over
   const aged=await start('judge');assert.equal(Number(aged.job_id),Number(backlog.id),'Age must eventually overtake the dependency bonus.');
 });
 
-for(const who of ['astra','author','runner'])test(`lightweight triage of an Astra proposal is available to ${who}`,async()=>{
+for(const who of ['astra','author','runner'])test(`lightweight probe of an Astra proposal is available to ${who}`,async()=>{
   const r=ok(await submit('astra',{research:proposal()}));
-  const a=await start(who);assert.equal(a.research_stage,'triage');
+  const a=await start(who);assert.equal(a.research_stage,'probe');
   assert.equal(Number(a.research_route_id),r.research.route_id);
   const queued=await one('SELECT min_tier,avoid_model,budget_hours FROM jobs WHERE id=$1',[a.job_id]);
   assert.equal(queued.min_tier,99);assert.equal(queued.avoid_model,null);assert.equal(Number(queued.budget_hours),0.5);
