@@ -266,6 +266,11 @@ root.get("/@:handle", async (req, res) => {
     FROM returns r JOIN problems p ON p.id = r.problem_id LEFT JOIN jobs j ON j.id = r.job_id WHERE r.user_id = $1 AND r.status = 'accepted' AND NOT r.provisional
     ORDER BY array_position(ARRAY['proven','verified','measured','heuristic','conjectured','refuted'], r.final_rung), array_position(ARRAY['rerun','spot','read'], coalesce(r.verification, 'read')), r.id DESC LIMIT 3`, [u.id]))
     .map((r: any) => ({ id: r.id, project: r.project, type: r.type, model: r.model, verification: r.verification, final_rung: r.final_rung, created_at: r.created_at, path: r.revision_path, points: 0, reason: null, cited: r.cited, title: titleOf(r), label: labelOf(r), summary: summaryOf(r.report_md), route: routeOf(r) }));
+  // The results behind the "proven" rung, listed further down the profile so the rung links to them (#sah-profile-proven-link).
+  // Same filter as the rung count above, so the list and the count always agree.
+  const provenRows = await q(`SELECT r.id, p.slug AS project, r.type, r.model, r.verification, r.provisional, r.created_at, j.title AS job_title, j.type AS job_type, j.follow_up_of, j.research_stage, left(r.report_md, 600) AS report_md
+    FROM returns r JOIN problems p ON p.id = r.problem_id LEFT JOIN jobs j ON j.id = r.job_id WHERE r.user_id = $1 AND r.status = 'accepted' AND r.final_rung = 'proven' ORDER BY r.id DESC`, [u.id]);
+  const proven = provenRows.map((r: any) => ({ id: r.id, project: r.project, type: r.type, model: r.model, verification: r.verification, provisional: r.provisional, created_at: r.created_at, title: titleOf(r), label: labelOf(r) }));
   const integratedPaths = await q(`SELECT DISTINCT r.revision_path AS path FROM credits c JOIN returns r ON r.id = c.source_id::bigint WHERE c.user_id = $1 AND c.kind = 'integrated' AND c.source_type = 'return' AND c.source_id ~ '^[0-9]+$' AND r.revision_path IS NOT NULL ORDER BY 1`, [u.id]);
   const cited = await one(`SELECT count(*)::int AS n, (SELECT source_id FROM credits WHERE user_id = $1 AND kind = 'insight' AND source_type = 'return' GROUP BY source_id ORDER BY count(*) DESC, source_id LIMIT 1) AS most FROM credits WHERE user_id = $1 AND kind = 'insight'`, [u.id]);
   const recentTitled = await q(`SELECT r.id, j.title AS job_title, j.type AS job_type, j.research_stage, j.follow_up_of, left(r.report_md, 600) AS report_md, r.type, r.model FROM returns r LEFT JOIN jobs j ON j.id = r.job_id WHERE r.user_id = $1 ORDER BY r.id DESC LIMIT 50`, [u.id]);
@@ -282,7 +287,7 @@ root.get("/@:handle", async (req, res) => {
              credit: { total: totals.reduce((s: number, t: any) => s + Number(t.points), 0), by_kind: Object.fromEntries(totals.map((t: any) => [t.kind, Number(t.points)])), count_by_kind: Object.fromEntries(totals.map((t: any) => [t.kind, Number(t.n)])), by_day, ledger },
              standing: { rank: standing?.rank ?? null, contributors: standing?.contributors ?? 0, points: Number(standing?.points ?? 0), pending_points: Number(pending?.pending_points ?? 0) },
              rungs: { accepted: Object.fromEntries(rungRows.map((r: any) => [r.rung, r.n])), contributors_reached: Object.fromEntries(reachedRows.map((r: any) => [r.rung, r.n])) },
-             kinds, reviews_given, days, models, highlights: highlights.length ? highlights : strongest, highlights_kind: highlights.length ? "breakthrough" : "strongest",
+             proven, kinds, reviews_given, days, models, highlights: highlights.length ? highlights : strongest, highlights_kind: highlights.length ? "breakthrough" : "strongest",
              integrated_paths: integratedPaths.map((r: any) => r.path), cited: { count: cited?.n ?? 0, most: cited?.most ?? null },
              agent_time: { accepted: u.accepted, rejected: u.rejected, review_agree: u.review_agree, review_disagree: u.review_disagree },
              compute: { cpu_hours: u.cpu_hours }, research_input: { directions_accepted: u.directions_accepted, lanes }, work, released: released.map((r: any) => ({ ...r, label: jobLabel(r) })), recent: recentOut });
