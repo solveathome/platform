@@ -4,7 +4,7 @@ import assert from 'node:assert/strict';
 import {test} from 'node:test';
 import {readFileSync, readdirSync} from 'node:fs';
 import {join} from 'node:path';
-const {JOB_KIND_LABELS, jobLabel, jobKind} = await import('../src/lib/research-format.ts');
+const {JOB_KIND_LABELS, jobLabel, jobKind, withoutKindPrefix} = await import('../src/lib/research-format.ts');
 const {tangentJob} = await import('../src/lib/tangent.ts');
 const {POINTS} = await import('../src/lib/credit.ts');
 
@@ -43,4 +43,12 @@ test('no code that makes a job writes a kind prefix into its title', () => {
     }
     for (const lit of src.matchAll(/title(?:: | = )`([^`$]*)/g)) assert.doesNotMatch(lit[1], PREFIX, `${f}: title \`${lit[1]}\``);
   }
+});
+
+test('a title read from a report heading loses a leading kind, and nothing else', () => {
+  assert.equal(withoutKindPrefix('Audit: `research/SEARCH-CONVENTIONS.md`'), '`research/SEARCH-CONVENTIONS.md`');
+  assert.equal(withoutKindPrefix('Triage: the two dials'), 'The two dials');
+  assert.equal(withoutKindPrefix('Break the bound: Lemma 2'), 'Break the bound: Lemma 2');
+  assert.equal(withoutKindPrefix('Theorem 5.5: inert at (D1)'), 'Theorem 5.5: inert at (D1)');
+  assert.equal(withoutKindPrefix('x'), 'x', 'a title with no kind is left exactly as written');
 });
