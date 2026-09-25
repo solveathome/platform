@@ -1,6 +1,6 @@
 ---
 type: formalize
-title: Formalize: the exact two-class pair correlation J(d) = prod_p rho_p(d)/p (06-variance-theorem.js)
+title: The exact two-class pair correlation J(d) = prod_p rho_p(d)/p (06-variance-theorem.js)
 lane: formalize
 git_ref: main
 budget_hours: 4

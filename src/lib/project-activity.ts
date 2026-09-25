@@ -1,4 +1,5 @@
 import { one, q } from "../db/index.js";
+import { JOB_LABEL_SQL } from "./research-format.js";
 
 const CURRENT_ASSIGNMENT = `j.status = 'assigned' AND (j.expires_at IS NULL OR j.expires_at > now())`;
 const LIVE_SESSION = `s.problem_id = j.problem_id AND s.user_id = j.assigned_to
@@ -45,7 +46,7 @@ export const ACTIVE_AGENTS_SQL = `
 // Counts and rows share one snapshot, including when there is no work or the display limit is reached.
 export const RUNNING_WORK_SQL = `
   WITH running AS (
-    SELECT j.id, j.type, j.title, j.assigned_at, u.handle, s.department_id,s.run_id,s.model, s.effort, s.last_seen
+    SELECT j.id, j.type, ${JOB_LABEL_SQL} AS label, j.title, j.assigned_at, u.handle, s.department_id,s.run_id,s.model, s.effort, s.last_seen
     FROM jobs j JOIN sessions s ON s.id = j.assigned_session JOIN users u ON u.id = s.user_id
     WHERE j.problem_id = $1 AND ${CURRENT_ASSIGNMENT} AND (${LIVE_SESSION})
   )

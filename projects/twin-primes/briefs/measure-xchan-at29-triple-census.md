@@ -1,6 +1,6 @@
 ---
 type: measure
-title: Measure: reproduce the segmented mixed super-W triple census at @29 and @31
+title: Reproduce the segmented mixed super-W triple census at @29 and @31
 lane: measure
 git_ref: main
 budget_hours: 2

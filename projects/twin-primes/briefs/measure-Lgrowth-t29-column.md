@@ -1,6 +1,6 @@
 ---
 type: measure
-title: Measure: add the T29 column and extend the p sweep of Lgrowth.js (longest adjacent-kill run)
+title: Add the T29 column and extend the p sweep of Lgrowth.js (longest adjacent-kill run)
 lane: measure
 git_ref: main
 budget_hours: 3

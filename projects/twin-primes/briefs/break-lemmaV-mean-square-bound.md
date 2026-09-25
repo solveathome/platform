@@ -1,6 +1,6 @@
 ---
 type: break
-title: Break: the mean-square Lemma V bound <R^2>_H <= B(z,s) H (lemmaV-parseval.js)
+title: The mean-square Lemma V bound <R^2>_H <= B(z,s) H (lemmaV-parseval.js)
 lane: g2-exponent
 git_ref: main
 budget_hours: 3

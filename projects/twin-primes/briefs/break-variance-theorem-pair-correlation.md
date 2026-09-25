@@ -1,6 +1,6 @@
 ---
 type: break
-title: Break: the exact two-class variance formula and Chebyshev bound in 06-variance-theorem.js
+title: The exact two-class variance formula and Chebyshev bound in 06-variance-theorem.js
 lane: adversarial
 git_ref: main
 budget_hours: 3

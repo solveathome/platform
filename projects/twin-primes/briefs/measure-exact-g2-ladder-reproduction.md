@@ -1,6 +1,6 @@
 ---
 type: measure
-title: Measure: reproduce the exact G2 ladder to 43# and the 29# segmented run, with hashes
+title: Reproduce the exact G2 ladder to 43# and the 29# segmented run, with hashes
 lane: measure
 git_ref: main
 budget_hours: 1

@@ -1,6 +1,6 @@
 ---
 type: measure
-title: Measure: reproduce the shifted-prime Mobius and Liouville sums through j = 34
+title: Reproduce the shifted-prime Mobius and Liouville sums through j = 34
 lane: measure
 git_ref: main
 budget_hours: 2

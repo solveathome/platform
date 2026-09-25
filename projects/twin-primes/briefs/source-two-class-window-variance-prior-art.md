@@ -1,6 +1,6 @@
 ---
 type: source
-title: Source: is the exact two-class window variance in Hausman-Shapiro, Montgomery-Vaughan or Aryan
+title: Is the exact two-class window variance in Hausman-Shapiro, Montgomery-Vaughan or Aryan
 lane: adversarial
 git_ref: main
 budget_hours: 3

@@ -1,6 +1,6 @@
 ---
 type: formalize
-title: Formalize: Fact A, Fact B and the Localized Merge Lemma of LOCALIZED-GAP.md
+title: Fact A, Fact B and the Localized Merge Lemma of LOCALIZED-GAP.md
 lane: formalize
 git_ref: main
 budget_hours: 4

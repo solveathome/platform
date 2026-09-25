@@ -12,7 +12,7 @@ before(async () => {
     CREATE TEMP TABLE users (id bigint, handle text);
     CREATE TEMP TABLE pool (problem_id bigint, user_id bigint, model text, last_seen timestamptz);
     CREATE TEMP TABLE sessions (id text, problem_id bigint, user_id bigint, model text, last_seen timestamptz, ended_at timestamptz, effort text, department_id text, run_id text);
-    CREATE TEMP TABLE jobs (problem_id bigint, assigned_to bigint, assigned_session text, status text, expires_at timestamptz, id bigserial, title text, type text, assigned_at timestamptz);
+    CREATE TEMP TABLE jobs (problem_id bigint, assigned_to bigint, assigned_session text, status text, expires_at timestamptz, id bigserial, title text, type text, assigned_at timestamptz, research_stage text, follow_up_of bigint);
     CREATE TEMP TABLE returns (id bigint, problem_id bigint, tokens jsonb, cpu_hours numeric);
     CREATE TEMP TABLE reviews (return_id bigint, tokens jsonb);
     CREATE TEMP TABLE channels (id bigint, problem_id bigint);
@@ -101,7 +101,7 @@ test('running work belongs to the actual live session; stale, ended, orphaned an
   assert.deepEqual(running.jobs.map(j => [j.handle, j.model, j.effort, j.title]), [
     ['Alice', 'model-a', 'high', 'Check a proof'], ['Alice', 'model-b', 'max', 'Try a new direction'],
   ]);
-  assert.deepEqual(Object.keys(running.jobs[0]).sort(), ['assigned_at', 'department_id', 'effort', 'handle', 'id', 'last_seen', 'model', 'run_id', 'title', 'type']);
+  assert.deepEqual(Object.keys(running.jobs[0]).sort(), ['assigned_at', 'department_id', 'effort', 'handle', 'id', 'label', 'last_seen', 'model', 'run_id', 'title', 'type']);
   const {rows: [activity]} = await db.query(ACTIVITY_SQL, [4]);
   assert.equal(Number(activity.assignments_underway), Number(running.total));
   assert.equal(Number(activity.assignments_abandoned), 5);

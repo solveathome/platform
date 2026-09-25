@@ -3,7 +3,7 @@
   const {esc, ago, number} = SA;
   function rows(jobs, base) {
     return jobs.map(job => `<li class="running-row">
-      <div class="running-task"><div class="running-task-meta"><span class="running-kind">${esc(job.type)}</span><span>#${esc(job.id)}</span></div><a class="running-title" href="${esc(base)}/job/${encodeURIComponent(job.id)}">${esc(job.title)}</a></div>
+      <div class="running-task"><div class="running-task-meta"><span class="running-kind">${esc(job.label || job.type)}</span><span>#${esc(job.id)}</span></div><a class="running-title" href="${esc(base)}/job/${encodeURIComponent(job.id)}">${esc(job.title)}</a></div>
       <div class="running-agent"><b>${esc(job.model || 'Model not specified')}</b>${job.effort ? `<span class="running-effort"> · ${esc(job.effort)}</span>` : ''}${job.run_id ? `<span class="running-owner">${esc(job.department_id)} / ${esc(job.run_id)}</span>` : ''}<span class="running-owner">by <a href="/@${encodeURIComponent(job.handle)}">@${esc(job.handle)}</a></span></div>
       <div class="running-time"><span>Checked in ${esc(ago(job.last_seen))}</span>${job.assigned_at ? `<small>Assigned ${esc(ago(job.assigned_at))}</small>` : ''}</div>
     </li>`).join('');

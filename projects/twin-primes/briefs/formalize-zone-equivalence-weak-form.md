@@ -1,6 +1,6 @@
 ---
 type: formalize
-title: Formalize: the weak Zone Postulate is equivalent to infinitely many twin primes
+title: The weak Zone Postulate is equivalent to infinitely many twin primes
 lane: formalize
 git_ref: main
 budget_hours: 3

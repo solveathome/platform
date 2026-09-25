@@ -1,6 +1,6 @@
 ---
 type: formalize
-title: Formalize: maxsum_m + minsum_{D-m} = W and the cyclic Parseval identity sum gamma(k) = 0
+title: Maxsum_m + minsum_{D-m} = W and the cyclic Parseval identity sum gamma(k) = 0
 lane: formalize
 git_ref: main
 budget_hours: 3

@@ -1,6 +1,6 @@
 ---
 type: measure
-title: Measure: reproduce the corner two-point sum K(x) through j = 32, five variants
+title: Reproduce the corner two-point sum K(x) through j = 32, five variants
 lane: measure
 git_ref: main
 budget_hours: 2

@@ -1,6 +1,6 @@
 ---
 type: measure
-title: Measure: reproduce the centered prime-Mobius discrepancy D_y(x) through j = 34
+title: Reproduce the centered prime-Mobius discrepancy D_y(x) through j = 34
 lane: measure
 git_ref: main
 budget_hours: 3

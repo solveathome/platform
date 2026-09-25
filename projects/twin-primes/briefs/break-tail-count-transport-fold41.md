@@ -1,6 +1,6 @@
 ---
 type: break
-title: Break: the Tail-Count Transport inequality at fold 41 (attack-foldL-03-transport.js)
+title: The Tail-Count Transport inequality at fold 41 (attack-foldL-03-transport.js)
 lane: g2-exponent
 git_ref: main
 budget_hours: 3

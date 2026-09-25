@@ -1,6 +1,6 @@
 ---
 type: formalize
-title: Formalize: sum_{i<=j} 2^i/i^K = (2+o(1)) 2^j/j^K and the (P)/(P') consumer equivalence
+title: Sum_{i<=j} 2^i/i^K = (2+o(1)) 2^j/j^K and the (P)/(P') consumer equivalence
 lane: formalize
 git_ref: main
 budget_hours: 3

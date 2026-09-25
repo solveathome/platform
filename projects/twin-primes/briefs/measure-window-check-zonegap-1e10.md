@@ -1,6 +1,6 @@
 ---
 type: measure
-title: Measure: window-check.js and zonegap-01.js at 1e10, worst margin and the Z2 zone-gap table
+title: Window-check.js and zonegap-01.js at 1e10, worst margin and the Z2 zone-gap table
 lane: measure
 git_ref: main
 budget_hours: 2

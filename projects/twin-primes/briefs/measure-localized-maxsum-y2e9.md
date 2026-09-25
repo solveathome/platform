@@ -1,6 +1,6 @@
 ---
 type: measure
-title: Measure: localized-04-maxsum.js at Y = 2e9, the maxsum_m ladder and R(1)/lnD
+title: Localized-04-maxsum.js at Y = 2e9, the maxsum_m ladder and R(1)/lnD
 lane: measure
 git_ref: main
 budget_hours: 2

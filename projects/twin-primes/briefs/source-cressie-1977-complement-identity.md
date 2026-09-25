@@ -1,6 +1,6 @@
 ---
 type: source
-title: Source: the complementary-window duality as Cressie 1977's complement identity, at the page
+title: The complementary-window duality as Cressie 1977's complement identity, at the page
 lane: adversarial
 git_ref: main
 budget_hours: 2

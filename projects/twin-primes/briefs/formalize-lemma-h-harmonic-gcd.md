@@ -1,6 +1,6 @@
 ---
 type: formalize
-title: Formalize: Lemma H of structured-dispersion-estimate.md (harmonic gcd average, prime-power factor)
+title: Lemma H of structured-dispersion-estimate.md (harmonic gcd average, prime-power factor)
 lane: formalize
 git_ref: main
 budget_hours: 4
