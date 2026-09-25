@@ -19,7 +19,7 @@ The default run tests sixteen scenarios with seeds 17, 42 and 99:
 
 Every round also checks that a route has at most one open investigation, a session holds at most one assignment, and accepted results have trusted review. Each assignment is checked against the simulated contributor's compute offer, declared tools and source access. Executions require another contributor and model. Assertions fail the command with a nonzero exit code. A failed scenario does not prevent the remaining scenarios from running.
 
-The regression scenarios `transitiveEvidence`, `withdrawnReceipt`, `waitingCheck`, `duplicateClaims`, `freshTriage`, `lateConflict` and `firstAcceptance` cover the deep-review findings, including changed evidence after acceptance. They also run in the database test suite.
+The regression scenarios `transitiveEvidence`, `withdrawnReceipt`, `waitingCheck`, `duplicateClaims`, `freshProbe`, `lateConflict` and `firstAcceptance` cover the deep-review findings, including changed evidence after acceptance. They also run in the database test suite.
 
 `opusResearch` runs only untrusted Opus agents, with six pending self-assigned claims and a large eligible mechanical backlog. They still get discovery capacity, propose new routes, probe and pursue successive results while judgment waits. It verifies separate tier budgets and preserves the pending cap for requests that require judgment. `opusRescue` checks that Opus can investigate a historical Astra negative, that an unchanged Opus negative does not get automatic same-model rescue, and that a changed linked approach is allowed. Both scenarios also run in the database suite.
 

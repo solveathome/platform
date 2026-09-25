@@ -6,14 +6,14 @@ export async function transitiveEvidence(w) {
   const a=await w.actor('a','claude-opus-5'),b=await w.actor('b','claude-sonnet-5');
   const c=await w.actor('c','claude-haiku-4-5'),judge=await w.actor('judge','claude-fable-5-1',{trusted:true});
   const ar=await a.submit({type:'direction',research:proposal('A')});
-  await w.take(a,j=>j.research_stage==='triage');const first=await a.submit(advance(ar.research.route_id,'A1'));
+  await w.take(a,j=>j.research_stage==='probe');const first=await a.submit(advance(ar.research.route_id,'A1'));
   await w.take(a,j=>j.research_stage==='pursue');const derived=await a.submit(advance(ar.research.route_id,'A2'));
   await w.take(a,j=>j.research_stage==='pursue');
   const br=await b.submit({type:'direction',research:{...proposal('B'),depends_on:[derived.return_id]}});
-  await w.take(b,j=>j.research_stage==='triage');const bEvidence=await b.submit(advance(br.research.route_id,'B1'));
+  await w.take(b,j=>j.research_stage==='probe');const bEvidence=await b.submit(advance(br.research.route_id,'B1'));
   await w.take(b,j=>j.research_stage==='pursue');
   const cr=await c.submit({type:'direction',research:{...proposal('C'),depends_on:[bEvidence.return_id]}});
-  await w.take(c,j=>j.research_stage==='triage');await c.submit(advance(cr.research.route_id,'C1'));
+  await w.take(c,j=>j.research_stage==='probe');await c.submit(advance(cr.research.route_id,'C1'));
   await judge.submit({type:'review',return_id:first.return_id,verdict:'reject',reject_reason:'refuted',notes_md:'The initial premise fails.'});
   assert.deepEqual((await w.q('SELECT state FROM research_routes WHERE problem_id=$1 ORDER BY id',[w.pid])).map(r=>r.state),['blocked','blocked','blocked']);
   assert.equal((await w.one('SELECT count(*)::int AS n FROM return_dependencies WHERE return_id=$1',[bEvidence.return_id])).n,1);
@@ -32,7 +32,7 @@ export async function withdrawnReceipt(w) {
   await w.take(worker,j=>j.type==='check');const receipt=await worker.submit(await w.execute(worker));
   await w.take(judge,j=>j.type==='review');await w.finish(judge);
   const route=await author.submit({type:'direction',research:{...proposal('Dependent'),depends_on:[claim.return_id]}});
-  await w.take(author,j=>j.research_stage==='triage');await author.submit(advance(route.research.route_id,'Dependent1'));
+  await w.take(author,j=>j.research_stage==='probe');await author.submit(advance(route.research.route_id,'Dependent1'));
   await judge.submit({type:'review',return_id:receipt.return_id,verdict:'reject',reject_reason:'refuted',notes_md:'Withdraw the execution observation.'});
   let subject=await w.read(`/return/${claim.return_id}`);
   assert.equal(subject.status,'pending');assert.equal(subject.verification_state.execution,'not_attempted');
@@ -97,20 +97,20 @@ export async function duplicateClaims(w) {
   w.record('expectations',{identical_claims:3,judgments:1,result_payments:1,canonical_reopen:true});
 }
 
-export async function freshTriage(w) {
+export async function freshProbe(w) {
   const a=await w.actor('author','claude-opus-5');
   const old=await a.submit({type:'direction',research:proposal('Established')});
-  await w.take(a,j=>j.research_stage==='triage');await a.submit(advance(old.research.route_id,'Established1'));
+  await w.take(a,j=>j.research_stage==='probe');await a.submit(advance(old.research.route_id,'Established1'));
   const fresh=await a.submit({type:'direction',research:proposal('Fresh')});
   let seen=false,pursuits=0;
   for(let i=0;i<4;i++){
-    const job=await w.take(a,j=>['triage','pursue'].includes(j.research_stage));
-    if(job.research_stage==='triage'){assert.equal(Number(job.research_route_id),fresh.research.route_id);seen=true;break;}
+    const job=await w.take(a,j=>['probe','pursue'].includes(j.research_stage));
+    if(job.research_stage==='probe'){assert.equal(Number(job.research_route_id),fresh.research.route_id);seen=true;break;}
     pursuits++;await a.submit(advance(old.research.route_id,`Established${i+2}`));
   }
-  assert.ok(seen,'A fresh eligible lead must receive triage after at most three pursuits.');
+  assert.ok(seen,'A fresh eligible lead must receive a probe after at most three pursuits.');
   await a.submit(advance(fresh.research.route_id,'Fresh1'));
-  w.record('expectations',{pursuits_before_fresh_triage:pursuits});
+  w.record('expectations',{pursuits_before_fresh_probe:pursuits});
 }
 export async function lateConflict(w) {
   const author=await w.actor('author','claude-opus-5'),worker=await w.actor('worker','claude-sonnet-5');
@@ -139,7 +139,7 @@ export async function lateConflict(w) {
 export async function firstAcceptance(w) {
   const author=await w.actor('author','claude-opus-5'),judge=await w.actor('judge','claude-fable-5-1',{trusted:true});
   const route=await author.submit({type:'direction',research:proposal('Conditional research')});
-  await w.take(author,j=>j.research_stage==='triage');
+  await w.take(author,j=>j.research_stage==='probe');
   const premise=await author.submit(advance(route.research.route_id,'First pursuit'));
   const before=await w.read(`/research-routes/${route.research.route_id}`);
   await judge.submit({type:'review',return_id:premise.return_id,verdict:'accept',rung:'measured',notes_md:'The scoped preliminary evidence holds.'});
@@ -166,7 +166,7 @@ export async function opusResearch(w) {
     assert.equal(job.assignment_reason.policy,'research portfolio');
     assert.equal(job.assignment_reason.tier,2);
     assert.notEqual(job.type,'review');
-    if(job.research_stage==='triage') {
+    if(job.research_stage==='probe') {
       await actor.submit(advance(routeId,`First experiment ${routeId}`));
     } else if(job.research_stage==='pursue') {
       const n=(pursuits.get(routeId)??0)+1;pursuits.set(routeId,n);
@@ -192,7 +192,7 @@ export async function opusResearch(w) {
   assert.equal(frontier.total,0);assert.ok(hours.discover>0&&hours.pursue>0&&hours.consolidate>0);
   assert.ok(hours.discover/hours.total>=.25,'Discovery retains capacity despite abundant mechanical work.');
   assert.ok((await w.one("SELECT count(*)::int AS n FROM jobs WHERE problem_id=$1 AND type='review' AND status='queued'",[w.pid])).n>=6);
-  // Even after the review backlog grows, fresh self-assigned proposals can still enter triage.
+  // Even after the review backlog grows, fresh self-assigned proposals can still get a probe.
   const late=await author.submit({type:'direction',research:proposal('Another original lead after the backlog grows')});
   assert.equal(late.status,'recorded');assert.ok(late.research.next_job_id);
   w.record('expectations',{only_opus_researchers:true,tier_1_hours:frontier.total,opus_hours:hours,results_awaiting_judgment:claims.length,new_routes:discovered.length+2,pending_cap_does_not_block_recorded_proposals:true});
@@ -200,7 +200,7 @@ export async function opusResearch(w) {
 export async function opusRescue(w) {
   const author=await w.actor('author','claude-opus-5'),other=await w.actor('other','claude-opus-5');
   const route=await author.submit({type:'direction',research:proposal('Uniform bound')});
-  await w.take(author,j=>j.research_stage==='triage');
+  await w.take(author,j=>j.research_stage==='probe');
   const negative=await author.submit({research:{route_id:route.research.route_id,outcome:'blocked',evidence_md:'The uniform argument has a finite counterexample.',obstacle:obstacle()}});
   for(let n=0;n<5;n++){const job=await other.start();assert.notEqual(job.research_stage,'rescue');await w.finish(other);}
   assert.equal((await w.read(`/research-routes/${route.research.route_id}`)).state,'blocked');
@@ -252,7 +252,7 @@ export async function priorWorkFirst(w) {
   await other.submit({research:{...known,route_id:extension.research.route_id,prior_art_md:updated+' A later inspected appendix also covers the weighting.',evidence_md:'The appendix eliminates the remaining gap before another computation.'}});
   assert.equal((await w.read(`/research-routes/${id}`)).state,'known','A linked extension does not erase the prior-work match.');
   assert.equal((await w.one('SELECT count(*)::int AS n FROM verification_runs v JOIN returns r ON r.id=v.result_return_id WHERE r.problem_id=$1',[w.pid])).n,0);
-  w.record('expectations',{published_count_not_recomputed:true,prior_work_stops_triage_and_pursuit:true,no_automatic_review_or_rescue:true,search_record_reused:true,uncovered_extension_allowed:true,source_findings_are_scripted:true});
+  w.record('expectations',{published_count_not_recomputed:true,prior_work_stops_probe_and_pursuit:true,no_automatic_review_or_rescue:true,search_record_reused:true,uncovered_extension_allowed:true,source_findings_are_scripted:true});
 }
 export async function guidanceDelivery(w) {
   const {GUIDANCE_VERSION}=await import('../../src/lib/research-guidance.ts');
@@ -288,8 +288,8 @@ export async function guidanceDelivery(w) {
   assert.equal(replay.attempt_id,issued.attempt_id);assert.equal(replay.brief_md,issued.brief_md);
   assert.equal(replay.guidance_version,GUIDANCE_VERSION);
   const route=await author.submit({research:proposal('A bounded guidance delivery fixture')});
-  await w.take(author,j=>j.research_stage==='triage');
-  await inspect(author,'triage',/Triage is an investment decision/);
+  await w.take(author,j=>j.research_stage==='probe');
+  await inspect(author,'probe',/A probe is the route’s first bounded test/);
   await author.submit(advance(route.research.route_id,'The finite implication'));
   await w.take(author,j=>j.research_stage==='pursue');
   await inspect(author,'pursue',/Advance the selected experiment/);
@@ -306,4 +306,4 @@ export async function guidanceDelivery(w) {
   assert.ok(subject.reviews[0].verification_receipt_id,'Judgment cites the existing execution.');
   w.record('expectations',{guidance_version:GUIDANCE_VERSION,roles_checked:observed,issued_brief_replayed:true,version_persisted:true,one_execution_reused_for_judgment:true,scientific_outcomes_are_scripted:true});
 }
-export const regressions={transitiveEvidence,withdrawnReceipt,waitingCheck,duplicateClaims,freshTriage,lateConflict,firstAcceptance,opusResearch,opusRescue,priorWorkFirst,guidanceDelivery};
+export const regressions={transitiveEvidence,withdrawnReceipt,waitingCheck,duplicateClaims,freshProbe,lateConflict,firstAcceptance,opusResearch,opusRescue,priorWorkFirst,guidanceDelivery};
