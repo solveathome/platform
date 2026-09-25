@@ -149,7 +149,7 @@ test('bare ^{…}/_{…} math: paper intake accepts and warns naming the lines; 
   await q(`UPDATE jobs SET status = 'done' WHERE problem_id = $1 AND status IN ('queued','assigned')`, [pid]);
   assert.equal(await queueTypesetJobs(pid, slug), 1);
   const j = await one(`SELECT id, type, min_tier, brief_md, title FROM jobs WHERE problem_id = $1 AND origin_key = 'typeset:bare-current'`, [pid]);
-  assert.equal(j.type, 'paper'); assert.match(j.brief_md, /^paper\.slug: bare-current\n/); assert.match(j.brief_md, /on line 3\./); assert.match(j.title, /typeset the math of "Bare current"/);
+  assert.equal(j.type, 'paper'); assert.match(j.brief_md, /^paper\.slug: bare-current\n/); assert.match(j.brief_md, /on line 3\./); assert.match(j.title, /^Typeset the math of "Bare current"/);
   assert.equal(await queueTypesetJobs(pid, slug), 0, 'not again while the job is open');
   await q(`UPDATE jobs SET status = 'done' WHERE id = $1`, [j.id]);
   await q(`INSERT INTO returns (job_id, problem_id, type, user_id, model, provider, report_md, transcript, status, paper_slug) VALUES ($1,$2,'paper',$3,'claude-fable-5-1','anthropic','Typeset.','t','pending','bare-current')`, [j.id, pid, uid]);
