@@ -85,6 +85,9 @@ async function sweepExpired(problemId: number): Promise<void> {
   // Abandonment: the session is ended and its assignment goes back to the queue at once, instead of at the job's expiry hours later.
   const silent = await q<{ id: string; user_id: number; model: string | null }>(`SELECT DISTINCT s.id, s.user_id, s.model FROM sessions s JOIN jobs j ON j.assigned_session = s.id AND j.status = 'assigned' WHERE s.problem_id = $1 AND s.ended_at IS NULL AND s.last_seen < now() - ($2::int * interval '1 minute')`, [problemId, ABANDON_AFTER_MIN]);
   for (const s of silent) await endSession(s.id, Number(s.user_id), problemId, s.model, `abandoned: no request from the agent for ${ABANDON_AFTER_MIN} minutes`);
+  // A route's first step the previous container wrote as 'triage' during a deploy is a first look (#sah-route-triage-title); the start-up
+  // relabel only sees rows that existed when it ran.
+  await q(`UPDATE jobs SET research_stage = 'first_look' WHERE problem_id = $1 AND research_stage = 'triage'`, [problemId]);
   // Jobs made on the spot for one session (an explore brief on the open questions, a person's tangent) die with that session; nothing else should inherit them.
   await q(`UPDATE jobs SET status = 'expired', last_release_note = 'expired with the session it was made for'
            WHERE problem_id = $1 AND status = 'assigned' AND expires_at < now() AND parent_return_id IS NULL AND (origin_key LIKE 'tangent:%' OR origin_key LIKE 'open-questions:%') AND assigned_session IS NOT NULL`, [problemId]);
