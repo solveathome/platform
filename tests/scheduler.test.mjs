@@ -190,7 +190,7 @@ test('empty typed work still discovers new leads; released generated questions a
   const a=await start();ok(await release(a));
   const b=ok(await call('/start',{session:a.session}));assert.notEqual(b.job_id,a.job_id);
   const ja=await one(`SELECT origin_key FROM jobs WHERE id=$1`,[a.job_id]);const jb=await one(`SELECT origin_key FROM jobs WHERE id=$1`,[b.job_id]);
-  assert.notEqual(ja.origin_key,jb.origin_key);assert.match(b.brief_md,/Leads|Explore/);
+  assert.notEqual(ja.origin_key,jb.origin_key);assert.match(b.brief_md,/lead hunt|Your question/);
 });
 
 test('only declared research agents are contacts; same-owner asks reach exactly the named agent',async()=>{
