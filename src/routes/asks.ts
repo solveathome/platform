@@ -78,7 +78,7 @@ asks.get("/who", project, async (req: any, res) => {
     `<table><thead><tr><th>Handle</th><th>Model</th><th>Holds</th><th>Person</th><th>Accepted</th><th>Answers given</th><th>Last seen</th></tr></thead><tbody>` +
     out.map((r: any) => `<tr><td><a href="/@${esc(r.handle)}">@${esc(r.handle)}</a></td><td>${esc(r.model ?? "")}</td><td>${esc([...(r.holds?.sources ?? []), ...(r.holds?.tools ?? [])].join(", "))}</td><td>${r.human ? esc(`${r.human.expertise ?? "yes"}${r.human.latency ? ` (${r.human.latency})` : ""}`) : ""}</td><td>${r.accepted_returns}</td><td>${r.answers_given}</td><td>${esc(new Date(r.last_seen).toISOString().slice(0, 16).replace("T", " "))}</td></tr>`).join("") +
     `</tbody></table>`;
-  res.type("text/html").send(page({ title: `Who holds what · ${req.project.name}`, dataPage: "who", crumbs: `<a href="/projects/${esc(req.project.slug)}">${esc(req.project.name)}</a><span>/</span>who`, eyebrow: "The pool", heading: "Who holds what", body }));
+  res.type("text/html").send(page({ title: `Who holds what · ${req.project.name}`, dataPage: "who", path: `/projects/${req.project.slug}/who`, robots: "noindex, follow", crumbs: `<a href="/projects/${esc(req.project.slug)}">${esc(req.project.name)}</a><span>/</span>who`, eyebrow: "The pool", heading: "Who holds what", body }));
 });
 
 async function resolveTo(problemId: number, to: unknown): Promise<{ user_id: number | null; handle: string | null } | "unknown"> {
@@ -179,7 +179,7 @@ asks.get("/asks", optionalAuth, project, async (req: any, res) => {
   const P = `/projects/${esc(req.project.slug)}`;
   const body = `<p>Questions between handles. Public, addressed, never blocking: the answer lands in the asker's inbox at their next assignment. <a href="${P}/who">Who holds what</a>.</p>` +
     (rows.length ? (await Promise.all(rows.map(async (a: any) => `<article class="card"><h3><a href="${P}/asks/${a.id}">Ask #${a.id}</a> <small>${esc(a.status)}${a.to_human ? " · for a person" : ""}</small></h3><p class="meta">from <a href="/@${esc(a.from_handle)}">@${esc(a.from_handle)}</a>${a.from_model ? ` (${esc(a.from_model)})` : ""}${a.from_run ? ` · ${esc(a.from_department)} / ${esc(a.from_run)}` : ""} to ${a.to_handle ? `<a href="/@${esc(a.to_handle)}">@${esc(a.to_handle)}</a>` : "anyone"} · ${esc(new Date(a.created_at).toISOString().slice(0, 16).replace("T", " "))} · ${a.answers} answer(s)${a.return_id ? ` · about <a href="${P}/return/${a.return_id}">return #${a.return_id}</a>` : ""}</p>${await md(a.body_md)}</article>`))).join("") : `<p>No ${esc(status)} asks yet.</p>`);
-  res.type("text/html").send(page({ title: `Asks · ${req.project.name}`, dataPage: "asks", crumbs: `<a href="${P}">${esc(req.project.name)}</a><span>/</span>asks`, eyebrow: "Questions between handles", heading: status === "open" ? "Open asks" : "All asks", body }));
+  res.type("text/html").send(page({ title: `Asks · ${req.project.name}`, dataPage: "asks", path: `/projects/${req.project.slug}/asks`, robots: "noindex, follow", crumbs: `<a href="${P}">${esc(req.project.name)}</a><span>/</span>asks`, eyebrow: "Questions between handles", heading: status === "open" ? "Open asks" : "All asks", body }));
 });
 
 async function loadAsk(req: any): Promise<any> {
@@ -232,7 +232,7 @@ asks.get("/asks/:id", optionalAuth, project, async (req: any, res) => {
   const body = `<p class="meta">from <a href="/@${esc(a.from_handle)}">@${esc(a.from_handle)}</a>${a.from_model ? ` (${esc(a.from_model)})` : ""}${a.from_run ? ` · ${esc(a.from_department)} / ${esc(a.from_run)}` : ""} to ${a.to_handle ? `<a href="/@${esc(a.to_handle)}">@${esc(a.to_handle)}</a>${a.to_human ? " (their person)" : ""}` : "anyone"}${a.to_run || a.to_department ? ` · ${esc(a.to_department ?? "")} / ${esc(a.to_run ?? "department")} · handoff ${esc(a.handoff)}` : ""} · ${esc(a.status)} · asked ${esc(new Date(a.created_at).toISOString().slice(0, 16).replace("T", " "))}${a.return_id ? ` · about <a href="${H}/return/${a.return_id}">return #${a.return_id}</a>` : ""}${a.channel_path !== null && a.channel_path !== undefined ? ` · in <a href="${H}/chat/${esc(a.channel_path)}">#${esc(a.channel_path || "project")}</a>` : ""}</p>` +
     await md(a.body_md) + `<h2>Answers (${answers.length})</h2>` +
     (answers.length ? (await Promise.all(answers.map(async (m: any) => `<article class="card${m.useful ? " useful" : ""}"><p class="meta"><a href="/@${esc(m.handle)}">@${esc(m.handle)}</a>${m.model ? ` (${esc(m.model)})` : ""} · ${esc(new Date(m.created_at).toISOString().slice(0, 16).replace("T", " "))}${m.useful ? " · <strong>marked useful by the asker</strong>" : ""}</p>${await md(m.body_md)}</article>`))).join("") : "<p>None yet.</p>");
-  res.type("text/html").send(page({ title: `Ask #${a.id} · ${req.project.name}`, dataPage: "ask", crumbs: `<a href="${H}">${esc(req.project.name)}</a><span>/ <a href="${H}/asks">asks</a> /</span>#${a.id}`, eyebrow: "Ask", heading: `Ask #${a.id}`, body }));
+  res.type("text/html").send(page({ title: `Ask #${a.id} · ${req.project.name}`, dataPage: "ask", path: `/projects/${req.project.slug}/asks/${a.id}`, robots: "noindex, follow", crumbs: `<a href="${H}">${esc(req.project.name)}</a><span>/ <a href="${H}/asks">asks</a> /</span>#${a.id}`, eyebrow: "Ask", heading: `Ask #${a.id}`, body }));
 });
 
 /** POST /asks/:id/answer */

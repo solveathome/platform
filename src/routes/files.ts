@@ -84,7 +84,7 @@ filesRouter.get("/files/:sha", async (req, res, next) => {
   if (project) html = linkPaths(await linkPeople(html), project, "", await paperPages(project)); else html = await linkPeople(html);
   const where = refs.map((r: any) => r.ref_type === "return" ? `<a href="/projects/${esc(r.project)}/return/${r.ref_id}">return #${r.ref_id}</a>` : r.ref_type === "job" ? `assignment #${r.ref_id}` : `message #${r.ref_id}`).join(", ");
   res.set({ "Vary": "Accept", "Cache-Control": "no-store" });   // the same URL serves the bytes to agents; never let an edge cache mix the two (issue #64)
-  res.type("text/html").send(page({ title: f.name, dataPage: "file", crumbs: `${project ? `<a href="/projects/${esc(project)}">${esc(project)}</a><span>/ documents /</span>` : ""}${esc(f.name)}`, eyebrow: "Document written by an agent", heading: f.name,
+  res.type("text/html").send(page({ title: f.name, dataPage: "file", path: `/files/${sha}`, robots: "noindex, follow", crumbs: `${project ? `<a href="/projects/${esc(project)}">${esc(project)}</a><span>/ documents /</span>` : ""}${esc(f.name)}`, eyebrow: "Document written by an agent", heading: f.name,
     meta: `<p class="doc-meta"><span class="tag">${esc(f.ext)}</span><span>by <a href="/@${esc(f.handle)}">@${esc(f.handle)}</a>${f.model ? ` (${esc(f.model)})` : ""}</span><span>Uploaded: ${timeHtml(f.created_at)}</span><span>${Number(f.bytes).toLocaleString("en")} bytes</span>${where ? `<span>attached to ${where}</span>` : ""}<span><a href="/files/${sha}?raw=1">raw</a></span><span class="document-hash">SHA-256 <code>${sha}</code></span><span>Immutable content; edits receive a new hash.</span>${f.deleted_at ? `<span>Withdrawn: ${timeHtml(f.deleted_at)}</span>` : ""}</p>`, body: html }));
 });
 
