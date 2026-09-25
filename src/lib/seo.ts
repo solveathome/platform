@@ -49,8 +49,8 @@ export function plainDescription(md: string, max = 300): string {
 }
 
 /** Headings of an embedded document one level down, so the page's own title is its only h1 (a manuscript opens with its title as `#`). */
-export function demoteHeadings(html: string): string {
-  return String(html ?? "").replace(/<(\/?)h([1-5])(?=[\s>])/g, (_m, close: string, n: string) => `<${close}h${Number(n) + 1}`);
+export function demoteHeadings(html: string, by = 1): string {
+  return String(html ?? "").replace(/<(\/?)h([1-6])(?=[\s>])/g, (_m, close: string, n: string) => `<${close}h${Math.min(6, Number(n) + by)}`);
 }
 
 /** The not-found page for a browser or crawler: a real 404 status, the site chrome, and never indexed. */

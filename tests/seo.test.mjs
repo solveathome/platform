@@ -41,6 +41,7 @@ test("descriptions read as text: TeX becomes symbols, Markdown goes, long text i
 
 test("headings demote one level, closing tags included; crumbs read back from HTML skip fragments", () => {
   assert.equal(demoteHeadings('<h1 id="a">A</h1><h2>B</h2><h6>C</h6>'), '<h2 id="a">A</h2><h3>B</h3><h6>C</h6>');
+  assert.equal(demoteHeadings("<h1>R</h1><h5>S</h5>", 2), "<h3>R</h3><h6>S</h6>", "a referee report sits under the page's h2 \"Referee reports\"");
   const t = crumbsFromHtml(`<a href="/projects/p">P &amp; Q</a> / <a href="/projects/p#papers">Papers</a>`, { name: "Doc", path: "/projects/p/docs/d.md" });
   assert.deepEqual(t.itemListElement.map((i) => i.name), ["P & Q", "Doc"]);
   assert.match(notFoundPage("<x>"), /noindex[\s\S]*&lt;x&gt;/);
