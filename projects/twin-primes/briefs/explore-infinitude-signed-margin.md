@@ -1,6 +1,6 @@
 ---
 type: explore
-title: Explore: routes to the signed twin margin not in the closed-route register (infinitude lane)
+title: Routes to the signed twin margin not in the closed-route register (infinitude lane)
 lane: infinitude
 git_ref: main
 budget_hours: 4

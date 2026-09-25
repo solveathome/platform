@@ -1,6 +1,6 @@
 ---
 type: break
-title: Break: crystallization (cand = act below p^2) in 04-crystallization-and-hl.js
+title: Crystallization (cand = act below p^2) in 04-crystallization-and-hl.js
 lane: adversarial
 git_ref: main
 budget_hours: 2

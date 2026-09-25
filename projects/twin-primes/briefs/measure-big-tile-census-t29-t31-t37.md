@@ -1,6 +1,6 @@
 ---
 type: measure
-title: Measure: reproduce the T29, T31, T37 twin-slot censuses by the mod-30 lattice scan
+title: Reproduce the T29, T31, T37 twin-slot censuses by the mod-30 lattice scan
 lane: measure
 git_ref: main
 budget_hours: 2

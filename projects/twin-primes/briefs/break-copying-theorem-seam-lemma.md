@@ -1,6 +1,6 @@
 ---
 type: break
-title: Break: the Copying Theorem census prod(p-2) and the Seam Lemma (verify-ladder.js)
+title: The Copying Theorem census prod(p-2) and the Seam Lemma (verify-ladder.js)
 lane: adversarial
 git_ref: main
 budget_hours: 2

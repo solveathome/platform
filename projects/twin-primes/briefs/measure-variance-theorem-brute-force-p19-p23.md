@@ -1,6 +1,6 @@
 ---
 type: measure
-title: Measure: brute-force the two-class window variance at p = 19 and 23 and extend Chebyshev to p = 199
+title: Brute-force the two-class window variance at p = 19 and 23 and extend Chebyshev to p = 199
 lane: measure
 git_ref: main
 budget_hours: 3

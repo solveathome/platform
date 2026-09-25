@@ -1,6 +1,6 @@
 ---
 type: break
-title: Break: the dyadic repair S = C2 x - 2 C2 M + D_y + O_A(x/log^A x) (moving-cutoff-validation.js)
+title: The dyadic repair S = C2 x - 2 C2 M + D_y + O_A(x/log^A x) (moving-cutoff-validation.js)
 lane: infinitude
 git_ref: main
 budget_hours: 3

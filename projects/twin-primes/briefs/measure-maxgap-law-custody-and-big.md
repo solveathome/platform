@@ -1,6 +1,6 @@
 ---
 type: measure
-title: Measure: reproduce maxgap-law.js (default and --big) and its three-engine custody block
+title: Reproduce maxgap-law.js (default and --big) and its three-engine custody block
 lane: measure
 git_ref: main
 budget_hours: 2

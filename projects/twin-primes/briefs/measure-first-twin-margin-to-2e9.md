@@ -1,6 +1,6 @@
 ---
 type: measure
-title: Measure: extend the first-twin safety margin of 02-first-twin-margin.js to p_n near 2^30
+title: Extend the first-twin safety margin of 02-first-twin-margin.js to p_n near 2^30
 lane: measure
 git_ref: main
 budget_hours: 2

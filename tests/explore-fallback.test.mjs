@@ -68,11 +68,11 @@ const register = async () => {
 test('an empty queue hands each session a different open question, one per job, and skips closed ones', async () => {
   const a = await register();
   assert.equal(a.type, 'explore');
-  assert.equal(a.title, 'Explore: Q-alpha in lane-a');
+  assert.equal(a.title, 'Q-alpha in lane-a');
   assert.match(a.brief_md, /`Q-alpha` \(OPEN\): first thing/);
   assert.doesNotMatch(a.brief_md, /Q-beta/, 'a second question leaked into a one-question brief');
   const b = await register();
-  assert.equal(b.title, 'Explore: Q-beta in lane-a', 'the next session got the same question again');
+  assert.equal(b.title, 'Q-beta in lane-a', 'the next session got the same question again');
   assert.match(b.brief_md, /Record so far: half done/);
   assert.doesNotMatch(b.brief_md, /Q-gamma/, 'a closed question was served');
 });
@@ -87,13 +87,14 @@ test('the fallback names typed work that only the compute offer blocks', async (
 test('once every open question is in hand, the fallback rotates through lead hunts', async () => {
   const seen = [];
   for (let i = 0; i < 6; i++) seen.push((await register()).title);
-  assert.deepEqual(seen.map(t => t.split(':')[0]), Array(6).fill('Leads'), seen.join(' | '));
+  assert.equal(Number((await one(`SELECT count(*) AS n FROM jobs WHERE problem_id = $1 AND origin_key LIKE 'lead:%' AND title = ANY($2)`, [pid, seen])).n), 6, seen.join(' | '));
+  assert.ok(seen.every(t => !t.includes(':')), `a lead hunt is titled by what it hunts, with no type prefix (#sah-route-triage-title): ${seen.join(' | ')}`);
   assert.equal(new Set(seen).size, 6, `the menu repeated inside one rotation: ${seen.join(' | ')}`);
-  const priorArt = await one(`SELECT brief_md FROM jobs WHERE problem_id = $1 AND title LIKE 'Leads: prior art%'`, [pid]);
+  const priorArt = await one(`SELECT brief_md FROM jobs WHERE problem_id = $1 AND origin_key LIKE 'lead:%' AND title LIKE 'Prior art%'`, [pid]);
   assert.match(priorArt.brief_md, /Prior-art hunt/); assert.match(priorArt.brief_md, /by @.*-other\)/, 'the hunt did not point at the accepted return');
-  const breakIt = await one(`SELECT brief_md FROM jobs WHERE problem_id = $1 AND title LIKE 'Leads: break%'`, [pid]);
+  const breakIt = await one(`SELECT brief_md FROM jobs WHERE problem_id = $1 AND origin_key LIKE 'lead:%' AND title LIKE 'Break%'`, [pid]);
   assert.match(breakIt.brief_md, /request_review/);
-  for (const t of ['registry sweep', 'cross-lane synthesis', 'new route', 'new statistic']) assert.ok(seen.includes(`Leads: ${t}`), `missing hunt: ${t}`);
+  for (const t of ['registry sweep', 'cross-lane synthesis', 'new route', 'new statistic']) assert.ok(seen.includes(t[0].toUpperCase() + t.slice(1)), `missing hunt: ${t}`);
 });
 
 // Issue #69: a return that answers a file-fix job repaired another return's scripts. It makes no claim of its own, so a
@@ -107,10 +108,10 @@ test('a lead hunt targets a claim, not a return that repaired another return\'s 
   await q(`UPDATE returns SET job_id = $2 WHERE id = $1`, [repair.id, fixJob.id]);
   await q(`DELETE FROM jobs WHERE problem_id = $1 AND title LIKE 'Leads:%'`, [pid]);
   for (let i = 0; i < 6; i++) await register();
-  const priorArt = await one(`SELECT brief_md FROM jobs WHERE problem_id = $1 AND title LIKE 'Leads: prior art%' ORDER BY id DESC LIMIT 1`, [pid]);
+  const priorArt = await one(`SELECT brief_md FROM jobs WHERE problem_id = $1 AND origin_key LIKE 'lead:%' AND title LIKE 'Prior art%' ORDER BY id DESC LIMIT 1`, [pid]);
   assert.doesNotMatch(priorArt.brief_md, new RegExp(`return #${repair.id}\\b`), 'the repair is not a prior-art target');
   assert.match(priorArt.brief_md, /A measured bound on the corner count|current bound/, 'a claim, or the router if there is none');
-  const breakIt = await one(`SELECT brief_md FROM jobs WHERE problem_id = $1 AND title LIKE 'Leads: break%' ORDER BY id DESC LIMIT 1`, [pid]);
+  const breakIt = await one(`SELECT brief_md FROM jobs WHERE problem_id = $1 AND origin_key LIKE 'lead:%' AND title LIKE 'Break%' ORDER BY id DESC LIMIT 1`, [pid]);
   assert.doesNotMatch(breakIt.brief_md, new RegExp(`return #${repair.id}\\b`), 'nor an adversarial re-check target');
   await q(`UPDATE returns SET job_id = NULL WHERE id = $1`, [repair.id]);   // returns.job_id and jobs.follow_up_of point at each other
   await q(`DELETE FROM jobs WHERE id = $1`, [fixJob.id]);

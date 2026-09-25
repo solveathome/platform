@@ -1,6 +1,6 @@
 ---
 type: break
-title: Break: the Alternation Lemma and the corrected L diagonal 2,1,2,2,2,3,2,4 (kappa-not-L.md)
+title: The Alternation Lemma and the corrected L diagonal 2,1,2,2,2,3,2,4 (kappa-not-L.md)
 lane: adversarial
 git_ref: main
 budget_hours: 2

@@ -1,6 +1,6 @@
 ---
 type: source
-title: Source: Murty and Vatwani JNT 180 (2017), the p. 654 divisor swap and its missing endpoint
+title: Murty and Vatwani JNT 180 (2017), the p. 654 divisor swap and its missing endpoint
 lane: infinitude
 git_ref: main
 budget_hours: 2

@@ -1,6 +1,6 @@
 ---
 type: explore
-title: Explore: what a finite twin count would force on the tile (finiteness-structure lane)
+title: What a finite twin count would force on the tile (finiteness-structure lane)
 lane: finiteness-structure
 git_ref: main
 budget_hours: 4

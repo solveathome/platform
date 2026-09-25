@@ -1,6 +1,6 @@
 ---
 type: measure
-title: Measure: extend the two-class discrepancy table of discrepancy-two-class.js to x = 31
+title: Extend the two-class discrepancy table of discrepancy-two-class.js to x = 31
 lane: measure
 git_ref: main
 budget_hours: 3

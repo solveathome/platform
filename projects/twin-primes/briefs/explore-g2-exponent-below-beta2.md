@@ -1,6 +1,6 @@
 ---
 type: explore
-title: Explore: any input that would move the two-class exponent below 4.26645 (g2-exponent lane)
+title: Any input that would move the two-class exponent below 4.26645 (g2-exponent lane)
 lane: g2-exponent
 git_ref: main
 budget_hours: 4

@@ -11,6 +11,7 @@ import { leaderboard, type Window } from "../lib/credit.js";
 import { projectActivity, runningWork } from "../lib/project-activity.js";
 import { standings, PENDING_POINTS_SQL } from "../lib/standings.js";
 import { researchSummary } from '../lib/research.js';
+import { jobLabel } from '../lib/research-format.js';
 import { researchPolicy, researchAllocation, workConcentration } from '../lib/scheduler.js';
 
 const page = (name: string) => readFileSync(join(PUBLIC_DIR, name), "utf8");
@@ -183,7 +184,7 @@ root.get("/@:handle", async (req, res) => {
       count(*) FILTER (WHERE status = 'recorded')::int AS recorded,
       count(*) FILTER (WHERE tokens->>'log' IN ('antigravity','custom') AND tokens->>'source' = 'none' AND tokens->'already_counted' IS NULL AND tokens->'mismatch' IS NULL)::int AS usage_missing
     FROM returns WHERE user_id = $1`, [u.id]);
-  const released = await q(`SELECT DISTINCT ON (m.job_id) m.job_id, j.title, j.status, j.follow_up_of, p.slug AS project, m.body_md AS note, m.created_at
+  const released = await q(`SELECT DISTINCT ON (m.job_id) m.job_id, j.title, j.type, j.research_stage, j.status, j.follow_up_of, p.slug AS project, m.body_md AS note, m.created_at
     FROM messages m JOIN jobs j ON j.id = m.job_id JOIN problems p ON p.id = j.problem_id
     WHERE m.user_id = $1 AND m.kind = 'done' AND m.body_md LIKE 'Released job #%'
       AND NOT EXISTS (SELECT 1 FROM returns r WHERE r.job_id = m.job_id AND r.user_id = $1)
@@ -238,21 +239,23 @@ root.get("/@:handle", async (req, res) => {
   const titleOf = (r: any) => r.job_title ?? String(r.report_md ?? "").split("\n").find((l: string) => l.trim())?.replace(/^#+\s*/, "").trim() ?? `${r.type} #${r.id}`;
   const summaryOf = (md: string) => { const blocks = String(md ?? "").split(/\n\s*\n/).map((b) => b.trim()).filter(Boolean); const body = blocks.find((b) => !b.startsWith("#") && !/^calibration ladder/i.test(b)) ?? ""; const t = body.replace(/^[-*]\s+/gm, "").replace(/\*\*|__|`/g, "").replace(/\[([^\]]+)\]\([^)]*\)/g, "$1").replace(/\s+/g, " "); return t.length > 320 ? t.slice(0, 317).replace(/\s+\S*$/, "") + "…" : t; };
   // A route job's title is its stage and the route it worked on; what it produced is the outcome it reported (#sah-route-triage-title).
+  // The title says what the work was about; the label what kind of work it was (#sah-route-triage-title: no "<type>: " in a title).
+  const labelOf = (r: any) => jobLabel({ type: r.job_type ?? r.type, research_stage: r.research_stage, follow_up_of: r.follow_up_of });
   const routeOf = (r: any) => r.research_route_id ? { id: Number(r.research_route_id), stage: r.research_stage === 'triage' ? 'probe' : r.research_stage, outcome: r.research_outcome ?? null } : null;
-  const hlRows = await q(`SELECT r.id, p.slug AS project, r.type, r.model, r.verification, r.final_rung, r.created_at, r.revision_path, j.title AS job_title, j.research_stage, r.research_route_id, r.research->>'outcome' AS research_outcome, left(r.report_md, 4000) AS report_md, c.points, c.note,
+  const hlRows = await q(`SELECT r.id, p.slug AS project, r.type, r.model, r.verification, r.final_rung, r.created_at, r.revision_path, j.title AS job_title, j.type AS job_type, j.follow_up_of, j.research_stage, r.research_route_id, r.research->>'outcome' AS research_outcome, left(r.report_md, 4000) AS report_md, c.points, c.note,
       (SELECT count(*) FROM credits i WHERE i.kind = 'insight' AND i.source_type = 'return' AND i.source_id = r.id::text)::int AS cited
     FROM credits c JOIN returns r ON r.id = c.source_id::bigint JOIN problems p ON p.id = r.problem_id LEFT JOIN jobs j ON j.id = r.job_id
     WHERE c.user_id = $1 AND c.kind = 'breakthrough' AND c.source_type = 'return' AND c.source_id ~ '^[0-9]+$' ORDER BY c.points DESC, r.id LIMIT 6`, [u.id]);
-  const highlights = hlRows.map((r: any) => ({ id: r.id, project: r.project, type: r.type, model: r.model, verification: r.verification, final_rung: r.final_rung, created_at: r.created_at, path: r.revision_path, points: Number(r.points), reason: r.note, cited: r.cited, title: titleOf(r), summary: summaryOf(r.report_md), route: routeOf(r) }));
-  const strongest = highlights.length ? [] : (await q(`SELECT r.id, p.slug AS project, r.type, r.model, r.verification, r.final_rung, r.created_at, r.revision_path, j.title AS job_title, j.research_stage, r.research_route_id, r.research->>'outcome' AS research_outcome, left(r.report_md, 4000) AS report_md,
+  const highlights = hlRows.map((r: any) => ({ id: r.id, project: r.project, type: r.type, model: r.model, verification: r.verification, final_rung: r.final_rung, created_at: r.created_at, path: r.revision_path, points: Number(r.points), reason: r.note, cited: r.cited, title: titleOf(r), label: labelOf(r), summary: summaryOf(r.report_md), route: routeOf(r) }));
+  const strongest = highlights.length ? [] : (await q(`SELECT r.id, p.slug AS project, r.type, r.model, r.verification, r.final_rung, r.created_at, r.revision_path, j.title AS job_title, j.type AS job_type, j.follow_up_of, j.research_stage, r.research_route_id, r.research->>'outcome' AS research_outcome, left(r.report_md, 4000) AS report_md,
       (SELECT count(*) FROM credits i WHERE i.kind = 'insight' AND i.source_type = 'return' AND i.source_id = r.id::text)::int AS cited
     FROM returns r JOIN problems p ON p.id = r.problem_id LEFT JOIN jobs j ON j.id = r.job_id WHERE r.user_id = $1 AND r.status = 'accepted' AND NOT r.provisional
     ORDER BY array_position(ARRAY['proven','verified','measured','heuristic','conjectured','refuted'], r.final_rung), array_position(ARRAY['rerun','spot','read'], coalesce(r.verification, 'read')), r.id DESC LIMIT 3`, [u.id]))
-    .map((r: any) => ({ id: r.id, project: r.project, type: r.type, model: r.model, verification: r.verification, final_rung: r.final_rung, created_at: r.created_at, path: r.revision_path, points: 0, reason: null, cited: r.cited, title: titleOf(r), summary: summaryOf(r.report_md), route: routeOf(r) }));
+    .map((r: any) => ({ id: r.id, project: r.project, type: r.type, model: r.model, verification: r.verification, final_rung: r.final_rung, created_at: r.created_at, path: r.revision_path, points: 0, reason: null, cited: r.cited, title: titleOf(r), label: labelOf(r), summary: summaryOf(r.report_md), route: routeOf(r) }));
   const integratedPaths = await q(`SELECT DISTINCT r.revision_path AS path FROM credits c JOIN returns r ON r.id = c.source_id::bigint WHERE c.user_id = $1 AND c.kind = 'integrated' AND c.source_type = 'return' AND c.source_id ~ '^[0-9]+$' AND r.revision_path IS NOT NULL ORDER BY 1`, [u.id]);
   const cited = await one(`SELECT count(*)::int AS n, (SELECT source_id FROM credits WHERE user_id = $1 AND kind = 'insight' AND source_type = 'return' GROUP BY source_id ORDER BY count(*) DESC, source_id LIMIT 1) AS most FROM credits WHERE user_id = $1 AND kind = 'insight'`, [u.id]);
-  const recentTitled = await q(`SELECT r.id, j.title AS job_title, left(r.report_md, 600) AS report_md, r.type, r.model FROM returns r LEFT JOIN jobs j ON j.id = r.job_id WHERE r.user_id = $1 ORDER BY r.id DESC LIMIT 50`, [u.id]);
-  const titles = new Map(recentTitled.map((r: any) => [String(r.id), { title: titleOf(r), model: r.model }]));
+  const recentTitled = await q(`SELECT r.id, j.title AS job_title, j.type AS job_type, j.research_stage, j.follow_up_of, left(r.report_md, 600) AS report_md, r.type, r.model FROM returns r LEFT JOIN jobs j ON j.id = r.job_id WHERE r.user_id = $1 ORDER BY r.id DESC LIMIT 50`, [u.id]);
+  const titles = new Map(recentTitled.map((r: any) => [String(r.id), { title: titleOf(r), label: labelOf(r), model: r.model }]));
   const recentOut = recent.map((r: any) => ({ ...r, ...(titles.get(String(r.id)) ?? {}) }));
   const deptOut = await Promise.all(departments.map(async (d: any) => {
     const runs = d.runs ?? [];
@@ -268,7 +271,7 @@ root.get("/@:handle", async (req, res) => {
              kinds, reviews_given, days, models, highlights: highlights.length ? highlights : strongest, highlights_kind: highlights.length ? "breakthrough" : "strongest",
              integrated_paths: integratedPaths.map((r: any) => r.path), cited: { count: cited?.n ?? 0, most: cited?.most ?? null },
              agent_time: { accepted: u.accepted, rejected: u.rejected, review_agree: u.review_agree, review_disagree: u.review_disagree },
-             compute: { cpu_hours: u.cpu_hours }, research_input: { directions_accepted: u.directions_accepted, lanes }, work, released, recent: recentOut });
+             compute: { cpu_hours: u.cpu_hours }, research_input: { directions_accepted: u.directions_accepted, lanes }, work, released: released.map((r: any) => ({ ...r, label: jobLabel(r) })), recent: recentOut });
 });
 
 root.get("/my/jobs", bearer, async (req, res) => {

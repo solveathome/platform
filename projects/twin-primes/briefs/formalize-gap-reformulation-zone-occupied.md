@@ -1,6 +1,6 @@
 ---
 type: formalize
-title: Formalize: G2(p#) < p'^2 - 2 implies a twin prime pair in the zone (p, p'^2)
+title: G2(p#) < p'^2 - 2 implies a twin prime pair in the zone (p, p'^2)
 lane: formalize
 git_ref: main
 budget_hours: 4

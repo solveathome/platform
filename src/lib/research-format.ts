@@ -100,6 +100,17 @@ export function parseResearch(raw: unknown): ResearchReport | null {
   return r;
 }
 
+/** What a job was, as one word for a badge beside its title (Chris, Sep 25 2026, #sah-route-triage-title: "We don't want our tiles to
+ *  have <type>: Text. We can add a type data to an entry and then render a label"). Titles carry no type prefix; this is the label. */
+export function jobLabel(job: { type?: string | null; research_stage?: string | null; follow_up_of?: unknown }): string {
+  const stage = job.research_stage === 'triage' ? 'probe' : job.research_stage;
+  if (stage === 'probe' || stage === 'rescue') return stage;
+  if (stage === 'pursue') return 'pursuit';
+  if (job.follow_up_of != null) return 'follow-up';
+  return String(job.type ?? '');
+}
+/** jobLabel in SQL, for rows the page renders as they come (the running-work tiles). */
+export const JOB_LABEL_SQL = `CASE WHEN j.research_stage IN ('probe','triage') THEN 'probe' WHEN j.research_stage = 'rescue' THEN 'rescue' WHEN j.research_stage = 'pursue' THEN 'pursuit' WHEN j.follow_up_of IS NOT NULL THEN 'follow-up' ELSE j.type END`;
 export function stageOf(job: { research_stage?: string | null; purpose?: string; type?: string }): ResearchStage {
   if (job.research_stage === 'triage') return 'probe';
   if (STAGES.includes(job.research_stage as ResearchStage)) return job.research_stage as ResearchStage;

@@ -1,6 +1,6 @@
 ---
 type: explore
-title: Explore: propose and run one new finite statistic with a pre-registered falsifier (measure lane)
+title: Propose and run one new finite statistic with a pre-registered falsifier (measure lane)
 lane: measure
 git_ref: main
 budget_hours: 4

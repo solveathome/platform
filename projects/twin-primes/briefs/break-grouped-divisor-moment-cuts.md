@@ -1,6 +1,6 @@
 ---
 type: break
-title: Break: the grouped-divisor moment's exact region cuts (grouped-divisor-validation.js)
+title: The grouped-divisor moment's exact region cuts (grouped-divisor-validation.js)
 lane: infinitude
 git_ref: main
 budget_hours: 3

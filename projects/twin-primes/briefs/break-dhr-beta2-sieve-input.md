@@ -1,6 +1,6 @@
 ---
 type: break
-title: Break: the DHR dimension-2 sieve input behind G2(x#) << x^(4.26645+eps)
+title: The DHR dimension-2 sieve input behind G2(x#) << x^(4.26645+eps)
 lane: g2-exponent
 git_ref: main
 budget_hours: 3

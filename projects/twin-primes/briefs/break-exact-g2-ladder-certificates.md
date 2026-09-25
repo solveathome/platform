@@ -1,6 +1,6 @@
 ---
 type: break
-title: Break: the exact G2 ladder certificates in research/exact-g2-ladder.js (x = 2..43)
+title: The exact G2 ladder certificates in research/exact-g2-ladder.js (x = 2..43)
 lane: g2-exponent
 git_ref: main
 budget_hours: 2

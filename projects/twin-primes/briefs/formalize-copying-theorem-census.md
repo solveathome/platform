@@ -1,6 +1,6 @@
 ---
 type: formalize
-title: Formalize: the twin-slot census of the tile, #{r mod x# : gcd(r(r+2), x#) = 1} = prod (p-2)
+title: The twin-slot census of the tile, #{r mod x# : gcd(r(r+2), x#) = 1} = prod (p-2)
 lane: formalize
 git_ref: main
 budget_hours: 3

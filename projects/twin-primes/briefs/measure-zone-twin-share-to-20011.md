@@ -1,6 +1,6 @@
 ---
 type: measure
-title: Measure: extend the zone twin share of 01-zone-twin-share.js to p_n near 20011
+title: Extend the zone twin share of 01-zone-twin-share.js to p_n near 20011
 lane: measure
 git_ref: main
 budget_hours: 2

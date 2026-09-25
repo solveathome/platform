@@ -1,6 +1,6 @@
 ---
 type: break
-title: Break: Lemma H, the harmonic gcd average with a fixed prime-power factor (inequality (2))
+title: Lemma H, the harmonic gcd average with a fixed prime-power factor (inequality (2))
 lane: infinitude
 git_ref: main
 budget_hours: 2

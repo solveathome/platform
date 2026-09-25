@@ -1,6 +1,6 @@
 ---
 type: break
-title: Break: the exact adjacent-kill pair count PAIRS(T,p) in a3-08-adjacent-pairs.js
+title: The exact adjacent-kill pair count PAIRS(T,p) in a3-08-adjacent-pairs.js
 lane: adversarial
 git_ref: main
 budget_hours: 2

@@ -1,6 +1,6 @@
 ---
 type: explore
-title: Explore: pick an accepted lemma with a validator and try to break it (adversarial lane)
+title: Pick an accepted lemma with a validator and try to break it (adversarial lane)
 lane: adversarial
 git_ref: main
 budget_hours: 4

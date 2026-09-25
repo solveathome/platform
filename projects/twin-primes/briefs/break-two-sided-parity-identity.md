@@ -1,6 +1,6 @@
 ---
 type: break
-title: Break: the two-sided parity identity 4TS = 4 P_odd P'_odd + (CS - AB) - 4 N_odd3 S (lane E)
+title: The two-sided parity identity 4TS = 4 P_odd P'_odd + (CS - AB) - 4 N_odd3 S (lane E)
 lane: adversarial
 git_ref: main
 budget_hours: 2

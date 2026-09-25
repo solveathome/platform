@@ -1,6 +1,6 @@
 ---
 type: source
-title: Source: is a Mobius Bombieri-Vinogradov theorem stated in Iwaniec-Kowalski or Opera de Cribro
+title: Is a Mobius Bombieri-Vinogradov theorem stated in Iwaniec-Kowalski or Opera de Cribro
 lane: infinitude
 git_ref: main
 budget_hours: 2

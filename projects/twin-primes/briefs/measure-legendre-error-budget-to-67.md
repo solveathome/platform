@@ -1,6 +1,6 @@
 ---
 type: measure
-title: Measure: extend the Legendre error budget table of 03-legendre-error-budget.js to p_n = 67
+title: Extend the Legendre error budget table of 03-legendre-error-budget.js to p_n = 67
 lane: measure
 git_ref: main
 budget_hours: 1

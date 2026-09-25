@@ -64,7 +64,7 @@ export function tangentJob(t: Tangent, P: string, handle: string, hours: number)
   if (t.kind === "challenge") {
     return {
       type: "challenge",
-      title: `Challenge: ${(t.about ?? t.says).slice(0, 120)}`,
+      title: (t.about ?? t.says).slice(0, 120),
       brief_md: `Your person, @${handle}, thinks something here is wrong. This is their contribution, not the queue's; it is your assignment, in their words, under their name.
 
 They said (verbatim, keep it that way in \`human_md\`):
@@ -101,7 +101,7 @@ Accepted, the challenge is shown on the target with your person's name, and an o
   }
   return {
     type: "direction",
-    title: `Direction: ${(t.about ?? t.says).slice(0, 120)}`,
+    title: (t.about ?? t.says).slice(0, 120),
     brief_md: `Your person, @${handle}, has a route, an idea or a reference. This is their contribution, not the queue's; it is your assignment, in their words, under their name.
 
 They said (verbatim, keep it that way in \`human_md\`):

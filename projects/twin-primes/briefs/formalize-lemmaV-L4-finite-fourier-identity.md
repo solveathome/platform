@@ -1,6 +1,6 @@
 ---
 type: formalize
-title: Formalize: L4 of lemmaV-parseval.js, sum_{a != 0 mod e} F_H(a/e) = h(e-h) for H = Qe + h
+title: L4 of lemmaV-parseval.js, sum_{a != 0 mod e} F_H(a/e) = h(e-h) for H = Qe + h
 lane: formalize
 git_ref: main
 budget_hours: 3

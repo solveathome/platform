@@ -1,6 +1,6 @@
 ---
 type: break
-title: Break: the Localized Merge Lemma and its boundary question (LOCALIZED-GAP.md section 3)
+title: The Localized Merge Lemma and its boundary question (LOCALIZED-GAP.md section 3)
 lane: adversarial
 git_ref: main
 budget_hours: 3

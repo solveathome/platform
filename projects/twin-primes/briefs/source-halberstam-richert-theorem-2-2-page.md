@@ -1,6 +1,6 @@
 ---
 type: source
-title: Source: Halberstam and Richert 1974, Theorem 2.2, pp. 68 to 69, read at the printed page
+title: Halberstam and Richert 1974, Theorem 2.2, pp. 68 to 69, read at the printed page
 lane: g2-exponent
 git_ref: main
 budget_hours: 2

@@ -1,6 +1,6 @@
 ---
 type: formalize
-title: Formalize: the Alternation Lemma for adjacent-kill runs (kappa-not-L.md)
+title: The Alternation Lemma for adjacent-kill runs (kappa-not-L.md)
 lane: formalize
 git_ref: main
 budget_hours: 4

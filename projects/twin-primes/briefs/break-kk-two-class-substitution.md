@@ -1,6 +1,6 @@
 ---
 type: break
-title: Break: the Kalmynin-Konyagin substitution G2(P(y)) >> y (ln y)^3 (lnlnln y)^2/(lnln y)^4
+title: The Kalmynin-Konyagin substitution G2(P(y)) >> y (ln y)^3 (lnlnln y)^2/(lnln y)^4
 lane: g2-exponent
 git_ref: main
 budget_hours: 4
