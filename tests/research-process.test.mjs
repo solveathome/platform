@@ -82,7 +82,7 @@ async function activeRoute(){const r=await proposed(),a=await start();const p=ok
 
 test('proposal → probe → pursuit → scoped obstacle → different-model rescue, with replay-safe follow-ups',async()=>{
   const r=await proposed();assert.equal(r.status,'recorded');assert.equal(r.reviews_requested,0);
-  const a=await start();assert.equal(a.research_stage,'probe');assert.match(a.brief_md,/Investment state: proposed/);
+  const a=await start();assert.equal(a.research_stage,'probe');assert.match(a.brief_md,/Investment state: proposed/);assert.match((await one(`SELECT title FROM jobs WHERE id=$1`,[a.job_id])).title,/^Probe: /);
   const missing=await submit('astra',{},a);assert.equal(missing.status,400);assert.match(missing.body.error,/requires research/);
   assert.equal((await submit('astra',{research:proposal()},a)).status,400);
   assert.equal((await one(`SELECT status FROM jobs WHERE id=$1`,[a.job_id])).status,'assigned');
@@ -176,6 +176,19 @@ test('reviews of evidence used by continued pursuit get a bounded advantage over
   const aged=await start('judge');assert.equal(Number(aged.job_id),Number(backlog.id),'Age must eventually overtake the dependency bonus.');
 });
 
+// #sah-route-triage-title (Chris, Sep 25 2026): a route's first step was titled like the review bookkeeping job. The relabel at start
+// turns the previous container's 'triage' rows into probes, runs twice to the same result, and leaves review triage alone.
+test('a route job recorded as triage is relabelled a probe at start; review triage keeps its name',async()=>{
+  const old=await one(`INSERT INTO jobs (problem_id,type,title,brief_md,budget_hours,research_stage) VALUES ($1,'explore','Triage: A route','Use published numbers with citations; do not reproduce them in triage. Seek the smallest experiment.',0.5,'triage') RETURNING id`,[pid]);
+  const done=await one(`INSERT INTO jobs (problem_id,type,title,brief_md,budget_hours,research_stage,status) VALUES ($1,'explore','Triage: Another route','do not reproduce them in triage.',0.5,'triage','accepted') RETURNING id`,[pid]);
+  const review=await one(`INSERT INTO jobs (problem_id,type,title,brief_md,budget_hours) VALUES ($1,'triage','Triage return #1','Would a trusted verdict change the record?',0.25) RETURNING id`,[pid]);
+  await migrate();await migrate();
+  const rows=Object.fromEntries((await q(`SELECT id,type,title,brief_md,research_stage FROM jobs WHERE id=ANY($1)`,[[old.id,done.id,review.id]])).map(r=>[r.id,r]));
+  assert.deepEqual([rows[old.id].research_stage,rows[old.id].title],['probe','Probe: A route']);
+  assert.match(rows[old.id].brief_md,/do not reproduce them in a probe\./);
+  assert.deepEqual([rows[done.id].research_stage,rows[done.id].title,rows[done.id].brief_md],['probe','Probe: Another route','do not reproduce them in triage.'],'a brief already handed out is the record of what the agent read');
+  assert.deepEqual([rows[review.id].type,rows[review.id].title,rows[review.id].research_stage],['triage','Triage return #1',null]);
+});
 for(const who of ['astra','author','runner'])test(`lightweight probe of an Astra proposal is available to ${who}`,async()=>{
   const r=ok(await submit('astra',{research:proposal()}));
   const a=await start(who);assert.equal(a.research_stage,'probe');
