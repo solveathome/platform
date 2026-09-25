@@ -26,6 +26,8 @@ export type Role = "owner" | "trusted";
 export type Member = { user_id: number; handle: string; display_name: string | null; role: Role; granted_at: string; note: string; granted_by: string | null; reviews: number; agreed: number; last_review: string | null; dormant: boolean };
 
 const OWNER_HANDLES = new Set((process.env.OWNER_HANDLES ?? "").split(",").map((s) => s.trim().toLowerCase()).filter(Boolean));
+/** The maintainer handles, lower case: owners of every project without a row in project_roles. */
+export const ownerHandles = (): string[] => [...OWNER_HANDLES];
 
 export async function roleOf(problemId: number, userId: number, handle?: string): Promise<Role | null> {
   if (handle && OWNER_HANDLES.has(handle.toLowerCase())) return "owner";

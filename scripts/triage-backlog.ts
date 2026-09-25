@@ -2,14 +2,14 @@
  * For every pending return of a project with triage on whose review jobs are still queued (nobody holds one) and that
  * has no triage yet: the queued review jobs are expired ("replaced by triage") and one triage job is made, so the first
  * read happens before any trusted reviewer spends an hour on it. Left alone: returns whose review is assigned right now,
- * packaged returns with a completed independent check (the receipt is the first pass), duplicates, and returns already
- * triaged. Dry run by default; --apply does it under the project lock. Never manufactures a return, review or credit.
+ * packaged returns with a completed independent check (the receipt is the first pass), duplicates, returns already
+ * triaged, and returns by a trusted tier-1 author (Sep 25 2026, #sah-tier1-skip-triage: they go to review directly). Dry run by default; --apply does it under the project lock. Never manufactures a return, review or credit.
  *
  *   npx tsx scripts/triage-backlog.ts [--apply] [--project=twin-primes]
  */
 import { q, one, pool, projectTransaction } from "../src/db/index.js";
 import { reviewTriage } from "../src/lib/scheduler.js";
-import { spawnTriage } from "../src/routes/job.js";
+import { spawnTriage, skipsTriage } from "../src/routes/job.js";
 import { verificationRuns, isCompletedCheck } from "../src/lib/verification.js";
 
 const apply = process.argv.includes("--apply");
@@ -27,9 +27,10 @@ try {
           AND NOT EXISTS (SELECT 1 FROM triages t WHERE t.return_id = r.id)
           AND NOT EXISTS (SELECT 1 FROM reviews rv WHERE rv.return_id = r.id AND rv.trusted AND NOT rv.needs_reassessment)
         ORDER BY r.created_at, r.id`, [p.id]);
-      let converted = 0, checked = 0, reviewJobs = 0;
+      let converted = 0, checked = 0, trusted = 0, reviewJobs = 0;
       for (const ret of waiting) {
         if (ret.verification_plan && (await verificationRuns(Number(ret.id))).some(isCompletedCheck)) { checked++; continue; }
+        if (await skipsTriage(ret)) { trusted++; continue; }
         const jobs = await q<{ id: string }>(`SELECT id FROM jobs WHERE parent_return_id = $1 AND type = 'review' AND status = 'queued'`, [ret.id]);
         reviewJobs += jobs.length; converted++;
         if (!apply) continue;
@@ -37,7 +38,7 @@ try {
         await q(`INSERT INTO return_decisions (return_id, status, final_rung, provisional, by, note) VALUES ($1,'pending',NULL,false,'triage',$2)`, [ret.id, `Put to triage first (review triage switched on): an agent that is not a trusted reviewer reads it and says whether a trusted verdict would change the record.`]);
         await spawnTriage(ret, cfg, jobs.length);
       }
-      console.log(JSON.stringify({ project: p.slug, triage: cfg, pending_with_queued_reviews: waiting.length, converted, review_jobs_replaced: reviewJobs, left_for_judgment_checked: checked, applied: apply }));
+      console.log(JSON.stringify({ project: p.slug, triage: cfg, pending_with_queued_reviews: waiting.length, converted, review_jobs_replaced: reviewJobs, left_for_judgment_checked: checked, left_for_review_trusted_tier1: trusted, applied: apply }));
     });
   }
 } finally { await pool.end(); }
