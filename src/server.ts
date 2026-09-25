@@ -29,6 +29,8 @@ import { perIp } from "./lib/ratelimit.js";
 import { pathGuard } from "./lib/guards.js";
 import { responseCache } from "./lib/cache.js";
 import { shareMeta, SITE_DESCRIPTION } from "./lib/share.js";
+import { jsonLd, notFoundPage, ORGANIZATION, WEBSITE } from "./lib/seo.js";
+import { seo } from "./routes/seo.js";
 
 const app = express();
 
@@ -55,7 +57,11 @@ app.use("/auth/github/callback", perIp("oauth-callback", 5, 60_000));
 // Anonymous aggregate pages are served from a 20 s cache: one Postgres pass per page per 20 s, however many people are looking.
 app.use(responseCache([/^\/projects\/?$/, /^\/projects\/[a-z0-9-]+\/(board|activity|standings|leaderboard|who|chat|papers|sequences|lanes|questions)\/?$/, /^\/projects\/[a-z0-9-]+\/?$/, /^\/leaderboard\/?$/, /^\/credit\/?$/]));
 
-app.use("/assets", express.static(join(PUBLIC_DIR, "assets"), { index: false, maxAge: "1h" }));
+// Assets are referenced with ?v=, bumped whenever the file changes, so a versioned URL is immutable: a year, and no revalidation.
+app.use("/assets", express.static(join(PUBLIC_DIR, "assets"), { index: false, maxAge: "1h", setHeaders: (res) => { if ((res as any).req?.query?.v) res.setHeader("Cache-Control", "public, max-age=31536000, immutable"); } }));
+// The API answers on the same URLs as the pages; a JSON body is never a search result (#sah-seo-optimize).
+app.use((_req, res, next) => { const json = res.json.bind(res); res.json = ((body: any) => { res.setHeader("X-Robots-Tag", "noindex"); return json(body); }) as any; next(); });
+app.use(seo);
 // Body limits by route (src/lib/body-limits.ts): big parsers only for a known token, and only for requests that carry a body.
 app.use("/projects/:slug/result", bigBody("50mb"));
 app.use(["/projects/:slug/return/:id/transcript", "/projects/:slug/review/:id/transcript"], bigBody("50mb"));
@@ -87,7 +93,7 @@ app.get("/", async (req, res) => {
   const slug = f?.slug ?? "<slug>";
   if (wantsHtml(req)) {
     const esc = (t: string) => String(t ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
-    res.type("text/html").send(homeHtml().replace("__SHARE__", shareMeta({ title: "solveathome: hard problems, solved in the open", description: SITE_DESCRIPTION, path: "/" })).replaceAll("__FEATURED_SLUG__", esc(slug)).replaceAll("__FEATURED_NAME__", esc(f?.name ?? "the first project")).replace("__FEATURED_TAGLINE__", esc(f?.tagline ?? "")).replace("__FEATURED_HERO__", f ? (projectPartial(f.slug, "home-hero") ?? "") : ""));
+    res.type("text/html").send(homeHtml().replace("__SHARE__", shareMeta({ title: "solveathome: hard problems, solved in the open", description: SITE_DESCRIPTION, path: "/" }) + jsonLd({ "@context": "https://schema.org", "@graph": [WEBSITE(), { ...ORGANIZATION(), description: SITE_DESCRIPTION }] })).replaceAll("__FEATURED_SLUG__", esc(slug)).replaceAll("__FEATURED_NAME__", esc(f?.name ?? "the first project")).replace("__FEATURED_TAGLINE__", esc(f?.tagline ?? "")).replace("__FEATURED_HERO__", f ? (projectPartial(f.slug, "home-hero") ?? "") : ""));
     return;
   }
   res.type("text/plain").send(
@@ -105,6 +111,8 @@ Code: MIT. Results and traces: CC BY 4.0.
 });
 
 app.use(notFound([job, lane, board, papers, sequences, chat, asks, trust, docs]));
+// A browser or crawler that misses gets the site's own not-found page with a real 404, never Express's bare "Cannot GET".
+app.use((req, res) => { res.status(404).type("text/html").send(notFoundPage(`Nothing at ${String(req.originalUrl ?? req.url).split("?")[0].slice(0, 200)}.`)); });
 
 const port = Number(process.env.PORT ?? 8600);
 // Errors are bug reports: say so, with where. Developed in the open (Chris, Sep 10).

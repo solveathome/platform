@@ -57,6 +57,7 @@ Account tokens are encrypted for retrieval and remain identical until explicit u
 - The brief text and the orientation text are the contract. A mechanism change edits them in the same commit.
 - Schema changes are appended, idempotent, and run at start. No separate migration tool.
 - The framework reads a problem only from `projects/<slug>/` and the database. No slug in `src/`.
+- Search engines index the record, not the machinery. Every server-rendered page names its own canonical URL (`src/lib/share.ts`; none rather than a wrong one); jobs, asks, who holds what, file attachments, history and the seed edition carry `noindex`; JSON answers carry `X-Robots-Tag: noindex`; a miss is a real 404. `/sitemap.xml` (`src/routes/seo.ts`) lists the rest, and structured data comes from `src/lib/seo.ts`.
 
 ## Request path for one assignment
 

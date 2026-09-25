@@ -81,6 +81,7 @@ async function project(req: any, res: any, next: any): Promise<void> {
 /** A session that holds an assignment and has made no request for this long is treated as gone: agents are reset and restarted, never resumed (Chris, Sep 12 2026). */
 export { ABANDON_AFTER_MIN } from "../lib/liveness.js";
 import { ABANDON_AFTER_MIN } from "../lib/liveness.js";
+import { plainDescription, notFoundPage, abs } from "../lib/seo.js";
 async function sweepExpired(problemId: number): Promise<void> {
   // Abandonment: the session is ended and its assignment goes back to the queue at once, instead of at the job's expiry hours later.
   const silent = await q<{ id: string; user_id: number; model: string | null }>(`SELECT DISTINCT s.id, s.user_id, s.model FROM sessions s JOIN jobs j ON j.assigned_session = s.id AND j.status = 'assigned' WHERE s.problem_id = $1 AND s.ended_at IS NULL AND s.last_seen < now() - ($2::int * interval '1 minute')`, [problemId, ABANDON_AFTER_MIN]);
@@ -658,7 +659,7 @@ job.get('/research-routes', project, async (req: any, res) => {
   if ((req.header('accept') ?? '').includes('application/json')) { res.json({ routes: rows }); return; }
   const P = `/projects/${req.project.slug}`;
   const text = `# Research routes\n\nInvestment states describe what to investigate, not what has been proved.\n\n${rows.map(r => `- [${r.title}](${P}/research-routes/${r.id}): ${r.state}. ${r.uncertainty_md}`).join('\n') || 'No routes proposed yet.'}`;
-  if (wantsHtml(req)) res.type('text/html').send(page({ title: 'Research routes', heading: 'Research routes', crumbs: `<a href="${P}">${escHtml(req.project.name)}</a>`, body: (() => { const m = protectMath(text.replace(/</g, '&lt;').replace(/>/g, '&gt;')); return m.restore(marked.parse(m.text) as string); })() }));
+  if (wantsHtml(req)) res.type('text/html').send(page({ title: `Research routes · ${req.project.name}`, heading: 'Research routes', path: `${P}/research-routes`, description: `The research routes proposed on ${req.project.name}, each with its investment state and what is still uncertain. A route's state says what to investigate, not what has been proved.`, crumbs: `<a href="${P}">${escHtml(req.project.name)}</a>`, body: (() => { const m = protectMath(text.replace(/</g, '&lt;').replace(/>/g, '&gt;')); return m.restore(marked.parse(m.text) as string); })() }));
   else res.type('text/markdown').send(text);
 });
 job.get('/research-routes/:id', project, async (req: any, res) => {
@@ -701,7 +702,7 @@ These investigations led to the current experiment. Their claims retain their ow
 
 ${route.events.map((e: any) => `- ${e.return_id ? `[Return #${e.return_id}](${P}/return/${e.return_id})` : 'Premise reassessment'}: ${String(e.outcome).replaceAll('_', ' ')}. ${e.evidence_md}`).join('\n')}
 `;
-  if (wantsHtml(req)) res.type('text/html').send(page({ title: route.title, heading: route.title, crumbs: `<a href="${P}">${escHtml(req.project.name)}</a> / <a href="${P}/research-routes">Research routes</a>`, body: (() => { const m = protectMath(text.replace(/</g, '&lt;').replace(/>/g, '&gt;')); return m.restore(marked.parse(m.text) as string); })() }));
+  if (wantsHtml(req)) res.type('text/html').send(page({ title: `Research route #${id}`, heading: route.title, path: `${P}/research-routes/${id}`, description: plainDescription(`${route.state}. ${route.contribution_md ?? ''} ${route.uncertainty_md ?? ''}`, 300), crumbs: `<a href="${P}">${escHtml(req.project.name)}</a> / <a href="${P}/research-routes">Research routes</a>`, body: (() => { const m = protectMath(text.replace(/</g, '&lt;').replace(/>/g, '&gt;')); return m.restore(marked.parse(m.text) as string); })() }));
   else res.type('text/markdown').send(text);
 });
 
@@ -880,7 +881,7 @@ job.get("/job/:id", optionalAuth, project, async (req: any, res) => {
   const meta = `<p class="doc-meta"><span>Created: ${timeHtml(row.created_at)}</span><span class="tag">${escHtml(row.status)}</span><span>${escHtml(jobLabel(row))}${row.lane_slug ? ` in <a href="${P}#discussion">${escHtml(row.lane_slug)}</a>` : ""}</span><span>budget ${escHtml(String(row.budget_hours))} h · tier ${row.min_tier >= 99 ? "any" : `≤ ${escHtml(String(row.min_tier))}`}</span>${row.assigned_handle ? `<span>held by <a href="/@${escHtml(row.assigned_handle)}">@${escHtml(row.assigned_handle)}</a></span>` : ""}${Number(row.release_count ?? 0) > 0 ? `<span>handed back ${row.release_count}×</span>` : ""}${row.parent_return_id ? `<span>reviews <a href="${P}/return/${row.parent_return_id}">return #${row.parent_return_id}</a></span>` : ""}${row.follow_up_of ? `<span>follow-up of <a href="${P}/return/${row.follow_up_of}">return #${row.follow_up_of}</a></span>` : ""}</p>`;
   const rlist = returns.length ? `<ul>${returns.map((r: any) => `<li><a href="${P}/return/${r.id}">Return #${r.id}</a> <span class="tag">${escHtml(r.status)}${r.final_rung ? `, ${escHtml(r.final_rung)}` : ""}</span> ${escHtml(r.model ?? "")}, ${timeHtml(r.created_at)}</li>`).join("")}</ul>` : `<p class="muted">No return yet.</p>`;
   const aside = `<div class="doc-side"><div><h3>Returns</h3>${rlist}</div><div><h3>Compute hint</h3><p class="panel-note"><code>${escHtml(JSON.stringify(row.compute_hint ?? {}))}</code></p><p class="panel-note"><a href="${P}/job/${row.id}?format=json">JSON</a></p></div></div>`;
-  res.type("text/html").send(page({ title: `Job #${row.id}`, dataPage: "job", description: `${row.type} assignment on ${req.project.name}: ${row.title}. ${row.status}.`, path: `${P}/job/${row.id}`, crumbs: `<a href="${P}">${escHtml(req.project.name)}</a><span>/ jobs /</span>#${row.id}`, eyebrow: "Assignment", heading: row.title, meta, aside, body: await md(row.brief_md) }));
+  res.type("text/html").send(page({ title: `Job #${row.id}`, dataPage: "job", robots: "noindex, follow", description: `${row.type} assignment on ${req.project.name}: ${row.title}. ${row.status}.`, path: `${P}/job/${row.id}`, crumbs: `<a href="${P}">${escHtml(req.project.name)}</a><span>/ jobs /</span>#${row.id}`, eyebrow: "Assignment", heading: row.title, meta, aside, body: await md(row.brief_md) }));
 });
 
 /**
@@ -1991,7 +1992,7 @@ job.get("/return/:id", optionalAuth, project, async (req: any, res) => {
 /** The return as a page: report, files, patch, verdicts, the transcript as a download. */
 async function returnPage(req: any, res: any): Promise<void> {
   const r = await one(`SELECT r.*, u.handle, u.display_name, j.title AS job_title, j.type AS job_type, j.research_stage AS job_stage, j.follow_up_of AS job_follow_up_of, l.slug AS lane FROM returns r JOIN users u ON u.id = r.user_id LEFT JOIN jobs j ON j.id = r.job_id LEFT JOIN lanes l ON l.id = r.lane_id WHERE r.id = $1 AND r.problem_id = $2`, [req.params.id, req.project.id]);
-  if (!r) { res.status(404).type("text/plain").send("no such return"); return; }
+  if (!r) { res.status(404).type("text/html").send(notFoundPage(`No return #${String(req.params.id).slice(0, 20)} in this project.`)); return; }
   const files = await q(`SELECT f.sha256, f.name, f.ext, f.bytes FROM file_refs x JOIN files f ON f.sha256 = x.file_sha WHERE x.ref_type = 'return' AND x.ref_id = $1 AND f.deleted_at IS NULL ORDER BY f.name`, [r.id]);
   const reviews = await q(`SELECT rv.id, rv.verdict, rv.rung, rv.reject_reason, rv.notes_md, rv.also_fix, rv.weight, rv.created_at, u.handle, rv.model, rv.verification, rv.rerun_reason, rv.trusted, rv.tokens, rv.transcript_resubmitted_at, rv.needs_reassessment, rv.verification_sufficiency_md, rv.verification_receipt_id, rv.verification_conflict_resolution_md FROM reviews rv JOIN users u ON u.id = rv.user_id WHERE rv.return_id = $1 ORDER BY rv.id`, [r.id]);
   const patchIntegrated = r.patch ? !!(await one(`SELECT 1 FROM document_versions WHERE return_id = $1`, [r.id])) : false;
@@ -2023,7 +2024,8 @@ async function returnPage(req: any, res: any): Promise<void> {
   const evidenceRecord = (canonical ? `\n\nShared claim decision: [return #${canonical.id}](${P}/return/${canonical.id}), currently ${canonical.status}${canonical.final_rung ? ` (${canonical.final_rung})` : ''}. This duplicate preserves attribution and earns no additional result credit.\n` : '') + await verificationBrief(Number(r.id)) + (premises.length ? `\n\nDeclared premises of this result: ${premises.map(p => `[return #${p.id}](${P}/return/${p.id}) (${p.status})`).join(', ')}.\n` : '') + (history.length ? `\n\n### Previous judgments\n\n${history.map(h => `- ${h.review.model}: ${h.review.verdict}${h.review.rung ? ` (${h.review.rung})` : ''}. ${h.review.notes_md}`).join('\n')}\n` : '');
   const body = challenged + targetLine + human + dupList + researchRecord + (await md(r.report_md)) + (evidenceRecord ? await md(evidenceRecord) : "") + fixList + (r.patch ? `<h2>Patch</h2><pre><code>${escHtml(r.patch)}</code></pre>` : "") + dlist;
   const firstLine = String(r.report_md ?? "").split("\n").map((l: string) => l.replace(/^[#>*\s-]+/, "").trim()).find((l: string) => l.length > 20) ?? "";
-  res.type("text/html").send(page({ title: `Return #${r.id}`, dataPage: "return", description: `${r.type} by ${creditText(r)} (${r.model}), ${r.status}${r.final_rung ? `, ${r.final_rung}` : ""}. ${firstLine}`, path: `${P}/return/${r.id}`, crumbs: `<a href="${P}">${escHtml(req.project.name)}</a><span>/ results /</span>#${r.id}`, eyebrow: "Result", heading: r.job_title ?? `${r.type} return #${r.id}`, meta, aside, body }));
+  res.type("text/html").send(page({ title: `Return #${r.id}`, dataPage: "return", type: "article", description: plainDescription(`${r.type} by ${creditText(r)} (${r.model}), ${r.status}${r.final_rung ? `, ${r.final_rung}` : ""}. ${firstLine}`),
+    ld: [{ "@type": "CreativeWork", "@id": abs(`${P}/return/${r.id}`), url: abs(`${P}/return/${r.id}`), name: plainDescription(r.job_title ?? `${r.type} return #${r.id}`, 110), description: plainDescription(firstLine), genre: `research result (${r.type})`, creativeWorkStatus: r.status, author: { "@type": "Person", name: creditText(r), url: abs(`/@${r.handle}`) }, dateCreated: new Date(r.created_at).toISOString(), inLanguage: "en", license: "https://creativecommons.org/licenses/by/4.0/", isPartOf: { "@type": "ResearchProject", name: req.project.name, url: abs(P) } }], path: `${P}/return/${r.id}`, crumbs: `<a href="${P}">${escHtml(req.project.name)}</a><span>/ results /</span>#${r.id}`, eyebrow: "Result", heading: r.job_title ?? `${r.type} return #${r.id}`, meta, aside, body }));
 }
 /** POST /return/:id/reopen { note } : a trusted reviewer puts a decided return back before the group, with a public note. */
 job.post("/return/:id/reopen", bearer, project, assignmentMutation(async (req: any, res) => {

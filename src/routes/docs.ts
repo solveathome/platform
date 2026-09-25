@@ -24,6 +24,7 @@ import { OVERLAY, revisedPaths, currentText } from "../lib/revisions.js";
 import { sha256 } from "../lib/files.js";
 import { SLUG } from "../lib/guards.js";
 import { shareMeta } from "../lib/share.js";
+import { jsonLd, crumbsFromHtml, plainDescription, textOf, abs as absUrl } from "../lib/seo.js";
 
 export const docs = Router({ mergeParams: true });
 const REPOS = process.env.DOCS_DIR ?? join(ROOT, "data", "repos");
@@ -52,8 +53,13 @@ function safePath(root: string, rel: string): string | null {
   return abs;
 }
 
-function chrome(slug: string, title: string, crumbs: string, body: string, extra = "", path = ""): string {
-  return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>${esc(title)} · ${esc(slug)} · solveathome</title>${shareMeta({ title: `${title} · ${slug}`, description: `A research document served by solveathome, with accepted revisions in place and the record one click away.`, path: path || `/projects/${slug}/docs`, type: "article" })}<link rel="icon" href="/favicon.ico"><link rel="stylesheet" href="/assets/app.css?v=27"><script defer src="https://umami.infessa.com/script.js" data-website-id="3c56339a-8792-42b6-b506-628db725c596"></script></head><body data-page="docs"><header data-site-header></header><main class="shell document-main" id="main"><nav class="breadcrumb" aria-label="Breadcrumb"><a href="/projects/${esc(slug)}">${esc(slug)}</a><span>/ documents /</span>${crumbs}</nav>${extra ? `<p class="panel-note">${extra}</p>` : ""}<article class="document">${body}</article></main><footer data-site-footer></footer><script src="/assets/ui.js?v=18"></script><script src="/assets/who.js?v=4"></script><script src="/assets/math.js?v=1"></script><script>loadWho(document.querySelector("#who"));</script></body></html>`;
+/** `seo`: the document's own description, a robots rule (the seed edition repeats the living documents, so it stays out of the
+ *  index), and schema.org data; the breadcrumb trail is read from the crumbs. */
+function chrome(slug: string, title: string, crumbs: string, body: string, extra = "", path = "", seo: { description?: string; robots?: string; ld?: object[] } = {}): string {
+  title = plainDescription(title, 120);
+  const trail = path ? crumbsFromHtml(crumbs.replace(/>(root|seed)<\/a>/, ">documents</a>"), { name: title, path }) : null;
+  const ld = [...(seo.ld ?? []), ...(trail ? [trail] : [])];
+  return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>${esc(title)} · ${esc(slug)} · solveathome</title>${shareMeta({ title: `${title} · ${slug}`, description: seo.description || `A research document served by solveathome, with accepted revisions in place and the record one click away.`, path: path || `/projects/${slug}/docs`, type: "article", robots: seo.robots })}${ld.length ? jsonLd({ "@context": "https://schema.org", "@graph": ld }) : ""}<link rel="icon" href="/favicon.ico"><link rel="stylesheet" href="/assets/app.css?v=27"><script defer src="https://umami.infessa.com/script.js" data-website-id="3c56339a-8792-42b6-b506-628db725c596"></script></head><body data-page="docs"><header data-site-header></header><main class="shell document-main" id="main"><nav class="breadcrumb" aria-label="Breadcrumb"><a href="/projects/${esc(slug)}">${esc(slug)}</a><span>/ documents /</span>${crumbs}</nav>${extra ? `<p class="panel-note">${extra}</p>` : ""}<article class="document">${body}</article></main><footer data-site-footer></footer><script src="/assets/ui.js?v=18"></script><script src="/assets/who.js?v=4"></script><script src="/assets/math.js?v=1"></script><script>loadWho(document.querySelector("#who"));</script></body></html>`;
 }
 
 function crumbsFor(slug: string, rel: string, edition: Edition = "docs"): string {
@@ -116,7 +122,7 @@ async function serve(req: any, res: any, edition: Edition): Promise<void> {
     const stem = rel.split("/").pop()!.replace(/\.[a-z0-9]+$/i, "").toLowerCase();
     const near = stem.length >= 3 ? Object.keys(publication.files).filter((f) => f.toLowerCase().includes(stem) || stem.includes(f.split("/").pop()!.replace(/\.[a-z0-9]+$/i, "").toLowerCase())).slice(0, 8) : [];
     const browser404 = wantsHtml(req);
-    if (browser404) { res.status(404).type("text/html").send(chrome(slug, "not found", crumbsFor(slug, rel), `<p>No document at <code>${esc(rel)}</code>.</p>${near.length ? `<p>Did you mean:</p><ul>${near.map((f) => `<li><a href="/projects/${esc(slug)}/${edition}/${esc(f)}">${esc(f)}</a></li>`).join("")}</ul>` : ""}`)); return; }
+    if (browser404) { res.status(404).type("text/html").send(chrome(slug, "not found", crumbsFor(slug, rel), `<p>No document at <code>${esc(rel)}</code>.</p>${near.length ? `<p>Did you mean:</p><ul>${near.map((f) => `<li><a href="/projects/${esc(slug)}/${edition}/${esc(f)}">${esc(f)}</a></li>`).join("")}</ul>` : ""}`, "", "", { robots: "noindex" })); return; }
     res.status(404).type("text/plain").send(`not found: ${rel}\n${near.length ? `did you mean:\n${near.map((f) => `- /projects/${slug}/${edition}/${f}`).join("\n")}\n` : ""}`); return;
   }
   const st = statSync(abs);
@@ -141,7 +147,7 @@ async function serve(req: any, res: any, edition: Edition): Promise<void> {
     if (readme) { const r = await renderMarkdown(readFileSync(join(abs, readme), "utf8"), slug, posix.join(rel, readme), edition); intro = `${ledgerHtml(r.ledger)}${r.html}<hr>`; }
     const records = pid ? await documentRecords(Number(pid)) : new Map();
     const list = entries.map((n) => { const s = statSync(join(abs, n)); const href = `/projects/${esc(slug)}/${edition}/${esc(posix.join(rel, n))}`; return `<li><a href="${href}">${esc(n)}${s.isDirectory() ? "/" : ""}</a>${s.isDirectory() ? "" : `<small>${s.size} B</small><div class="tree-dates">${datesHtml(documentDates(publication, posix.join(rel, n), records.get(posix.join(rel, n)), !seed && !req.query.original && existsSync(join(OVERLAY, slug, rel, n)) ? sha256(readFileSync(join(OVERLAY, slug, rel, n), "utf8")) : undefined, seed))}</div>`}</li>`; }).join("");
-    res.type("text/html").send(chrome(slug, rel || (seed ? "seed" : "root"), crumbsFor(slug, rel, edition), `${seed ? await seedBanner(slug, rel) : ""}${intro}<ul class="tree">${list}</ul>`, seed ? seedNote(slug, rel) : ""));
+    res.type("text/html").send(chrome(slug, rel || (seed ? "seed" : "root"), crumbsFor(slug, rel, edition), `${seed ? await seedBanner(slug, rel) : ""}${intro || `<h1>${esc(rel || "Documents")}</h1>`}<ul class="tree">${list}</ul>`, seed ? seedNote(slug, rel) : "", `/projects/${slug}/${edition}${rel ? `/${rel}` : ""}`, { robots: seed ? "noindex, follow" : undefined, description: rel ? `The documents under ${rel} in the ${slug} body of work.` : `The body of work of ${slug}: every published document, with accepted revisions in place.` }));
     return;
   }
   const ext = extname(abs).toLowerCase();
@@ -166,20 +172,21 @@ async function serve(req: any, res: any, edition: Edition): Promise<void> {
   }
   if (ext === ".md" && content.length <= 1024 * 1024) {
     const r = await renderMarkdown(content.toString("utf8"), slug, rel, edition);
-    if (seed) { res.type("text/html").send(chrome(slug, r.title, crumbsFor(slug, rel, "seed"), `${record}${await seedBanner(slug, rel, readFileSync(abs, "utf8"))}${ledgerHtml(r.ledger)}${await linkPeople(r.html)}`, seedNote(slug, rel), `/projects/${slug}/seed/${rel}`)); return; }
+    if (seed) { res.type("text/html").send(chrome(slug, r.title, crumbsFor(slug, rel, "seed"), `${record}${await seedBanner(slug, rel, readFileSync(abs, "utf8"))}${ledgerHtml(r.ledger)}${await linkPeople(r.html)}`, seedNote(slug, rel), `/projects/${slug}/seed/${rel}`, { robots: "noindex, follow", description: docDescription(r.html) })); return; }
     const claim = await one(`SELECT c.status, c.origin_handle FROM claims c JOIN problems p ON p.id = c.problem_id WHERE p.slug = $1 AND c.path = $2`, [slug, rel]);
     const extra = (revisedNote && !req.query.original ? revisedNote + (claim ? " · " : "") : "") + (claim ? `<span class="muted">claim status <span class="status">${esc(String(claim.status).toLowerCase())}</span> · origin <a href="/@${esc(claim.origin_handle)}" style="font-weight:400">@${esc(claim.origin_handle)}</a></span>` : "");
     const banner = pid ? challengeBanner(await challengesFor(Number(pid), "document", rel), `/projects/${slug}`) : "";
     // Corrections routed to this document are findings (Sep 24 2026): shown while open, gone once an accepted revision answered them.
     const fixes = pid ? await q(`SELECT f.id, f.return_id, f.scope, f.note, f.job_id, j.status AS job_status, u.handle FROM findings f LEFT JOIN jobs j ON j.id = f.job_id LEFT JOIN reviews rv ON rv.id = f.review_id LEFT JOIN returns r ON r.id = f.return_id LEFT JOIN users u ON u.id = COALESCE(rv.user_id, r.user_id) WHERE f.problem_id = $1 AND f.path = $2 AND f.status = 'open' ORDER BY f.id DESC LIMIT 10`, [pid, rel]) : [];
     const fixNotes = fixes.length ? `<div class="panel" style="margin:0 0 1.5rem;padding:.9rem 1.1rem;border-left:4px solid var(--line)"><p style="margin:0 0 .4rem"><b>Open corrections for this document</b> <span class="muted">(required by trusted reviewers or accepted audits; not yet applied here)</span></p><ul style="margin:0;padding-left:1.1rem">${fixes.map((f: any) => `<li>finding #${f.id}${f.scope === "before_circulation" ? " (before circulation)" : f.scope === "advisory" ? " (advisory)" : ""}${f.return_id ? `, <a href="/projects/${esc(slug)}/return/${f.return_id}">return #${f.return_id}</a>` : ""}${f.handle ? ` by ${credit(f.handle)}` : ""}: ${esc(f.note)}${f.job_id ? ` <span class="muted">(fix job #${f.job_id}, ${esc(f.job_status ?? "")})</span>` : ""}</li>`).join("")}</ul></div>` : "";
-    res.type("text/html").send(chrome(slug, r.title, crumbsFor(slug, rel), `${record}${banner}${fixNotes}${ledgerHtml(r.ledger)}${await linkPeople(r.html)}`, extra, `/projects/${slug}/docs/${rel}`));
+    res.type("text/html").send(chrome(slug, r.title, crumbsFor(slug, rel), `${record}${banner}${fixNotes}${ledgerHtml(r.ledger)}${await linkPeople(r.html)}`, extra, `/projects/${slug}/docs/${rel}`, { description: docDescription(r.html),
+      ld: [{ "@type": "Article", "@id": absUrl(`/projects/${slug}/docs/${rel}`), url: absUrl(`/projects/${slug}/docs/${rel}`), headline: plainDescription(r.title, 110), description: docDescription(r.html), ...(timestamps.created_at ? { dateCreated: timestamps.created_at } : {}), ...(timestamps.modified_at ? { dateModified: timestamps.modified_at } : {}), inLanguage: "en", isAccessibleForFree: true, isPartOf: { "@type": "ResearchProject", url: absUrl(`/projects/${slug}`) } }] }));
     return;
   }
   if (browser) {
     const rawUrl = `?raw=1${req.query.original ? "&amp;original=1" : ""}`;
     const body = TEXT_EXT.has(ext) && content.length <= MAX_TEXT ? `<pre><code>${esc(content.toString("utf8"))}</code></pre>` : `<p>This file is available as a download.</p>`;
-    res.type("text/html").send(chrome(slug, rel, crumbsFor(slug, rel, edition), `${record}<p><a href="${rawUrl}">Raw file / download</a></p>${body}`)); return;
+    res.type("text/html").send(chrome(slug, rel, crumbsFor(slug, rel, edition), `${record}<p><a href="${rawUrl}">Raw file / download</a></p>${body}`, "", `/projects/${slug}/${edition}/${rel}`, { robots: seed ? "noindex, follow" : undefined, description: `${posix.basename(rel)}: a file in the ${slug} body of work, served as text with its record.` })); return;
   }
   bytes();
   if (IMG[ext]) { res.type(IMG[ext]).set({ "X-Content-Type-Options": "nosniff", "Content-Security-Policy": "default-src 'none'; sandbox" }).send(content); return; }
@@ -188,6 +195,12 @@ async function serve(req: any, res: any, edition: Edition): Promise<void> {
     return;
   }
   res.set({ "Content-Type": "application/octet-stream", "Content-Disposition": `attachment; filename="${posix.basename(rel)}"`, "X-Content-Type-Options": "nosniff" }).send(content);
+}
+
+/** A document's meta description: its first real paragraph. */
+function docDescription(html: string): string | undefined {
+  for (const m of String(html).matchAll(/<p>([\s\S]*?)<\/p>/g)) { const t = textOf(m[1]); if (t.length > 60) return plainDescription(t); }
+  return undefined;
 }
 
 function seedNote(slug: string, rel: string): string {

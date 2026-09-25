@@ -16,7 +16,7 @@ export function responseCache(patterns: RegExp[], ttlMs = 20_000) {
     const acc = req.header("accept") ?? "";
     const key = `${req.originalUrl}|${acc.includes("text/html") ? "html" : acc.includes("application/json") ? "json" : "text"}`;
     const hit = store.get(key);
-    if (hit && Date.now() - hit.at < ttlMs) { res.status(hit.status).type(hit.type).set("X-Cache", "hit").send(hit.body); return; }
+    if (hit && Date.now() - hit.at < ttlMs) { if (hit.type.includes("json")) res.set("X-Robots-Tag", "noindex"); res.status(hit.status).type(hit.type).set("X-Cache", "hit").send(hit.body); return; }
     const send = res.send.bind(res);
     res.send = ((body: any) => {
       if (res.statusCode === 200 && (typeof body === "string" || Buffer.isBuffer(body))) {
