@@ -11,7 +11,7 @@ import { leaderboard, type Window } from "../lib/credit.js";
 import { projectActivity, runningWork } from "../lib/project-activity.js";
 import { standings, PENDING_POINTS_SQL } from "../lib/standings.js";
 import { researchSummary } from '../lib/research.js';
-import { jobLabel, JOB_LABEL_SQL } from '../lib/research-format.js';
+import { jobLabel, JOB_LABEL_SQL, withoutKindPrefix } from '../lib/research-format.js';
 import { researchPolicy, researchAllocation, workConcentration } from '../lib/scheduler.js';
 
 const page = (name: string) => readFileSync(join(PUBLIC_DIR, name), "utf8");
@@ -236,7 +236,7 @@ root.get("/@:handle", async (req, res) => {
   const models = await q(`SELECT model, count(*)::int AS submitted, count(*) FILTER (WHERE status = 'accepted')::int AS accepted FROM returns WHERE user_id = $1 GROUP BY model ORDER BY submitted DESC, model`, [u.id]);
   const days = await q(`SELECT to_char(created_at::date, 'YYYY-MM-DD') AS day, count(*)::int AS submitted, count(*) FILTER (WHERE status = 'accepted')::int AS accepted
     FROM returns WHERE user_id = $1 GROUP BY created_at::date ORDER BY created_at::date`, [u.id]);
-  const titleOf = (r: any) => r.job_title ?? String(r.report_md ?? "").split("\n").find((l: string) => l.trim())?.replace(/^#+\s*/, "").trim() ?? `${r.type} #${r.id}`;
+  const titleOf = (r: any) => r.job_title ?? withoutKindPrefix(String(r.report_md ?? "").split("\n").find((l: string) => l.trim())?.replace(/^#+\s*/, "").trim() ?? `${r.type} #${r.id}`);
   const summaryOf = (md: string) => { const blocks = String(md ?? "").split(/\n\s*\n/).map((b) => b.trim()).filter(Boolean); const body = blocks.find((b) => !b.startsWith("#") && !/^calibration ladder/i.test(b)) ?? ""; const t = body.replace(/^[-*]\s+/gm, "").replace(/\*\*|__|`/g, "").replace(/\[([^\]]+)\]\([^)]*\)/g, "$1").replace(/\s+/g, " "); return t.length > 320 ? t.slice(0, 317).replace(/\s+\S*$/, "") + "…" : t; };
   // A route job's title is its stage and the route it worked on; what it produced is the outcome it reported (#sah-route-triage-title).
   // The title says what the work was about; the label what kind of work it was (#sah-route-triage-title: no "<type>: " in a title).

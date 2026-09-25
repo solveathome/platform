@@ -117,6 +117,11 @@ export function jobKind(job: { type?: string | null; research_stage?: string | n
   if (job.follow_up_of != null) return 'follow_up';
   return String(job.type ?? '');
 }
+// The words a title must not open with: every label and type, and the prefixes titles carried before Sep 25 2026.
+const KIND_WORDS = [...new Set([...Object.values(JOB_KIND_LABELS), ...Object.keys(JOB_KIND_LABELS), 'Triage', 'Pursue', 'Leads', 'Make checkable', 'Rescue investigation'])];
+export const KIND_PREFIX = new RegExp(`^(${KIND_WORDS.join('|')}):\\s+`, 'i');
+/** A title read from a report's first line (a return with no job) keeps its words but not a leading kind. */
+export function withoutKindPrefix(title: string): string { const t = title.replace(KIND_PREFIX, ''); return t && t !== title ? t[0].toUpperCase() + t.slice(1) : title; }
 export function jobLabel(job: Parameters<typeof jobKind>[0]): string { const k = jobKind(job); return JOB_KIND_LABELS[k] ?? k; }
 /** jobKind and jobLabel in SQL, for rows a page renders as they come (the running-work tiles). */
 export const JOB_KIND_SQL = `CASE WHEN j.research_stage IN ('first_look','triage') THEN 'first_look' WHEN j.research_stage = 'pursue' THEN 'pursuit' WHEN j.research_stage = 'rescue' THEN 'rescue' WHEN j.follow_up_of IS NOT NULL THEN 'follow_up' ELSE j.type END`;
