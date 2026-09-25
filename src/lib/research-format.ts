@@ -1,5 +1,7 @@
 /** Structured research reports are investment proposals, never mathematical verdicts. */
-export const STAGES = ['discover', 'triage', 'pursue', 'rescue', 'consolidate'] as const;
+// The first bounded step on a new route is a probe (Chris, Sep 25 2026, #sah-route-triage-title: "If this was not a triage task, it should
+// not show up as such"): it was called triage, a name that belongs to the review bookkeeping job. Rows from before read 'triage'.
+export const STAGES = ['discover', 'probe', 'pursue', 'rescue', 'consolidate'] as const;
 export type ResearchStage = typeof STAGES[number];
 export const OUTCOMES = ['proposed', 'promising', 'progress', 'blocked', 'inconclusive', 'known', 'result'] as const;
 export const OBSTACLES = ['unresolved', 'attempt_failed', 'claim_refuted', 'scoped_obstruction'] as const;
@@ -99,6 +101,7 @@ export function parseResearch(raw: unknown): ResearchReport | null {
 }
 
 export function stageOf(job: { research_stage?: string | null; purpose?: string; type?: string }): ResearchStage {
+  if (job.research_stage === 'triage') return 'probe';
   if (STAGES.includes(job.research_stage as ResearchStage)) return job.research_stage as ResearchStage;
   return job.purpose === 'discovery' ? (['explore', 'direction'].includes(job.type ?? '') ? 'discover' : 'pursue') : 'consolidate';
 }

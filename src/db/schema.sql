@@ -1000,3 +1000,17 @@ INSERT INTO findings (problem_id, path, return_id, note, created_at)
   SELECT r.problem_id, x->>'path', r.id, x->>'note', r.created_at FROM returns r, jsonb_array_elements(r.also_fix) x
   WHERE r.type = 'audit' AND r.status = 'accepted' AND NOT r.provisional AND jsonb_typeof(r.also_fix) = 'array' AND coalesce(x->>'path', '') <> '' AND coalesce(x->>'note', '') <> ''
   ON CONFLICT (COALESCE(return_id, 0), path, md5(note)) DO NOTHING;
+-- The first step on a new route is a probe, not a triage (Chris, Sep 25 2026, #sah-route-triage-title: "If this was not a triage task, it
+-- should not show up as such"). Triage is the review bookkeeping job only. The check keeps 'triage' for the previous container during a
+-- deploy; every start relabels what it wrote, so the stage, the title a profile shows and a queued brief all say probe.
+DO $$ BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'jobs_research_stage_check' AND pg_get_constraintdef(oid) LIKE '%probe%') THEN
+    ALTER TABLE jobs DROP CONSTRAINT IF EXISTS jobs_research_stage_check;
+    ALTER TABLE jobs ADD CONSTRAINT jobs_research_stage_check CHECK (research_stage IN ('discover','probe','triage','pursue','rescue','consolidate'));
+  END IF;
+END $$;
+UPDATE jobs SET research_stage = 'probe' WHERE research_stage = 'triage';
+UPDATE assignment_attempts SET research_stage = 'probe' WHERE research_stage = 'triage';
+UPDATE jobs SET title = 'Probe: ' || substr(title, 9) WHERE research_stage = 'probe' AND title LIKE 'Triage: %';
+UPDATE jobs SET brief_md = replace(brief_md, 'do not reproduce them in triage.', 'do not reproduce them in a probe.') WHERE research_stage = 'probe' AND status = 'queued' AND brief_md LIKE '%do not reproduce them in triage.%';
+CREATE UNIQUE INDEX IF NOT EXISTS jobs_one_route_probe_idx ON jobs (research_route_id) WHERE research_route_id IS NOT NULL AND research_stage IN ('probe','pursue','rescue') AND status IN ('queued','assigned');

@@ -40,7 +40,7 @@ async function ecosystem(w,{rounds}) {
         await w.finish(actor);continue;
       }
       const id=Number(a.research_route_id);
-      if(a.research_stage==='triage') {
+      if(a.research_stage==='probe') {
         if(['known','transfer','rescue'].includes(route.kind))await actor.submit(report(id,'blocked',{obstacle:obstacle(route.kind==='known'?'scoped_obstruction':'attempt_failed')}));
         else await actor.submit(report(id,'promising',{next_step:pursue(`${route.kind}-first`)}));
       } else if(a.research_stage==='rescue') {
@@ -64,12 +64,12 @@ async function ecosystem(w,{rounds}) {
   const snapshot=await w.snapshot();
   const frontierHours=snapshot.hours.filter(x=>x.tier===1);
   const total=frontierHours.reduce((n,x)=>n+x.hours,0);
-  const forward=frontierHours.filter(x=>['discover','triage','pursue'].includes(x.stage)).reduce((n,x)=>n+x.hours,0);
+  const forward=frontierHours.filter(x=>['discover','probe','pursue'].includes(x.stage)).reduce((n,x)=>n+x.hours,0);
   assert.ok(forward/total>=.60,`Discovery/pursuit must retain most frontier time under review pressure: ${forward/total}`);
   assert.ok(frontierHours.some(x=>x.stage==='consolidate'&&x.hours>0),'Review must still advance.');
   assert.ok(frontierHours.some(x=>x.stage==='rescue'&&x.hours>0),'Negatives must receive selective rescue.');
   for(const route of routes.values()) {
-    if(['known','transfer'].includes(route.kind))assert.equal(route.pursuits,0,'These scripted triage failures must not get pursuit funding.');
+    if(['known','transfer'].includes(route.kind))assert.equal(route.pursuits,0,'These scripted probe failures must not get pursuit funding.');
     if(route.kind==='repeat')assert.equal(route.pursuits,1,'An unchanged experiment must not be repeated.');
     assert.ok(route.rescues<=1,'An unchanged negative must not enter a rescue loop.');
     if(['promising','reuse','rescue'].includes(route.kind))assert.equal(route.results.length,2,`${route.kind} should produce a result and a continuation.`);
@@ -88,7 +88,7 @@ async function lateChallenge(w) {
   const judge=await w.actor('judge','claude-fable-5-1',{trusted:true});
   const rescuer=await w.actor('rescuer','gpt-6-astra',{trusted:true});
   const r=await author.submit({type:'direction',research:proposal('late-challenge')});const id=r.research.route_id;
-  await w.take(author,a=>a.research_stage==='triage');
+  await w.take(author,a=>a.research_stage==='probe');
   const premise=await author.submit(report(id,'promising',{next_step:step('first')}));
   await w.take(author,a=>a.research_stage==='pursue');
   await author.submit(report(id,'progress',{next_step:step('second'),depends_on:[]}));
@@ -153,7 +153,7 @@ async function interruptions(w) {
   const responses=await Promise.all([1,2,3,4].map(()=>a.request('/start?share=25',{launch:a.launch})));
   for(const response of responses)assert.deepEqual(response,responses[0]);
   a.held=responses[0];a.session=a.held.session;
-  assert.equal(a.held.research_stage,'triage');const interrupted=a.held;
+  assert.equal(a.held.research_stage,'probe');const interrupted=a.held;
   // Simulate silence by ageing only this session; the application's normal sweep performs recovery.
   await w.fault('Worker disconnected for three hours.',`UPDATE sessions SET last_seen=now()-interval '3 hours' WHERE id=$1`,[a.session]);
   const replacement=await b.start();assert.equal(Number(replacement.job_id),Number(interrupted.job_id));assert.notEqual(replacement.attempt_id,interrupted.attempt_id);

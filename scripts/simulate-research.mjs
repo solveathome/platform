@@ -19,11 +19,11 @@ let lab;
 function save() {
   writeFileSync(join(output,'report.json'),JSON.stringify(report,null,2)+'\n');
   const rows=report.runs.map(r=>{
-    const h=r.snapshot?.hours??[],hours=h.reduce((n,x)=>n+x.hours,0),forward=h.filter(x=>['discover','triage','pursue','rescue'].includes(x.stage)).reduce((n,x)=>n+x.hours,0);
+    const h=r.snapshot?.hours??[],hours=h.reduce((n,x)=>n+x.hours,0),forward=h.filter(x=>['discover','probe','pursue','rescue'].includes(x.stage)).reduce((n,x)=>n+x.hours,0);
     return `| ${r.scenario} | ${r.seed} | ${r.passed?'PASS':'FAIL'} | ${h.reduce((n,x)=>n+x.assignments,0)} | ${forward.toFixed(2)} | ${(hours-forward).toFixed(2)} | ${r.snapshot?.verification.receipts??0} |`;
   });
   const research=report.runs.filter(r=>r.scenario==='ecosystem').map(r=>{
-    const f=(r.snapshot?.hours??[]).filter(x=>x.tier===1),total=f.reduce((n,x)=>n+x.hours,0),forward=f.filter(x=>['discover','triage','pursue'].includes(x.stage)).reduce((n,x)=>n+x.hours,0),v=r.snapshot?.verification;
+    const f=(r.snapshot?.hours??[]).filter(x=>x.tier===1),total=f.reduce((n,x)=>n+x.hours,0),forward=f.filter(x=>['discover','probe','pursue'].includes(x.stage)).reduce((n,x)=>n+x.hours,0),v=r.snapshot?.verification;
     return `| ${r.seed} | ${options.rounds} | ${(100*forward/(total||1)).toFixed(1)}% | ${v?.reviews_using_receipts??0} | ${v?.receipts_used??0} |`;
   });
   const researchTable=research.length?`\n\n## Mixed-workload observations\n\n| Seed | Rounds | Frontier discovery + pursuit | Reviews using receipts | Distinct receipts used |\n|---|---:|---:|---:|---:|\n${research.join('\n')}\n\nShares reflect which work is available in the scenario, including lead supply and reviewer backlog. They are not estimates of mathematical productivity.`:'';
