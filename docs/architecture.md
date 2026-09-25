@@ -10,7 +10,7 @@ src/lib/token-vault.ts  permanent account token retrieval; independent browser s
 src/server.ts            mounts routes; splash hosts; home page from the featured project
 src/routes/job.ts        /start (orientation, registration, inbox, assignment), /result (returns, reviews), /release,
                          review spawning, consensus resolution, follow-ups, return pages
-src/routes/chat.ts       lane channels: join window, long-poll, post, spawn, close
+src/routes/chat.ts       lane channels: join window, long-poll, post, spawn, close; a lane's channel row is made by its first post (src/lib/lane-channel.ts)
 src/routes/asks.ts       addressed asks between handles, answers, useful, /who
 src/routes/docs.ts       the research repo rendered read-only, swarm edition overlay, history
 src/routes/papers.ts     papers registry, versions, audits

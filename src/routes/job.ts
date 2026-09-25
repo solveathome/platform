@@ -82,6 +82,7 @@ async function project(req: any, res: any, next: any): Promise<void> {
 export { ABANDON_AFTER_MIN } from "../lib/liveness.js";
 import { ABANDON_AFTER_MIN } from "../lib/liveness.js";
 import { plainDescription, notFoundPage, abs } from "../lib/seo.js";
+import { noticeChannel } from "../lib/lane-channel.js";
 async function sweepExpired(problemId: number): Promise<void> {
   // Abandonment: the session is ended and its assignment goes back to the queue at once, instead of at the job's expiry hours later.
   const silent = await q<{ id: string; user_id: number; model: string | null }>(`SELECT DISTINCT s.id, s.user_id, s.model FROM sessions s JOIN jobs j ON j.assigned_session = s.id AND j.status = 'assigned' WHERE s.problem_id = $1 AND s.ended_at IS NULL AND s.last_seen < now() - ($2::int * interval '1 minute')`, [problemId, ABANDON_AFTER_MIN]);
@@ -97,7 +98,7 @@ async function sweepExpired(problemId: number): Promise<void> {
            WHERE problem_id = $1 AND status = 'assigned' AND expires_at < now()`, [problemId]);
   // The trail (agent feedback, Sep 10): a handed-back job says so in its lane channel, under the handle whose assignment lapsed.
   for (const e of expired) {
-    const ch = e.lane_id ? await one(`SELECT id FROM channels WHERE lane_id = $1 AND parent_id IS NOT NULL ORDER BY id LIMIT 1`, [e.lane_id]) : await one(`SELECT id FROM channels WHERE problem_id = $1 AND path = ''`, [problemId]);
+    const ch = await noticeChannel(problemId, e.lane_id);
     if (ch && e.assigned_to) await q(`INSERT INTO messages (channel_id, user_id, kind, body_md, job_id) VALUES ($1,$2,'done',$3,$4)`, [ch.id, e.assigned_to, `Job #${e.id} (${e.title}): the assignment expired without a return or a release.`, e.id]);
   }
 }
@@ -492,7 +493,7 @@ async function synthesizeTangent(req: any, session: any, t: Tangent): Promise<an
   const P = `${BASE()}/projects/${req.project.slug}`;
   const spec = tangentJob(t, P, req.user!.handle, hours);
   const laneSlug = session.input?.lane ?? null;
-  const lane = laneSlug ? await one(`SELECT id FROM lanes WHERE problem_id = $1 AND slug = $2`, [req.project.id, laneSlug]) : null;
+  const lane = laneSlug ? await one(`SELECT id FROM lanes WHERE problem_id = $1 AND slug = $2 AND status = 'open'`, [req.project.id, laneSlug]) : null;
   // Marked as the session's own by origin_key, not by a title prefix (#sah-route-triage-title): it expires with the session.
   const j = await one(`INSERT INTO jobs (problem_id, lane_id, type, title, brief_md, git_ref, compute_hint, budget_hours, min_tier, quorum, status, assigned_to, assigned_session, assigned_at, expires_at, origin_key)
                        VALUES ($1,$2,$3,$4,$5,'main','{}',$6,99,1,'queued',NULL,NULL,NULL,NULL,$7) RETURNING *`,
@@ -512,9 +513,10 @@ const LEAD_KINDS = ["elevate", "prior-art", "break", "registry", "synthesis", "r
 async function synthesizeExplore(req: any, session: any, laneSlug: string | null, _maxHours: number, blocked: { n: number; types: string; ram: number; hours: number } | null = null, discovery = false): Promise<any> {
   const hours = Math.max(0.5, Math.min(24, Number(session.ai?.max_hours_per_assignment ?? 2)));
   const lane = laneSlug
-    ? await one(`SELECT l.id, l.slug, l.title FROM lanes l WHERE l.problem_id = $1 AND l.slug = $2`, [req.project.id, laneSlug])
+    ? await one(`SELECT l.id, l.slug, l.title FROM lanes l WHERE l.problem_id = $1 AND l.slug = $2 AND l.status = 'open'`, [req.project.id, laneSlug])
     : await one(`SELECT l.id, l.slug, l.title FROM lanes l LEFT JOIN channels c ON c.lane_id = l.id AND c.parent_id IS NOT NULL
                  WHERE l.problem_id = $1 AND l.status = 'open'
+                   AND (l.variant <> 'direction' OR EXISTS (SELECT 1 FROM returns r WHERE l.slug = 'dir-' || r.id AND r.problem_id = l.problem_id AND nullif(btrim(r.human_md), '') IS NOT NULL))
                  ORDER BY (SELECT count(*) FROM jobs j WHERE j.lane_id = l.id AND j.status = 'assigned') ASC, (SELECT count(*) FROM channel_members m WHERE m.channel_id = c.id) ASC, l.id LIMIT 1`, [req.project.id]);
   const P = `${BASE()}/projects/${req.project.slug}`;
   const served = new Set((await q<{ qid: string }>(`SELECT DISTINCT coalesce(substring(origin_key from '^question:(.*)$'), substring(title from '^(?:Explore: )?(Q-[A-Za-z0-9_-]+) in ')) AS qid FROM jobs WHERE problem_id = $1 AND type = 'explore' AND (origin_key LIKE 'question:%' OR title ~ '^(Explore: )?Q-') AND (status IN ('queued','assigned') OR created_at > now() - interval '${SERVED_WINDOW}')`, [req.project.id])).map((r) => r.qid));
@@ -593,7 +595,7 @@ async function endSession(sessionId: string, uid: number, problemId: number, mod
   const held = await q<{ id: number; lane_id: number | null }>(`SELECT id, lane_id FROM jobs WHERE assigned_session = $1 AND status = 'assigned'`, [sessionId]);
   for (const j of held) {
     await releaseAssignment(j, `session ended: ${note}`);
-    const ch = j.lane_id ? await one(`SELECT id FROM channels WHERE lane_id = $1 AND parent_id IS NOT NULL ORDER BY id LIMIT 1`, [j.lane_id]) : await one(`SELECT id FROM channels WHERE problem_id = $1 AND path = ''`, [problemId]);
+    const ch = await noticeChannel(problemId, j.lane_id);
     if (ch) await q(`INSERT INTO messages (channel_id, user_id, model, kind, body_md, job_id, session) VALUES ($1,$2,$3,'done',$4,$5,$6)`, [ch.id, uid, model, `Released job #${j.id}: session ended (${note}).`, j.id, sessionId]);
   }
   await q(`UPDATE sessions SET ended_at = now() WHERE id = $1`, [sessionId]);
@@ -727,7 +729,7 @@ job.post("/release", bearer, project, assignmentMutation(async (req: any, res: a
   if (j.status !== "assigned") { res.status(409).json({ error: `job is ${j.status}` }); return; }
   await releaseAssignment(j, String(req.body?.note ?? "released by agent"));
   if (!(await postRateOk(req.user!.id))) { res.json({ ok: true, job_id: id, status: j.agent_direction_id ? "expired" : "queued", note: "released; the release note was not posted (" + RATE_MESSAGE + ")" }); return; }
-  const ch = j.lane_id ? await one(`SELECT id FROM channels WHERE lane_id = $1 AND parent_id IS NOT NULL ORDER BY id LIMIT 1`, [j.lane_id]) : await one(`SELECT id FROM channels WHERE problem_id = $1 AND path = ''`, [req.project.id]);
+  const ch = await noticeChannel(req.project.id, j.lane_id);
   if (ch) await q(`INSERT INTO messages (channel_id, user_id, model, kind, body_md, job_id) VALUES ($1,$2,$3,'done',$4,$5)`,
     [ch.id, req.user!.id, req.model ?? null, `Released job #${id}${req.body?.note ? `: ${String(req.body.note).slice(0, 500)}` : ""}.`, id]);
   res.json({ ok: true, job_id: id, status: j.agent_direction_id ? "expired" : "queued" });
@@ -1721,7 +1723,7 @@ async function resolveReturnLocked(returnId: number): Promise<string> {
     if (!v.scored_at) { await q(`UPDATE reviews SET scored_at = now() WHERE id = $1`, [v.id]); await reputation.onReviewScored(Number(v.user_id), agreed); }
   }
   if (changed) {
-    const ch = ret.lane_id ? await one(`SELECT id FROM channels WHERE lane_id = $1 AND parent_id IS NOT NULL ORDER BY id LIMIT 1`, [ret.lane_id]) : await one(`SELECT id FROM channels WHERE problem_id = $1 AND path = ''`, [ret.problem_id]);
+    const ch = await noticeChannel(ret.problem_id, ret.lane_id);
     const last = deciding.slice().sort((a, b) => Number(b.id) - Number(a.id))[0];
     if (ch && last) await q(`INSERT INTO messages (channel_id, user_id, model, kind, body_md, return_id) VALUES ($1,$2,$3,'found',$4,$5)`,
       [ch.id, last.user_id, last.model ?? null, `Return #${returnId} revisited: now **${d.status}**${rung ? ` (${rung})` : ""}, was ${ret.status}${ret.final_rung ? ` (${ret.final_rung})` : ""}. The record is on the return page.`, returnId]);
@@ -1792,7 +1794,7 @@ export async function reopen(ret: any, userId: number | null, note: string, by: 
   const checking = !options.judgmentOnly && await queueCheck(ret);
   const reviewCount = ret.verification_plan || ret.research ? 1 : MIN_REVIEWS;
   if (!checking) await spawnReviews(Number(ret.id), Number(ret.problem_id), ret.lane_id, reviewCount, { fresh: true, judgmentOnly: options.judgmentOnly });
-  const ch = ret.lane_id ? await one(`SELECT id FROM channels WHERE lane_id = $1 AND parent_id IS NOT NULL ORDER BY id LIMIT 1`, [ret.lane_id]) : await one(`SELECT id FROM channels WHERE problem_id = $1 AND path = ''`, [ret.problem_id]);
+  const ch = await noticeChannel(ret.problem_id, ret.lane_id);
   if (ch && userId) await q(`INSERT INTO messages (channel_id, user_id, kind, body_md, return_id) VALUES ($1,$2,'challenge',$3,$4)`, [ch.id, userId, `Return #${ret.id} reopened: ${note}. Trusted reviewers, look again.`, ret.id]);
 }
 
@@ -1936,7 +1938,10 @@ ${orig?.brief_md ?? "(the return was self-assigned; its report states the task)"
     [ret.problem_id, ret.lane_id, ret.type, `${orig?.title ?? `${ret.type} return #${ret.id}`}`.slice(0, 200), brief, orig?.git_ref ?? "main", JSON.stringify(orig?.compute_hint ?? {}), Number(orig?.budget_hours ?? 2), mechanical ? 99 : Number(orig?.min_tier ?? 99), ret.id]);
 }
 
+/** An accepted direction opens a lane only when it carries the person's own words (human_md): a person's idea gets a place for the swarm to gather.
+ *  A route result or report filed as a direction opens nothing; its route is where the work continues (Chris, Sep 25 2026: seven such lanes sat empty). */
 async function openLaneFromDirection(ret: any): Promise<void> {
+  if (!String(ret.human_md ?? "").trim()) return;
   const slug = `dir-${ret.id}`;
   const title = (String(ret.report_md).split("\n").find((l: string) => l.trim()) ?? `Direction #${ret.id}`).replace(/^#+\s*/, "").slice(0, 120);
   await q(`INSERT INTO lanes (problem_id, slug, title, variant, origin_user_id) VALUES ($1,$2,$3,'direction',$4) ON CONFLICT DO NOTHING`,
@@ -2056,7 +2061,7 @@ job.post("/return/:id/request-review", bearer, project, assignmentMutation(async
   const checking = await queueCheck(ret);
   const reviewCount = ret.verification_plan || ret.research ? 1 : MIN_REVIEWS;
   const triaging = !checking && await admitToReview(ret, req.project.slug, reviewCount);
-  const ch = ret.lane_id ? await one(`SELECT id FROM channels WHERE lane_id = $1 AND parent_id IS NOT NULL ORDER BY id LIMIT 1`, [ret.lane_id]) : await one(`SELECT id FROM channels WHERE problem_id = $1 AND path = ''`, [ret.problem_id]);
+  const ch = await noticeChannel(ret.problem_id, ret.lane_id);
   if (ch) await q(`INSERT INTO messages (channel_id, user_id, model, kind, body_md, return_id, session) VALUES ($1,$2,$3,'challenge',$4,$5,$6)`, [ch.id, uid, req.model ?? null, `Return #${ret.id} elevated for review by @${req.user!.handle}: ${note}. ${triaging ? "It goes to triage first: a first read decides whether it goes before reviewers." : "Reviewers, verify it."}`, ret.id, String(req.header("x-session") ?? "").trim().slice(0, 64) || null]);
   res.json({ ok: true, return_id: Number(ret.id), status: "pending", elevated_by: req.user!.handle, note, check_requested: checking, triage_requested: triaging, reviews_requested: checking || triaging ? 0 : reviewCount, ...(triaging ? { note_triage: `Triage first: a session that is not trusted, on another handle and model than the author's, reads the return and says whether a trusted verdict would change the record. Yes: it goes before reviewers with your note. No: it stays recorded, on the record and citable; elevate it again with a stake (a return of yours that builds on it, or a verification package) and another triager reads it.` } : {}) });
 }));

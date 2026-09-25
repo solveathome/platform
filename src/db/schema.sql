@@ -1028,3 +1028,11 @@ UPDATE jobs j SET title_before = j.title, title = x.t FROM (
       FROM jobs WHERE title_before IS NULL AND type <> 'triage'
         AND (title ~ '^(Leads|Rescue investigation|Make checkable|Triage|Pursue|Rescue|Paper|Audit): ' OR title LIKE initcap(type) || ': %')) a) x
   WHERE j.id = x.id;
+
+-- An accepted direction opens a lane only when it carries the person's words (Chris, Sep 25 2026). The lanes opened before that
+-- from route results and reports are closed, never deleted: they stay in /lanes and the dataset, leave the active table and are
+-- never picked for work; their channels, which nobody ever posted in, close with them and leave the discussion list.
+UPDATE lanes l SET status = 'closed' FROM returns r
+  WHERE l.variant = 'direction' AND l.status = 'open' AND l.slug = 'dir-' || r.id AND r.problem_id = l.problem_id AND nullif(btrim(r.human_md), '') IS NULL;
+UPDATE channels c SET status = 'closed', closed_note = 'lane closed: a direction without its person''s words opens no lane' FROM lanes l
+  WHERE c.lane_id = l.id AND c.path = l.slug AND l.status = 'closed' AND c.status = 'open' AND NOT EXISTS (SELECT 1 FROM messages m WHERE m.channel_id = c.id);
