@@ -48,8 +48,8 @@ import { unservedNote } from "../lib/served-paths.js";
 import { parseTranscript } from "../lib/tokens.js";
 import { needsSourceReview, SOURCE_REVIEW_MESSAGE, sourceReviewHit, readPublication } from "../lib/document-publication.js";
 import { randomBytes } from "node:crypto";
-import { isTrusted, isGrantedTrusted, TRUSTED_MODEL_FAMILIES } from "../lib/roles.js";
-import { tierForEffort, MODEL_IDENTITY_GUIDANCE, isHarnessModel } from "../lib/model-id.js";
+import { isTrusted, isGrantedTrusted, TRUSTED_MODEL_FAMILIES, ownerHandles } from "../lib/roles.js";
+import { tierForEffort, MODEL_IDENTITY_GUIDANCE, isHarnessModel, TOP_EFFORTS } from "../lib/model-id.js";
 import { parseRung, RUNG_ERROR, LADDER } from "../lib/rungs.js";
 import { postRateOk, RATE_MESSAGE } from "../lib/messages.js";
 import { parseTangent, parseTarget, tangentJob, challengesFor, challengeBanner, targetUrl, targetLabel, FINDINGS, type Tangent } from "../lib/tangent.js";
@@ -226,6 +226,7 @@ ${ENDED_LAUNCH_GUIDANCE}
     ramGb: prefs.ramGb, hasGpu: prefs.hasGpu, disk, maxHours: Number(settings.ai?.max_hours_per_assignment ?? 2),
     directionId: session.direction_id, directionRevision: savedDirection?.revision, reviewStreak: Number(session.review_streak ?? 0), capabilities: session.capabilities ?? {} };
   await resumeDeferredReviews(agent.problemId);
+  if (reviewTriage(req.project.slug)) await releaseTrustedTriage(agent.problemId);
   for (const waiting of await expireWaitingChecks(agent.problemId)) {
     if (!await one(`SELECT 1 FROM jobs WHERE parent_return_id=$1 AND type='review' AND status IN ('queued','assigned')`, [waiting.id]))
       await spawnReviews(Number(waiting.id), agent.problemId, waiting.lane_id, 1, { judgmentOnly: true });
@@ -282,11 +283,20 @@ ${ENDED_LAUNCH_GUIDANCE}
   // Triage first when nothing is left to review (Chris, Sep 23 2026, ask 387: "for a review only agent, if there is nothing to
   // review because triage has not happened yet, do triage"): with no review waiting it takes a queued triage under the same
   // rules as a review (never its own model's return, its own handle's only by grant), and waits only when neither is open.
+  // A trusted tier-1 session does not triage at all (Chris, Sep 25 2026, #sah-tier1-skip-triage: "a trusted tier 1 agent should just
+  // skip triage"): the return it would have triaged goes to review directly, and it takes the review. The eligibility is the triage
+  // fallback's, so it is never its own model's return; a review it cannot take after all (compute) stays queued for another reviewer.
   const reviewsOnly = settings.ai?.reviews_only === true && trusted && !recovery && !session.direction_id && !tangentFirst;
-  let reviewsOnlyTriage = false;
+  let reviewsOnlyTriage = false, triageSkipped = false;
   if (reviewsOnly && !row) {
     row = await selectJob(agent, false, false, undefined, false, true);
-    if (!row && reviewTriage(req.project.slug)) { row = await selectJob({ ...agent, triageFallback: true }, false, false, undefined, false, false, true); reviewsOnlyTriage = !!row; }
+    for (let tries = 0; !row && tier === 1 && reviewTriage(req.project.slug) && tries < 5; tries++) {
+      const waiting = await selectJob({ ...agent, triageFallback: true }, false, false, undefined, false, false, true);
+      if (!waiting) break;
+      await skipTriage(waiting, `a trusted tier-1 reviewer (${req.model ?? "unknown"}) reviews it directly`);
+      row = await selectJob(agent, false, false, undefined, false, true); triageSkipped = !!row;
+    }
+    if (!row && tier !== 1 && reviewTriage(req.project.slug)) { row = await selectJob({ ...agent, triageFallback: true }, false, false, undefined, false, false, true); reviewsOnlyTriage = !!row; }
     if (!row) {
       let md = `# solveathome / ${req.project.name}: no review waiting for you\n\nYour person set this agent to reviews only, and no review or triage you may take is waiting right now (a model never reviews or triages its own kind${granted ? "" : ", nor a handle its own returns"}${need.blocked_reviews ? `; ${need.blocked_reviews} wait for an agent on another model` : ""}). You hold nothing. Call \`GET ${BASE()}/projects/${req.project.slug}/start\` again with your \`X-Session\` header in ${Math.round(REVIEWS_ONLY_RETRY_S / 60)} minutes; do not start other work, your person asked for reviews.`;
       if (req.justRegistered && !session.department_id) md = (await orientation(req.project, BASE(), { ...member, ...settings, capabilities: session.capabilities, contact_id: session.contact_id, session: session.id, session_max_jobs: session.max_jobs, length: lengthWords(session), disk }, true, { model: req.model ?? null, uid, trusted, tier, effort: req.effort ?? null, tier_note: tf.note }, true)) + "\n\n---\n\n" + md;
@@ -328,7 +338,7 @@ ${ENDED_LAUNCH_GUIDANCE}
     ?? await synthesizeExplore(req, session, lane, maxHours, null, true);
   if (!row) row = await synthesizeExplore(req, session, lane, maxHours, await computeBlocked(agent));
   const unmet = row.type === 'check' ? { tools: [], sources: [] } : unmetRequirements(row, agent.capabilities);
-  const reason = { policy: session.direction_id ? "agent direction" : tangentFirst ? "person's tangent" : reviewsOnlyTriage ? "reviews only: triage, no review waiting" : reviewsOnly ? "reviews only" : trustedJudgment ? "trusted judgment" : pressed ? "review pressure" : triaged ? "review triage" : portfolio ? "research portfolio" : reserveDiscovery ? "reserved tier-1 discovery" : "eligible work by need and capability",
+  const reason = { policy: session.direction_id ? "agent direction" : tangentFirst ? "person's tangent" : reviewsOnlyTriage ? "reviews only: triage, no review waiting" : triageSkipped ? "reviews only: triage skipped, trusted tier 1" : reviewsOnly ? "reviews only" : trustedJudgment ? "trusted judgment" : pressed ? "review pressure" : triaged ? "review triage" : portfolio ? "research portfolio" : reserveDiscovery ? "reserved tier-1 discovery" : "eligible work by need and capability",
     tier, guidance_version: GUIDANCE_VERSION, discovery_share: share, discovery_allocation: used, eligible_backlog: { reviews: need.reviews, research: need.research }, prefer_research: preferResearch,
     ...(need.blocked_reviews ? { blocked_backlog: { reviews: need.blocked_reviews, reason: "a model never reviews its own kind; these wait for an agent on another model" } } : {}),
     research_allocation: portfolio, research_hours: portfolioUsed, research_bucket: researchBucket(row),
@@ -1498,9 +1508,46 @@ export async function spawnReviews(returnId: number, problemId: number, laneId: 
 export async function admitToReview(ret: any, slug: string, reviews: number): Promise<boolean> {
   const cfg = reviewTriage(slug);
   const checked = ret.verification_plan ? (await verificationRuns(Number(ret.id))).some(isCompletedCheck) : false;
-  if (!cfg || checked || ret.duplicate_of) { await spawnReviews(Number(ret.id), Number(ret.problem_id), ret.lane_id, reviews); return false; }
+  if (!cfg || checked || ret.duplicate_of || await skipsTriage(ret)) { await spawnReviews(Number(ret.id), Number(ret.problem_id), ret.lane_id, reviews); return false; }
   await spawnTriage(ret, cfg, reviews);
   return true;
+}
+/** Trusted tier-1 work skips triage (Chris, Sep 25 2026, #sah-tier1-skip-triage: "a trusted tier 1 agent should just skip triage as
+ *  there is no need to do research > triage > validation when we can just do research > validation"). Triage is a tier-2 first read
+ *  that saves scarce tier-1 time for returns worth it; a return whose author was trusted and at tier 1 when it returned has had that
+ *  read already, so it goes to review directly. The author's model and thinking level are the return's own, not the handle's now. */
+export async function skipsTriage(ret: any): Promise<boolean> {
+  if (tierForEffort(await modelTier(ret.model ?? "unknown"), ret.effort ?? null).tier !== 1) return false;
+  const u = await one<{ handle: string }>(`SELECT handle FROM users WHERE id = $1`, [ret.user_id]);
+  return isTrusted(Number(ret.problem_id), Number(ret.user_id), u?.handle, { model: ret.model, effort: ret.effort });
+}
+/** A queued triage made into review jobs: the triage job expires with the reason, the return page says why it went to review
+ *  without a first read, and the review jobs are made as a yes would make them (without a triage note: nobody triaged it). */
+export async function skipTriage(triageJob: any, why: string): Promise<boolean> {
+  const ret = await one(`SELECT * FROM returns WHERE id = $1`, [triageJob.parent_return_id]);
+  const moved = await one(`UPDATE jobs SET status = 'expired', last_release_note = $2 WHERE id = $1 AND type = 'triage' AND status = 'queued' RETURNING id`, [triageJob.id, why]);
+  if (!moved || !ret || ret.status !== "pending") return false;
+  await q(`INSERT INTO return_decisions (return_id, status, final_rung, provisional, by, note) VALUES ($1,'pending',NULL,false,'triage',$2)`, [ret.id, `Triage skipped: ${why}`]);
+  // fresh: counted against open jobs only, so a return with an old history of jobs still gets its review (never left with none).
+  await spawnReviews(Number(ret.id), Number(ret.problem_id), ret.lane_id, ret.verification_plan || ret.research ? 1 : MIN_REVIEWS, { fresh: true });
+  return true;
+}
+/** The triages already waiting on trusted tier-1 work go to review (#sah-tier1-skip-triage): the ones queued before the rule, and
+ *  any whose author was granted trust since. Held triages finish as they are. Candidates are narrowed in SQL to authors a model
+ *  family or a role could make trusted; skipsTriage decides. Caller holds the project transaction. */
+export async function releaseTrustedTriage(problemId: number): Promise<number> {
+  const waiting = await q(`SELECT j.* FROM jobs j JOIN returns r ON r.id = j.parent_return_id JOIN users u ON u.id = r.user_id
+      WHERE j.problem_id = $1 AND j.type = 'triage' AND j.status = 'queued' AND r.status = 'pending'
+        AND ((r.effort = ANY($2::text[]) AND ('-' || replace(lower(r.model), '.', '-') || '-') LIKE ANY($3::text[]))
+          OR EXISTS (SELECT 1 FROM project_roles pr WHERE pr.problem_id = $1 AND pr.user_id = r.user_id AND pr.revoked_at IS NULL)
+          OR r.user_id = (SELECT researcher_user_id FROM problems WHERE id = $1) OR lower(u.handle) = ANY($4::text[]))
+      ORDER BY j.id`, [problemId, [...TOP_EFFORTS], TRUSTED_MODEL_FAMILIES.map((f) => `%-${f}-%`), ownerHandles()]);
+  let moved = 0;
+  for (const j of waiting) {
+    const ret = await one(`SELECT * FROM returns WHERE id = $1`, [j.parent_return_id]);
+    if (ret && await skipsTriage(ret) && await skipTriage(j, "a trusted tier-1 agent wrote this return, so it goes to review directly")) moved++;
+  }
+  return moved;
 }
 export async function spawnTriage(ret: any, cfg: { minTier: number; budgetHours: number }, reviews: number): Promise<void> {
   await q(`UPDATE returns SET review_admitted_at=coalesce(review_admitted_at,now()) WHERE id=$1`, [ret.id]);
