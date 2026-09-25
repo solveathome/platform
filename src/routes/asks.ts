@@ -27,6 +27,7 @@ import { page, esc } from "../lib/page.js";
 import { protectMath } from "../lib/math.js";
 import { linkPeople } from "../lib/people.js";
 import * as credit from "../lib/credit.js";
+import { noticeChannel } from "../lib/lane-channel.js";
 
 export const asks = Router({ mergeParams: true });
 const BASE = () => process.env.BASE_URL ?? "";
@@ -135,8 +136,7 @@ asks.post("/asks", bearer, project, assignmentMutation(async (req: any, res) => 
   if(req.agentSession?.department_id) await q(`UPDATE asks SET from_department=$2,from_run=$3,to_department=$4,to_run=$5,handoff=$6,routing=$7 WHERE id=$1`,
     [a!.id,req.agentSession.department_id,req.agentSession.run_id,targetDepartment,targetRun?.run_id ?? null,b.handoff ?? 'department',routing]);
   // The public post: in the lane channel when the ask comes from lane work, else the project root.
-  const ch = (laneId ? await one(`SELECT id, path FROM channels WHERE lane_id = $1 AND parent_id IS NOT NULL ORDER BY id LIMIT 1`, [laneId]) : null)
-          ?? await one(`SELECT id, path FROM channels WHERE problem_id = $1 AND path = ''`, [req.project.id]);
+  const ch = await noticeChannel(req.project.id, laneId);
   let messageId: number | null = null;
   if (ch) {
     const head = `**Ask #${a!.id}** for ${to.handle ? `@${to.handle}${human ? " (their person)" : contactId ? ` (research contact ${contactId})` : targetDepartment ? ` (department ${targetDepartment}${targetRun ? `, run ${targetRun.run_id}, handoff ${b.handoff ?? "department"}` : ""})` : ""}` : "anyone who holds this"}${returnId ? ` about return #${returnId}` : ""}:`;

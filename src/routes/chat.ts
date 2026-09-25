@@ -9,6 +9,7 @@ import { clientIp } from "../lib/ratelimit.js";
 import { paperPages } from "../lib/paths-link.js";
 import { postRateOk, RATE_MESSAGE } from "../lib/messages.js";
 import { findSecret } from "../lib/files.js";
+import { ensureRootChannel, ensureLaneChannel, LANE_PURPOSE } from "../lib/lane-channel.js";
 
 /**
  * Live chat for agents and humans. Project-scoped: /projects/:slug/chat/...
@@ -59,30 +60,30 @@ async function project(req: any, res: any, next: any): Promise<void> {
 async function channel(req: any, res: any, next: any): Promise<void> {
   const raw = req.params.path;
   const path = (Array.isArray(raw) ? raw.join("/") : String(raw ?? "")).replace(/^\/+|\/+$/g, "");
-  const c = await one(`SELECT * FROM channels WHERE problem_id = $1 AND path = $2`, [req.project.id, path]);
+  let c = await one(`SELECT * FROM channels WHERE problem_id = $1 AND path = $2`, [req.project.id, path]);
+  // An open lane has a channel before anyone has posted in it: joining and reading it answer as an empty channel, and the first post makes the row (ensureLaneChannel).
+  if (!c && path) {
+    const l = await one(`SELECT id, slug, title FROM lanes WHERE problem_id = $1 AND slug = $2 AND status = 'open'`, [req.project.id, path]);
+    if (l) c = { id: null, problem_id: req.project.id, parent_id: null, lane_id: l.id, path: l.slug, title: l.title, purpose: LANE_PURPOSE, status: "open", unmade: true };
+  }
   if (!c) { res.status(404).json({ error: `no channel '${path}'` }); return; }
   req.channel = c; next();
 }
 
-/** Ensure the project root channel and one channel per lane exist. Called from seed and lazily here. */
+/** Ensure the project root channel exists. Called from seed and lazily here; a lane's channel is made by its first message (src/lib/lane-channel.ts). */
 export async function ensureChannels(problemId: number): Promise<void> {
-  await q(`INSERT INTO channels (problem_id, path, title, purpose) VALUES ($1, '', 'project', 'Whole-project channel. Announce yourself, ask where help is needed, link sub-channels.')
-           ON CONFLICT (problem_id, path) DO NOTHING`, [problemId]);
-  const root = await one<{ id: number }>(`SELECT id FROM channels WHERE problem_id = $1 AND path = ''`, [problemId]);
-  const lanes = await q<{ id: number; slug: string; title: string }>(`SELECT id, slug, title FROM lanes WHERE problem_id = $1`, [problemId]);
-  for (const l of lanes)
-    await q(`INSERT INTO channels (problem_id, parent_id, lane_id, path, title, purpose) VALUES ($1,$2,$3,$4,$5,'Lane channel. Claim what you take, post what you find, spawn a sub-channel to split off.')
-             ON CONFLICT (problem_id, path) DO NOTHING`, [problemId, root!.id, l.id, l.slug, l.title]);
+  await ensureRootChannel(problemId);
 }
 
-/** GET /chat : the channel tree with member counts and last activity. */
+/** GET /chat : the channel tree with member counts and last activity. A closed channel nobody ever posted in is not listed; its row stays on record. */
 chat.get("/chat", project, async (req: any, res) => {
   await ensureChannels(req.project.id);
   res.json(await q(`SELECT c.path, c.title, c.purpose, c.status, u.handle AS created_by,
       (SELECT count(*) FROM channel_members m WHERE m.channel_id = c.id) AS members,
       (SELECT count(*) FROM messages x WHERE x.channel_id = c.id) AS messages,
       (SELECT max(x.created_at) FROM messages x WHERE x.channel_id = c.id) AS last_activity
-    FROM channels c LEFT JOIN users u ON u.id = c.created_by WHERE c.problem_id = $1 ORDER BY c.path`, [req.project.id]));
+    FROM channels c LEFT JOIN users u ON u.id = c.created_by WHERE c.problem_id = $1
+      AND NOT (c.status <> 'open' AND NOT EXISTS (SELECT 1 FROM messages x WHERE x.channel_id = c.id)) ORDER BY c.path`, [req.project.id]));
 });
 
 /** POST /chat : spawn a sub-channel. Body: { parent: "<path>", name: "attempt-7", title, purpose }. Posts a 'spawn' message in the parent. */
@@ -92,7 +93,8 @@ chat.post("/chat", bearer, project, assignmentMutation(async (req: any, res) => 
   const parentPath = String(b.parent ?? "").replace(/^\/+|\/+$/g, "");
   const name = String(b.name ?? "").toLowerCase().replace(/[^a-z0-9-]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 40);
   if (!name) { res.status(400).json({ error: "name required (a-z, 0-9, -)" }); return; }
-  const parent = await one(`SELECT * FROM channels WHERE problem_id = $1 AND path = $2`, [req.project.id, parentPath]);
+  let parent = await one(`SELECT * FROM channels WHERE problem_id = $1 AND path = $2`, [req.project.id, parentPath]);
+  if (!parent && parentPath) { const l = await one<{ id: number }>(`SELECT id FROM lanes WHERE problem_id = $1 AND slug = $2 AND status = 'open'`, [req.project.id, parentPath]); const made = l ? await ensureLaneChannel(Number(l.id)) : null; if (made) parent = await one(`SELECT * FROM channels WHERE id = $1`, [made.id]); }
   if (!parent) { res.status(404).json({ error: `no parent channel '${parentPath}'` }); return; }
   const path = parentPath ? `${parentPath}/${name}` : name;
   const c = await one<{ id: number }>(`INSERT INTO channels (problem_id, parent_id, lane_id, path, title, purpose, created_by)
@@ -136,6 +138,9 @@ chat.post("/chat/*path/close", bearer, project, channel, assignmentMutation(asyn
 /** POST /chat/*path/join */
 chat.post("/chat/*path/join", bearer, project, channel, assignmentMutation(joinHandler));
 async function joinHandler(req: any, res: any, _next?: any): Promise<void> {
+  const base0 = `/projects/${req.project.slug}/chat/${req.channel.path}/`;
+  if (req.channel.unmade) { res.json({ ok: true, path: req.channel.path, title: req.channel.title, purpose: req.channel.purpose, last_message_id: 0, members: [], max_chars: { message: MAX_MESSAGE_CHARS, claim: MAX_STATUS_CHARS, done: MAX_STATUS_CHARS }, recent: [], open_threads: [],
+    how: "Nobody has posted in this lane yet. Your first post opens its channel and makes you a member.", listen: `GET ${base0}messages?since=0&wait=30`, post: `POST ${base0}messages { "body_md", "kind": "idea|question|challenge|reply|found|stuck|claim|done", "reply_to": null, "job_id": <id or null> }` }); return; }
   await q(`INSERT INTO channel_members (channel_id, user_id, model) VALUES ($1,$2,$3) ON CONFLICT (channel_id, user_id) DO UPDATE SET model = EXCLUDED.model`, [req.channel.id, req.user!.id, req.model ?? null]);
   if(req.agentSession?.department_id) await q(`INSERT INTO run_channel_members(channel_id,session_id) VALUES($1,$2) ON CONFLICT DO NOTHING`,[req.channel.id,req.agentSession.id]);
   const last = await one<{ m: string }>(`SELECT coalesce(max(id),0) AS m FROM messages WHERE channel_id = $1`, [req.channel.id]);
@@ -154,6 +159,7 @@ async function joinHandler(req: any, res: any, _next?: any): Promise<void> {
 
 chat.post("/chat/*path/leave", bearer, project, channel, assignmentMutation(leaveHandler));
 async function leaveHandler(req: any, res: any): Promise<void> {
+  if (req.channel.unmade) { res.json({ ok: true }); return; }
   if(req.agentSession?.department_id) {
     await q(`DELETE FROM run_channel_members WHERE channel_id=$1 AND session_id=$2`,[req.channel.id,req.agentSession.id]);
     if(await one(`SELECT 1 FROM run_channel_members rm JOIN sessions s ON s.id=rm.session_id WHERE rm.channel_id=$1 AND s.user_id=$2 AND s.ended_at IS NULL`,[req.channel.id,req.user.id])) { res.json({ok:true}); return; }
@@ -184,6 +190,12 @@ async function listHandler(req: any, res: any): Promise<void> {
   let since = Number(req.query.since ?? NaN);
   if (!Number.isFinite(since)) { const edge = await one<{ id: string }>(`SELECT id FROM messages WHERE channel_id = $1 AND ($3::bigint IS NULL OR id < $3) ORDER BY id DESC OFFSET $2 LIMIT 1`, [req.channel.id, limit, upTo]); since = Number(edge?.id ?? 0); }
   const deadline = Date.now() + wait * 1000;
+  // A lane nobody has posted in: nothing to read yet; a listener waits out its window rather than polling a row that does not exist.
+  if (req.channel.unmade) {
+    if (wait > 0) await new Promise<void>((done) => { const t = setTimeout(done, wait * 1000); res.on("close", () => { clearTimeout(t); done(); }); });
+    if ((req.header("accept") ?? "").includes("application/json")) { res.json({ path: req.channel.path, since: Number(since), last_id: Number(since), messages: [] }); return; }
+    res.type("text/markdown").send(`(no messages in \`${req.channel.path}\` yet; poll again with since=${since}&wait=30)\n`); return;
+  }
   let rows: any[] = [];
   for (;;) {
     rows = await q(`SELECT m.id, u.handle, m.department_id,m.run_id,m.model, m.kind, m.reply_to, m.body_md, m.job_id, m.return_id, m.created_at,
@@ -235,6 +247,7 @@ async function postHandler(req: any, res: any): Promise<void> {
   }
   if (!(await postRateOk(req.user!.id))) { res.status(429).json({ error: RATE_MESSAGE }); return; }
   const leak = findSecret(body); if (leak) { res.status(400).json({ error: `the message looks like it contains a secret (${leak}); scrub it and retry` }); return; }
+  if (req.channel.unmade) { const made = await ensureLaneChannel(Number(req.channel.lane_id)); if (!made) { res.status(409).json({ error: `lane '${req.channel.path}' is closed; post in the project channel` }); return; } req.channel = await one(`SELECT * FROM channels WHERE id = $1`, [made.id]); }
   await q(`INSERT INTO channel_members (channel_id, user_id, model) VALUES ($1,$2,$3) ON CONFLICT DO NOTHING`, [req.channel.id, req.user!.id, req.model ?? null]);
   const m = await one<{ id: number }>(`INSERT INTO messages (channel_id, user_id, model, kind, reply_to, body_md, job_id, return_id, session) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING id`,
     [req.channel.id, req.user!.id, req.model ?? null, kind, b.reply_to ?? null, body, b.job_id ?? null, b.return_id ?? null, String(req.header("x-session") ?? "").trim().slice(0, 64) || null]);
