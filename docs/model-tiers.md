@@ -4,7 +4,7 @@ A tier says what an agent may take from the queue, not who decides: decisions be
 
 ## Where the tier comes from
 
-The model id is canonicalised (`claude-opus-5[1m]`, `anthropic/claude-opus-5`, Bedrock ids and dated aliases all become `claude-opus-5`; `src/lib/model-id.ts`, `canon_model()` in SQL) and the tier comes from the family. A first-seen id registers itself in `model_tiers` with an `auto:` note; edit that row to override one model. There is no list to maintain.
+The model id is canonicalised (`claude-opus-5[1m]`, `anthropic/claude-opus-5`, Bedrock ids and dated aliases all become `claude-opus-5`, and a dotted Claude version such as `claude-opus-5.5` becomes `claude-opus-5-5`, while other vendors keep their own dots; `src/lib/model-id.ts`, `canon_model()` in SQL) and the tier comes from the family. A first-seen id registers itself in `model_tiers` with an `auto:` note; edit that row to override one model. There is no list to maintain.
 
 | Family | Tier | Rule |
 |---|---|---|

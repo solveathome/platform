@@ -351,6 +351,29 @@ test('review jobs blocked only by the same-kind rule are counted as blocked, not
   await q(`DELETE FROM returns WHERE id=$1`,[ret.id]);
 });
 
+// Review 4163 (#1820): a return stored as "claude-opus-5.5" went to one "claude-opus-5-5" reviewer after another, each releasing
+// it as its own kind. canon_model() folds the dotted spelling at start, like the server does with X-Model on the way in.
+test('a dotted Claude label is folded at start and is the same kind as the dashed id for review selection',async()=>{
+  const {canonicalModel}=await import('../src/lib/model-id.ts');
+  for (const raw of ['claude-opus-5.5','claude-opus-5.5[1m]','anthropic/claude-opus-5.5','claude-haiku-4.5-20251001','gpt-5.1','gemini-3.5-flash','claude-opus-5']) {
+    const row=await one(`SELECT canon_model($1) AS m`,[raw]);
+    assert.equal(row.m,canonicalModel(raw),`the SQL twin agrees with model-id.ts on ${raw}`);
+  }
+  const ret=await one(`INSERT INTO returns (problem_id,type,user_id,model,provider,report_md,transcript,status) VALUES ($1,'explore',$2,'claude-opus-5.5','anthropic','A result.','t','pending') RETURNING id`,[pid,other]);
+  const j=await one(`INSERT INTO jobs (problem_id,type,title,brief_md,git_ref,budget_hours,min_tier,parent_return_id,avoid_model) VALUES ($1,'review',$2,'Check it.','main',1,99,$3,'claude-opus-5.5') RETURNING id`,[pid,`Review return #${ret.id}`,ret.id]);
+  await migrate();
+  assert.equal((await one(`SELECT model FROM returns WHERE id=$1`,[ret.id])).model,'claude-opus-5-5','the stored return is folded');
+  assert.equal((await one(`SELECT avoid_model FROM jobs WHERE id=$1`,[j.id])).avoid_model,'claude-opus-5-5','and so is the job\'s avoided model');
+  await q(`UPDATE jobs SET avoid_model=NULL WHERE id=$1`,[j.id]);   // a review job carries no avoided model; only the return's kind decides below
+  const a={problemId:pid,slug,sessionId:'synthetic-4163',uid,tier:1,model:'claude-opus-5-5',provider:'anthropic',trusted:true,granted:true,lane:null,cpuHours:4,ramGb:8,hasGpu:false,disk:1,maxHours:2,reviewStreak:0,capabilities:{}};
+  const mine=await backlogFor(a);
+  assert.equal(mine.reviews,0,'an Opus 5.5 reviewer is not offered its own kind under another spelling');
+  assert.equal(mine.blocked_reviews,1,JSON.stringify(mine));
+  assert.equal((await backlogFor({...a,model:'gpt-6-astra',provider:'openai'})).reviews,1,'another model takes it');
+  await q(`DELETE FROM jobs WHERE id=$1`,[j.id]);
+  await q(`DELETE FROM returns WHERE id=$1`,[ret.id]);
+});
+
 test('a research job on a route this handle and model worked recently ranks lower but is never refused; the board names the busiest handle and model',async()=>{
   const origin=await one(`INSERT INTO returns (problem_id,type,user_id,model,provider,report_md,transcript,status) VALUES ($1,'explore',$2,'claude-fable-5-1','test','Origin.','t','accepted') RETURNING id`,[pid,other]);
   const route=async title=>Number((await one(`INSERT INTO research_routes (problem_id,origin_return_id,title,contribution_md,prior_art_md,uncertainty_md,state) VALUES ($1,$2,$3,'c','p','u','active') RETURNING id`,[pid,origin.id,title])).id);
