@@ -691,3 +691,13 @@ test('reviews only: a trusted session takes reviews and nothing else, waits when
   const other=await get('runner');assert.equal(other.status,200,JSON.stringify(other.body));
   assert.notEqual(other.body.type,'review');assert.match(other.body.assignment_reason.reviews_only,/ignored/);
 });
+
+test('a route brief lists the files served with its returns under the return that holds them, not a number in their name',async()=>{
+  const r=await proposed(),a=await start();
+  const sha=(await files.store(users.astra.id,models.astra,'falsifier1676.py','py','print("pair sums")\n')).sha;
+  const p=ok(await submit('astra',{files:[sha],research:{route_id:r.research.route_id,outcome:'promising',evidence_md:'The first test leaves a specific viable implication.',next_step:step()}},a));
+  const pursue=await start('author');assert.equal(pursue.research_stage,'pursue');
+  assert.match(pursue.brief_md,new RegExp(`Files served with this route's returns[^\\n]*\\n- Return #${p.return_id}: falsifier1676\\.py`));
+  assert.match(pursue.brief_md,/a number in a file name is usually the job it was made under/);
+  assert.match(pursue.brief_md,/a file lives with the return that uploaded it/);
+});
