@@ -64,9 +64,17 @@ export async function researchSummary(problemId: number): Promise<any> {
     FROM verification_runs v JOIN returns r ON r.id=v.result_return_id WHERE r.problem_id=$1`, [problemId]);
   return { routes, states, checks: { ...checks, ...reuse, ...packages, ...controls } };
 }
+// The brief stays readable on a long route: the latest returns' files are listed, the rest are one request away in the route record.
+const BRIEF_FILE_RETURNS = 12;
+export function routeFilesMd(files: { return_id: number; names: string[] }[], routeId: number): string {
+  if (!files.length) return '- none';
+  const lines = files.slice(-BRIEF_FILE_RETURNS).map((f) => `- Return #${f.return_id}: ${f.names.slice(0, 20).join(', ')}${f.names.length > 20 ? `, and ${f.names.length - 20} more` : ''}`);
+  if (files.length > BRIEF_FILE_RETURNS) lines.push(`- Files of ${files.length - BRIEF_FILE_RETURNS} earlier returns: the \`files\` field of GET <project base>/research-routes/${routeId} with Accept: application/json.`);
+  return lines.join('\n');
+}
 export async function researchBrief(id: number): Promise<string> {
   const r = await routeContext(id); if (!r) return '';
-  return `\n\n### Research route #${r.id}: ${r.title}\n\nInvestment state: ${r.state}; this is not a truth grade. Revision ${r.revision}.\n\nContribution: ${r.contribution_md}\n\nPrior art and exact difference: ${r.prior_art_md}\n\nCentral uncertainty: ${r.uncertainty_md}\n\nNext experiment: ${JSON.stringify(r.next_step)}\n\nObstacle: ${JSON.stringify(r.obstacle)}\n\nEvidence behind continued investment: ${JSON.stringify(r.basis)}.\n\nFiles served with this route's returns (GET <project base>/return/<id> lists and links them; a number in a file name is usually the job it was made under, not a return id):\n${r.files.length ? r.files.map((f: any) => `- Return #${f.return_id}: ${f.names.slice(0, 20).join(', ')}${f.names.length > 20 ? `, and ${f.names.length - 20} more` : ''}`).join('\n') : '- none'}\n\nDeclared dependencies: ${JSON.stringify(r.dependencies)}. Pending, recorded, rejected or provisional premises remain conditional; inspect the evidence before building on them.\n\nRecent investigations:\n${r.events.slice(0, 5).map((e: any) => `- Return #${e.return_id ?? '—'} (${e.model ?? 'system'}): ${e.outcome}. ${e.evidence_md}`).join('\n')}\n\nFull route and event record: GET <project base>/research-routes/${r.id}.\n`;
+  return `\n\n### Research route #${r.id}: ${r.title}\n\nInvestment state: ${r.state}; this is not a truth grade. Revision ${r.revision}.\n\nContribution: ${r.contribution_md}\n\nPrior art and exact difference: ${r.prior_art_md}\n\nCentral uncertainty: ${r.uncertainty_md}\n\nNext experiment: ${JSON.stringify(r.next_step)}\n\nObstacle: ${JSON.stringify(r.obstacle)}\n\nEvidence behind continued investment: ${JSON.stringify(r.basis)}.\n\nFiles served with this route's returns (GET <project base>/return/<id> lists and links them; a number in a file name is usually the job it was made under, not a return id):\n${routeFilesMd(r.files, r.id)}\n\nDeclared dependencies: ${JSON.stringify(r.dependencies)}. Pending, recorded, rejected or provisional premises remain conditional; inspect the evidence before building on them.\n\nRecent investigations:\n${r.events.slice(0, 5).map((e: any) => `- Return #${e.return_id ?? '—'} (${e.model ?? 'system'}): ${e.outcome}. ${e.evidence_md}`).join('\n')}\n\nFull route and event record: GET <project base>/research-routes/${r.id}.\n`;
 }
 async function queueInvestigation(route: any, stage: ResearchStage, source: any): Promise<any> {
   if (await one(`SELECT 1 FROM jobs WHERE research_route_id=$1 AND research_stage IN ('first_look','pursue','rescue') AND status IN ('queued','assigned')`, [route.id])) return null;

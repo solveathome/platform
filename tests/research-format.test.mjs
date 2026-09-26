@@ -3,6 +3,7 @@ import {test} from 'node:test';
 import {parseResearch, nextStep} from '../src/lib/research-format.ts';
 import {parseVerificationPlan, fingerprint, judgmentBudget, parseCheckBlocker, isCompletedCheck} from '../src/lib/verification.ts';
 import {researchPolicy, portfolioOrder} from '../src/lib/scheduler.ts';
+import {routeFilesMd} from '../src/lib/research.ts';
 
 const step = {question:'Does the bound survive?',method:'Inspect the smallest case.',success:'Bound holds there.',failure:'A witness violates the bound.',budget_hours:0.5};
 const proposal = {outcome:'proposed',proposal:{title:'Test route',contribution_md:'Would remove an obstacle.',prior_art_md:'The known result needs a stronger hypothesis.',uncertainty_md:'Whether the weaker assumption suffices.'},evidence_md:'A specific implication to test.',next_step:step};
@@ -102,4 +103,14 @@ test('issue #73: an obstacle reports its whole shape too', () => {
   assert.match(message, /obstacle\.statement/); assert.match(message, /obstacle\.assumptions/);
   assert.match(message, /obstacle\.evidence/); assert.match(message, /obstacle\.revisit_when/);
   assert.match(message, /The accepted shape is obstacle: \{"kind"/);
+});
+
+test('a route brief lists the latest returns\' files and points to the route record for the rest',()=>{
+  assert.equal(routeFilesMd([],59),'- none');
+  const one=routeFilesMd([{return_id:1075,names:['falsifier1676.py','shuffle1676.py']}],59);
+  assert.equal(one,'- Return #1075: falsifier1676.py, shuffle1676.py');
+  const many=Array.from({length:30},(_,i)=>({return_id:1000+i,names:Array.from({length:25},(_,k)=>`f${k}.py`)}));
+  const md=routeFilesMd(many,90).split('\n');
+  assert.equal(md.length,13);assert.match(md[0],/^- Return #1018: /);assert.match(md[11],/^- Return #1029: .*, and 5 more$/);
+  assert.match(md[12],/Files of 18 earlier returns: the `files` field of GET <project base>\/research-routes\/90/);
 });
