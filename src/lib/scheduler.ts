@@ -67,23 +67,24 @@ export type SchedulingAgent = {
 
 /** Hours a pursuit step waits before a requirement nobody here has ever declared stops holding it back. */
 export const STALE_REQUIREMENT_HOURS = Math.max(1, Number(process.env.STALE_REQUIREMENT_HOURS) || 24);
-/** Days a session's declaration keeps counting as a capability someone here has. On Sep 26 2026 the 1,160 sessions of the last
+/** Hours a session's declaration keeps counting as a capability someone here has. On Sep 26 2026 the 1,160 sessions of the last
  * week (every one a local department run) declared no tools, while sessions from before Sep 23 had declared `python3`: 93 of 96
  * queued pursuit steps named python and fitted nobody, pursuit had 11% of the hours against a 40% share, and the steps on the
  * routes the record ranks first (29, 59, 115, the k=46 certificate) waited eight days untaken. A capability nobody currently
- * running has declared is then treated like a name nobody declared: it stops holding a pursuit step after a day. */
-export const DECLARED_CAPABILITY_DAYS = Math.max(1, Number(process.env.DECLARED_CAPABILITY_DAYS) || 7);
+ * running has declared is then treated like a name nobody declared: it stops holding a pursuit step after a day. A week was
+ * too long: the python3 sessions were last seen on Sep 23, so a 7-day window left the 93 steps held until Sep 30. */
+export const DECLARED_CAPABILITY_HOURS = Math.max(1, Number(process.env.DECLARED_CAPABILITY_HOURS) || 24);
 const TOOL_ALIASES = `CASE WHEN need.name IN ('python','python3') THEN ARRAY['python','python3'] WHEN need.name IN ('node','nodejs','node.js') THEN ARRAY['node','nodejs','node.js'] ELSE ARRAY[need.name] END`;
 /** A proposer's next step names its tools and sources in its own words ("job1934-blockgrain.py", "return-660"). Matching is
  * exact, so a name no agent declares holds the step for ever: on Sep 18 2026, 49 of 54 queued pursuit steps fitted no session
  * of the last week, their proposers' included, while agents were dealt lead hunts. A requirement still has to be met when any
- * session of the project seen in the last DECLARED_CAPABILITY_DAYS has declared it (it is a real capability: `lean`, a private
+ * session of the project seen in the last DECLARED_CAPABILITY_HOURS has declared it (it is a real capability: `lean`, a private
  * archive). A name nobody running has declared stops holding a pursuit step after a day; it is then shown to the taker as the proposer's note (`unmetRequirements`). */
 function requirementClause(column: 'required_tools' | 'required_sources', key: 'tools' | 'sources', held: string, aliases: boolean): string {
   const names = aliases ? TOOL_ALIASES : `ARRAY[need.name]`;
   return `(j.${column} <@ ${held}::text[] OR (j.research_stage='pursue' AND j.created_at < now()-interval '${STALE_REQUIREMENT_HOURS} hours'
       AND NOT EXISTS (SELECT 1 FROM unnest(j.${column}) need(name) WHERE NOT (need.name = ANY(${held}::text[]))
-        AND EXISTS (SELECT 1 FROM sessions known WHERE known.problem_id=j.problem_id AND known.last_seen > now()-interval '${DECLARED_CAPABILITY_DAYS} days'
+        AND EXISTS (SELECT 1 FROM sessions known WHERE known.problem_id=j.problem_id AND known.last_seen > now()-interval '${DECLARED_CAPABILITY_HOURS} hours'
           AND coalesce(known.capabilities->'${key}','[]'::jsonb) ?| ${names}))))`;
 }
 /** The requirements of an assigned job this agent did not declare: served with the brief as the proposer's notes. */

@@ -105,15 +105,15 @@ test('a pursuit step held only by names nobody has ever declared is served after
 });
 
 // Sep 26 2026: every session of the week declared no tools while older ones had declared python3, and 93 of 96 pursuit steps
-// fitted nobody. A declaration counts only from a session seen in the last DECLARED_CAPABILITY_DAYS.
-test('a tool declared only by sessions not seen this week stops holding a pursuit step after a day',async()=>{
+// fitted nobody. A declaration counts only from a session seen in the last DECLARED_CAPABILITY_HOURS (24).
+test('a tool declared only by sessions not seen for a day stops holding a pursuit step after a day',async()=>{
   const old=await start({who:otherToken,model:'claude-opus-5',capabilities:{tools:['sage']}}); await release(old);
   await q(`UPDATE jobs SET status='expired' WHERE id=$1`,[old.job_id]);
   const sage=await pursuit({tools:['sage'],age:2});
   const pick=async()=>(await selectJob({...agentOf(),jobId:Number(sage.id)},true))?.id;
   assert.equal(await pick(),undefined,'a tool a live session declared still holds the step');
-  await q(`UPDATE sessions SET last_seen=now()-interval '8 days' WHERE id=$1`,[old.session]);
-  assert.equal(String(await pick()),String(sage.id),'once nobody seen this week declares it, the step is served with the name as a note');
+  await q(`UPDATE sessions SET last_seen=now()-interval '25 hours' WHERE id=$1`,[old.session]);
+  assert.equal(String(await pick()),String(sage.id),'once nobody seen in the last day declares it, the step is served with the name as a note');
 });
 
 test('the served brief names the proposer\'s requirements as notes and the assignment records what was relaxed',async()=>{
