@@ -46,3 +46,15 @@ test("headings demote one level, closing tags included; crumbs read back from HT
   assert.deepEqual(t.itemListElement.map((i) => i.name), ["P & Q", "Doc"]);
   assert.match(notFoundPage("<x>"), /noindex[\s\S]*&lt;x&gt;/);
 });
+
+test("IndexNow key: the committed key file is valid, and a missing or malformed file gives no key route", async () => {
+  const { indexNowKey } = await import("../src/lib/seo.ts");
+  const { mkdtempSync, writeFileSync } = await import("node:fs");
+  const { join } = await import("node:path");
+  const { tmpdir } = await import("node:os");
+  assert.match(indexNowKey() ?? "", /^[A-Za-z0-9-]{8,128}$/);
+  const dir = mkdtempSync(join(tmpdir(), "indexnow-"));
+  assert.equal(indexNowKey(join(dir, "none.txt")), null);
+  writeFileSync(join(dir, "bad.txt"), "../../etc/passwd\n");
+  assert.equal(indexNowKey(join(dir, "bad.txt")), null);
+});

@@ -3,7 +3,14 @@
  * robots.txt and sitemap.xml are in src/routes/seo.ts. The site stays the record: nothing here changes what a page says,
  * only how a crawler finds it and what it may index.
  */
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
+import { PUBLIC_DIR } from "./paths.js";
 const esc = (s: unknown) => String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]!));
+/** The instance's IndexNow key from public/indexnow.txt, or null when the file is absent or not a valid key (8–128 of [A-Za-z0-9-]). */
+export function indexNowKey(file = join(PUBLIC_DIR, "indexnow.txt")): string | null {
+  try { const k = readFileSync(file, "utf8").trim(); return /^[A-Za-z0-9-]{8,128}$/.test(k) ? k : null; } catch { return null; }
+}
 export const BASE = () => (process.env.BASE_URL ?? "http://localhost:8600").replace(/\/+$/, "");
 export const abs = (path: string) => /^https?:/.test(path) ? path : `${BASE()}${path.startsWith("/") ? path : "/" + path}`;
 
