@@ -79,3 +79,15 @@ export function diskFor(o: ComputeOffer | null | undefined): number {
   if (o?.disk_gb) return Number(o.disk_gb);
   return o?.mathlib_cache ? 10 : DISK_DEFAULT;
 }
+
+/**
+ * The compute hint of a mechanical review (#sah-review-hint-mathlib, Sep 26 2026). A review reads the author's recipe and captured
+ * outputs by default and reruns only for a reason, so it inherits the Mathlib cache (and the 10 GB disk it implies) only when there
+ * is no recipe to read and the reviewer has to rebuild the proof. Copying the job's hint whole had held ten Lean reviews since
+ * Sep 11: every trusted reviewer on another model than the author's offered 5 GB, and the scheduler asks 10 for a Mathlib job.
+ */
+export function reviewComputeHint(jobCompute: Record<string, unknown> | null | undefined, hasRecipe: boolean): Record<string, unknown> {
+  const hint = { ...(jobCompute ?? {}) };
+  if (hasRecipe) { delete hint.mathlib_cache; delete hint.disk_gb; }
+  return hint;
+}

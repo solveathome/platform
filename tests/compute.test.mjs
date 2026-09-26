@@ -28,3 +28,11 @@ test("a cpu_hours cap next to the share is the person's own cap and is the numbe
   const loose = parseOffer({ cpu_hours: 100, share: 0.25, machine: { cores: 20, ram_gb: 128 } }, 2);
   assert.equal(loose.usable.cpu_hours, 10); assert.doesNotMatch(describeOffer(loose), /their own cap/);
 });
+test("a mechanical review inherits the Mathlib cache only when there is no recipe to read (#sah-review-hint-mathlib)", async () => {
+  const { reviewComputeHint } = await import("../src/lib/compute.ts");
+  const lean = { ram_gb: 8, cpu_hours: 1, mathlib_cache: true, disk_gb: 10 };
+  assert.deepEqual(reviewComputeHint(lean, true), { ram_gb: 8, cpu_hours: 1 });
+  assert.deepEqual(reviewComputeHint(lean, false), lean);
+  assert.deepEqual(reviewComputeHint(null, true), {});
+  assert.equal(lean.mathlib_cache, true, "the job's own hint is not changed");
+});
