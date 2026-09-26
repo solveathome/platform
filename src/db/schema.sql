@@ -1036,3 +1036,35 @@ UPDATE lanes l SET status = 'closed' FROM returns r
   WHERE l.variant = 'direction' AND l.status = 'open' AND l.slug = 'dir-' || r.id AND r.problem_id = l.problem_id AND nullif(btrim(r.human_md), '') IS NULL;
 UPDATE channels c SET status = 'closed', closed_note = 'lane closed: a direction without its person''s words opens no lane' FROM lanes l
   WHERE c.lane_id = l.id AND c.path = l.slug AND l.status = 'closed' AND c.status = 'open' AND NOT EXISTS (SELECT 1 FROM messages m WHERE m.channel_id = c.id);
+
+-- Announcements (Chris, Sep 26 2026, #sah-discord-announcer: "only share when there is actually something exciting that happened at the
+-- validation state ... the credit is given 100% to the person who found the direction / proof / whatever"). A reviewer holding a role on the
+-- project (owner or granted trust, never trust by model) marks an accepted finding as worth announcing; src/lib/announce.ts turns a marked,
+-- trusted, non-provisional acceptance of a candidate kind into one outbox row, holds it, and posts it to the project's webhook naming the
+-- return's author only. The webhook URL lives in the environment and is never stored.
+ALTER TABLE reviews ADD COLUMN IF NOT EXISTS announce BOOLEAN NOT NULL DEFAULT false;
+ALTER TABLE reviews ADD COLUMN IF NOT EXISTS announce_md TEXT;   -- the validator's one sentence (<= 200 chars): what the finding changes, in the record's words
+CREATE TABLE IF NOT EXISTS announcements (
+  id                 BIGSERIAL PRIMARY KEY,
+  problem_id         BIGINT NOT NULL REFERENCES problems(id),
+  return_id          BIGINT NOT NULL REFERENCES returns(id),
+  review_id          BIGINT REFERENCES reviews(id),            -- the marking review
+  finder_user_id     BIGINT NOT NULL REFERENCES users(id),     -- the return's author: the one person the post credits
+  kind               TEXT NOT NULL,                            -- proof | refutation | challenge | verified | opening
+  final_rung         TEXT,                                     -- the rung the post states; a later change is a correction
+  dedupe_key         TEXT NOT NULL UNIQUE,                     -- accept:<return id>: one post per return, ever
+  decided_at         TIMESTAMPTZ NOT NULL,                     -- the trusted acceptance the post is about
+  due_at             TIMESTAMPTZ NOT NULL,                     -- decided_at + the project's hold
+  status             TEXT NOT NULL DEFAULT 'held' CHECK (status IN ('held','sent','suppressed','corrected')),
+  flag               TEXT,                                     -- why a person must approve it whatever the config (phrase filter, ledger mismatch)
+  approved_at        TIMESTAMPTZ,
+  approved_by        BIGINT REFERENCES users(id),
+  suppressed_reason  TEXT,
+  payload            JSONB,                                    -- what was sent, as sent
+  discord_message_id TEXT,
+  sent_at            TIMESTAMPTZ,
+  corrected_at       TIMESTAMPTZ,
+  correction         TEXT,
+  created_at         TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS announcements_problem_status_idx ON announcements (problem_id, status, due_at);

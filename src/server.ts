@@ -21,6 +21,8 @@ import { bigBody } from "./lib/body-limits.js";
 import { docs } from "./routes/docs.js";
 import { projects } from "./routes/projects.js";
 import { trust } from "./routes/trust.js";
+import { announcements } from "./routes/announcements.js";
+import { announceTick } from "./lib/announce.js";
 import { settings } from "./routes/settings.js";
 import { githubStart, githubCallback, logout } from "./lib/auth.js";
 import { splash } from "./lib/splash.js";
@@ -78,6 +80,7 @@ app.use("/projects/:slug", sequences);
 app.use("/projects/:slug", chat);
 app.use("/projects/:slug", asks);
 app.use("/projects/:slug", trust);
+app.use("/projects/:slug", announcements);
 app.use("/projects/:slug", docs);
 app.use(projects);
 app.use(settings);
@@ -110,7 +113,7 @@ Code: MIT. Results and traces: CC BY 4.0.
 `);
 });
 
-app.use(notFound([job, lane, board, papers, sequences, chat, asks, trust, docs]));
+app.use(notFound([job, lane, board, papers, sequences, chat, asks, trust, announcements, docs]));
 // A browser or crawler that misses gets the site's own not-found page with a real 404, never Express's bare "Cannot GET".
 app.use((req, res) => { res.status(404).type("text/html").send(notFoundPage(`Nothing at ${String(req.originalUrl ?? req.url).split("?")[0].slice(0, 200)}.`)); });
 
@@ -125,6 +128,8 @@ migrate().then(async () => {
   await flushFileEffects();
   await recordAllPublications();
   setInterval(() => { flushFileEffects().catch(error => console.error("publication retry:", error)); }, 30000).unref();
+  // Announcements (#sah-discord-announcer): scan and send once a minute; off unless a project turns it on, ANNOUNCE_ENABLED=0 stops it.
+  setInterval(() => { announceTick().catch(error => console.error("announce:", error)); }, 60_000).unref();
   const srv = app.listen(port, () => console.log(`solveathome on :${port}`));
   // A deploy replaces the container: finish in-flight requests (a 50 MB result upload among them) before going.
   process.on("SIGTERM", () => { console.log("SIGTERM: draining"); srv.close(() => process.exit(0)); setTimeout(() => process.exit(0), 15_000).unref(); });
