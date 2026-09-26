@@ -15,7 +15,11 @@ export function canonicalModel(raw: unknown): string {
   m = m.replace(/[@:][a-z0-9._-]*$/, "");                       // "@20260101", ":latest"
   m = m.replace(/-latest$/, "");
   m = m.replace(/-\d{8}$/, "");                                 // dated alias "…-20251001"
-  return m.replace(/\s+/g, "-").replace(/-+$/, "");
+  m = m.replace(/\s+/g, "-").replace(/-+$/, "");
+  // Anthropic ids spell the version with dashes ("claude-opus-5-5"); a harness that prints "claude-opus-5.5" is the same model.
+  // Without this the dotted label was another kind to the own-kind rule, and review 4163 (#1820) went to one Opus 5.5 reviewer
+  // after another, each releasing it. Other vendors keep their dots: "gpt-5.1" and "gemini-3.5-flash" are their own spelling.
+  return /^claude-/.test(m) ? m.replace(/(\d)\.(?=\d)/g, "$1-") : m;
 }
 
 /** App/persona labels are not model ids. Keep this narrow: unfamiliar models remain welcome. */

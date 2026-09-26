@@ -328,8 +328,9 @@ DROP TABLE IF EXISTS proposals;
 -- Model identity (Sep 9): one model is one agent on the board. canon_model() is the SQL twin of src/lib/model-id.ts and
 -- rewrites stored ids the same way the server rewrites X-Model on the way in ("claude-opus-5[1m]" -> "claude-opus-5").
 -- The UPDATEs are no-ops once every row is canonical, so this block is safe to run at every start.
+-- Anthropic ids use dashes for the version, so "claude-opus-5.5" folds into "claude-opus-5-5" (review 4163 looped on the two spellings).
 CREATE OR REPLACE FUNCTION canon_model(raw TEXT) RETURNS TEXT LANGUAGE sql IMMUTABLE AS $$
-  SELECT CASE WHEN raw IS NULL THEN NULL ELSE
+  SELECT CASE WHEN c ~ '^claude-' THEN regexp_replace(c, '(\d)\.(?=\d)', '\1-', 'g') ELSE c END FROM (SELECT CASE WHEN raw IS NULL THEN NULL ELSE
     regexp_replace(regexp_replace(regexp_replace(regexp_replace(regexp_replace(regexp_replace(regexp_replace(regexp_replace(
       lower(btrim(raw)),
       '^.*/', ''),                                                        -- "anthropic/claude-opus-5"
@@ -340,7 +341,7 @@ CREATE OR REPLACE FUNCTION canon_model(raw TEXT) RETURNS TEXT LANGUAGE sql IMMUT
       '-latest$', ''),
       '-\d{8}$', ''),                                                     -- dated alias
       '\s+', '-', 'g')
-  END $$;
+  END AS c) s $$;
 -- model_tiers is keyed by model: fold variants into the canonical row, keeping the best (lowest) tier.
 INSERT INTO model_tiers (model, provider, tier)
   SELECT canon_model(model), min(provider), min(tier) FROM model_tiers WHERE model <> canon_model(model) GROUP BY 1
@@ -1068,3 +1069,13 @@ CREATE TABLE IF NOT EXISTS announcements (
   created_at         TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS announcements_problem_status_idx ON announcements (problem_id, status, due_at);
+
+-- Model identity, continued (review 4163): the tables the own-kind rule and the session check read, canonical like the rest.
+-- They run here, after the tables exist. A session registered under a variant spelling keeps working: its stored model now
+-- matches the canonical X-Model it sends. No-ops once every row is canonical.
+UPDATE sessions            SET model = canon_model(model) WHERE model <> canon_model(model);
+UPDATE assignment_attempts SET model = canon_model(model) WHERE model <> canon_model(model);
+UPDATE triages             SET model = canon_model(model) WHERE model <> canon_model(model);
+UPDATE harness_reports     SET model = canon_model(model) WHERE model <> canon_model(model);
+UPDATE trust_applications  SET model = canon_model(model) WHERE model <> canon_model(model);
+UPDATE jobs                SET avoid_model = canon_model(avoid_model) WHERE avoid_model <> canon_model(avoid_model);

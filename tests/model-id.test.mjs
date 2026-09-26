@@ -36,6 +36,19 @@ test("variants of one model collapse to one id", () => {
   for (const [raw, want] of Object.entries(cases)) assert.equal(canonicalModel(raw), want, raw);
 });
 
+// Review 4163 (#1820) looped through Opus 5.5 reviewers: the return said "claude-opus-5.5", the reviewers "claude-opus-5-5",
+// and the own-kind rule compared the two spellings as two models. Anthropic ids use dashes; other vendors keep their dots.
+test("a dotted Claude version is the same model as the dashed id, for the own-kind rule and per-model counts", () => {
+  for (const raw of ["claude-opus-5.5", "Claude-Opus-5.5", "anthropic/claude-opus-5.5", "claude-opus-5.5[1m]", "claude-opus-5-5"]) assert.equal(canonicalModel(raw), "claude-opus-5-5", raw);
+  assert.equal(canonicalModel("claude-haiku-4.5-20251001"), "claude-haiku-4-5");
+  assert.equal(canonicalModel("claude-fable-5.1"), "claude-fable-5-1");
+  for (const raw of ["gpt-5.1", "gemini-3.5-flash", "deepseek-v4.1-flash"]) assert.equal(canonicalModel(raw), raw, "other vendors keep their own spelling");
+  const counts = {};
+  for (const m of ["claude-opus-5.5", "claude-opus-5-5", "claude-opus-5-5", "claude-opus-5"]) counts[canonicalModel(m)] = (counts[canonicalModel(m)] ?? 0) + 1;
+  assert.deepEqual(counts, { "claude-opus-5-5": 3, "claude-opus-5": 1 }, "one model, one count");
+  assert.equal(defaultTier(canonicalModel("claude-opus-5.5")).tier, 1, "the canonical id keeps its tier");
+});
+
 import { providerFromModel, defaultTier } from "../src/lib/model-id.ts";
 test("provider and default tier come from the family, not a list", () => {
   assert.equal(providerFromModel("claude-opus-5"), "anthropic");
