@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import {test} from 'node:test';
-import {parseResearch, nextStep} from '../src/lib/research-format.ts';
+import {parseResearch, nextStep, withoutTimeAllowance} from '../src/lib/research-format.ts';
 import {parseVerificationPlan, fingerprint, judgmentBudget, parseCheckBlocker, isCompletedCheck} from '../src/lib/verification.ts';
 import {researchPolicy, portfolioOrder} from '../src/lib/scheduler.ts';
 import {routeFilesMd} from '../src/lib/research.ts';
@@ -113,4 +113,17 @@ test('a route brief lists the latest returns\' files and points to the route rec
   const md=routeFilesMd(many,90).split('\n');
   assert.equal(md.length,13);assert.match(md[0],/^- Return #1018: /);assert.match(md[11],/^- Return #1029: .*, and 5 more$/);
   assert.match(md[12],/Files of 18 earlier returns: the `files` field of GET <project base>\/research-routes\/90/);
+});
+
+test('a next_step loses a leading time allowance at intake and keeps its mathematics (route 164, Sep 26 2026)',()=>{
+  const route164='Within one hour, recover and hash the exact degree17 k46/eps25_861 Ritz input and dependency closure, using the publicly served1599 engine lead.';
+  assert.equal(nextStep({...step,method:route164}).method,'Recover and hash the exact degree17 k46/eps25_861 Ritz input and dependency closure, using the publicly served1599 engine lead.');
+  for(const [given,kept] of [['In the next 30 minutes, run the sieve.','Run the sieve.'],['By tomorrow, report the counts.','Report the counts.'],['Within 2 h: check the witness.','Check the witness.'],
+    ['In 45 min, test the bound.','Test the bound.'],['Within the hour, rerun C1.','Rerun C1.'],['Within an hour or so, run it.','Run it.'],['Under 4 hours of wall-clock time, run the pass.','Run the pass.'],['Today, compute the table.','Compute the table.']])
+    assert.equal(withoutTimeAllowance(given),kept,given);
+  const q=nextStep({...step,question:'Within one hour, does the bound survive?',success:'In 2 days, the bound holds.',failure:'By the end of the session, a witness.'});
+  assert.deepEqual([q.question,q.success,q.failure],['Does the bound survive?','The bound holds.','A witness.']);
+  for(const math of ['Within 10^-6 of the bound, the error vanishes.','In one pass, compute maxsum_m for all m.','min over hostile supports of min B2 > min BT?','For each prime p <= 61, add one clause.',
+    'In h = 30030, compute the offset.','Within one hour','Check the bound within one hour of the cutoff scale.','The run took 3 hours, and the census matched.','Within error at both rho, the exponent is <= 0.'])
+    assert.equal(withoutTimeAllowance(math),math,math);
 });

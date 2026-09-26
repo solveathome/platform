@@ -33,7 +33,7 @@ export function tags(raw: any, field: string): string[] {
  * the whole transcript, about a megabyte a time. The rendered route page calls these "Next experiment", "Continue if" and
  * "Stop this attempt if", which are reasonable names to guess and are not the API's, so the skeleton goes in the refusal too.
  */
-export const NEXT_STEP_SHAPE = 'next_step: {"question": "the discriminating question, <=1000 chars", "method": "how it is run, <=4000", "success": "what a positive result looks like, <=2000", "failure": "what stops this attempt, <=2000", "budget_hours": 0.1-4 (your estimate for the accounting of the portfolio; never a limit on the taker), "compute": {"cpu_hours": 0-32, "ram_gb": 0-32, "disk_gb": 0-10} (optional), "required_tools": [], "required_sources": []}';
+export const NEXT_STEP_SHAPE = 'next_step: {"question": "the discriminating question, <=1000 chars", "method": "how it is run, <=4000", "success": "what a positive result looks like, <=2000", "failure": "what stops this attempt, <=2000", "budget_hours": 0.1-4 (your estimate for the accounting of the portfolio; never a limit on the taker). Say what to do, never when or how fast: a leading time allowance ("Within one hour, ...") is removed, "compute": {"cpu_hours": 0-32, "ram_gb": 0-32, "disk_gb": 0-10} (optional), "required_tools": [], "required_sources": []}';
 export const OBSTACLE_SHAPE = `obstacle: {"kind": "${OBSTACLES.join('|')}", "statement": "the exact obstruction", "assumptions": "what it rests on", "evidence": "what shows it", "revisit_when": "the condition that reopens it"}`;
 
 /** Runs every field check, then refuses once with everything that was wrong and the shape that is accepted. */
@@ -46,13 +46,29 @@ export function checked<T extends Record<string, any>>(shape: string, fields: { 
   return out;
 }
 
+/**
+ * No brief states a time allowance or a deadline (agent rules; the only clock is silence). A next_step is served as the next
+ * brief, so a leading allowance is taken off at intake rather than refusing the return over a phrase (route 164, Sep 26 2026:
+ * a method opening "Within one hour, recover and hash ..."). Narrow on purpose: only a clause at the very start of a field, with
+ * a number (or "the next") and a time unit, followed by its punctuation. "Within 10^-6 of the bound", "in one pass", "min over
+ * hostile supports" and "for each p <= 61" are mathematics and stay untouched.
+ */
+const COUNT = String.raw`(?:\d+(?:\.\d+)?|an?|one|two|three|four|five|six|seven|eight|nine|ten|twelve|fifteen|twenty|thirty|forty[- ]?five|sixty|ninety|half\s+an?|a\s+few|a\s+couple\s+of|several)`;
+const UNIT = String.raw`(?:(?:wall[- ]?clock\s+|compute\s+|cpu\s+)?(?:minutes?|mins?|hours?|hrs?|days?|weeks?)|h)`;
+const LEADING_TIME_ALLOWANCE = new RegExp(String.raw`^(?:(?:within|in|over|during|under|for)\s+(?:(?:the\s+)?(?:next|first)\s+${COUNT}?\s*${UNIT}|the\s+(?:next\s+)?(?:hour|day|week)|${COUNT}[\s-]*${UNIT})(?:\s+of\s+(?:wall[- ]?clock|compute|cpu)(?:\s+time)?)?(?:\s+or\s+(?:less|so))?|(?:by|before)\s+(?:tomorrow|tonight|(?:the\s+)?end\s+of\s+(?:the\s+|this\s+)?(?:day|session|week|hour))|today|tonight|tomorrow)\s*[,;:\u2014\u2013]\s*`, 'i');
+export function withoutTimeAllowance(text: string): string {
+  const m = LEADING_TIME_ALLOWANCE.exec(text);
+  const rest = m ? text.slice(m[0].length) : '';
+  return rest.trim() ? rest.charAt(0).toUpperCase() + rest.slice(1) : text;
+}
+
 export function nextStep(raw: any): NextStep {
   const x = object(raw, `research.next_step`), c = object(x.compute ?? {}, 'next_step.compute');
   return checked<NextStep>(NEXT_STEP_SHAPE, {
-    question: () => prose(x.question, 'next_step.question', 1000),
-    method: () => prose(x.method, 'next_step.method'),
-    success: () => prose(x.success, 'next_step.success', 2000),
-    failure: () => prose(x.failure, 'next_step.failure', 2000),
+    question: () => withoutTimeAllowance(prose(x.question, 'next_step.question', 1000)),
+    method: () => withoutTimeAllowance(prose(x.method, 'next_step.method')),
+    success: () => withoutTimeAllowance(prose(x.success, 'next_step.success', 2000)),
+    failure: () => withoutTimeAllowance(prose(x.failure, 'next_step.failure', 2000)),
     budget_hours: () => amount(x.budget_hours, 'next_step.budget_hours', 0.1, 4),
     compute: () => ({ cpu_hours: amount(c.cpu_hours ?? 0, 'compute.cpu_hours', 0, 32), ram_gb: amount(c.ram_gb ?? 2, 'compute.ram_gb', 0, 32), disk_gb: amount(c.disk_gb ?? 1, 'compute.disk_gb', 0, 10) }),
     required_tools: () => tags(x.required_tools ?? [], 'next_step.required_tools'),
