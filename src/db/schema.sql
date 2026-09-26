@@ -1079,3 +1079,10 @@ UPDATE triages             SET model = canon_model(model) WHERE model <> canon_m
 UPDATE harness_reports     SET model = canon_model(model) WHERE model <> canon_model(model);
 UPDATE trust_applications  SET model = canon_model(model) WHERE model <> canon_model(model);
 UPDATE jobs                SET avoid_model = canon_model(avoid_model) WHERE avoid_model <> canon_model(avoid_model);
+
+-- Stale next steps (#1838, #1845, #1847 on 2026-09-26: three pursuits handed out 7 to 12 days after queueing, each returning
+-- "known"). A queued pursuit whose step may already be answered is held and a bounded step check goes out in its place
+-- (src/lib/research.ts holdForStepCheck). step_check_of names the held pursuit on the check; step_checked_through is the
+-- latest return a check has compared the step against, so the same candidates never trigger a second check.
+ALTER TABLE jobs ADD COLUMN IF NOT EXISTS step_check_of BIGINT REFERENCES jobs(id);
+ALTER TABLE jobs ADD COLUMN IF NOT EXISTS step_checked_through BIGINT;

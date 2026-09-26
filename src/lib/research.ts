@@ -89,11 +89,61 @@ async function queueInvestigation(route: any, stage: ResearchStage, source: any)
   return one(`INSERT INTO jobs (problem_id,lane_id,type,title,brief_md,budget_hours,min_tier,compute_hint,purpose,research_stage,research_route_id,research_source_return_id,avoid_model,origin_key,required_tools,required_sources,priority,research_revision)
     VALUES ($1,$2,'explore',$3,$4,$5,$6,$7,'discovery',$8,$9,$10,$11,$12,$13,$14,$15,$16) RETURNING *`,
     [route.problem_id, route.lane_id, String(route.title).slice(0, 200),
-      `${task}\n\nRead GET <project base>/research-routes/${route.id} and return #${source.id}. Return the ordinary report and transcript plus research: {route_id: ${route.id}, outcome: "promising|progress|blocked|inconclusive|known|result", evidence_md: "what the evidence changes, <=4000 chars", prior_art_md: "updated online search record, sources and exact remaining gap, <=4000", next_step: {question, method, success, failure, budget_hours} <only for continued pursuit>, obstacle: {kind, statement, assumptions, evidence, revisit_when} <for blocked/inconclusive>, depends_on: [<return ids actually required>]}. A result with a distinct next_step requests review and continues pursuit concurrently; omit next_step when no further experiment is warranted. Use known with prior_art_md and no next_step or obstacle when cited prior work already covers the proposed contribution; it stops automatic investigation without requesting review. The evidence grade is separate. Do not close a broad route because one proof attempt failed.`,
+      `${task}\n\nRead GET <project base>/research-routes/${route.id} and return #${source.id}. Return the ordinary report and transcript plus research: {route_id: ${route.id}, outcome: "promising|progress|blocked|inconclusive|known|result", evidence_md: "what the evidence changes, <=4000 chars", prior_art_md: "updated online search record, sources and exact remaining gap, <=4000", next_step: {question, method, success, failure, budget_hours} <only for continued pursuit; it must not ask for what a return on this route or a linked route already did, and the route returns it builds on go in depends_on or cites.returns>, obstacle: {kind, statement, assumptions, evidence, revisit_when} <for blocked/inconclusive>, depends_on: [<return ids actually required>]}. A result with a distinct next_step requests review and continues pursuit concurrently; omit next_step when no further experiment is warranted. Use known with prior_art_md and no next_step or obstacle when cited prior work already covers the proposed contribution; it stops automatic investigation without requesting review. The evidence grade is separate. Do not close a broad route because one proof attempt failed.`,
       stage === 'pursue' ? step?.budget_hours ?? 1 : 0.5, 99,
       JSON.stringify(stage === 'pursue' ? step?.compute ?? {} : {}), stage, route.id, source.id,
       stage === 'rescue' ? source.model : null, origin,
       stage === 'pursue' ? step?.required_tools ?? [] : [], stage === 'pursue' ? step?.required_sources ?? [] : [], stage === 'pursue' ? 3 : 1, route.revision]);
+}
+
+/** Stale next steps (#sah-stale-next-step-check). On 2026-09-26 three pursuits were handed out 7 to 12 days after they were
+ * queued and each spent a full opus assignment returning "known": route 88's step was answered by route 92 (#1144, whose route
+ * cites route 88's origin), route 18's D51 refutation had been made by #1840 on route 4 (sharing premise #360 with route 18) and
+ * #1844 on route 7, and route 3's rerun had been done by its own origin #351. No return carries a claim id, so the server cannot
+ * tell that a return answers a step, and it never runs a model; it can tell when there is something to compare. A pursuit is held
+ * and a bounded step check (a first look on the route, same eligibility, so nothing waits on a scarcer pool) goes out in its place
+ * when a return was recorded since the step was set on the route or on a linked route (one whose returns cite or depend on this
+ * route's, or share a premise with them, and parent or child routes), or when the step waited STEP_CHECK_AFTER_HOURS unchecked:
+ * an answer older than the step (route 3) leaves no other trace, and all three stale steps had waited a week or more. */
+export const STEP_CHECK_AFTER_HOURS = Math.max(1, Number(process.env.STEP_CHECK_AFTER_HOURS) || 72);
+export const STEP_CHECK_HOURS = 0.25;
+const RETURN_EDGES = `SELECT d.return_id AS src,d.depends_on_id AS dst FROM return_dependencies d JOIN returns r ON r.id=d.return_id WHERE r.problem_id=$1
+  UNION SELECT r.id,x.v::bigint FROM returns r CROSS JOIN LATERAL jsonb_array_elements_text(CASE WHEN jsonb_typeof(r.cites->'returns')='array' THEN r.cites->'returns' ELSE '[]'::jsonb END) x(v)
+    WHERE r.problem_id=$1 AND x.v ~ '^[0-9]{1,15}$'`;
+/** Research returns recorded after `through` on this route or a linked one: what a step check compares the step against. */
+export async function stepCandidates(problemId: number, routeId: number, through: number): Promise<any[]> {
+  return q(`WITH edges AS (${RETURN_EDGES}),
+      mine AS (SELECT id FROM returns WHERE problem_id=$1 AND research_route_id=$2),
+      premises AS (SELECT dst FROM edges WHERE src IN (SELECT id FROM mine)),
+      linked AS (
+        SELECT c.research_route_id AS id FROM returns c JOIN edges e ON e.src=c.id
+          WHERE c.problem_id=$1 AND c.research_route_id IS NOT NULL AND (e.dst IN (SELECT id FROM mine) OR e.dst IN (SELECT dst FROM premises))
+        UNION SELECT r.research_route_id FROM edges e JOIN returns r ON r.id=e.dst WHERE e.src IN (SELECT id FROM mine) AND r.research_route_id IS NOT NULL
+        UNION SELECT id FROM research_routes WHERE problem_id=$1 AND (parent_route_id=$2 OR id=(SELECT parent_route_id FROM research_routes WHERE id=$2))
+        UNION SELECT $2::bigint)
+    SELECT c.id,c.research_route_id AS route_id,c.status,c.final_rung,c.research->>'outcome' AS outcome,left(coalesce(c.research->>'evidence_md',''),400) AS evidence
+    FROM returns c WHERE c.problem_id=$1 AND c.research_route_id IN (SELECT id FROM linked) AND c.id>$3 AND c.status<>'rejected' AND c.duplicate_of IS NULL
+    ORDER BY c.research_route_id=$2 DESC,c.id DESC LIMIT 12`, [problemId, routeId, through]);
+}
+/** Called with the pursuit the scheduler picked, inside the assignment transaction: the step check that replaces it, or null. */
+export async function holdForStepCheck(row: any): Promise<any | null> {
+  if (row?.research_stage !== 'pursue' || !row.research_route_id || row.research_source_return_id == null) return null;
+  const through = Math.max(Number(row.research_source_return_id), Number(row.step_checked_through ?? 0));
+  const found = await stepCandidates(Number(row.problem_id), Number(row.research_route_id), through);
+  const waited = row.step_checked_through == null && Date.now() - new Date(row.created_at).getTime() > STEP_CHECK_AFTER_HOURS * 3600e3;
+  if (!found.length && !waited) return null;
+  const route = await one(`SELECT * FROM research_routes WHERE id=$1`, [row.research_route_id]);
+  if (!route?.next_step || route.state !== 'active') return null;
+  const own = (await q(`SELECT id FROM returns WHERE problem_id=$1 AND research_route_id=$2 ORDER BY id`, [row.problem_id, route.id])).map((r: any) => `#${r.id}`);
+  const why = found.length ? `returns were recorded after it on this route or a route linked to it by citations, dependencies or shared premises`
+    : `it has waited since ${new Date(row.created_at).toISOString().slice(0, 10)}, and the record may have moved on`;
+  const listed = found.map((c: any) => `- Return #${c.id} (route ${c.route_id}, ${c.outcome ?? 'no outcome'}, ${c.status}${c.final_rung ? `, ${c.final_rung}` : ''}): ${String(c.evidence).replace(/\s+/g, ' ')}`).join('\n');
+  const brief = `Step check before pursuit. Route #${route.id}'s next experiment was set by return #${row.research_source_return_id}, and ${why}. Before a pursuit is spent on it, decide whether the returns already on record answer it. Read and compare; do not run the experiment and do not reproduce a computation a return already made.\n\nThe step:\n${JSON.stringify(route.next_step)}\n\n${found.length ? `Returns to compare it with (the latest on this route first, then linked routes):\n${listed}\n\n` : ''}The route's own returns: ${own.join(', ') || 'none'} (GET <project base>/return/<id>).\n\nReturn the ordinary report and transcript plus research: {route_id: ${route.id}, outcome, evidence_md, depends_on}, with one of:\n- outcome "known": the returns you name in depends_on already answer the step; evidence_md says what each settles. No next_step. The route stops here and the pursuit is not handed out.\n- outcome "progress" with a new next_step that builds on the answer where they answer part of it; the old step is replaced.\n- outcome "promising" with the step above copied exactly as next_step when it is still open; the held pursuit then goes out with your note, and these returns never hold it again.`;
+  await q(`UPDATE jobs SET status='expired',last_release_note=$2 WHERE id=$1 AND status='queued'`, [row.id, `held for a step check against the returns on record`]);
+  const check = await one(`INSERT INTO jobs (problem_id,lane_id,type,title,brief_md,budget_hours,min_tier,purpose,research_stage,research_route_id,research_source_return_id,avoid_model,origin_key,priority,research_revision,step_check_of)
+    VALUES ($1,$2,'explore',$3,$4,$5,$6,'discovery','first_look',$7,$8,$9,$10,$11,$12,$13) RETURNING *`,
+    [row.problem_id, row.lane_id, row.title, brief, STEP_CHECK_HOURS, row.min_tier, route.id, row.research_source_return_id, row.avoid_model, `step-check:${row.id}:${through}`, row.priority, route.revision, row.id]);
+  return { ...check, lane_slug: row.lane_slug, skill_matches: row.skill_matches, route_repeat: row.route_repeat };
 }
 
 export async function recordResearch(ret: any, job: any, report: ResearchReport | null): Promise<any> {
@@ -102,7 +152,7 @@ export async function recordResearch(ret: any, job: any, report: ResearchReport 
   if (report.depends_on !== undefined) for (const id of report.depends_on)
     if (id === Number(ret.id) || !(await one(`SELECT 1 FROM returns WHERE id=$1 AND problem_id=$2`, [id, ret.problem_id]))) bad('research dependencies must name earlier returns in this project');
   if (job?.research_route_id && Number(job.research_route_id) !== report.route_id) bad('this assignment must report on its assigned route; propose independent alternatives in a separate linked return');
-  let route: any;
+  let route: any, held: any = null;
   if (report.proposal) {
     if (!['explore', 'direction'].includes(ret.type)) bad('propose a route through an explore or direction return');
     if (report.parent_route_id && !(await one(`SELECT 1 FROM research_routes WHERE id=$1 AND problem_id=$2`, [report.parent_route_id, ret.problem_id]))) bad('parent route is not in this project');
@@ -126,8 +176,11 @@ export async function recordResearch(ret: any, job: any, report: ResearchReport 
     }
     let state = ({ promising: 'active', progress: 'active', blocked: 'blocked', inconclusive: 'paused', known: 'known', result: report.next_step ? 'active' : 'result' } as any)[report.outcome];
     if (!state) bad('this is an existing route; report progress or an obstacle');
+    // A step check that finds the held step still open copies it unchanged: the held pursuit goes back out, it is not a repeat.
+    held = job?.step_check_of ? await one(`SELECT * FROM jobs WHERE id=$1`, [job.step_check_of]) : null;
+    if (held && !(report.next_step && held.origin_key === `pursue:${route.id}:${experimentKey(report.next_step)}`)) held = null;
     // An identical experiment is already on record. Cosmetic re-budgeting cannot buy the same work again.
-    if (report.next_step && await one(`SELECT 1 FROM jobs WHERE problem_id=$1 AND origin_key=$2`, [ret.problem_id, `pursue:${route.id}:${experimentKey(report.next_step)}`])) state = 'paused';
+    if (!held && report.next_step && await one(`SELECT 1 FROM jobs WHERE problem_id=$1 AND origin_key=$2`, [ret.problem_id, `pursue:${route.id}:${experimentKey(report.next_step)}`])) state = 'paused';
     route = await one(`UPDATE research_routes SET state=$2,next_step=$3,obstacle=$4,revision=revision+1,last_return_id=$5,prior_art_md=coalesce($6,prior_art_md),updated_at=now() WHERE id=$1 RETURNING *`,
       [route.id, state, report.next_step ? JSON.stringify(report.next_step) : null, report.obstacle ? JSON.stringify(report.obstacle) : null, ret.id, report.prior_art_md ?? null]);
   }
@@ -140,7 +193,11 @@ export async function recordResearch(ret: any, job: any, report: ResearchReport 
   await q(`UPDATE returns SET research=$2,research_route_id=$3 WHERE id=$1`, [ret.id, JSON.stringify(report), route.id]);
   await q(`INSERT INTO research_events (route_id,return_id,outcome,evidence_md,detail) VALUES ($1,$2,$3,$4,$5)`, [route.id, ret.id, report.outcome, report.evidence_md, JSON.stringify(report)]);
   // The current assignment was marked returned before this function. Exactly one next experiment may now open.
+  // Checked through this return: the candidates the check read never hold this pursuit again, only returns recorded after it.
   const next = report.proposal ? await queueInvestigation(route, 'first_look', ret)
+    : held && route.state === 'active' ? await one(`UPDATE jobs SET status='queued',step_checked_through=$2,research_revision=$3,last_release_note=NULL,
+        brief_md=brief_md||$4 WHERE id=$1 AND status='expired' RETURNING *`, [held.id, ret.id, route.revision,
+        `\n\nStep check: return #${ret.id} compared this step with the returns on record and found it still open. Build on what it read; do not redo it.\n\n${String(report.evidence_md).slice(0, 1500)}`])
     : route.state === 'active' ? await queueInvestigation(route, 'pursue', ret) : null;
   return { route_id: Number(route.id), state: route.state, next_job_id: next ? Number(next.id) : null };
 }

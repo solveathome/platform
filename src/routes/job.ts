@@ -12,7 +12,7 @@ import { checkInstruction, ENDED_LAUNCH_GUIDANCE, folderLaunchContract } from ".
 import { isDeepStrictEqual } from "node:util";
 import { backlogFor, reviewWorkFor, selectJob, computeBlocked, discoveryShare, discoveryDue, allocation, researchPolicy, researchAllocation, portfolioOrder, researchBucket, reviewPressure, reviewTriage, unmetRequirements, STALE_REQUIREMENT_HOURS, ROUTE_REPEAT_WINDOW, type SchedulingAgent } from "../lib/scheduler.js";
 import { parseResearch, stageOf, jobLabel } from '../lib/research-format.js';
-import { recordResearch, prepareRescue, researchBrief, routeContext, reconsiderDependents } from '../lib/research.js';
+import { recordResearch, prepareRescue, researchBrief, routeContext, reconsiderDependents, holdForStepCheck } from '../lib/research.js';
 import { parseVerificationPlan, saveVerificationPlan, queueCheck, saveCheckReceipt, verificationRuns, verificationState, verificationBrief, judgmentBudget, validateReceiptUse, isCompletedCheck, expireWaitingChecks, checkWaitExpired, identicalClaim, verificationSummary, receiptId } from '../lib/verification.js';
 import { readFileSync } from 'node:fs';
 import { ROOT } from '../lib/paths.js';
@@ -343,12 +343,17 @@ ${ENDED_LAUNCH_GUIDANCE}
   if (reserveDiscovery) row = await selectJob(agent, preferResearch, true)
     ?? await synthesizeExplore(req, session, lane, maxHours, null, true);
   if (!row) row = await synthesizeExplore(req, session, lane, maxHours, await computeBlocked(agent));
+  // A pursuit is compared with the returns on record before it goes out (#sah-stale-next-step-check): #1838, #1845 and #1847
+  // each spent a full pursuit on a step already answered. The same session takes the bounded check in its place.
+  const stepCheck = !recovery ? await holdForStepCheck(row) : null;
+  if (stepCheck) row = stepCheck;
   const unmet = row.type === 'check' ? { tools: [], sources: [] } : unmetRequirements(row, agent.capabilities);
   const reason = { policy: session.direction_id ? "agent direction" : tangentFirst ? "person's tangent" : reviewsOnlyTriage ? "reviews only: triage, no review waiting" : triageSkipped ? "reviews only: triage skipped, trusted tier 1" : reviewsOnly ? "reviews only" : trustedJudgment ? "trusted judgment" : pressed ? "review pressure" : triaged ? "review triage" : portfolio ? "research portfolio" : reserveDiscovery ? "reserved tier-1 discovery" : "eligible work by need and capability",
     tier, guidance_version: GUIDANCE_VERSION, discovery_share: share, discovery_allocation: used, eligible_backlog: { reviews: need.reviews, research: need.research }, prefer_research: preferResearch,
     ...(need.blocked_reviews ? { blocked_backlog: { reviews: need.blocked_reviews, reason: "a model never reviews its own kind; these wait for an agent on another model" } } : {}),
     research_allocation: portfolio, research_hours: portfolioUsed, research_bucket: researchBucket(row),
     skill_matches: Number(row.skill_matches ?? 0), purpose: row.purpose ?? 'work',
+    ...(stepCheck ? { step_check: `pursuit job #${stepCheck.step_check_of} is held: its step is first compared with the returns on record` } : {}),
     ...(row.route_repeat ? { route_repeat: `route ${row.research_route_id} was in the last ${ROUTE_REPEAT_WINDOW} assignments of this handle and model: ranked lower to spread work across routes, and still the best eligible` } : {}),
     ...(pressure !== null ? { review_pressure: { threshold: pressure, waiting: need.reviews } } : {}),
     ...(triageCfg ? { review_triage: { min_tier: triageCfg.minTier } } : {}),
