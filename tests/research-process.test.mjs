@@ -701,3 +701,56 @@ test('a route brief lists the files served with its returns under the return tha
   assert.match(pursue.brief_md,/a number in a file name is usually the job it was made under/);
   assert.match(pursue.brief_md,/a file lives with the return that uploaded it/);
 });
+
+// Stale next steps (#sah-stale-next-step-check): on Sep 26 2026 #1838, #1845 and #1847 each spent a full pursuit on a step already answered.
+const pursuitOf=async route=>one(`SELECT * FROM jobs WHERE research_route_id=$1 AND research_stage='pursue' ORDER BY id DESC LIMIT 1`,[route]);
+const otherRoute=async(extra={})=>{const b=ok(await submit('author',{research:{...proposal(),...extra}}));await q(`UPDATE jobs SET status='expired' WHERE research_route_id=$1 AND status='queued'`,[b.research.route_id]);return b;};
+
+test('cross-route: a step answered on a linked route after it was queued goes out as a step check, and known retires it (#1838, #1847)',async()=>{
+  // #1847: route 18 and route 4 share premise #360; #1840 on route 4 made the refutation route 18's queued step asked for.
+  const premise=ok(await submit('author',{research:proposal()}));await q(`UPDATE jobs SET status='expired' WHERE research_route_id=$1`,[premise.research.route_id]);
+  const r=ok(await submit('author',{research:{...proposal(),depends_on:[premise.return_id]}})),a=await start();
+  ok(await submit('astra',{research:{route_id:r.research.route_id,outcome:'promising',evidence_md:'The first test leaves a specific viable implication.',next_step:step()}},a));
+  const held=await pursuitOf(r.research.route_id);
+  const answer=await otherRoute({depends_on:[premise.return_id]});
+  const c=await start('author');
+  assert.equal(c.research_stage,'first_look');
+  const job=await one(`SELECT * FROM jobs WHERE id=$1`,[c.job_id]);assert.equal(Number(job.research_route_id),r.research.route_id);assert.equal(Number(job.step_check_of),Number(held.id));assert.equal(Number(job.budget_hours),0.25);
+  assert.match(c.brief_md,/Step check before pursuit/);assert.match(c.brief_md,new RegExp(`Return #${answer.return_id} \\(route ${answer.research.route_id}`));
+  assert.equal((await one(`SELECT status FROM jobs WHERE id=$1`,[held.id])).status,'expired');
+  const known=ok(await submit('author',{research:{route_id:r.research.route_id,outcome:'known',evidence_md:`Return #${answer.return_id} already settles the step.`,prior_art_md:`Answered on route ${answer.research.route_id}.`,depends_on:[answer.return_id]}},c));
+  assert.equal(known.research.state,'known');assert.equal(known.research.next_job_id,null);
+  assert.equal((await one(`SELECT count(*)::int AS n FROM jobs WHERE research_route_id=$1 AND status IN ('queued','assigned')`,[r.research.route_id])).n,0);
+  // #1838: route 92's origin cites route 88's origin; a direct citation links the routes the same way.
+  const {r:r2}=await activeRoute();
+  const cited=ok(await submit('author',{cites:{returns:[r2.return_id]},research:proposal()}));await q(`UPDATE jobs SET status='expired' WHERE research_route_id=$1 AND status='queued'`,[cited.research.route_id]);
+  const c2=await start('author');assert.equal(c2.research_stage,'first_look');assert.match(c2.brief_md,new RegExp(`Return #${cited.return_id} \\(route`));
+});
+
+test('same-route: a step that waited unchecked is compared with the route\'s own returns first (#1845)',async()=>{
+  // #1845: route 3's step, queued 12 days, asked for a rerun its own origin #351 had done; nothing newer pointed at it.
+  const {r}=await activeRoute(),held=await pursuitOf(r.research.route_id);
+  await q(`UPDATE jobs SET created_at=now()-interval '4 days' WHERE id=$1`,[held.id]);
+  const c=await start('author');assert.equal(c.research_stage,'first_look');
+  assert.match(c.brief_md,new RegExp(`The route's own returns: #${r.return_id}`));assert.match(c.brief_md,/it has waited since/);
+  const known=ok(await submit('author',{research:{route_id:r.research.route_id,outcome:'known',evidence_md:`The origin #${r.return_id} already ran this construction.`,prior_art_md:'Done by the route origin.',depends_on:[r.return_id]}},c));
+  assert.equal(known.research.state,'known');assert.equal((await one(`SELECT status FROM jobs WHERE id=$1`,[held.id])).status,'expired');
+});
+
+test('a step check that finds the step open sends the held pursuit out once, and the same candidates never hold it again',async()=>{
+  const {r}=await activeRoute(),held=await pursuitOf(r.research.route_id);
+  await q(`UPDATE jobs SET created_at=now()-interval '4 days' WHERE id=$1`,[held.id]);
+  const c=await start('author');assert.equal(c.research_stage,'first_look');
+  const open=ok(await submit('author',{research:{route_id:r.research.route_id,outcome:'promising',evidence_md:'Nothing on record answers the step.',next_step:step()}},c));
+  assert.equal(open.research.state,'active');assert.equal(open.research.next_job_id,Number(held.id));
+  const p=await start('author');assert.equal(p.research_stage,'pursue');assert.equal(Number(p.job_id),Number(held.id));
+  assert.match(p.brief_md,new RegExp(`Step check: return #${open.return_id} compared this step`));
+  assert.equal(Number((await one(`SELECT step_checked_through FROM jobs WHERE id=$1`,[held.id])).step_checked_through),open.return_id);
+});
+
+test('an unanswered fresh step with no linked returns since it was set goes out as the pursuit',async()=>{
+  const {r}=await activeRoute(),held=await pursuitOf(r.research.route_id);
+  await otherRoute({});   // a new return on an unlinked route is no reason to hold the step
+  const p=await start('author');assert.equal(p.research_stage,'pursue');assert.equal(Number(p.job_id),Number(held.id));
+  assert.equal((await q(`SELECT 1 FROM jobs WHERE step_check_of=$1`,[held.id])).length,0);
+});
