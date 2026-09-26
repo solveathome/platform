@@ -1,6 +1,7 @@
 /**
- * The owner's approve page for announcements (#sah-discord-announcer, src/lib/announce.ts). Held rows wait here for an owner while the
- * project's `approval` is on, or when a flag (the phrase filter, a ledger mismatch) asks a person to look.
+ * The owners' log of announcements (#sah-discord-announcer, src/lib/announce.ts): what was posted, dropped, skipped or left out of a post.
+ * Posts go out without approval (Chris, Sep 26 2026, #sah-discord-autopost); an owner may still suppress a row that has not gone out, and
+ * approves only if the project turns `approval` back on.
  *   GET  /projects/:slug/announcements                  owner: the page (HTML) or the rows (JSON)
  *   POST /projects/:slug/announcements/:id/approve      owner, on the site
  *   POST /projects/:slug/announcements/:id/suppress     owner, on the site  { reason }
@@ -54,14 +55,14 @@ announcements.get("/announcements", optionalAuth, project, owner, async (req: an
   const when = (t: any) => t ? esc(new Date(t).toISOString().slice(0, 16).replace("T", " ")) + " UTC" : "";
   const heldHtml = held.map((a: any) => `<article class="card" id="a${esc(a.id)}">
 <p><a href="${P}/return/${esc(a.return_id)}">Return #${esc(a.return_id)}</a> · ${esc(a.kind)} · found by <a href="/@${esc(a.finder)}">@${esc(a.finder)}</a> · decided ${when(a.decided_at)} · hold until ${when(a.due_at)}${a.approved_at ? ` · <b>approved</b> by @${esc(a.approved_by_handle ?? "")}` : ""}</p>
-${a.flag ? `<p><b>Needs a person:</b> ${esc(a.flag)}</p>` : ""}
+${a.flag ? `<p><b>Left out of the post:</b> ${esc(a.flag)}</p>` : ""}
 ${preview(a)}
-<p>${a.approved_at ? "" : `<button data-act="approve" data-id="${esc(a.id)}">Approve</button> `}<button data-act="suppress" data-id="${esc(a.id)}">Suppress</button></p></article>`).join("") || `<p class="muted">Nothing is held.</p>`;
-  const doneHtml = done.map((a: any) => `<tr><td><a href="${P}/return/${esc(a.return_id)}">#${esc(a.return_id)}</a></td><td>${esc(a.kind)}</td><td>@${esc(a.finder)}</td><td>${esc(a.status)}</td><td>${when(a.sent_at ?? a.corrected_at ?? a.created_at)}</td><td>${esc(a.suppressed_reason ?? a.correction ?? "")}</td></tr>`).join("");
+<p>${a.approved_at || !cfg.approval ? "" : `<button data-act="approve" data-id="${esc(a.id)}">Approve</button> `}<button data-act="suppress" data-id="${esc(a.id)}">Suppress</button></p></article>`).join("") || `<p class="muted">Nothing is held.</p>`;
+  const doneHtml = done.map((a: any) => `<tr><td><a href="${P}/return/${esc(a.return_id)}">#${esc(a.return_id)}</a></td><td>${esc(a.kind)}</td><td>@${esc(a.finder)}</td><td>${esc(a.status)}</td><td>${when(a.sent_at ?? a.corrected_at ?? a.created_at)}</td><td>${esc([a.suppressed_reason ?? a.correction, a.flag ? `left out: ${a.flag}` : null].filter(Boolean).join("; "))}</td></tr>`).join("");
   const body = `
-<p>A post goes out when a reviewer holding a role on this project accepts a finding and marks it worth announcing, the acceptance is trusted and final, and it is a proof, a refutation, an upheld challenge, a reproduced computation or a validated direction. It names one person: the return's author. It waits ${esc(cfg.hold_hours)} hours after the decision${cfg.approval ? ", then for your approval here" : ""}; a flagged row always waits for a person. A later decision that changes the acceptance suppresses a held row and corrects a sent post.</p>
+<p>A post goes out when a reviewer holding a role on this project accepts a finding and marks it worth announcing, the acceptance is trusted and final, and it is a proof, a refutation, an upheld challenge, a reproduced computation or a validated direction. It names one person: the return's author. It goes out ${cfg.hold_hours ? `${esc(cfg.hold_hours)} hours after the decision` : "on the next pass after the decision (once a minute)"}${cfg.approval ? ", once you approve it here" : ", with nobody approving it"}. The record is read again just before sending: a decision reversed before then drops the row. A validator's note or route title that overclaims is left out of the post and noted here; a post whose credit the ledger does not back is skipped. A later decision that changes the acceptance corrects a sent post.</p>
 <p class="muted">Posting to Discord: ${cfg.discord ? "on" : "off"} for this project. Kill switch: ${announceEnabled() ? "not set" : "<b>set (ANNOUNCE_ENABLED=0): nothing is sent</b>"}. Webhook (${esc(cfg.webhook_env)}): ${webhookUrl(cfg) ? "set" : "<b>unset: nothing is sent</b>"}. At most ${esc(cfg.max_per_day)} posts a day and one per route per ${esc(cfg.route_cooldown_hours)} h; sending pauses when more than ${esc(cfg.burst_per_hour)} rows queue in an hour.</p>
-<h2>Held</h2>${heldHtml}
+<h2>Waiting to go out</h2>${heldHtml}
 <h2>Recent</h2>${doneHtml ? `<div class="wrap"><table><thead><tr><th>Return</th><th>Kind</th><th>Finder</th><th>Status</th><th>When</th><th>Note</th></tr></thead><tbody>${doneHtml}</tbody></table></div>` : `<p class="muted">Nothing yet.</p>`}
 <script>
 document.addEventListener("click", async (e) => {

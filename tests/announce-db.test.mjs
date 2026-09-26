@@ -115,39 +115,21 @@ test('trust by model marks nothing, and an acceptance without a role-holder\'s m
   assert.equal(await row(rej), undefined);
 });
 
-test('the outbox holds the post; approval is needed; the approve page is the owner\'s, on the site', async () => {
+test('the post goes out on the next pass with nobody approving it, naming only the return\'s author, joined at send time', async () => {
   await scan([slug]);   // the scan in the test above already made it
   const a = await row(proof);
   assert.ok(a, 'no row for a marked, trusted acceptance of a proof');
   assert.deepEqual([a.kind, a.final_rung, a.status, Number(a.finder_user_id), a.flag], ['proof', 'proven', 'held', people.author.id, null]);
   assert.deepEqual(await scan([slug]), [], 'one row per return, ever');
   const t = await decidedAt(proof);
-  assert.equal(new Date(a.due_at).getTime(), hours(t, 12).getTime(), 'the default hold is 12 hours');
-  let d = await dispatch(slug, {now: hours(t, 1), fetchImpl: stub, env});
-  assert.match(d.waiting[a.id], /^hold until/);
-  d = await dispatch(slug, {now: hours(t, 13), fetchImpl: stub, env});
-  assert.equal(d.waiting[a.id], "waiting for an owner's approval");
-  assert.equal(calls.length, 0);
-  // The page: owners only; decisions by cookie on the site, never a bearer token, never a non-owner.
-  assert.equal((await call('granted', 'GET', '/announcements', {cookie: true})).status, 403);
-  const page = await okJson(await call('owner', 'GET', '/announcements', {cookie: true}));
-  assert.equal(page.held.length, 1); assert.equal(page.config.approval, true);
-  const html = await (await fetch(base + '/announcements', {headers: {cookie: `sah_session=${people.owner.token}`, accept: 'text/html'}})).text();
-  assert.match(html, /Found by \*\*\[@announce-test-[a-z0-9]+-author\]/); assert.match(html, /<button data-act="approve"/);
-  assert.equal((await call('owner', 'POST', `/announcements/${a.id}/approve`)).status, 403, 'an agent token approved');
-  assert.equal((await call('granted', 'POST', `/announcements/${a.id}/approve`, {cookie: true})).status, 403, 'a non-owner approved');
-  await okJson(await call('owner', 'POST', `/announcements/${a.id}/approve`, {cookie: true}));
-});
-
-test('the finder is joined at send time; the post goes to the webhook naming only the return\'s author', async () => {
-  const a = await row(proof);
-  const t = await decidedAt(proof);
-  await dispatch(slug, {now: hours(t, 13), fetchImpl: stub, env: {}}).then(d => assert.match(d.waiting[a.id], /DISCORD_PROGRESS_WEBHOOK_URL is unset/));
+  assert.equal(new Date(a.due_at).getTime(), t.getTime(), 'no hold by default: due at the decision');
+  // No webhook: nothing is sent and the row waits for one.
+  assert.match((await dispatch(slug, {now: new Date(), fetchImpl: stub, env: {}})).waiting[a.id], /DISCORD_PROGRESS_WEBHOOK_URL is unset/);
   assert.equal(calls.length, 0, 'sent without a webhook');
   const renamed = `${people.author.handle}-r`;
   await q(`UPDATE users SET handle = $2 WHERE id = $1`, [people.author.id, renamed]); people.author.handle = renamed;
-  const d = await dispatch(slug, {now: hours(t, 13), fetchImpl: stub, env});
-  assert.deepEqual(d.sent, [Number(a.id)]);
+  const d = await dispatch(slug, {now: new Date(), fetchImpl: stub, env});
+  assert.deepEqual(d.sent, [Number(a.id)], JSON.stringify(d));
   assert.equal(calls.length, 1);
   const c = calls[0];
   assert.equal(c.method, 'POST'); assert.match(c.url, /\?wait=true$/);
@@ -159,8 +141,28 @@ test('the finder is joined at send time; the post goes to the webhook naming onl
   assert.ok(!e.description.includes(people.granted.handle) && !e.description.includes('gpt-6-astra'), 'the reviewer or the model is credited');
   assert.match(e.description, /x ≥ 2/);
   const sent = await row(proof);
-  assert.deepEqual([sent.status, sent.discord_message_id], ['sent', 'm1']);
-  assert.equal((await dispatch(slug, {now: hours(t, 14), fetchImpl: stub, env})).sent.length, 0, 'sent twice');
+  assert.deepEqual([sent.status, sent.discord_message_id, sent.approved_at], ['sent', 'm1', null]);
+  assert.equal((await dispatch(slug, {now: new Date(), fetchImpl: stub, env})).sent.length, 0, 'sent twice');
+  assert.deepEqual(await scan([slug]), [], 'a sent return queued again');
+});
+
+test('the log page is the owners\', on the site; no approve step unless a project turns approval back on', async () => {
+  assert.equal((await call('granted', 'GET', '/announcements', {cookie: true})).status, 403);
+  const page = await okJson(await call('owner', 'GET', '/announcements', {cookie: true}));
+  assert.equal(page.config.approval, false); assert.ok(page.recent.some(r => Number(r.return_id) === proof && r.status === 'sent'));
+  const html = await (await fetch(base + '/announcements', {headers: {cookie: `sah_session=${people.owner.token}`, accept: 'text/html'}})).text();
+  assert.match(html, /with nobody approving it/); assert.doesNotMatch(html, /data-act="approve"/);
+  // Opt back in: a row waits for an owner; bearer tokens and non-owners cannot approve.
+  setConfig({discord: true, approval: true});
+  const id = await mkReturn('explore');
+  await okJson(await call('granted', 'POST', '/result', {model: 'gpt-6-astra', body: review(id, 'measured', {announce: true, announce_md: 'A route is opened at Measured.'})}));
+  await scan([slug]);
+  const a = await row(id);
+  assert.equal((await dispatch(slug, {now: new Date(), fetchImpl: stub, env})).waiting[a.id], "waiting for an owner's approval");
+  assert.equal((await call('owner', 'POST', `/announcements/${a.id}/approve`)).status, 403, 'an agent token approved');
+  assert.equal((await call('granted', 'POST', `/announcements/${a.id}/approve`, {cookie: true})).status, 403, 'a non-owner approved');
+  await okJson(await call('owner', 'POST', `/announcements/${a.id}/suppress`, {cookie: true, body: {reason: 'test of the opt-in path'}}));
+  setConfig({discord: true});
 });
 
 test('a revisited acceptance corrects the sent post: the original is edited and a correction follows', async () => {
@@ -191,27 +193,35 @@ test('a decision that changes inside the hold suppresses the row before anything
   assert.equal(calls.length, before);
 });
 
-test('a ledger that pays someone else holds the row for a person, even with approval off', async () => {
-  setConfig({discord: true, approval: false, hold_hours: 0});
+test('credit never drifts: a ledger that pays someone else skips the post and says why; nobody is asked', async () => {
   const id = await mkReturn('explore');
   await okJson(await call('granted', 'POST', '/result', {model: 'gpt-6-astra', body: review(id, 'measured', {announce: true, announce_md: 'A new route: the gap statistic is measured to 10^9.'})}));
   await q(`UPDATE credits SET user_id = $2 WHERE source_type = 'return' AND source_id = $1 AND kind = 'result'`, [String(id), people.other.id]);
   await scan([slug]);
   const a = await row(id);
   assert.equal(a.kind, 'opening');
-  assert.match(a.flag, /pays someone other than the return's author/);
   const before = calls.length;
   const d = await dispatch(slug, {now: new Date(), fetchImpl: stub, env});
-  assert.match(d.waiting[a.id], /^needs a person/);
+  assert.deepEqual(d.suppressed, [Number(a.id)]);
+  assert.match((await row(id)).suppressed_reason, /^skipped: the ledger's result credit pays someone other than the return's author/);
   assert.equal(calls.length, before);
-  // Put right, with approval off and no hold, it goes out after an owner has looked (the flag stays until someone approves).
-  await q(`UPDATE credits SET user_id = $2 WHERE source_type = 'return' AND source_id = $1 AND kind = 'result'`, [String(id), people.author.id]);
-  await okJson(await call('owner', 'POST', `/announcements/${a.id}/approve`, {cookie: true}));
-  assert.deepEqual((await dispatch(slug, {now: new Date(), fetchImpl: stub, env})).sent, [Number(a.id)]);
+});
+
+test('overclaiming wording never goes out: the note is left out, the post still goes, the row says what was left out', async () => {
+  const id = await mkReturn('explore');
+  await okJson(await call('granted', 'POST', '/result', {model: 'gpt-6-astra', body: review(id, 'measured', {announce: true, announce_md: 'This breakthrough has solved the gap question.'})}));
+  await scan([slug]);
+  const a = await row(id);
+  assert.match(a.flag, /^validator's note left out \(wording to check: "solved"\)/);
+  const d = await dispatch(slug, {now: new Date(), fetchImpl: stub, env});
+  assert.deepEqual(d.sent, [Number(a.id)], JSON.stringify(d));
+  const e = calls.at(-1).body.embeds[0];
+  assert.doesNotMatch(e.description, /solved|breakthrough|Validator's note/i);
+  assert.match(e.description, /^Found by \*\*\[@/);
 });
 
 test('rate limits: the daily cap and the burst guard hold rows back; an owner suppresses with a reason on the record', async () => {
-  setConfig({discord: true, approval: false, hold_hours: 0, max_per_day: 1});
+  setConfig({discord: true, max_per_day: 1, burst_per_hour: 100});
   const id = await mkReturn('explore');
   await okJson(await call('granted', 'POST', '/result', {model: 'gpt-6-astra', body: review(id, 'measured', {announce: true, announce_md: 'Another route opened.'})}));
   await scan([slug]);

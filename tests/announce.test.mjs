@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import {test} from 'node:test';
 
 // Announcements (#sah-discord-announcer): which acceptances are candidates, how the post reads, what agent text is allowed to do in it.
-const {candidateKind, buildPost, quoteSafe, texToUnicode, overclaim, announceConfig, webhookUrl, announceEnabled, ANNOUNCE_DEFAULTS} = await import('../src/lib/announce.ts');
+const {candidateKind, omitted, buildPost, quoteSafe, texToUnicode, overclaim, announceConfig, webhookUrl, announceEnabled, ANNOUNCE_DEFAULTS} = await import('../src/lib/announce.ts');
 
 test('candidate kinds come from the final record, never the author', () => {
   assert.equal(candidateKind({type: 'formalize', final_rung: 'proven'}), 'proof');
@@ -70,4 +70,12 @@ test('the kill switch: ANNOUNCE_ENABLED=0 (or false, off, no) stops every pass',
     delete process.env.ANNOUNCE_ENABLED; assert.equal(announceEnabled(), true);
     for (const v of ['0', 'false', 'OFF', 'no']) { process.env.ANNOUNCE_ENABLED = v; assert.equal(announceEnabled(), false, v); }
   } finally { if (was === undefined) delete process.env.ANNOUNCE_ENABLED; else process.env.ANNOUNCE_ENABLED = was; }
+});
+
+test('overclaiming agent text is left out of the post, never held: the route shows by number, the note goes', () => {
+  assert.equal(omitted('Lemma 3 holds at Proven.', 'Bound on G2'), null);
+  assert.match(omitted('We solved it', 'Bound on G2'), /^validator's note left out/);
+  assert.match(omitted(null, 'The breakthrough route'), /^route title left out/);
+  const p = buildPost({kind: 'opening', final_rung: 'measured', return_id: 9, type: 'explore', handle: 'h', slug: 's', base: 'http://x', decided_at: new Date(), route: {id: 4, title: ''}, note: null});
+  assert.match(p.description, /Return #9 \(explore\), route #4\./);
 });

@@ -9,14 +9,18 @@
  *
  * A post names one person: the author of the accepted return, joined from users.handle when it is sent (never display_name, never the
  * reviewer, never the model). The ledger still pays the whole chain; the ledger's `result` row for the return must pay the same person,
- * or the row waits for a person to look (flag).
+ * or the post is skipped and the reason recorded: credit never drifts.
  *
- * Rows are held (hold_hours), approved by an owner on /projects/<slug>/announcements while `approval` is on, then posted to a Discord
- * webhook from the environment (the URL is never stored). A later decision that changes the acceptance suppresses a held row and edits a
- * sent one, with a correction posted after it: every change is kept, a reversal is recorded, never undone.
+ * Posts go out without a person in the loop (Chris, Sep 26 2026, #sah-discord-autopost: "Post without my approval"): a marked acceptance is
+ * posted on the next pass, to a Discord webhook from the environment (the URL is never stored). The safeguards need nobody: the record is
+ * read again just before sending, so a decision reversed before then drops the row; the only free text (the validator's note, a route
+ * title) is left out of the post when it overclaims, and the row records what was left out (flag); one post per return, rate-limited. A
+ * later decision that changes the acceptance edits a sent post, with a correction after it: every change is kept, a reversal is recorded,
+ * never undone. /projects/<slug>/announcements is the owners' log of what was posted, dropped or changed.
  *
  * Config per project in project.json, off unless set: "announce": { "discord": true, "webhook_env": "DISCORD_PROGRESS_WEBHOOK_URL",
- * "hold_hours": 12, "approval": true, "max_per_day": 3, "route_cooldown_hours": 24, "burst_per_hour": 5 }. ANNOUNCE_ENABLED=0 stops it all.
+ * "hold_hours": 0, "approval": false, "max_per_day": 3, "route_cooldown_hours": 24, "burst_per_hour": 5 }. `approval: true` brings back an
+ * owner's approval on that page; ANNOUNCE_ENABLED=0 stops it all.
  */
 import { q, one } from "../db/index.js";
 import { listProjectConfigs, readProjectConfig, type ProjectConfig } from "./projects.js";
@@ -24,7 +28,7 @@ import { roleOf } from "./roles.js";
 import { verificationState } from "./verification.js";
 
 export type AnnounceConfig = { discord: boolean; webhook_env: string; hold_hours: number; approval: boolean; max_per_day: number; route_cooldown_hours: number; burst_per_hour: number };
-export const ANNOUNCE_DEFAULTS: AnnounceConfig = { discord: false, webhook_env: "DISCORD_PROGRESS_WEBHOOK_URL", hold_hours: 12, approval: true, max_per_day: 3, route_cooldown_hours: 24, burst_per_hour: 5 };
+export const ANNOUNCE_DEFAULTS: AnnounceConfig = { discord: false, webhook_env: "DISCORD_PROGRESS_WEBHOOK_URL", hold_hours: 0, approval: false, max_per_day: 3, route_cooldown_hours: 24, burst_per_hour: 5 };
 export function announceConfig(cfg: ProjectConfig | null | undefined): AnnounceConfig {
   const a = (cfg as any)?.announce ?? {};
   const num = (v: unknown, d: number) => (typeof v === "number" && Number.isFinite(v) && v >= 0 ? v : d);
@@ -32,7 +36,7 @@ export function announceConfig(cfg: ProjectConfig | null | undefined): AnnounceC
     discord: a.discord === true,
     webhook_env: typeof a.webhook_env === "string" && /^[A-Z][A-Z0-9_]*$/.test(a.webhook_env) ? a.webhook_env : ANNOUNCE_DEFAULTS.webhook_env,
     hold_hours: num(a.hold_hours, ANNOUNCE_DEFAULTS.hold_hours),
-    approval: a.approval !== false,
+    approval: a.approval === true,
     max_per_day: num(a.max_per_day, ANNOUNCE_DEFAULTS.max_per_day),
     route_cooldown_hours: num(a.route_cooldown_hours, ANNOUNCE_DEFAULTS.route_cooldown_hours),
     burst_per_hour: num(a.burst_per_hour, ANNOUNCE_DEFAULTS.burst_per_hour),
@@ -110,7 +114,7 @@ export function buildPost(f: PostFacts): { title: string; description: string; u
     opening: `A new direction was validated: accepted at ${cap(f.final_rung ?? "a rung")} by a trusted reviewer`,
   }[f.kind];
   const handle = String(f.handle).replace(/[^A-Za-z0-9_.-]/g, "");
-  const what = `Return #${f.return_id} (${f.type})${f.route ? `, route #${f.route.id} “${quoteSafe(f.route.title, 160)}”` : ""}${f.target_return_id && (f.kind === "refutation" || f.kind === "challenge") ? `: the claim in return #${f.target_return_id} does not hold` : ""}.`;
+  const what = `Return #${f.return_id} (${f.type})${f.route ? `, route #${f.route.id}${f.route.title ? ` “${quoteSafe(f.route.title, 160)}”` : ""}` : ""}${f.target_return_id && (f.kind === "refutation" || f.kind === "challenge") ? `: the claim in return #${f.target_return_id} does not hold` : ""}.`;
   const lines = [
     `Found by **[@${handle}](${f.base}/@${handle})**.`,
     what,
@@ -169,7 +173,7 @@ export async function scan(slugs: string[]): Promise<number[]> {
     const finder = await finderOf(Number(c.id));
     if (!finder) continue;
     const route = await routeOf(a.ret);
-    const flag = finder.mismatch ?? overclaim(a.review.announce_md) ?? overclaim(route?.title);
+    const flag = omitted(a.review.announce_md, route?.title);
     const decided = new Date(a.decision.decided_at);
     const due = new Date(decided.getTime() + cfg.hold_hours * 3600_000);
     const row = await one<{ id: string }>(`INSERT INTO announcements (problem_id, return_id, review_id, finder_user_id, kind, final_rung, dedupe_key, decided_at, due_at, flag)
@@ -191,6 +195,13 @@ async function send(fetchImpl: Fetch, url: string, method: string, body: any): P
   const r = await fetchImpl(url, { method, headers: { "content-type": "application/json" }, body: JSON.stringify({ ...body, allowed_mentions: { parse: [] } }), signal: AbortSignal.timeout(10_000) });
   if (!r.ok) throw new Error(`webhook ${method} answered ${r.status}: ${(await r.text()).slice(0, 200)}`);
   return method === "POST" ? r.json() : null;
+}
+
+/** Agent-written text that overclaims is left out of the post, never reworded by a model and never held for a person: the template lines
+ *  carry the record on their own. Returns what was left out and why, for the row (null when nothing was). */
+export function omitted(note: string | null | undefined, routeTitle: string | null | undefined): string | null {
+  const parts = [overclaim(note) ? `validator's note left out (${overclaim(note)})` : null, overclaim(routeTitle) ? `route title left out (${overclaim(routeTitle)})` : null].filter(Boolean);
+  return parts.length ? parts.join("; ") : null;
 }
 
 const unsetLogged = new Map<string, number>();
@@ -239,14 +250,14 @@ export async function dispatch(slug: string, opts: { now?: Date; fetchImpl?: Fet
       out.suppressed.push(Number(h.id)); continue;
     }
     if (new Date(h.due_at) > now) { out.waiting[h.id] = `hold until ${new Date(h.due_at).toISOString()}`; continue; }
+    // Credit never drifts: a post that cannot name the one person the ledger pays for this return is skipped, with the reason on the row.
     const finder = await finderOf(Number(h.return_id));
-    if (!finder) { out.waiting[h.id] = "needs a person: the return's author is gone"; continue; }
-    if (finder.user_id !== Number(h.finder_user_id) || finder.mismatch) {
-      const flag = finder.user_id !== Number(h.finder_user_id) ? "the return's author changed since the row was made" : finder.mismatch!;
-      if (h.flag !== flag) await q(`UPDATE announcements SET flag = $2, approved_at = NULL, approved_by = NULL WHERE id = $1`, [h.id, flag]);
-      if (h.flag !== flag || !h.approved_at) { out.waiting[h.id] = `needs a person: ${flag}`; continue; }
+    const creditProblem = !finder ? "the return's author is gone" : finder.user_id !== Number(h.finder_user_id) ? "the return's author changed since the row was made" : finder.mismatch;
+    if (!finder || creditProblem) {
+      await q(`UPDATE announcements SET status = 'suppressed', suppressed_reason = $2 WHERE id = $1 AND status = 'held'`, [h.id, `skipped: ${creditProblem}`]);
+      out.suppressed.push(Number(h.id)); continue;
     }
-    if ((cfg.approval || h.flag) && !h.approved_at) { out.waiting[h.id] = h.flag ? `needs a person: ${h.flag}` : "waiting for an owner's approval"; continue; }
+    if (cfg.approval && !h.approved_at) { out.waiting[h.id] = "waiting for an owner's approval"; continue; }
     if (paused) { out.waiting[h.id] = "burst guard"; continue; }
     if (!hook) {
       out.waiting[h.id] = `${cfg.webhook_env} is unset`;
@@ -256,12 +267,16 @@ export async function dispatch(slug: string, opts: { now?: Date; fetchImpl?: Fet
     const day = await one<{ n: string }>(`SELECT count(*) AS n FROM announcements WHERE problem_id = $1 AND sent_at > $2::timestamptz - interval '24 hours'`, [pid, now]);
     if (Number(day?.n ?? 0) >= cfg.max_per_day) { out.waiting[h.id] = `daily limit (${cfg.max_per_day})`; continue; }
     const route = await routeOf(a.ret);
+    const note = overclaim(a.review.announce_md) ? null : a.review.announce_md;
+    const shownRoute = route && overclaim(route.title) ? { id: route.id, title: "" } : route;
+    const left = omitted(a.review.announce_md, route?.title);
+    if (left !== h.flag) await q(`UPDATE announcements SET flag = $2 WHERE id = $1`, [h.id, left]);
     if (route && cfg.route_cooldown_hours > 0) {
       const recent = await one(`SELECT 1 FROM announcements a JOIN returns r ON r.id = a.return_id WHERE a.problem_id = $1 AND a.sent_at > $2::timestamptz - make_interval(secs => $3) AND coalesce(r.research_route_id, (SELECT e.route_id FROM research_events e WHERE e.return_id = r.id ORDER BY e.id DESC LIMIT 1)) = $4`, [pid, now, cfg.route_cooldown_hours * 3600, route.id]);
       if (recent) { out.waiting[h.id] = `route #${route.id} was announced in the last ${cfg.route_cooldown_hours} h`; continue; }
     }
     const target = a.ret.target?.kind === "return" && Number.isInteger(Number(a.ret.target.ref)) ? Number(a.ret.target.ref) : null;
-    const post = buildPost({ kind: a.kind, final_rung: a.ret.final_rung, return_id: Number(a.ret.id), type: a.ret.type, handle: finder.handle, slug, base, decided_at: h.decided_at, route, target_return_id: target, note: a.review.announce_md });
+    const post = buildPost({ kind: a.kind, final_rung: a.ret.final_rung, return_id: Number(a.ret.id), type: a.ret.type, handle: finder.handle, slug, base, decided_at: h.decided_at, route: shownRoute, target_return_id: target, note });
     const payload = { embeds: [{ ...post, finder_handle: finder.handle }] };
     const claimed = await one(`UPDATE announcements SET status = 'sent', sent_at = $2, payload = $3 WHERE id = $1 AND status = 'held' RETURNING id`, [h.id, now, JSON.stringify(payload)]);
     if (!claimed) continue;
