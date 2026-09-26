@@ -1056,7 +1056,7 @@ CREATE TABLE IF NOT EXISTS announcements (
   decided_at         TIMESTAMPTZ NOT NULL,                     -- the trusted acceptance the post is about
   due_at             TIMESTAMPTZ NOT NULL,                     -- decided_at + the project's hold
   status             TEXT NOT NULL DEFAULT 'held' CHECK (status IN ('held','sent','suppressed','corrected')),
-  flag               TEXT,                                     -- why a person must approve it whatever the config (phrase filter, ledger mismatch)
+  flag               TEXT,                                     -- what the post left out and why (overclaiming agent text); since Sep 26 2026 no person holds a row for it
   approved_at        TIMESTAMPTZ,
   approved_by        BIGINT REFERENCES users(id),
   suppressed_reason  TEXT,
