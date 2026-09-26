@@ -9,7 +9,7 @@ import { join } from "node:path";
 import { q } from "../db/index.js";
 import { ROOT } from "../lib/paths.js";
 import { readPublication, publishedDocument } from "../lib/document-publication.js";
-import { BASE } from "../lib/seo.js";
+import { BASE, indexNowKey } from "../lib/seo.js";
 
 export const seo = Router();
 const REPOS = process.env.DOCS_DIR ?? join(ROOT, "data", "repos");
@@ -31,6 +31,11 @@ Disallow: /*?json=
 Sitemap: ${BASE()}/sitemap.xml
 `);
 });
+
+// IndexNow (#sah-search-console-sitemaps): the key file must sit at the root to cover every URL on the host, so it is served
+// from public/indexnow.txt here rather than under /assets. scripts/indexnow.mjs pings with the sitemap after a deploy.
+const INDEXNOW_KEY = indexNowKey();
+if (INDEXNOW_KEY) seo.get(`/${INDEXNOW_KEY}.txt`, (_req, res) => { res.type("text/plain").set("Cache-Control", "public, max-age=86400").send(INDEXNOW_KEY); });
 
 type Url = { loc: string; lastmod?: string | Date | null };
 const xmlEsc = (s: string) => s.replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&apos;" }[c]!));
