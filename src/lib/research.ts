@@ -20,7 +20,12 @@ export async function routeContext(id: number): Promise<any> {
     ) SELECT r.id,r.status,r.final_rung,r.provisional FROM basis b JOIN returns r ON r.id=b.id ORDER BY r.id`, [route.last_return_id, id]);
   const events = await q(`SELECT e.*,r.model,u.handle,r.status AS evidence_status,r.final_rung FROM research_events e LEFT JOIN returns r ON r.id=e.return_id LEFT JOIN users u ON u.id=r.user_id WHERE route_id=$1 ORDER BY e.id DESC`, [id]);
   const jobs = await q(`SELECT id,type,research_stage,title,status,budget_hours FROM jobs WHERE research_route_id=$1 ORDER BY id DESC LIMIT 20`, [id]);
-  return { ...route, dependencies, basis, events, jobs };
+  // Inputs are served with the return that uploaded them. Agents looked for "falsifier1676.py" under return #1676 (the name
+  // carried a job number) and reported the route blocked on a missing input that was served all along (routes 59 and 162).
+  const returnIds = [route.origin_return_id, ...events.map((e: any) => e.return_id), ...basis.map((r: any) => r.id), ...dependencies.map((r: any) => r.id)].filter((x) => x != null).map(Number);
+  const files = await q(`SELECT x.ref_id AS return_id,array_agg(f.name ORDER BY f.name) AS names FROM file_refs x JOIN files f ON f.sha256=x.file_sha
+    WHERE x.ref_type='return' AND x.ref_id=ANY($1::bigint[]) AND f.deleted_at IS NULL GROUP BY x.ref_id ORDER BY x.ref_id`, [[...new Set(returnIds)]]);
+  return { ...route, dependencies, basis, events, jobs, files: files.map((f: any) => ({ return_id: Number(f.return_id), names: f.names })) };
 }
 export async function researchSummary(problemId: number): Promise<any> {
   const routes = await q(`SELECT id,title,state,next_step,obstacle,origin_return_id,last_return_id,updated_at FROM research_routes WHERE problem_id=$1 ORDER BY updated_at DESC,id DESC LIMIT 40`, [problemId]);
@@ -61,7 +66,7 @@ export async function researchSummary(problemId: number): Promise<any> {
 }
 export async function researchBrief(id: number): Promise<string> {
   const r = await routeContext(id); if (!r) return '';
-  return `\n\n### Research route #${r.id}: ${r.title}\n\nInvestment state: ${r.state}; this is not a truth grade. Revision ${r.revision}.\n\nContribution: ${r.contribution_md}\n\nPrior art and exact difference: ${r.prior_art_md}\n\nCentral uncertainty: ${r.uncertainty_md}\n\nNext experiment: ${JSON.stringify(r.next_step)}\n\nObstacle: ${JSON.stringify(r.obstacle)}\n\nEvidence behind continued investment: ${JSON.stringify(r.basis)}.\n\nDeclared dependencies: ${JSON.stringify(r.dependencies)}. Pending, recorded, rejected or provisional premises remain conditional; inspect the evidence before building on them.\n\nRecent investigations:\n${r.events.slice(0, 5).map((e: any) => `- Return #${e.return_id ?? '—'} (${e.model ?? 'system'}): ${e.outcome}. ${e.evidence_md}`).join('\n')}\n\nFull route and event record: GET <project base>/research-routes/${r.id}.\n`;
+  return `\n\n### Research route #${r.id}: ${r.title}\n\nInvestment state: ${r.state}; this is not a truth grade. Revision ${r.revision}.\n\nContribution: ${r.contribution_md}\n\nPrior art and exact difference: ${r.prior_art_md}\n\nCentral uncertainty: ${r.uncertainty_md}\n\nNext experiment: ${JSON.stringify(r.next_step)}\n\nObstacle: ${JSON.stringify(r.obstacle)}\n\nEvidence behind continued investment: ${JSON.stringify(r.basis)}.\n\nFiles served with this route's returns (GET <project base>/return/<id> lists and links them; a number in a file name is usually the job it was made under, not a return id):\n${r.files.length ? r.files.map((f: any) => `- Return #${f.return_id}: ${f.names.slice(0, 20).join(', ')}${f.names.length > 20 ? `, and ${f.names.length - 20} more` : ''}`).join('\n') : '- none'}\n\nDeclared dependencies: ${JSON.stringify(r.dependencies)}. Pending, recorded, rejected or provisional premises remain conditional; inspect the evidence before building on them.\n\nRecent investigations:\n${r.events.slice(0, 5).map((e: any) => `- Return #${e.return_id ?? '—'} (${e.model ?? 'system'}): ${e.outcome}. ${e.evidence_md}`).join('\n')}\n\nFull route and event record: GET <project base>/research-routes/${r.id}.\n`;
 }
 async function queueInvestigation(route: any, stage: ResearchStage, source: any): Promise<any> {
   if (await one(`SELECT 1 FROM jobs WHERE research_route_id=$1 AND research_stage IN ('first_look','pursue','rescue') AND status IN ('queued','assigned')`, [route.id])) return null;
