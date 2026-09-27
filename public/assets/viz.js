@@ -81,31 +81,41 @@
   const TIME = new Intl.DateTimeFormat('en', {hour: '2-digit', minute: '2-digit', hourCycle: 'h23', timeZone: 'UTC'});
   const SHORT = new Intl.DateTimeFormat('en', {month: 'short', day: 'numeric', timeZone: 'UTC'});
   /**
-   * The playback axis (client, Sep 27: "empty slots in the timeline should just be skipped like the hours did not exist").
-   * Events closer than two seconds of playback form one stretch; each stretch is kept with a short margin either side and the
-   * quiet between stretches is cut. Play, the scrubber and its histogram run on this axis, so no position on it is dead time;
-   * the clock label still shows the real date and time. It depends on the speed (two seconds of playback is 20 minutes at
-   * 10 min/s, 12 hours at 6 h/s) and is rebuilt when the speed changes or new events arrive.
+   * The playback axis (client, Sep 27: "we want those hours to not show this inactivity by just skipping over empty hours").
+   * The record is cut into quarter hours of real time. A quarter plays when agents worked in it: at least one assignment,
+   * result, review or decision, and at least a quarter of the events of the median working quarter (never fewer than three).
+   * Every other quarter is left out, however many stray chat lines it holds. Quarter hours, not hours: at 1 h/s an hour-long
+   * bin still played its quiet half. Runs of playing quarters are joined; a cut of an hour or more is a short beat (0.1 s of
+   * playback, the picture held), a shorter one is seamless, and each has a tick on the scrubber. Play, the scrubber and its
+   * histogram run on this axis; the clock label keeps the real date and time, so it jumps across a cut. A skipped quarter's
+   * events are not played: their results and chat are in place after the cut.
    */
-  const GAP = 2000, PAD = 400;   // ms of playback: a longer silence is cut; a stretch keeps 0.4 s either side, so a cut is a 0.8 s beat
+  const BIN = 900_000, HOUR = 3600_000, BEAT = 100, QUIET_SHARE = 0.25, QUIET_MIN = 3;
+  const WORK = new Set(['a', 'r', 'v', 'd']);
   class Axis {
     constructor(events, start, rate) {
-      const gap = rate * GAP, pad = rate * PAD, segs = [];
-      let cur = null;
-      for (const e of events) {
-        if (cur && e[0] - cur.last <= gap) { cur.last = e[0]; continue; }
-        cur = {first: e[0], last: e[0]}; segs.push(cur);
+      const beat = rate * BEAT, bins = new Map();
+      for (const e of events) { const k = Math.floor(e[0] / BIN), x = bins.get(k) || {n: 0, work: 0}; x.n++; if (WORK.has(e[1])) x.work++; bins.set(k, x); }
+      const counts = [...bins.values()].filter(x => x.work).map(x => x.n).sort((x, y) => x - y);
+      const median = counts.length ? counts[counts.length >> 1] : 0;
+      this.threshold = Math.max(QUIET_MIN, Math.ceil(median * QUIET_SHARE));
+      const active = k => { const x = bins.get(k); return !!x && x.work > 0 && x.n >= this.threshold; };
+      const lastT = events.length ? events[events.length - 1][0] : start, keys = [...bins.keys()].filter(active).sort((x, y) => x - y);
+      const segs = [];
+      for (const k of keys) {
+        const t0 = Math.max(start, k * BIN), t1 = Math.min((k + 1) * BIN, lastT + 60_000);
+        if (t1 <= t0) continue;
+        const prev = segs[segs.length - 1];
+        if (prev && prev.t1 >= t0) prev.t1 = t1; else segs.push({t0, t1});
       }
       let p = 0;
-      this.segs = segs.map((c, i) => {
-        const t0 = Math.max(start, c.first - pad, i ? segs[i - 1].last + pad : -Infinity), t1 = c.last + pad, seg = {t0, t1, p0: p};
-        p += t1 - t0; return seg;
-      });
-      if (!this.segs.length) this.segs = [{t0: start, t1: start + 3600_000, p0: 0}], p = 3600_000;
+      this.segs = segs.map((sg, i) => { const seg = {...sg, p0: p}; p += sg.t1 - sg.t0 + (i < segs.length - 1 && segs[i + 1].t0 - sg.t1 >= HOUR ? beat : 0); return seg; });
+      if (!this.segs.length) { this.segs = [{t0: start, t1: Math.max(start + HOUR, lastT), p0: 0}]; p = this.segs[0].t1 - start; }
       this.total = p;
+      this.skipped = Math.round(((segs.length ? segs[segs.length - 1].t1 - segs[0].t0 : 0) - segs.reduce((a, sg) => a + sg.t1 - sg.t0, 0)) / HOUR);   // hours cut
     }
     seg(P) { let lo = 0, hi = this.segs.length - 1; while (lo < hi) { const m = (lo + hi + 1) >> 1; if (this.segs[m].p0 <= P) lo = m; else hi = m - 1; } return this.segs[lo]; }
-    /** Real time at a point of the axis. */
+    /** Real time at a point of the axis; inside a beat the picture holds at the end of the stretch before it. */
     real(P) { const s = this.seg(Math.max(0, Math.min(this.total, P))); return Math.min(s.t1, s.t0 + Math.max(0, P - s.p0)); }
     /** The axis point of a real time; a moment inside a cut lands at the start of the next stretch. */
     at(T) {
@@ -116,6 +126,8 @@
       if (T <= s.t1) return s.p0 + (T - s.t0);
       return lo + 1 < segs.length ? segs[lo + 1].p0 : this.total;
     }
+    /** Whether a real moment is played (not inside a cut). */
+    plays(T) { const P = this.at(T); return Math.abs(this.real(P) - T) < 1; }
   }
 
   /** The clock: play, pause, speed, scrub, live. It calls onFrame(T, info) every animation frame with T in real time. */
