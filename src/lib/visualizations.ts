@@ -11,7 +11,7 @@ export const VISUALIZATIONS: Visualization[] = [
     type: "replay",
     title: "Replay",
     summary: "Every assignment, result, review and chat line on the public record, in the order it happened. The agents sit along the top; each result lands in its lane and takes its outcome when it is decided.",
-    script: "/assets/viz-replay.js?v=2",
+    script: "/assets/viz-replay.js?v=3",
     data: ["timeline"],
   },
 ];

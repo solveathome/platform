@@ -153,14 +153,17 @@
       }
       for (const [key, last] of S.agents) {
         const p = pos.get(key); if (!p) continue;
-        const act = Math.exp(-(T - last) / (span * 4)), col = C[p.a.prov] || C.unknown;
+        const act = Math.exp(-Math.max(0, info.clock - info.at(last)) / (span * 4)), col = C[p.a.prov] || C.unknown;
         if (act > .05) dot(p.x, p.y, 4 + 5 * act, col, .18 * act);
         dot(p.x, p.y, 3.2, col, .35 + .65 * act);
       }
       // What happened in the last moment of playback: results in flight, review beams, decisions, assignments.
       const ev = stream.events;
-      for (let i = S.i - 1; i >= 0 && ev[i][0] > T - span; i--) {
-        const e = ev[i], p = (T - e[0]) / span, k = e[1];
+      // Timed on the playback clock (info.clock), so a cut in the record never shortens or skips one.
+      for (let i = S.i - 1; i >= 0; i--) {
+        const e = ev[i], p = (info.clock - info.at(e[0])) / span, k = e[1];
+        if (p >= 1) break;
+        if (p < 0) continue;
         if (k === 'r') {
           const a = pos.get(e[2] + '\u0000' + e[3]), b = slotXY(e[4]); if (!a || !b) continue;
           const q = ease(Math.min(1, p * 1.6)), x = a.x + (b.x - a.x) * q, y = a.y + (b.y - a.y) * q, col = C[SAViz.provider(e[3])] || C.unknown;

@@ -5,8 +5,9 @@
  *
  *   SAViz.register('replay', {mount(ctx) { ...; return {frame(T, info), resize(), data()} }})
  *
- * ctx = {root, stage, stream, player, slug, theme()}. frame(T) gets the record time in epoch ms and must draw the record as it
- * stood at T from the events alone, so a scrub backwards is the same as a play forwards.
+ * ctx = {root, stage, stream, player, slug, theme()}. frame(T, info) gets the record time in epoch ms and must draw the record as it
+ * stood at T from the events alone, so a scrub backwards is the same as a play forwards. Anything animated is timed on
+ * info.clock, with info.at(t) the clock reading of an event at record time t: that clock never jumps at a cut.
  */
 (function () {
   const LAG = 60_000;            // live runs a minute behind: a poll every 30 s then shows events as they happen, not in bursts
@@ -177,7 +178,11 @@
         if (this.el.date.textContent !== date) this.el.date.textContent = date;
         if (this.el.time.textContent !== time) this.el.time.textContent = time;
         this.drawPlayhead();
-        this.onFrame(this.T, {rate: this.live ? 60 : this.rate, live: this.live, playing: this.playing});
+        // Animations run on the playback clock, not the record's (client, Sep 27: a cut must not fast-forward a fade): P crosses a
+        // cut at the normal pace, so a fade under way plays out on the other side, and one starting after a cut starts in full.
+        // Live has no axis ahead of it and runs on the real clock.
+        const ax = this.axis, clock = this.live ? this.T : this.P, at = this.live ? (t => t) : (t => ax.at(t));
+        this.onFrame(this.T, {rate: this.live ? 60 : this.rate, live: this.live, playing: this.playing, clock, at});
       }
       requestAnimationFrame(t => this.tick(t));
     }
