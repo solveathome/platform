@@ -33,6 +33,7 @@ import { responseCache } from "./lib/cache.js";
 import { shareMeta, SITE_DESCRIPTION } from "./lib/share.js";
 import { jsonLd, notFoundPage, ORGANIZATION, WEBSITE } from "./lib/seo.js";
 import { seo } from "./routes/seo.js";
+import { visualizations, visualizationsRoot } from "./routes/visualizations.js";
 
 const app = express();
 
@@ -57,7 +58,7 @@ app.use(perIp("all", Number(process.env.RATE_LIMIT_PER_MIN ?? 1200), 60_000));
 app.use("/auth", perIp("auth", 30, 60_000));
 app.use("/auth/github/callback", perIp("oauth-callback", 5, 60_000));
 // Anonymous aggregate pages are served from a 20 s cache: one Postgres pass per page per 20 s, however many people are looking.
-app.use(responseCache([/^\/projects\/?$/, /^\/projects\/[a-z0-9-]+\/(board|activity|standings|leaderboard|who|chat|papers|sequences|lanes|questions)\/?$/, /^\/projects\/[a-z0-9-]+\/?$/, /^\/leaderboard\/?$/, /^\/credit\/?$/]));
+app.use(responseCache([/^\/projects\/?$/, /^\/projects\/[a-z0-9-]+\/(board|activity|standings|leaderboard|who|chat|papers|sequences|lanes|questions|timeline)\/?$/, /^\/projects\/[a-z0-9-]+\/?$/, /^\/leaderboard\/?$/, /^\/credit\/?$/]));
 
 // Assets are referenced with ?v=, bumped whenever the file changes, so a versioned URL is immutable: a year, and no revalidation.
 app.use("/assets", express.static(join(PUBLIC_DIR, "assets"), { index: false, maxAge: "1h", setHeaders: (res) => { if ((res as any).req?.query?.v) res.setHeader("Cache-Control", "public, max-age=31536000, immutable"); } }));
@@ -82,8 +83,10 @@ app.use("/projects/:slug", asks);
 app.use("/projects/:slug", trust);
 app.use("/projects/:slug", announcements);
 app.use("/projects/:slug", docs);
+app.use("/projects/:slug", visualizations);
 app.use(projects);
 app.use(settings);
+app.use(visualizationsRoot);
 app.use(root);
 app.use(dumps);
 app.use(terms);
@@ -113,7 +116,7 @@ Code: MIT. Results and traces: CC BY 4.0.
 `);
 });
 
-app.use(notFound([job, lane, board, papers, sequences, chat, asks, trust, announcements, docs]));
+app.use(notFound([job, lane, board, papers, sequences, chat, asks, trust, announcements, docs, visualizations]));
 // A browser or crawler that misses gets the site's own not-found page with a real 404, never Express's bare "Cannot GET".
 app.use((req, res) => { res.status(404).type("text/html").send(notFoundPage(`Nothing at ${String(req.originalUrl ?? req.url).split("?")[0].slice(0, 200)}.`)); });
 

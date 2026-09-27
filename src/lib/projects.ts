@@ -19,6 +19,7 @@ export type ProjectConfig = {
   share?: { title?: string; description?: string; image?: string; question?: string; line?: string; line2?: string; footer?: string };
   review_notes?: { patch?: string };
   announce?: { discord?: boolean; webhook_env?: string; hold_hours?: number; approval?: boolean; max_per_day?: number; route_cooldown_hours?: number; burst_per_hour?: number };   // src/lib/announce.ts: off unless discord is true
+  launched_at?: string;   // the first moment the visualizations replay (ISO); testing before it is left out
   sequence_proposals?: string[]; // paths of OEIS drafts in the published research mirror
   ledger?: { start: string; end: string; registry?: string };   // a generated-registry block in notes (issue #48): a patch that leaves it unchanged is warned about   // project-specific instructions for reviewers, e.g. how to check a patched script (issue #22)   // the project page's own share card (scripts/build-share.mjs)
 };
