@@ -68,11 +68,15 @@
         while (cell > 2 && Math.floor(cw / cell) * Math.floor(ch / cell) < maxCount) cell -= 0.25;
         lanes.forEach((l, i) => regions.push({l, x: i * (cw + colGap), y: top, w: cw, h: ch, cols: Math.max(1, Math.floor(cw / cell)), vertical: true, labelY: top + ch + 14}));
       } else {
-        cell = 7;
-        const cols = Math.max(1, Math.floor(W / cell)), labelH = 22;
+        // The height is the width's alone, like the desktop's: the cell shrinks until every lane's rows fit, so new results
+        // never make the canvas, and with it the page, taller.
+        H = Math.round(Math.min(680, Math.max(480, W * 1.5)));
+        const labelH = 22, gap = 10, avail = H - band - 10;
+        const need = c => lanes.reduce((h, l) => h + labelH + Math.ceil(l.count / Math.max(1, Math.floor(W / c))) * c + gap, 0);
+        cell = 9; while (cell > 2 && need(cell) > avail) cell -= 0.25;
+        const cols = Math.max(1, Math.floor(W / cell));
         let y = band + 6;
-        for (const l of lanes) { const rows = Math.ceil(l.count / cols); regions.push({l, x: 0, y: y + labelH, w: W, h: rows * cell, cols, vertical: false, labelY: y + 11}); y += labelH + rows * cell + 12; }
-        H = Math.round(y + 4);
+        for (const l of lanes) { const rows = Math.ceil(l.count / cols); regions.push({l, x: 0, y: y + labelH, w: W, h: rows * cell, cols, vertical: false, labelY: y + 11}); y += labelH + rows * cell + gap; }
       }
       const byLane = new Map(regions.map(r => [r.l.slug, r]));
       const slotXY = id => {
@@ -84,7 +88,7 @@
       };
       const dpr = devicePixelRatio || 1;
       canvas.style.height = H + 'px'; canvas.width = Math.round(W * dpr); canvas.height = Math.round(H * dpr);
-      L = {W, H, narrow, agents, persons, groups, pos, lanes, regions, results, cell, slotXY, dpr, count: ev.length};
+      L = {W, H, narrow, provs: [...new Set([...agents.values()].map(a => a.prov))], agents, persons, groups, pos, lanes, regions, results, cell, slotXY, dpr, count: ev.length};
       lastT = Infinity;   // re-fold from the start on the next frame
     }
 
@@ -186,9 +190,10 @@
       const put = (el, html) => { if (el._html !== html) { el._html = html; el.innerHTML = html; } };   // chat items fade in: rewrite only what changed
       put(metricsEl, m(number(people), 'People') + m(number(S.agents.size), 'Agents') + m(number(S.counts.results), 'Results') + m(number(S.counts.accepted), 'Accepted') + m(number(S.counts.reviews), 'Reviews') + m(number(S.counts.msgs), 'Chat lines') + m(compact(S.counts.tokens), 'Tokens'));
       const ev = stream.events;
-      put(chatEl, S.chat.slice(-6).reverse().map(i => { const e = ev[i];
-        return `<li><p class="replay-who"><a href="/@${encodeURIComponent(e[2])}">@${esc(e[2])}</a> <span>${esc(e[3] || 'on the site')} · ${esc(KIND[e[4]] || e[4])}${e[6] ? ` · #${esc(e[6])}` : ''}</span></p><p>${esc(e[5])}</p></li>`; }).join('') || '<li class="muted">No chat yet at this moment.</li>');
-      const provs = [...new Set([...S.agents.keys()].map(k => SAViz.provider(k.split('\u0000')[1])))];
+      const lines = S.chat.slice(-6).reverse();
+      put(chatEl, lines.map(i => { const e = ev[i];
+        return `<li><p class="replay-who"><a href="/@${encodeURIComponent(e[2])}">@${esc(e[2])}</a> <span>${esc(e[3] || 'on the site')} · ${esc(KIND[e[4]] || e[4])}${e[6] ? ` · #${esc(e[6])}` : ''}</span></p><p>${esc(e[5])}</p></li>`; }).join('') + (lines.length ? '' : '<li class="muted">No chat yet at this moment.</li>'));
+      const provs = L.provs;   // every maker in the record, not only those seen by T: the legend never gains a line mid-play
       const C = th.colors, sw = (style, label) => `<span><i style="${style}"></i>${esc(label)}</span>`;
       put(legendEl, `<div>${provs.map(p => sw(`background:${C[p] || C.unknown}`, SAViz.PROVIDER_NAMES[p] || p)).join('')}</div><div>${sw(`background:${th.mut};opacity:.4;transform:scale(.7)`, 'waiting for review')}${sw(`background:${th.fg}`, 'accepted')}${sw(`border:2px solid ${th.fg}`, 'accepted provisionally')}${sw(`background:${C.reject};transform:scale(.55)`, 'rejected')}${sw(`height:1px;border-radius:0;background:${th.fg}`, 'review beam')}</div>`);
     }

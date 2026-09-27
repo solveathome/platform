@@ -80,6 +80,7 @@
   const DATE = new Intl.DateTimeFormat('en', {month: 'short', day: 'numeric', year: 'numeric', timeZone: 'UTC'});
   const TIME = new Intl.DateTimeFormat('en', {hour: '2-digit', minute: '2-digit', hourCycle: 'h23', timeZone: 'UTC'});
   const SHORT = new Intl.DateTimeFormat('en', {month: 'short', day: 'numeric', timeZone: 'UTC'});
+  const quiet = ms => { const m = Math.round(ms / 60000); return m < 60 ? `${m} min` : m < 2880 ? `${Math.floor(m / 60)} h${m % 60 ? ` ${m % 60} min` : ''}` : `${Math.round(m / 1440)} days`; };
 
   /** The clock: play, pause, speed, scrub, live. It calls onFrame(T, info) every animation frame. */
   class Player {
@@ -114,16 +115,18 @@
         const [a, b] = this.span();
         if (this.live) this.T = b;
         else if (this.playing) {
-          // Quiet hours pass eight times faster: when nothing happens in the next three seconds of playback, skip ahead.
-          const next = this.stream.events[this.stream.count(this.T)];
-          const quiet = !next || next[0] - this.T > this.rate * 3000;
-          this.T += dt * this.rate * 1000 * (quiet ? 8 : 1);
+          // Dead time is not played (client, Sep 27): when the next event is more than two seconds of playback away, the clock
+          // jumps to just before it. The scrubber moves with it and the time label says how much quiet was skipped.
+          const next = this.stream.events[this.stream.count(this.T)], lead = this.rate * 400;
+          if (next && next[0] - this.T > this.rate * 2000) { this.skip = {ms: next[0] - lead - this.T, until: now + 1800}; this.T = next[0] - lead; }
+          else this.T += dt * this.rate * 1000;
           if (this.T >= b) { this.T = b; if (this.stream.caughtUp) this.goLive(true); }
         }
         if (this.T < a) this.T = a;
         if (document.activeElement !== this.el.scrub || this.playing) this.el.scrub.value = String(Math.round((this.T - a) / (b - a) * 1000));
         const d = new Date(this.T);
-        const date = DATE.format(d), time = `${TIME.format(d)} UTC${this.live ? ' · live' : ''}`;
+        const skipped = this.skip && now < this.skip.until && !this.live ? ` · skipped ${quiet(this.skip.ms)} of quiet` : '';
+        const date = DATE.format(d), time = `${TIME.format(d)} UTC${this.live ? ' · live' : skipped}`;
         if (this.el.date.textContent !== date) this.el.date.textContent = date;
         if (this.el.time.textContent !== time) this.el.time.textContent = time;
         this.drawPlayhead();
@@ -133,7 +136,7 @@
     }
     onData() {
       const s = this.stream;
-      if (this.T === null && s.start != null) {
+      if (this.T === null && s.caughtUp) {
         this.el.player.hidden = false;
         const at = Date.parse(new URLSearchParams(location.search).get('t') || '');
         const still = matchMedia('(prefers-reduced-motion: reduce)').matches;
@@ -183,9 +186,11 @@
     const stream = new Stream(root.dataset.slug);
     let renderer = null;
     const player = new Player(root, stream, (T, info) => renderer?.frame(T, info));
+    // The type mounts once all history is in, so the page takes its final shape once instead of growing page by page.
     stream.on(kind => {
-      if (kind === 'head' && !renderer) { status.remove(); renderer = type.mount({root, stage, stream, player, slug: root.dataset.slug, theme}); }
-      renderer?.data?.(kind); player.onData();
+      if (!stream.caughtUp) { status.textContent = `Loading the record · ${Math.round(100 * stream.events.length / Math.max(1, stream.total))}%`; return; }
+      if (!renderer) { status.remove(); renderer = type.mount({root, stage, stream, player, slug: root.dataset.slug, theme}); }
+      renderer.data?.(kind); player.onData();
     });
     try { await stream.load(); }
     catch { if (!renderer) status.textContent = 'The record is temporarily unavailable. Refresh to try again.'; }
