@@ -4,13 +4,33 @@ import { renderBrief } from "../src/lib/brief.ts";
 import { compactDepartmentBrief } from "../src/lib/department-protocol.ts";
 import { GUIDANCE_VERSION, taskGuidance } from "../src/lib/research-guidance.ts";
 import { tangentJob } from "../src/lib/tangent.ts";
-import { EFFORT_GUIDANCE, workspaceSections } from "../src/lib/workspace-guidance.ts";
+import { EFFORT_GUIDANCE, FRAMEWORK_GUIDANCE_VERSION, FRAMEWORK_RECHECK_HOURS, workspaceSections } from "../src/lib/workspace-guidance.ts";
+import { createHash } from "node:crypto";
 import { MODEL_IDENTITY_GUIDANCE } from "../src/lib/model-id.ts";
 import { LOG_LOCATIONS } from "../src/lib/tokens.ts";
 import { readdirSync, readFileSync } from "node:fs";
 
 const job = { id: 78, type: "audit", title: "Audit: beta2-note", brief_md: "paper.slug: beta2-note\n\nAudit it.", git_ref: "main", compute_hint: {}, budget_hours: 3, release_count: 1, last_release_note: "expired: the agent did not return or release it", lane_slug: null, repo_url: "https://example.org/r", expires_at: null };
 const session = { id: "s1", jobs: 1, max: 1, maxHours: 2, compute: "not offered", transcriptPreapproved: true };
+
+test('a recent framework stamp at the current framework guidance version skips the startup self-test, never result checks',()=>{
+  assert.equal(FRAMEWORK_RECHECK_HOURS,24);
+  // The version follows the text: a changed framework section yields a new version, whatever server renders it.
+  assert.equal(FRAMEWORK_GUIDANCE_VERSION,`framework-${createHash('sha256').update(JSON.stringify(workspaceSections('https://solveathome.invalid/projects/project'))).digest('hex').slice(0,12)}`);
+  assert.notEqual(JSON.stringify(workspaceSections('https://a.test/projects/p')),JSON.stringify(workspaceSections('https://solveathome.invalid/projects/project')),'the hash base is fixed, not the serving origin');
+  const run={...session,jobs:2,max:null},full=renderBrief(job,'https://x.test/projects/p',run);
+  for(const brief of [full,compactDepartmentBrief(full,job,run,null)]) {
+    assert.ok(brief.includes(FRAMEWORK_GUIDANCE_VERSION),'every brief states the version the stamp is compared with');
+    assert.match(brief,/Skip the self-review when your stamp \(section=framework\) matches it and the framework last completed a real assignment operation within 24 hours; a failing tool forces a recheck/);
+    assert.match(brief,/Unless your framework stamp allows the skip, self-review your local framework/);
+    assert.match(brief,/ALL issued attempts, including those with no submission/,'the outstanding-work check is never part of the skip');
+  }
+  const sections=workspaceSections('https://x.test/projects/p');
+  assert.match(sections.bootstrap,/keeps its readiness record: skip re-exercising and continue to step 7/);
+  assert.match(sections.framework,/unless the framework stamp allows the skip/);
+  assert.match(sections.framework,/within 24 hours, skip the startup self-review and self-tests/);assert.match(sections.framework,/recheck when a tool fails/);
+  assert.match(sections.framework,/never skips reading this turn's model\/thinking level, the outbound-payload check before each publication, the outstanding-work check, or verification of research results/);
+});
 
 test('every first and subsequent job requires working local tools and a framework self-review before research',()=>{
   for(const type of ['explore','source','direction','break','measure','formalize','paper','audit','check','review'])for(const jobs of [1,2]) {

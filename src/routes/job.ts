@@ -1,4 +1,4 @@
-import { DEPARTMENT_PROTOCOL, EFFORT_GUIDANCE } from '../lib/workspace-guidance.js';
+import { DEPARTMENT_PROTOCOL, EFFORT_GUIDANCE, FRAMEWORK_GUIDANCE_VERSION } from '../lib/workspace-guidance.js';
 import { creditHtml, creditText, creditByHandle, nameMap } from "../lib/display-name.js";
 import { departments } from "./departments.js";
 import { runBinding, publicId, directionFor, initialDirectionStep, enqueueReply } from "../lib/departments.js";
@@ -415,7 +415,7 @@ ${ENDED_LAUNCH_GUIDANCE}
   if (inboxMd) md = md.replace(/\n## /, () => `\n${inboxMd}## `);   // after the title block, before the first section
   if (ib.max_message_id > Number(session.inbox_seen_message_id ?? 0)) await q(`UPDATE sessions SET inbox_seen_message_id = $2 WHERE id = $1`, [session.id, ib.max_message_id]);
   if (session.department_id) md = compactDepartmentBrief(md, row, sess, savedDirection);
-  const payload = { department_id:session.department_id,run_id:session.run_id,direction:savedDirection,protocol_version:session.department_id ? `${DEPARTMENT_PROTOCOL}.${GUIDANCE_VERSION}` : undefined,job_id: row.id, attempt_id: row.attempt_id, guidance_version: GUIDANCE_VERSION, type: row.type, purpose: row.purpose, research_stage: stageOf(row), research_route_id: row.research_route_id ?? null, session: sess.id, session_jobs: sess.jobs, session_max_jobs: sess.max, inbox: ib, assignment_reason: reason, contact_id: session.contact_id, brief_md: md };
+  const payload = { department_id:session.department_id,run_id:session.run_id,direction:savedDirection,protocol_version:session.department_id ? `${DEPARTMENT_PROTOCOL}.${GUIDANCE_VERSION}` : undefined,job_id: row.id, attempt_id: row.attempt_id, guidance_version: GUIDANCE_VERSION, framework_version: FRAMEWORK_GUIDANCE_VERSION, type: row.type, purpose: row.purpose, research_stage: stageOf(row), research_route_id: row.research_route_id ?? null, session: sess.id, session_jobs: sess.jobs, session_max_jobs: sess.max, inbox: ib, assignment_reason: reason, contact_id: session.contact_id, brief_md: md };
   await q(`UPDATE assignment_attempts SET assignment_payload = $2 WHERE id = $1`, [row.attempt_id, JSON.stringify(payload)]);
   if (wantsJson) res.json(payload);
   else res.type("text/markdown").send(md);
@@ -431,9 +431,9 @@ job.get('/department-protocol',project,(req:any,res) => {
   const selected=typeof section === 'string' ? {[section]:sections[section]} : sections;
   const version=`${DEPARTMENT_PROTOCOL}.${GUIDANCE_VERSION}`;
   if ((req.header('accept') ?? '').includes('text/markdown')) {
-    res.type('text/markdown').send(`# Local research department guidance\n\n${PROTOCOL_PROVENANCE}\n\nVersion: ${version}.\n\n${Object.entries(selected).map(([name,body])=>`## ${name}\n\n${body}`).join('\n\n')}`); return;
+    res.type('text/markdown').send(`# Local research department guidance\n\n${PROTOCOL_PROVENANCE}\n\nVersion: ${version}. Framework guidance version: ${FRAMEWORK_GUIDANCE_VERSION}.\n\n${Object.entries(selected).map(([name,body])=>`## ${name}\n\n${body}`).join('\n\n')}`); return;
   }
-  res.json({about:PROTOCOL_PROVENANCE,version,distribution:'guidance',launch:folderLaunchContract(BASE(),req.project.slug),sections:selected});
+  res.json({about:PROTOCOL_PROVENANCE,version,framework_version:FRAMEWORK_GUIDANCE_VERSION,distribution:'guidance',launch:folderLaunchContract(BASE(),req.project.slug),sections:selected});
 });
 job.get("/start", checkInstruction, bearer, project, assignmentMutation(start, { commitErrors: true }));
 job.get("/job", checkInstruction, bearer, project, assignmentMutation(start, { commitErrors: true }));

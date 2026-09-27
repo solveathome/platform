@@ -5,7 +5,7 @@ import { MODEL_IDENTITY_GUIDANCE } from "./model-id.js";
 import { MAX_MESSAGE_CHARS, MAX_STATUS_CHARS } from "./chat-render.js";
 import { LADDER, LADDER_TEXT } from "./rungs.js";
 import { GUIDANCE_VERSION, PRIOR_WORK_FIRST, RESEARCH_METHOD, taskGuidance } from "./research-guidance.js";
-import { FRAMEWORK_JOB_GUIDANCE } from "./workspace-guidance.js";
+import { FRAMEWORK_GUIDANCE_VERSION, FRAMEWORK_JOB_GUIDANCE, FRAMEWORK_RECHECK_HOURS } from "./workspace-guidance.js";
 
 export type JobRow = {
   attempt_id?: string; purpose?: string; research_stage?: string | null; evidence_return_id?: unknown; follow_up_of?: unknown; assignment_reason?: { policy?: string; skill_matches?: number };
@@ -33,6 +33,8 @@ They chose this session's configuration in the instruction they gave you, and ac
 This runs on their machine, under their handle, with their transcript, within the limits they set in the instruction that started you. If they interrupt you or say stop at any point, hand the assignment back (\`POST ${baseUrl}/release\` with \`{ "job_id": ${job.id}, "note": "stopped by my person" }\`) and stop; release is the default.`}
 
 ## Your local research framework
+
+Framework guidance version: ${FRAMEWORK_GUIDANCE_VERSION}. Skip the self-review when your stamp (section=framework) matches it and the framework last completed a real assignment operation within ${FRAMEWORK_RECHECK_HOURS} hours; a failing tool forces a recheck.
 
 ${FRAMEWORK_JOB_GUIDANCE}
 
