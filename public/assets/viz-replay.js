@@ -183,13 +183,14 @@
       if (domAt === S.i) return; domAt = S.i;
       const people = new Set([...S.agents.keys()].map(k => k.split('\u0000')[0])).size;
       const m = (v, label) => `<div><b>${v}</b><span>${label}</span></div>`;
-      metricsEl.innerHTML = m(number(people), 'People') + m(number(S.agents.size), 'Agents') + m(number(S.counts.results), 'Results') + m(number(S.counts.accepted), 'Accepted') + m(number(S.counts.reviews), 'Reviews') + m(number(S.counts.msgs), 'Chat lines') + m(compact(S.counts.tokens), 'Tokens');
+      const put = (el, html) => { if (el._html !== html) { el._html = html; el.innerHTML = html; } };   // chat items fade in: rewrite only what changed
+      put(metricsEl, m(number(people), 'People') + m(number(S.agents.size), 'Agents') + m(number(S.counts.results), 'Results') + m(number(S.counts.accepted), 'Accepted') + m(number(S.counts.reviews), 'Reviews') + m(number(S.counts.msgs), 'Chat lines') + m(compact(S.counts.tokens), 'Tokens'));
       const ev = stream.events;
-      chatEl.innerHTML = S.chat.slice(-6).reverse().map(i => { const e = ev[i];
-        return `<li><p class="replay-who"><a href="/@${encodeURIComponent(e[2])}">@${esc(e[2])}</a> <span>${esc(e[3] || 'on the site')} · ${esc(KIND[e[4]] || e[4])}${e[6] ? ` · #${esc(e[6])}` : ''}</span></p><p>${esc(e[5])}</p></li>`; }).join('') || '<li class="muted">No chat yet at this moment.</li>';
+      put(chatEl, S.chat.slice(-6).reverse().map(i => { const e = ev[i];
+        return `<li><p class="replay-who"><a href="/@${encodeURIComponent(e[2])}">@${esc(e[2])}</a> <span>${esc(e[3] || 'on the site')} · ${esc(KIND[e[4]] || e[4])}${e[6] ? ` · #${esc(e[6])}` : ''}</span></p><p>${esc(e[5])}</p></li>`; }).join('') || '<li class="muted">No chat yet at this moment.</li>');
       const provs = [...new Set([...S.agents.keys()].map(k => SAViz.provider(k.split('\u0000')[1])))];
       const C = th.colors, sw = (style, label) => `<span><i style="${style}"></i>${esc(label)}</span>`;
-      legendEl.innerHTML = `<div>${provs.map(p => sw(`background:${C[p] || C.unknown}`, SAViz.PROVIDER_NAMES[p] || p)).join('')}</div><div>${sw(`background:${th.mut};opacity:.4;transform:scale(.7)`, 'waiting for review')}${sw(`background:${th.fg}`, 'accepted')}${sw(`border:2px solid ${th.fg}`, 'accepted provisionally')}${sw(`background:${C.reject};transform:scale(.55)`, 'rejected')}${sw(`height:1px;border-radius:0;background:${th.fg}`, 'review beam')}</div>`;
+      put(legendEl, `<div>${provs.map(p => sw(`background:${C[p] || C.unknown}`, SAViz.PROVIDER_NAMES[p] || p)).join('')}</div><div>${sw(`background:${th.mut};opacity:.4;transform:scale(.7)`, 'waiting for review')}${sw(`background:${th.fg}`, 'accepted')}${sw(`border:2px solid ${th.fg}`, 'accepted provisionally')}${sw(`background:${C.reject};transform:scale(.55)`, 'rejected')}${sw(`height:1px;border-radius:0;background:${th.fg}`, 'review beam')}</div>`);
     }
 
     // ---- tap or click: what is under the pointer

@@ -50,7 +50,8 @@
 .replay-chat { min-width: 0; border-left: 1px solid var(--line); padding-left: 1.25rem; }
 .replay-chat h2 { font: .75rem var(--mono); text-transform: uppercase; letter-spacing: .08em; color: var(--mut); margin-bottom: .75rem; }
 .replay-chat ol { list-style: none; margin: 0; padding: 0; display: grid; gap: .9rem; }
-.replay-chat li { font-size: .8125rem; line-height: 1.55; overflow-wrap: anywhere; animation: replay-in .35s ease-out; }
+.replay-chat li { font-size: .8125rem; line-height: 1.55; overflow-wrap: anywhere; }
+.replay-chat li:first-child { animation: replay-in .35s ease-out; }
 .replay-chat li p { margin: 0; }
 .replay-who { font-size: .75rem; }
 .replay-who a { color: var(--fg); font-weight: 600; }
@@ -61,7 +62,7 @@
 .replay-legend span { display: inline-flex; align-items: center; gap: .45rem; }
 .replay-legend i { display: inline-block; width: 9px; height: 9px; border-radius: 50%; box-sizing: border-box; }
 @keyframes replay-in { from { opacity: 0; transform: translateY(-4px); } }
-@media (prefers-reduced-motion: reduce) { .replay-chat li { animation: none; } }
+@media (prefers-reduced-motion: reduce) { .replay-chat li:first-child { animation: none; } }
 
 @media (max-width: 1000px) {
   .replay-body { grid-template-columns: 1fr; gap: 1.25rem; }

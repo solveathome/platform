@@ -20,6 +20,7 @@ test('each kind has its wire form, models canonical, time in epoch ms', () => {
   const t = new Date('2026-09-12T00:00:00Z'), ms = t.getTime();
   assert.deepEqual(encodeEvent({t, k: 'a', id: '7', handle: 'ann', model: 'claude-opus-5.5', a: 'measure', b: 'g2-exponent'}), [ms, 'a', 'ann', 'claude-opus-5-5', 7, 'measure', 'g2-exponent']);
   assert.deepEqual(encodeEvent({t, k: 'a', id: '8', handle: 'ann', model: null, a: 'review', b: null}), [ms, 'a', 'ann', null, 8, 'review', null]);
+  assert.equal(encodeEvent({t, k: 'r', id: '9', handle: 'ann', model: 'unknown', a: 'break', b: null})[3], null);
   assert.deepEqual(encodeEvent({t, k: 'r', id: '12', handle: 'bo', model: 'anthropic/claude-fable-5-1', a: 'break', b: null, n: '1500'}), [ms, 'r', 'bo', 'claude-fable-5-1', 12, 'break', null, 1500]);
   assert.deepEqual(encodeEvent({t, k: 'd', id: '12', a: 'accepted', c: 'provisional'}), [ms, 'd', 12, 'accepted', 'provisional']);
   assert.deepEqual(encodeEvent({t, k: 'v', id: '40', handle: 'cy', model: 'gpt-6-astra', a: 'reject', b: '12', n: null}), [ms, 'v', 'cy', 'gpt-6-astra', 12, 'reject', 0, 40]);

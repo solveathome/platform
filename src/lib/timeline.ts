@@ -75,7 +75,9 @@ export function plainLine(md: unknown, n = MESSAGE_CHARS): string {
  *   m  chat line   [t, "m", handle, model, kind, text, channel]
  */
 export function encodeEvent(row: any): unknown[] {
-  const t = new Date(row.t).getTime(), model = row.model ? canonicalModel(row.model) || null : null, n = row.n == null ? 0 : Number(row.n);
+  // "unknown" is a model nobody named: no agent of its own on the page.
+  const canon = row.model ? canonicalModel(row.model) : "";
+  const t = new Date(row.t).getTime(), model = canon && canon !== "unknown" ? canon : null, n = row.n == null ? 0 : Number(row.n);
   switch (row.k) {
     case "a": return [t, "a", row.handle, model, Number(row.id), row.a, row.b ?? null];
     case "r": return [t, "r", row.handle, model, Number(row.id), row.a, row.b ?? null, n];

@@ -40,7 +40,7 @@ const all = async (floor = null, limit = 1000, cur = null) => (await db.query(TI
 
 test('one project, every kind, oldest first, no bookkeeping chat, decisions at the moment they were made', async () => {
   const rows = await all();
-  assert.deepEqual(rows.map(r => `${r.k}${r.id}`), ['a13', 'a10', 'm900', 'r100', 'r101', 'r102', 'v500', 'v501', 'd101', 'd100']);
+  assert.deepEqual(rows.map(r => `${r.k}${r.id}`), ['a13', 'a10', 'm900', 'r100', 'r101', 'r102', 'v500', 'd101', 'v501', 'd100']);   // a rejection shares its deciding review's moment; k orders the tie
   const byKey = Object.fromEntries(rows.map(r => [`${r.k}${r.id}`, r]));
   assert.equal(byKey.a10.model, 'claude-opus-5');                              // the holding session's model
   assert.equal(byKey.a13.model, null);
