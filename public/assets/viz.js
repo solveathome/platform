@@ -87,9 +87,10 @@
    * result, review or decision, and at least a quarter of the events of the median working quarter (never fewer than three).
    * Every other quarter is left out, however many stray chat lines it holds. Quarter hours, not hours: at 1 h/s an hour-long
    * bin still played its quiet half. Runs of playing quarters are joined; a cut of an hour or more is a short beat (0.1 s of
-   * playback, the picture held), a shorter one is seamless, and each has a tick on the scrubber. Play, the scrubber and its
-   * histogram run on this axis; the clock label keeps the real date and time, so it jumps across a cut. A skipped quarter's
-   * events are not played: their results and chat are in place after the cut.
+   * playback, the picture held), a shorter one is seamless. Play runs on this axis, so the clock label, which keeps the real
+   * date and time, jumps forward across a cut; a skipped quarter's events are not played, their results and chat are in place
+   * after the cut. The scrubber does not (client, Sep 27: "we should still visually show the gaps in the timeline"): it is
+   * drawn in real time with each cut (gaps()) hatched, and scrubbing into a gap shows the record as it stood there.
    */
   const BIN = 900_000, HOUR = 3600_000, BEAT = 100, QUIET_SHARE = 0.25, QUIET_MIN = 3;
   const WORK = new Set(['a', 'r', 'v', 'd']);
@@ -127,6 +128,14 @@
       if (T <= s.t1) return s.p0 + (T - s.t0);
       return lo + 1 < segs.length ? segs[lo + 1].p0 : this.total;
     }
+    /** The quiet stretches in real time, [from, to] each: before the first stretch, between stretches, and after the last up to `end`. */
+    gaps(start, end) {
+      const out = [], segs = this.segs;
+      if (segs[0].t0 > start) out.push([start, segs[0].t0]);
+      for (let i = 1; i < segs.length; i++) out.push([segs[i - 1].t1, segs[i].t0]);
+      if (end > segs[segs.length - 1].t1) out.push([segs[segs.length - 1].t1, end]);
+      return out;
+    }
     /** Whether a real moment is played (not inside a cut). */
     plays(T) { const P = this.at(T); return Math.abs(this.real(P) - T) < 1; }
   }
@@ -141,7 +150,7 @@
       this.el.play.onclick = () => this.toggle();
       this.el.speed.onchange = () => { this.rate = Number(this.el.speed.value); this.rebuild(); };
       this.el.live.onclick = () => this.goLive(!this.live);
-      this.el.scrub.addEventListener('input', () => { this.live = false; this.el.live.setAttribute('aria-pressed', 'false'); this.seekP(this.axis.total * Number(this.el.scrub.value) / 1000); });
+      this.el.scrub.addEventListener('input', () => { this.live = false; this.el.live.setAttribute('aria-pressed', 'false'); const [a, b] = this.span(); this.seekT(a + (b - a) * Number(this.el.scrub.value) / 1000); });
       this.el.scrub.addEventListener('pointerdown', () => { this.wasPlaying = this.playing; this.setPlaying(false); });
       this.el.scrub.addEventListener('pointerup', () => { if (this.wasPlaying) this.setPlaying(true); });
       addEventListener('keydown', e => { if (e.key === ' ' && !/INPUT|SELECT|BUTTON|TEXTAREA|A/.test(document.activeElement?.tagName || '')) { e.preventDefault(); this.toggle(); } });
@@ -157,6 +166,10 @@
       this.histDirty = true;
     }
     seekP(P) { this.P = Math.max(0, Math.min(this.axis.total, P)); this.T = this.axis.real(this.P); }
+    /** Scrubbing lands on a real moment, inside a gap too; play then resumes from the start of the next stretch. */
+    seekT(T) { this.T = T; this.P = this.axis.at(T); }
+    /** The scrubber's span in real time: launch to now. */
+    span() { return [this.stream.start, Math.max(this.stream.start + HOUR, this.stream.end())]; }
     toggle() { if (this.live) this.goLive(false); this.setPlaying(!this.playing); }
     setPlaying(on) {
       if (on && !this.live && this.P >= this.axis.total - 1) this.seekP(0);   // play at the end starts over
@@ -172,7 +185,8 @@
           this.seekP(this.P + dt * this.rate * 1000);
           if (this.P >= this.axis.total && this.stream.caughtUp) this.goLive(true);
         }
-        if (document.activeElement !== this.el.scrub || this.playing) this.el.scrub.value = String(Math.round(this.P / this.axis.total * 1000));
+        const [a, b] = this.span();
+        if (document.activeElement !== this.el.scrub || this.playing) this.el.scrub.value = String(Math.round((this.T - a) / (b - a) * 1000));
         const d = new Date(this.T);
         const date = DATE.format(d), time = `${TIME.format(d)} UTC${this.live ? ' · live' : ''}`;
         if (this.el.date.textContent !== date) this.el.date.textContent = date;
@@ -197,39 +211,42 @@
         if (Number.isFinite(at)) this.seekP(this.axis.at(at)); else this.seekP(0);
         if (!still && !Number.isFinite(at)) this.setPlaying(true);
       }
-      this.el.start.textContent = SHORT.format(new Date(this.axis.segs[0].t0)); this.el.end.textContent = 'now';
+      this.el.start.textContent = SHORT.format(new Date(s.start)); this.el.end.textContent = 'now';
       this.el.loading.textContent = `${SA.number(s.events.length)} events`;
     }
-    /** The scrubber's background: events per bucket along the playback axis, the part already played in full ink, a tick where quiet was cut. */
+    /** The scrubber's background, in real time: events per bucket, the part already played in full ink, and the gaps play skips hatched. */
     drawHistogram() {
       const c = this.el.hist, dpr = devicePixelRatio || 1, w = c.clientWidth, h = c.clientHeight;
       if (!w || !h || !this.axis) return;
       if (c.width !== Math.round(w * dpr) || c.height !== Math.round(h * dpr)) { c.width = Math.round(w * dpr); c.height = Math.round(h * dpr); }
-      const ax = this.axis, n = Math.max(24, Math.min(240, Math.floor(w / 4))), counts = new Array(n).fill(0);
-      for (const e of this.stream.events) { const i = Math.min(n - 1, Math.floor(ax.at(e[0]) / ax.total * n)); if (i >= 0) counts[i]++; }
+      const [a, b] = this.span(), n = Math.max(24, Math.min(240, Math.floor(w / 4))), counts = new Array(n).fill(0);
+      for (const e of this.stream.events) { const i = Math.min(n - 1, Math.floor((e[0] - a) / (b - a) * n)); if (i >= 0) counts[i]++; }
       const max = Math.max(1, ...counts);
-      this.bars = {n, counts, max, cuts: ax.segs.slice(1).map(sg => sg.p0 / ax.total)}; this.histDirty = false; this.drawnAt = null; this.drawPlayhead(true);
+      this.bars = {n, counts, max, a, b, gaps: this.axis.gaps(a, b)}; this.histDirty = false; this.drawnAt = null; this.drawPlayhead(true);
     }
     drawPlayhead(force) {
-      if (this.histDirty) return this.drawHistogram();
+      if (this.histDirty || (this.bars && this.span()[1] - this.bars.b > (this.bars.b - this.bars.a) / 500)) return this.drawHistogram();   // now moves on: redraw every 0.2% of the span
       if (!this.bars) return;
-      const {n, counts, max, cuts} = this.bars, c = this.el.hist, ctx = c.getContext('2d'), dpr = devicePixelRatio || 1, w = c.width / dpr, h = c.height / dpr;
-      const x = this.P / this.axis.total * w;
+      const {n, counts, max, a, b, gaps} = this.bars, c = this.el.hist, ctx = c.getContext('2d'), dpr = devicePixelRatio || 1, w = c.width / dpr, h = c.height / dpr;
+      const x = (this.T - a) / (b - a) * w;
       if (!force && this.drawnAt !== null && Math.abs(this.drawnAt - x) < 0.5) return;
       this.drawnAt = x;
-      const th = theme(), bw = w / n;
+      const th = theme(), bw = w / n, X = t => (t - a) / (b - a) * w;
       ctx.setTransform(dpr, 0, 0, dpr, 0, 0); ctx.clearRect(0, 0, w, h);
+      // Gaps: a soft band with fine diagonal hatching, full height, under the bars. Play jumps them; the scrubber still reaches them.
+      ctx.save(); ctx.beginPath();
+      for (const [g0, g1] of gaps) { const x0 = X(g0), x1 = X(g1); if (x1 - x0 >= 0.75) ctx.rect(x0, 0, x1 - x0, h); }
+      ctx.clip(); ctx.fillStyle = th.soft; ctx.fillRect(0, 0, w, h);
+      ctx.strokeStyle = th.line; ctx.lineWidth = 1; ctx.beginPath();
+      for (let d = -h; d < w; d += 5) { ctx.moveTo(d, h); ctx.lineTo(d + h, 0); }
+      ctx.stroke(); ctx.restore();
       for (let i = 0; i < n; i++) {
         if (!counts[i]) continue;
         const bh = Math.max(1, Math.sqrt(counts[i] / max) * (h - 6));   // square root: a busy hour does not flatten a quiet day
-        ctx.fillStyle = (i + 1) * bw <= x ? th.fg : th.line;
+        ctx.fillStyle = (i + 1) * bw <= x ? th.fg : th.mut; ctx.globalAlpha = (i + 1) * bw <= x ? 1 : .55;
         ctx.fillRect(i * bw + 0.5, h - bh, Math.max(1, bw - 1), bh);
       }
-      ctx.fillStyle = th.fg; ctx.fillRect(Math.round(x) - 1, 0, 2, h);
-      // A short tick under the base where a quiet stretch was cut.
-      ctx.fillStyle = th.mut; ctx.globalAlpha = .7;
-      for (const f of cuts) ctx.fillRect(Math.round(f * w), h - 3, 1, 3);
-      ctx.globalAlpha = 1;
+      ctx.globalAlpha = 1; ctx.fillStyle = th.fg; ctx.fillRect(Math.round(x) - 1, 0, 2, h);
     }
   }
 
