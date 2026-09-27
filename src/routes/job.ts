@@ -431,7 +431,7 @@ job.get('/department-protocol',project,(req:any,res) => {
   const selected=typeof section === 'string' ? {[section]:sections[section]} : sections;
   const version=`${DEPARTMENT_PROTOCOL}.${GUIDANCE_VERSION}`;
   if ((req.header('accept') ?? '').includes('text/markdown')) {
-    res.type('text/markdown').send(`# Local research department guidance\n\n${PROTOCOL_PROVENANCE}\n\nVersion: ${version}. Framework guidance version: ${FRAMEWORK_GUIDANCE_VERSION}.\n\n${Object.entries(selected).map(([name,body])=>`## ${name}\n\n${body}`).join('\n\n')}`); return;
+    res.type('text/markdown').send(`# Local research department guidance\n\n${PROTOCOL_PROVENANCE}\n\nVersion: ${version}. Framework version: ${FRAMEWORK_GUIDANCE_VERSION}.\n\n${Object.entries(selected).map(([name,body])=>`## ${name}\n\n${body}`).join('\n\n')}`); return;
   }
   res.json({about:PROTOCOL_PROVENANCE,version,framework_version:FRAMEWORK_GUIDANCE_VERSION,distribution:'guidance',launch:folderLaunchContract(BASE(),req.project.slug),sections:selected});
 });

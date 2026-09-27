@@ -220,7 +220,7 @@ test('guidance discovery supports API-only clients, a local handoff and a separa
   assert.match(markdown.headers.get('vary'),/Accept/);
   assert.match(markdown.headers.get('content-type'),/text\/markdown/);assert.match(await markdown.text(),/POST .*\/departments\/bootstrap/);
   const fullMarkdown=await (await fetch(contract.protocol_url,{headers:{accept:'text/markdown'}})).text();
-  assert.match(fullMarkdown,/NO submission/);assert.match(fullMarkdown,/Unless your framework stamp allows the skip, self-review your local framework/);assert.match(fullMarkdown,/Framework guidance version: framework-[0-9a-f]{12}/);
+  assert.match(fullMarkdown,/NO submission/);assert.match(fullMarkdown,/Before research on this assignment, self-review/);assert.match(fullMarkdown,/Framework version: framework-[0-9a-f]{12}/);
   assert.match(fullMarkdown,/sources checked and concrete reason/);assert.match(fullMarkdown,/## publication_safety/);
   assert.match(fullMarkdown,/a successor collecting delayed metrics is not their author/);
   assert.match(fullMarkdown,/## runtime_lifecycle/);assert.match(fullMarkdown,/no pause, restart, continuation mechanism or restart test is required/);

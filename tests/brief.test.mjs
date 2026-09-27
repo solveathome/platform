@@ -21,8 +21,7 @@ test('a recent framework stamp at the current framework guidance version skips t
   const run={...session,jobs:2,max:null},full=renderBrief(job,'https://x.test/projects/p',run);
   for(const brief of [full,compactDepartmentBrief(full,job,run,null)]) {
     assert.ok(brief.includes(FRAMEWORK_GUIDANCE_VERSION),'every brief states the version the stamp is compared with');
-    assert.match(brief,/Skip the self-review when your stamp \(section=framework\) matches it and the framework last completed a real assignment operation within 24 hours; a failing tool forces a recheck/);
-    assert.match(brief,/Unless your framework stamp allows the skip, self-review your local framework/);
+    assert.match(brief,/self-review your local framework against this task and prior failures, unless your stamp matches this framework version and last worked under 24 hours ago/);assert.match(brief,/section=framework/);
     assert.match(brief,/ALL issued attempts, including those with no submission/,'the outstanding-work check is never part of the skip');
   }
   const sections=workspaceSections('https://x.test/projects/p');
