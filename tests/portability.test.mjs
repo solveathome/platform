@@ -121,3 +121,14 @@ test('issue #92: only a stated fact queues a repair for someone else', async () 
   assert.equal(guess.length, 1);
   assert.ok(!guess.some(certainNote), 'the stdout-timing note is a reading of the text, so it queues nothing on its own');
 });
+
+// #mba-sah-bot-feedback-fixes, fix 14 (~36 bot posts: "File-note false positive again."): three shapes that are not stdout timing.
+test('no stdout-timing note for a column header, a print to a name bound to stderr, or a diff kept as a script; a real one still notes', () => {
+  const stdoutNote = (name, text) => portabilityNotes(name, text).some(n => /progress or timing to stdout/.test(n));
+  assert.equal(stdoutNote('h.py', `print(f"{'n':>6} {'elapsed':>9} {'total':>8}")\nprint(f"{n:>6} {v:>9}")\n`), false, 'a header of labels');
+  assert.equal(stdoutNote('h.py', `print("n", "elapsed", "total", sep="\\t")\n`), false, 'literal labels over several arguments');
+  assert.equal(stdoutNote('l.py', `import sys, time\nlog = sys.stderr\nt0 = time.time()\nprint(f"elapsed {time.time()-t0:.1f}s", file=log)\n`), false, 'file=log where log is stderr');
+  assert.equal(stdoutNote('d.py', `--- a/x.py\n+++ b/x.py\n@@ -1,2 +1,2 @@\n-print(f"elapsed {dt}")\n+print(f"elapsed {dt}", file=sys.stderr)\n`), false, 'a diff');
+  assert.equal(stdoutNote('r.py', `import time\nt0 = time.time()\nprint(f"elapsed {time.time()-t0:.1f}s")\n`), true, 'a real elapsed value on stdout');
+  assert.equal(stdoutNote('r.py', `print(f"{'elapsed':>9} {dt:.1f}")\n`), true, 'a label next to a value is a value');
+});

@@ -256,6 +256,18 @@ function callText(lines: string[], i: number, ext: string): string {
   return open > 0 ? stripComment(lines[i], marker) : text;
 }
 
+/**
+ * A print of text only: a column header (`print(f"{'n':>6} {'elapsed':>9}")`), a literal line over several arguments. Its words are
+ * labels, not values of this run (#mba-sah-bot-feedback-fixes, fix 14: "the heuristic seems to fire on f-strings that contain
+ * 'elapsed'/'total'"). Interpolations that hold only a string literal and a format spec are labels too; any other value is not.
+ */
+function literalOnlyCall(call: string): boolean {
+  const labels = call.replace(/\{\s*(['"])(?:(?!\1)[^\\\n])*\1\s*(?:[:!][^{}]*)?\}/g, "");
+  const blank = blankLiterals(labels);
+  if (/\{/.test(blank) || /\$[A-Za-z_(]/.test(labels)) return false;   // an interpolation, or a shell variable inside quotes, is a value
+  const rest = blank.replace(STDOUT_PRINT, "").replace(/\b(?:sep|end|flush)\s*=\s*(?:True|False)?/g, "").replace(/\b[frbuFRBU]{1,2}(?=['"])/g, "").replace(/['"`\s(),;+]/g, "");
+  return rest === "";
+}
 /** The line without its trailing comment: a note that says there is *no* elapsed field must not read as one. Quotes are respected, and the marker is the language's own (`//` is floor division in Python). */
 function stripComment(line: string, marker: string): string {
   let quote = "";
@@ -282,15 +294,21 @@ export function portabilityNotes(name: string, content: string): string[] {
   if (home) notes.push(`carries a hard-coded home directory: ${home}; on another machine that path does not exist. Use a path relative to the repository.`);
   if (!SCRIPT_EXT.has(ext)) return notes;
   const lines = String(content ?? "").split("\n");
+  // A unified diff kept under a script's name is not a program: its + and - lines are text (#mba-sah-bot-feedback-fixes, fix 14).
+  const isDiff = /^@@ -\d+(?:,\d+)? \+\d+/m.test(content) && /^\+\+\+ /m.test(content);
+  // A name bound to stderr (`log = sys.stderr`, `from sys import stderr`) sends a print there: `print(..., file=log)` is not stdout
+  // (bot feedback: "Line 54 writes to `log`, which is `sys.stderr`").
+  const errNames = [...String(content ?? "").matchAll(/\b([A-Za-z_]\w*)\s*=\s*sys\.stderr\b/g)].map((m) => m[1]);
+  const toErr = new RegExp(`\\bfile\\s*=\\s*(?:${["stderr", ...errNames].join("|")})\\b`);
   let printsStdout = false;
-  for (let i = 0; i < lines.length; i++) {
+  for (let i = 0; i < lines.length && !isDiff; i++) {
     const l = lines[i];
     if (COMMENT.test(l)) continue;
     if (!STDOUT_PRINT.test(l)) continue;
     const call = callText(lines, i, ext);
-    const toStdout = !/stderr|console\.error|>&2|file=sys\.stderr|eprint/.test(call);
+    const toStdout = !/stderr|console\.error|>&2|file=sys\.stderr|eprint/.test(call) && !toErr.test(call);
     printsStdout = printsStdout || toStdout;
-    if (toStdout && (PROGRESS_WORDS.test(call) || ETA.test(call) || CLOCK_CALL.test(blankLiterals(call))) && !LITERAL_ONLY.test(l)) {
+    if (toStdout && (PROGRESS_WORDS.test(call) || ETA.test(call) || CLOCK_CALL.test(blankLiterals(call))) && !LITERAL_ONLY.test(l) && !literalOnlyCall(call)) {
       // Quote the line that matched, not the line the call starts on. A print whose arguments run over several lines is read
       // as one statement, so the evidence can sit two lines below the one a reader is pointed at, and then the note names a
       // line with nothing wrong on it and the author cannot tell what was seen (platform issue #92).
