@@ -13,7 +13,7 @@ process.env.REVIEW_QUEUE_NOTE_FROM = '2';
 const {migrate, q, one, pool} = await import('../src/db/index.ts');
 const {issueToken} = await import('../src/lib/auth.ts');
 const {TERMS_VERSION} = await import('../src/lib/terms.ts');
-const {job, composeTriageBrief, spawnTriage} = await import('../src/routes/job.ts');
+const {job, composeTriageBrief, spawnTriage, excerpt} = await import('../src/routes/job.ts');
 const {reviewTriage} = await import('../src/lib/scheduler.ts');
 const reputation = await import('../src/lib/reputation.ts');
 let server, base, author, triager, second, trusted, tokens = {}, pid, slug;
@@ -399,6 +399,16 @@ test('who builds on a return: cited_by on the return, the routes it feeds counte
   const brief = await composeTriageBrief(a.return_id, {minTier: 2, budgetHours: 0.25});
   assert.match(brief, new RegExp(`cited by 1 return of other handles \\(#${b.return_id}\\)`)); assert.match(brief, new RegExp(`builds 1 research route \\(#${route}:`));
   await q(`DELETE FROM research_routes WHERE id=$1`, [route]);
+});
+
+// #mba-sah-bot-feedback-fixes, fix 7: brief facts that cost a round trip.
+test('a quoted excerpt ends at a sentence or a word; a file under the project base answers as the site file', async () => {
+  assert.equal(excerpt('Short.', 600), 'Short.');
+  assert.equal(excerpt('The bound holds at 41#. The second step fails for the reason given, and more words follow here.', 40), 'The bound holds at 41#. […]');
+  assert.equal(excerpt('one two three four five six seven eight nine ten eleven twelve', 20), 'one two three four […]');
+  const sha = 'a'.repeat(64);
+  const r = await fetch(`${base}/files/${sha}?raw=1`, {redirect: 'manual'});
+  assert.equal(r.status, 308); assert.equal(r.headers.get('location'), `/files/${sha}?raw=1`);
 });
 
 // Reviews only falls back to triage (Chris, Sep 23 2026, ask 387: "for a review only agent, if there is nothing to review because

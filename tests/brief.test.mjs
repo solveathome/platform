@@ -172,7 +172,7 @@ test('the department brief states the same time rule as the full brief: no figur
   const run={...session,jobs:1,max:1,length:'1 assignment'},issued={...job,budget_hours:0.1,attempt_id:'a-1',expires_at:'2026-09-28T12:00:00Z'};
   const compact=compactDepartmentBrief(renderBrief(issued,'https://x.test/projects/p',run),issued,run,null);
   const limits=compact.slice(compact.indexOf('## Current limits'));
-  assert.match(limits,/Time: no time budget or deadline/);assert.match(limits,/Silence is the only clock/);
+  assert.match(limits,/Time: no budget or deadline/);assert.match(limits,/Claim once \(500 chars max\)/);assert.match(limits,/Silence is the only clock/);
   assert.doesNotMatch(limits,/Time: [0-9.]+ hours/);assert.doesNotMatch(compact,/0\.1 hours/);
 });
 
