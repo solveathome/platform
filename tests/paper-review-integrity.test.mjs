@@ -16,8 +16,8 @@ process.env.DOCS_DIR = join(tmp, 'repos'); process.env.OVERLAY_DIR = join(tmp, '
 const {migrate, q, one, pool} = await import('../src/db/index.ts');
 const {TERMS_VERSION} = await import('../src/lib/terms.ts');
 const files = await import('../src/lib/files.ts');
-const {recordMirrorCut, restoreVersion, history} = await import('../src/lib/revisions.ts');
-const {resolveReturn, spawnFixJob} = await import('../src/routes/job.ts');
+const {recordMirrorCut, restoreVersion, history, servedDrift} = await import('../src/lib/revisions.ts');
+const {resolveReturn, spawnFixJob, staleRevision} = await import('../src/routes/job.ts');
 const findings = await import('../src/lib/findings.ts');
 const {paperReview} = await import('../src/lib/paper-state.ts');
 const {listPapers} = await import('../src/routes/papers.ts');
@@ -152,6 +152,32 @@ test('a revision without a recorded base (older returns) is integrated as before
   const id = await submit({path: note, text: '# Note\n\nA figure: 4.\n', base: null});
   await decide(id);
   assert.equal((await one(`SELECT integration FROM returns WHERE id = $1`, [id])).integration, 'applied');
+});
+
+// Whole-file revisions from a stale base erased accepted edits (#mba-sah-bot-feedback-fixes, fix 4, ~100 bot posts Sep 22-27).
+test('a whole-file revision needs the base it was made against, and that base must still be served', async () => {
+  const head = files.sha256(served(note));
+  const missing = await staleRevision(undefined, slug, note, pid, 'revision');
+  assert.equal(missing.status, 400); assert.match(missing.error, /revision\.base is required/); assert.equal(missing.head, head);
+  const stale = await staleRevision('a'.repeat(64), slug, note, pid, 'revision');
+  assert.equal(stale.status, 409); assert.match(stale.error, /would erase the accepted edits in between/);
+  assert.equal(await staleRevision(head.toUpperCase(), slug, note, pid, 'revision'), null, 'the served base passes');
+  assert.equal(await staleRevision(undefined, slug, 'paper/new-one.md', pid, 'paper'), null, 'a text nothing serves needs no base');
+});
+
+test('an older return without a base conflicts once a later version exists, and the drift check names lost integrated returns', async () => {
+  const older = await submit({path: note, text: '# Note\n\nAn older whole file.\n', base: null});
+  await q(`UPDATE returns SET created_at = now() - interval '1 hour' WHERE id = $1`, [older]);
+  await decide(older);
+  assert.equal((await one(`SELECT integration FROM returns WHERE id = $1`, [older])).integration, 'conflict', 'a version newer than the return exists');
+  assert.ok(await one(`SELECT 1 FROM jobs WHERE problem_id = $1 AND title = $2`, [pid, `Rebase return #${older} onto ${note}`]));
+  assert.deepEqual(await servedDrift(pid, slug), [], 'every document serves its latest version');
+  const latest = await one(`SELECT version, return_id FROM document_versions WHERE problem_id = $1 AND path = $2 ORDER BY version DESC LIMIT 1`, [pid, note]);
+  writeFileSync(join(tmp, 'overlay', slug, note), '# Note\n\nA figure: 3.\n');   // the text before the swarm, as a whole-file overwrite would leave it
+  const drift = await servedDrift(pid, slug);
+  assert.equal(drift.length, 1); assert.equal(drift[0].path, note); assert.equal(drift[0].served_version, 1); assert.equal(drift[0].latest, Number(latest.version));
+  assert.ok(drift[0].lost_returns.includes(Number(latest.return_id)));
+  writeFileSync(join(tmp, 'overlay', slug, note), '# Note\n\nA figure: 4.\n');
 });
 
 test('a before-circulation finding qualifies the status, survives job turnover, and closes only on an accepted revision that answers it', async () => {

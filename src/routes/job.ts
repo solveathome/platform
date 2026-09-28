@@ -1316,6 +1316,8 @@ job.post("/result", bearer, project, assignmentMutation(async (req: any, res) =>
     }
     await q(`UPDATE returns SET paper_slug = $2 WHERE id = $1`, [ret!.id, paperPlan.slug]);
     const ppath = (await one<{ path: string | null }>(`SELECT path FROM papers WHERE id = $1`, [paperId]))?.path ?? `paper/${paperPlan.slug}.md`;
+    const stale = await staleRevision(b.paper?.base, problem.slug, ppath, Number(problem.id), "paper");
+    if (stale) { res.status(stale.status).json({ error: stale.error, served_sha256: stale.head }); return; }
     await q(`UPDATE returns SET revision_path = $2, revision_sha = $3, revision_base_sha = $4 WHERE id = $1`, [ret!.id, ppath, paperPlan.fsha, await revisionBase(b.paper?.base, problem.slug, ppath, Number(problem.id))]);
     await q(`UPDATE papers SET status = 'under_review', updated_at = now() WHERE id = $1`, [paperId]);
   }
@@ -1325,6 +1327,8 @@ job.post("/result", bearer, project, assignmentMutation(async (req: any, res) =>
     const fsha = String(b.revision?.file ?? "").toLowerCase();
     if (!rel || !(await revisions.exists(problem.slug, rel, Number(problem.id)))) { res.status(400).json({ error: "an audit return needs revision: { path, file } where path is a document served at <project>/docs/<path> (or a paper's path)" }); return; }
     if (!/^[0-9a-f]{64}$/.test(fsha) || !(Array.isArray(b.files) && b.files.map((x: any) => String(x).toLowerCase()).includes(fsha))) { res.status(400).json({ error: "revision.file must be the sha256 of the revised document, and it must be listed in files" }); return; }
+    const stale = await staleRevision(b.revision?.base, problem.slug, rel, Number(problem.id), "revision");
+    if (stale) { res.status(stale.status).json({ error: stale.error, served_sha256: stale.head }); return; }
     await q(`UPDATE returns SET revision_path = $2, revision_sha = $3, revision_base_sha = $4 WHERE id = $1`, [ret!.id, rel, fsha, await revisionBase(b.revision?.base, problem.slug, rel, Number(problem.id))]);
     const paper = await one(`SELECT slug FROM papers WHERE problem_id = $1 AND path = $2`, [problem.id, rel]);
     if (paper) await q(`UPDATE returns SET paper_slug = $2 WHERE id = $1`, [ret!.id, paper.slug]);
@@ -1862,7 +1866,7 @@ export async function spawnFixJob(problemId: number, laneId: number | null, slug
 What the reviewer said:
 > ${note.replace(/\n/g, "\n> ")}
 
-Fetch the current file (GET ${P}/docs/${rel}), make the change, check it still runs and that its stdout reproduces byte for byte elsewhere (progress, timing and rates go to stderr; paths relative to the repository), upload the revised file (POST /files) and return as this job with \`"revision": { "path": "${rel}", "file": "<sha256 of the revised file>" }\`, the sha in \`files\`, a one-line report of what changed and why${by.returnId ? `, and \`"cites": { "returns": [${by.returnId}] }\`` : ""}. If the file's embedded hashes depend on the change, re-embed them and say so. Send \`"revision": { …, "base": "<X-Content-SHA256 of the text you edited>" }\` so a later change to the file is caught rather than overwritten, and list the findings your revision answers in \`"resolves": [<finding ids>]\` (GET ${P}/findings?path=${rel} lists the open ones). Accepted, the revision becomes the served version and closes the findings it answered; a finding it leaves open goes to the next fix job.`;
+Fetch the current file (GET ${P}/docs/${rel}), make the change, check it still runs and that its stdout reproduces byte for byte elsewhere (progress, timing and rates go to stderr; paths relative to the repository), upload the revised file (POST /files) and return as this job with \`"revision": { "path": "${rel}", "file": "<sha256 of the revised file>", "base": "<X-Content-SHA256 of the text you fetched>" }\`, the sha in \`files\`, a one-line report of what changed and why${by.returnId ? `, and \`"cites": { "returns": [${by.returnId}] }\`` : ""}. If the file's embedded hashes depend on the change, re-embed them and say so. Send \`"revision": { …, "base": "<X-Content-SHA256 of the text you edited>" }\` so a later change to the file is caught rather than overwritten, and list the findings your revision answers in \`"resolves": [<finding ids>]\` (GET ${P}/findings?path=${rel} lists the open ones). Accepted, the revision becomes the served version and closes the findings it answered; a finding it leaves open goes to the next fix job.`;
   const j = await one<{ id: string }>(`INSERT INTO jobs (problem_id, lane_id, type, title, brief_md, git_ref, compute_hint, budget_hours, min_tier, quorum) VALUES ($1,$2,'audit',$3,$4,'main','{}',1,99,1) RETURNING id`, [problemId, laneId, title, brief]);
   if (j && by.findingId) await findings.linkToJob(by.findingId, Number(j.id));
   return j ? Number(j.id) : null;
@@ -1898,6 +1902,18 @@ async function currentSha(slug: string, rel: string, problemId: number): Promise
   const t = await revisions.currentText(slug, rel, problemId); return t ? files.sha256(t.text) : null;
 }
 /** The text a revision was made against: the base the author sent (the X-Content-SHA256 of the text fetched), else the text served at submission. */
+/**
+ * A whole-file revision of a served text names the text it was made against, and that text is still the one served (#mba-sah-bot-feedback-fixes,
+ * ~100 bot posts Sep 22-27: "Whole-file integration keeps erasing accepted rows"). Without a base the text served at submission stood in for it,
+ * so a file edited from an older fetch replaced every edit accepted since. A text nothing serves yet (a new paper) needs no base.
+ */
+export async function staleRevision(given: unknown, slug: string, rel: string, problemId: number, field: "revision" | "paper"): Promise<{ status: number; error: string; head: string } | null> {
+  const head = await currentSha(slug, rel, problemId); if (!head) return null;
+  const g = String(given ?? "").trim().toLowerCase();
+  if (!/^[0-9a-f]{64}$/.test(g)) return { status: 400, head, error: `${field}.base is required: the X-Content-SHA256 of the text of \`${rel}\` you edited (GET <project base>/docs/${rel} sends it; the text served now is ${head}). A whole file sent without it would replace any edit accepted since you fetched it. Nothing was recorded.` };
+  if (g !== head) return { status: 409, head, error: `\`${rel}\` changed since the text you edited (${field}.base ${g}; served now ${head}): your file would erase the accepted edits in between. Fetch the current text, carry your change onto it and submit again with its X-Content-SHA256 as base. Nothing was recorded.` };
+  return null;
+}
 async function revisionBase(given: unknown, slug: string, rel: string, problemId: number): Promise<string | null> {
   const g = String(given ?? "").toLowerCase();
   return /^[0-9a-f]{64}$/.test(g) ? g : currentSha(slug, rel, problemId);

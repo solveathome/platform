@@ -60,8 +60,10 @@ async function integrateLocked(ret: any, slug: string, votes: Array<{ verdict: s
     return outcome("unchanged");
   }
   // Compare and set on the text the author and reviewers worked from: a revision made against an older text never replaces a newer one.
-  // An older return without a recorded base is integrated as before; its base is unknown and is not filled in with the current head.
+  // An older return without a recorded base is integrated as before only while the document has no version newer than the return: once a
+  // later version exists, replacing the text would erase it (#mba-sah-bot-feedback-fixes, fix 4), so it conflicts and a rebase carries it.
   if (head && ret.revision_base_sha && head !== ret.revision_base_sha) return outcome("conflict");
+  if (head && !ret.revision_base_sha && await one(`SELECT 1 FROM document_versions v JOIN returns r ON r.id = $3 WHERE v.problem_id = $1 AND v.path = $2 AND v.created_at > r.created_at`, [ret.problem_id, rel, ret.id])) return outcome("conflict");
   const last = await one<{ version: string }>(`SELECT max(version) AS version FROM document_versions WHERE problem_id = $1 AND path = $2`, [ret.problem_id, rel]);
   let version = Number(last?.version ?? 0);
   if (version === 0 && base && base.from !== "paper") {
@@ -193,4 +195,26 @@ export async function restoreVersion(slug: string, problemId: number, rel: strin
     await reopenRegressed(problemId, rel, v.content_sha);
     return { action: "restored", version: next, sha: v.content_sha, return_id: rid };
   });
+}
+
+/**
+ * Documents whose served text is not their latest recorded version (#mba-sah-bot-feedback-fixes, fix 4): an integrated revision was
+ * lost to a whole-file replacement or a mirror cut. Lists, per document, the integrated returns the served text no longer carries: those
+ * after the version it equals, or every version when it equals none.
+ */
+export async function servedDrift(problemId: number, slug: string): Promise<Array<{ path: string; latest: number; served_sha: string | null; served_version: number | null; lost_returns: number[] }>> {
+  const rows = await q<{ path: string; version: string; content_sha: string; return_id: string | null }>(`SELECT path, version, content_sha, return_id FROM document_versions WHERE problem_id = $1 ORDER BY path, version`, [problemId]);
+  const byPath = new Map<string, typeof rows>();
+  for (const r of rows) byPath.set(r.path, [...(byPath.get(r.path) ?? []), r]);
+  const out = [];
+  for (const [path, versions] of byPath) {
+    const latest = versions[versions.length - 1];
+    const cur = await currentText(slug, path, problemId);
+    const served = cur ? files.sha256(cur.text) : null;
+    if (served === latest.content_sha) continue;
+    const match = [...versions].reverse().find((v) => v.content_sha === served);
+    const lost = versions.filter((v) => v.return_id && (!match || Number(v.version) > Number(match.version))).map((v) => Number(v.return_id));
+    out.push({ path, latest: Number(latest.version), served_sha: served, served_version: match ? Number(match.version) : null, lost_returns: lost });
+  }
+  return out;
 }
