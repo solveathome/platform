@@ -47,6 +47,9 @@ departments.get('/run/context',assignmentMutation(async(req,res) => {
   const s=req.agentSession;
   if (!s?.department_id) { res.status(403).json({error:'folder run required'}); return; }
   const attempt = await one(`SELECT id,job_id,status,receipt,direction_snapshot,assignment_payload,started_at,budget_hours FROM assignment_attempts WHERE session_id=$1 ORDER BY started_at DESC LIMIT 1`,[s.id]);
+  // The context is read back into transcripts and local files: the private session value never travels in it (#mba-sah-bot-feedback-fixes,
+  // fix 9: "the run context response embeds the private session value in attempt.assignment_payload.session"). The header carries it.
+  if (attempt?.assignment_payload) { const { session: _private, ...rest } = attempt.assignment_payload; attempt.assignment_payload = JSON.parse(JSON.stringify(rest).split(String(s.id)).join('<private session>')); }
   res.json({run_id:s.run_id,department_id:s.department_id,direction:await directionFor(s),ended_at:s.ended_at,ends_at:s.ends_at,max_jobs:s.max_jobs,jobs:s.jobs,execution_active:!!await one(`SELECT 1 FROM sessions s JOIN jobs j ON j.assigned_session=s.id WHERE s.id=$1 AND j.status='assigned' AND (j.expires_at IS NULL OR j.expires_at>now()) AND s.ended_at IS NULL AND s.last_seen>now()-interval '120 minutes'`,[s.id]),attempt:attempt ?? null});
 }));
 departments.post('/run/direction',assignmentMutation(async(req,res) => {

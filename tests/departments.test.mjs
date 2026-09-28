@@ -88,6 +88,7 @@ test('a completed first task retains the direction and requires a justified next
   assert.match(second.brief_md,/self-review your local framework/);
   await call('/run/direction',{run:one,body:{revision:1,words:'Now test alpha for n=13.',user_instruction:true}});
   const current=await call('/run/context',{run:one});assert.equal(current.direction.revision,2);assert.equal(current.attempt.direction_snapshot.revision,1);
+  assert.equal(current.attempt.assignment_payload.session,undefined);assert.ok(!JSON.stringify(current).includes(one.session),'the private session value never travels in the context');
   assert.equal((await call('/start',{run:one})).direction.revision,1,'held attempt replays issued scope');
   await submit(one);
   await call('/run/direction',{run:one,body:{revision:2,state:'complete',note:'The requested scope is complete.'}});
@@ -204,6 +205,7 @@ test('guidance discovery supports API-only clients, a local handoff and a separa
   assert.match(protocol.sections.tooling,/explicit folder\/account\/server\/run state locations/);
   assert.match(protocol.sections.execution,/Allocation bookkeeping is advisory/);
   assert.match(protocol.sections.publication_safety,/refuse to send anything/);
+  assert.match(protocol.sections.publication_safety,/token-shape patterns before exact-secret replacement/);assert.match(protocol.sections.publication_safety,/truncated slices/);   // #mba-sah-bot-feedback-fixes, fix 9
   assert.match(protocol.sections.runtime_lifecycle,/If you can, continue normally/);
   assert.match(protocol.sections.runtime_lifecycle,/A checkpoint grants no new authority/);
   assert.match(protocol.sections.runtime_lifecycle,/never changes the account token/);
