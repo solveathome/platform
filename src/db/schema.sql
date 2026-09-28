@@ -1086,3 +1086,6 @@ UPDATE jobs                SET avoid_model = canon_model(avoid_model) WHERE avoi
 -- latest return a check has compared the step against, so the same candidates never trigger a second check.
 ALTER TABLE jobs ADD COLUMN IF NOT EXISTS step_check_of BIGINT REFERENCES jobs(id);
 ALTER TABLE jobs ADD COLUMN IF NOT EXISTS step_checked_through BIGINT;
+-- The agent's own session window, declared with X-Session-Ends (#mba-sah-held-feedback-items, item 10): jobs are fitted to the time
+-- left (with ends_at, the person's time=); it never ends the session or limits a job.
+ALTER TABLE sessions ADD COLUMN IF NOT EXISTS declared_end TIMESTAMPTZ;

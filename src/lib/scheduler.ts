@@ -60,6 +60,8 @@ export type SchedulingAgent = {
   problemId: number; slug: string; sessionId: string; uid: number; tier: number; model: string | null;
   provider: string | null; trusted: boolean; granted: boolean; lane: string | null;
   cpuHours: number; ramGb: number; hasGpu: boolean; disk: number; maxHours: number;
+  /** Hours left in the session, when it has an end (the person's time= or the agent's X-Session-Ends): jobs are fitted to it (item 10). */
+  hoursLeft?: number | null;
   jobId?: number; directionId?: string | null; directionRevision?: number; reviewStreak: number; capabilities: Partial<Capabilities>;
   /** A reviews-only trusted session with no review waiting (Chris, Sep 23 2026, ask 387): it may take a triage, under the review rules. */
   triageFallback?: boolean;
@@ -100,46 +102,62 @@ function eligibility(a: SchedulingAgent, omitCompute = false, sameKindOnly = fal
   const values: any[] = [];
   const p = (v: any) => { values.push(v); return `$${values.length}`; };
   const pid = p(a.problemId), tier = p(a.tier), sid = p(a.sessionId), uid = p(a.uid), model = p(a.model), fallback = p(a.triageFallback === true && a.trusted);
-  const clauses = [
-    `j.problem_id = ${pid} AND j.status = 'queued' AND j.min_tier >= ${tier}`,
-    `j.last_released_session IS DISTINCT FROM ${sid}::text`,
-    `NOT EXISTS (SELECT 1 FROM assignment_attempts old WHERE old.job_id = j.id AND old.session_id = ${sid} AND old.status IN ('released','cancelled'))`,
-    `(${p(a.lane)}::text IS NULL OR l.slug = $${values.length})`,
-    `(j.avoid_model IS NULL OR j.avoid_model IS DISTINCT FROM ${model}::text)`,
-    `(er.id IS NULL OR (er.user_id <> ${uid} AND er.model IS DISTINCT FROM ${model}::text))`,
-    `(j.type <> 'check' OR j.budget_hours <= ${p(a.maxHours)})`,
-    `(j.type <> 'check' OR NOT EXISTS (SELECT 1 FROM verification_runs v JOIN returns worker ON worker.id=v.result_return_id WHERE v.fingerprint=er.verification_fingerprint AND worker.problem_id=j.problem_id AND worker.user_id=${uid} AND v.outcome='unable'))`,
-    requirementClause('required_tools', 'tools', p(matchingTools(a.capabilities.tools)), true),
-    requirementClause('required_sources', 'sources', p(a.capabilities.sources ?? []), false),
-    `(pr.id IS NULL OR pr.user_id <> ${uid} OR ((j.type <> 'triage' OR ${fallback}::boolean) AND ${p(a.granted)}::boolean))`,
-    `(pr.id IS NULL OR j.type = 'triage' OR ${p(a.trusted)}::boolean)`,
+  // Each clause carries the reason a bot is given when it asks for a job by id and cannot have it (#mba-sah-held-feedback-items, item 11).
+  const labeled: Array<[string, string]> = [
+    [`it asks for tier ${"${j.min_tier}"} or better and this session is tier ${a.tier}`, `j.problem_id = ${pid} AND j.status = 'queued' AND j.min_tier >= ${tier}`],
+    ["this session released it before", `j.last_released_session IS DISTINCT FROM ${sid}::text`],
+    ["this session released or cancelled an attempt on it before", `NOT EXISTS (SELECT 1 FROM assignment_attempts old WHERE old.job_id = j.id AND old.session_id = ${sid} AND old.status IN ('released','cancelled'))`],
+    ["it is outside the lane this session was registered for", `(${p(a.lane)}::text IS NULL OR l.slug = $${values.length})`],
+    ["it asks for another model than yours", `(j.avoid_model IS NULL OR j.avoid_model IS DISTINCT FROM ${model}::text)`],
+    ["it checks evidence of your own handle or model", `(er.id IS NULL OR (er.user_id <> ${uid} AND er.model IS DISTINCT FROM ${model}::text))`],
+    ["it is a check longer than this session's hours per assignment", `(j.type <> 'check' OR j.budget_hours <= ${p(a.maxHours)})`],
+    ["your handle already reported this package as unable to run", `(j.type <> 'check' OR NOT EXISTS (SELECT 1 FROM verification_runs v JOIN returns worker ON worker.id=v.result_return_id WHERE v.fingerprint=er.verification_fingerprint AND worker.problem_id=j.problem_id AND worker.user_id=${uid} AND v.outcome='unable'))`],
+    ["it needs tools this session did not declare", requirementClause('required_tools', 'tools', p(matchingTools(a.capabilities.tools)), true)],
+    ["it needs sources this session did not declare", requirementClause('required_sources', 'sources', p(a.capabilities.sources ?? []), false)],
+    ["it judges your own handle's return, which needs a grant", `(pr.id IS NULL OR pr.user_id <> ${uid} OR ((j.type <> 'triage' OR ${fallback}::boolean) AND ${p(a.granted)}::boolean))`],
+    ["it is a review and this session is not a trusted reviewer", `(pr.id IS NULL OR j.type = 'triage' OR ${p(a.trusted)}::boolean)`],
     // Review triage (Sep 18 2026): a first read by a session that is not trusted, on another handle and model than the author's;
     // a trusted session reviews instead, and nobody triages one return twice. A reviews-only trusted session with no review
     // waiting selects a triage under the review rules (never its own model's return, its own handle's only by grant) only to
     // turn it into its review: a trusted session never triages (Sep 28 2026, #mba-sah-bot-feedback-fixes-skip-triage).
-    `(j.type <> 'triage' OR ((${fallback}::boolean OR (NOT ${p(a.trusted)}::boolean AND ${p(a.reviewStreak < 4)}::boolean)) AND NOT EXISTS (SELECT 1 FROM triages t WHERE t.return_id = j.parent_return_id AND t.user_id = ${uid})))`,
-    `NOT EXISTS (SELECT 1 FROM reviews rv WHERE rv.return_id = j.parent_return_id AND rv.user_id = ${uid} AND NOT rv.needs_reassessment)`,
-    `NOT EXISTS (SELECT 1 FROM jobs j2 WHERE j2.parent_return_id = j.parent_return_id AND j2.id <> j.id AND j2.assigned_to = ${uid} AND j2.status = 'assigned')`,
-    sameKindOnly ? `(pr.id IS NOT NULL AND pr.model IS NOT DISTINCT FROM ${model}::text)` : `(pr.id IS NULL OR pr.model IS DISTINCT FROM ${model}::text)`,
+    ["it is a triage: a trusted session never triages, nobody triages a return twice, and a run of four first reads goes to research", `(j.type <> 'triage' OR ((${fallback}::boolean OR (NOT ${p(a.trusted)}::boolean AND ${p(a.reviewStreak < 4)}::boolean)) AND NOT EXISTS (SELECT 1 FROM triages t WHERE t.return_id = j.parent_return_id AND t.user_id = ${uid})))`],
+    ["you already reviewed this return", `NOT EXISTS (SELECT 1 FROM reviews rv WHERE rv.return_id = j.parent_return_id AND rv.user_id = ${uid} AND NOT rv.needs_reassessment)`],
+    ["you already hold another job on this return", `NOT EXISTS (SELECT 1 FROM jobs j2 WHERE j2.parent_return_id = j.parent_return_id AND j2.id <> j.id AND j2.assigned_to = ${uid} AND j2.status = 'assigned')`],
+    [sameKindOnly ? "it is not a return of your model" : "it judges a return of your own model: a model never judges its own kind", sameKindOnly ? `(pr.id IS NOT NULL AND pr.model IS NOT DISTINCT FROM ${model}::text)` : `(pr.id IS NULL OR pr.model IS DISTINCT FROM ${model}::text)`],
     // A trusted session never triages (Chris, Sep 28 2026, #mba-sah-bot-feedback-fixes-skip-triage): a triage it falls back to becomes
     // its review, so it only falls back to a triage whose return it may review.
-    `(pr.id IS NULL OR (j.type = 'triage' AND NOT ${fallback}::boolean) OR (j.type <> 'triage' AND j.min_tier >= 99) OR ${tier} <= coalesce(amt.tier, 99))`,
-    `(j.type <> 'triage' OR NOT ${fallback}::boolean OR ${tier} <= ${REVIEW_TIER_SQL})`,
+    ["the return's author model is above this session's tier", `(pr.id IS NULL OR (j.type = 'triage' AND NOT ${fallback}::boolean) OR (j.type <> 'triage' AND j.min_tier >= 99) OR ${tier} <= coalesce(amt.tier, 99))`],
+    ["its review asks for a higher tier than this session's", `(j.type <> 'triage' OR NOT ${fallback}::boolean OR ${tier} <= ${REVIEW_TIER_SQL})`],
+    // Fitted to the session's remaining time (#mba-sah-held-feedback-items, item 10): a job estimated longer than the session has left
+    // is passed over for one that fits. The estimate chooses the job; it never limits it (no time budget or deadline, Sep 19 2026).
+    [`its estimate (${"${j.budget_hours}"} h) is longer than this session has left (${a.hoursLeft ?? "?"} h)`, `(${p(a.hoursLeft ?? null)}::numeric IS NULL OR j.budget_hours <= $${values.length})`],
   ];
-  clauses.push(a.directionId
-    ? `((j.agent_direction_id=${p(a.directionId)} AND j.agent_direction_revision=${p(a.directionRevision)}) OR (j.agent_direction_id IS NULL AND EXISTS(SELECT 1 FROM agent_direction_links dl WHERE dl.job_id=j.id AND dl.direction_id=${p(a.directionId)} AND dl.revision=${p(a.directionRevision)})))`
-    : `j.agent_direction_id IS NULL`);
+  labeled.push(a.directionId
+    ? ["it is outside this session's direction", `((j.agent_direction_id=${p(a.directionId)} AND j.agent_direction_revision=${p(a.directionRevision)}) OR (j.agent_direction_id IS NULL AND EXISTS(SELECT 1 FROM agent_direction_links dl WHERE dl.job_id=j.id AND dl.direction_id=${p(a.directionId)} AND dl.revision=${p(a.directionRevision)})))`]
+    : ["it belongs to another agent's direction", `j.agent_direction_id IS NULL`]);
+  const clauses = labeled.map(([, sql]) => sql);
   if(a.jobId) clauses.push(`j.id=${p(a.jobId)}`);
-  if (!omitCompute) clauses.push(
+  if (!omitCompute) { const compute: [string, string] = ["it needs more compute than this session offers (cpu, ram, gpu or disk)", [
     `coalesce((j.compute_hint->>'cpu_hours')::numeric,0) <= ${p(a.cpuHours)}`,
     `coalesce((j.compute_hint->>'ram_gb')::numeric,0) <= ${p(a.ramGb > 0 ? a.ramGb : 8)}`,
     `(coalesce(j.compute_hint->>'gpu','false') IN ('false','0','') OR ${p(a.hasGpu)}::boolean)`,
     `(coalesce(j.compute_hint->>'mathlib_cache','false') IN ('false','0','') OR ${p(a.disk)} >= 10)`,
     `coalesce((j.compute_hint->>'disk_gb')::numeric,0) <= ${p(a.disk)}`,
-  );
-  return { values, p, where: clauses.join("\n AND "), joins: `FROM jobs j LEFT JOIN lanes l ON l.id = j.lane_id LEFT JOIN returns pr ON pr.id = j.parent_return_id LEFT JOIN returns er ON er.id=j.evidence_return_id LEFT JOIN model_tiers amt ON amt.model = pr.model` };
+  ].join(" AND ")]; labeled.push(compute); clauses.push(compute[1]); }
+  return { values, p, labeled, where: clauses.join("\n AND "), joins: `FROM jobs j LEFT JOIN lanes l ON l.id = j.lane_id LEFT JOIN returns pr ON pr.id = j.parent_return_id LEFT JOIN returns er ON er.id=j.evidence_return_id LEFT JOIN model_tiers amt ON amt.model = pr.model` };
 }
 
+/**
+ * Why a session may not take one job (#mba-sah-held-feedback-items, item 11: a bot asks for ?job=<id>): each eligibility clause the job
+ * fails, in words. Empty when it is eligible. Status (queued, taken, done) is answered before this by the caller.
+ */
+export async function whyNotEligible(a: SchedulingAgent, jobId: number): Promise<string[]> {
+  const e = eligibility(a);
+  const idx = e.p(jobId);
+  const row = await one<Record<string, any>>(`SELECT j.min_tier, j.budget_hours, ${e.labeled.map(([, sql], i) => `coalesce((${sql}), false) AS c${i}`).join(", ")} ${e.joins} WHERE j.id = ${idx}`, e.values);
+  if (!row) return ["no such job in this project"];
+  return e.labeled.map(([label], i) => row[`c${i}`] ? null : label.replace("${j.min_tier}", String(row.min_tier)).replace("${j.budget_hours}", String(Number(row.budget_hours)))).filter((x): x is string => !!x);
+}
 export async function backlogFor(a: SchedulingAgent) {
   const e = eligibility(a);
   const row = await one(`SELECT count(*) FILTER (WHERE j.type IN ('review','audit')) AS reviews,

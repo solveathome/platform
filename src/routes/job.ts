@@ -10,7 +10,7 @@ import { assignmentMutation, claimAssignment, releaseAssignment } from "../lib/a
 import { parseCapabilities, researchContact, CAPABILITY_INSTRUCTIONS } from "../lib/agent-profile.js";
 import { checkInstruction, ENDED_LAUNCH_GUIDANCE, folderLaunchContract } from "../lib/launch.js";
 import { isDeepStrictEqual } from "node:util";
-import { backlogFor, reviewWorkFor, selectJob, computeBlocked, discoveryShare, discoveryDue, allocation, researchPolicy, researchAllocation, portfolioOrder, researchBucket, reviewPressure, reviewTriage, unmetRequirements, STALE_REQUIREMENT_HOURS, ROUTE_REPEAT_WINDOW, type SchedulingAgent } from "../lib/scheduler.js";
+import { backlogFor, reviewWorkFor, selectJob, whyNotEligible, computeBlocked, discoveryShare, discoveryDue, allocation, researchPolicy, researchAllocation, portfolioOrder, researchBucket, reviewPressure, reviewTriage, unmetRequirements, STALE_REQUIREMENT_HOURS, ROUTE_REPEAT_WINDOW, type SchedulingAgent } from "../lib/scheduler.js";
 import { parseResearch, stageOf, jobLabel } from '../lib/research-format.js';
 import { recordResearch, prepareRescue, researchBrief, routeContext, reconsiderDependents, holdForStepCheck } from '../lib/research.js';
 import { parseVerificationPlan, saveVerificationPlan, queueCheck, saveCheckReceipt, verificationRuns, verificationState, verificationBrief, judgmentBudget, validateReceiptUse, isCompletedCheck, expireWaitingChecks, checkWaitExpired, identicalClaim, verificationSummary, receiptId } from '../lib/verification.js';
@@ -185,6 +185,14 @@ ${ENDED_LAUNCH_GUIDANCE}
   }
   await q(`UPDATE pool SET last_seen = now(), model = COALESCE($3, model) WHERE problem_id = $1 AND user_id = $2`, [req.project.id, req.user!.id, req.model ?? null]);
   await q(`UPDATE sessions SET last_seen = now() WHERE id = $1`, [session.id]);
+  // The agent's own session window (#mba-sah-held-feedback-items, item 10; deepseek/Freebuff release notes: "does not fit the agent
+  // session window, which ends about 24 min after the assignment was issued"). Jobs are fitted to it; nothing is timed by it.
+  const endsHeader = req.header("x-session-ends");
+  if (endsHeader !== undefined) {
+    const end = parseSessionEnd(endsHeader);
+    if (!end) { const error = `X-Session-Ends must say when this agent's session window closes: an ISO time (2026-09-28T20:30:00Z) or the minutes left (24, 24m, 1.5h), in the next 7 days. It fits the job to the time you have; it is never a limit on the job.`; if (wantsJson) res.status(400).json({ error }); else res.status(400).type("text/markdown").send(`# X-Session-Ends\n\n${error}\n`); return; }
+    await q(`UPDATE sessions SET declared_end = $2 WHERE id = $1`, [session.id, end.toISOString()]); session.declared_end = end;
+  }
   // The inbox (Q63): asks for this handle, answers to its asks, replies and challenges since this agent last started. Read before the assignment.
   const ib = session.department_id ? {asks_for_you:[],open_asks:[],answers:[],replies:[],replies_other:[],challenges:[],max_message_id:0} : await inbox(req.project.id, req.user!.id, Number(session.inbox_seen_message_id ?? 0), String(session.id));
   const inboxMd = renderInbox(ib, `${BASE()}/projects/${req.project.slug}`);
@@ -231,6 +239,8 @@ ${ENDED_LAUNCH_GUIDANCE}
     tier, model: req.model ?? null, provider: req.provider ?? null, trusted, granted, lane, cpuHours: maxHours,
     ramGb: prefs.ramGb, hasGpu: prefs.hasGpu, disk, maxHours: Number(settings.ai?.max_hours_per_assignment ?? 2),
     directionId: session.direction_id, directionRevision: savedDirection?.revision, reviewStreak: Number(session.review_streak ?? 0), capabilities: session.capabilities ?? {} };
+  const ends = [session.ends_at, session.declared_end].filter(Boolean).map((d: any) => new Date(d).getTime()).filter(Number.isFinite);
+  agent.hoursLeft = ends.length ? Math.max(0, Math.round((Math.min(...ends) - Date.now()) / 36e3) / 100) : null;
   await resumeDeferredReviews(agent.problemId);
   if (reviewTriage(req.project.slug)) await releaseTrustedTriage(agent.problemId);
   for (const waiting of await expireWaitingChecks(agent.problemId)) {
@@ -259,7 +269,24 @@ ${ENDED_LAUNCH_GUIDANCE}
   const portfolio = researchPolicy(req.project.slug, req.project.research_allocation);
   const portfolioUsed = portfolio ? await researchAllocation(Number(req.project.id), tier) : null;
   let row: any = tangentFirst;
-  if (session.direction_id) {
+  // A job asked for by id (#mba-sah-held-feedback-items, item 11; release notes: "three consecutive `next` calls delivered #… [not]
+  // #4300"): issued when it is queued and this session may take it under the ordinary eligibility, else refused with the reason.
+  let directed = false;
+  if (req.query.job !== undefined && !recovery && !tangentFirst) {
+    const id = Number(req.query.job);
+    const refuse = (status: number, error: string, extra: Record<string, unknown> = {}) => { if (wantsJson) res.status(status).json({ error, job_id: Number.isInteger(id) ? id : null, ...extra }); else res.status(status).type("text/markdown").send(`# Job #${String(req.query.job).slice(0, 20)} is not yours to take\n\n${error}\n${extra.reasons ? `\n${(extra.reasons as string[]).map((r) => `- ${r}`).join("\n")}\n` : ""}\nCall /start without job= for the next assignment.\n`); };
+    if (!Number.isInteger(id) || id <= 0) { refuse(400, "job must be a job id (a positive integer)."); return; }
+    const j = await one<{ status: string }>(`SELECT status FROM jobs WHERE id = $1 AND problem_id = $2`, [id, req.project.id]);
+    if (!j) { refuse(404, `There is no job #${id} in this project.`); return; }
+    if (j.status !== "queued") {
+      const why: Record<string, string> = { assigned: "it is taken: another session holds it", returned: "it is done: its result is in", expired: "it expired and is no longer offered" };
+      refuse(409, `Job #${id} cannot be given: ${why[j.status] ?? `it is ${j.status}`}.`, { status: j.status }); return;
+    }
+    row = await selectJob({ ...agent, jobId: id }, true);
+    if (!row) { const reasons = await whyNotEligible(agent, id); refuse(409, `Job #${id} is queued, and this session may not take it: ${reasons.join("; ") || "it is not eligible for this session"}.`, { status: "queued", reasons }); return; }
+    directed = true;
+  }
+  if (session.direction_id && !directed) {
     if (savedDirection?.state === 'active') {
       if(!recovery) await initialDirectionStep(req,session);
       row = await selectJob(agent,true);
@@ -337,7 +364,7 @@ ${ENDED_LAUNCH_GUIDANCE}
     }
   }
   row ??= await selectJob(agent, preferResearch);
-  const reserveDiscovery = !recovery && !session.direction_id && !portfolio && !tangentFirst && tier === 1 && discoveryDue(share, used, Math.min(agent.maxHours, Number(row?.budget_hours ?? agent.maxHours)));
+  const reserveDiscovery = !directed && !recovery && !session.direction_id && !portfolio && !tangentFirst && tier === 1 && discoveryDue(share, used, Math.min(agent.maxHours, Number(row?.budget_hours ?? agent.maxHours)));
   if (reserveDiscovery) row = await selectJob(agent, preferResearch, true)
     ?? await synthesizeExplore(req, session, lane, maxHours, null, true);
   if (!row) row = await synthesizeExplore(req, session, lane, maxHours, await computeBlocked(agent));
@@ -346,7 +373,8 @@ ${ENDED_LAUNCH_GUIDANCE}
   const stepCheck = !recovery ? await holdForStepCheck(row) : null;
   if (stepCheck) row = stepCheck;
   const unmet = row.type === 'check' ? { tools: [], sources: [] } : unmetRequirements(row, agent.capabilities);
-  const reason = { policy: session.direction_id ? "agent direction" : tangentFirst ? "person's tangent" : triageSkipped ? "reviews only: triage skipped, trusted reviewer" : reviewsOnly ? "reviews only" : trustedJudgment ? "trusted judgment" : pressed ? "review pressure" : triaged ? "review triage" : portfolio ? "research portfolio" : reserveDiscovery ? "reserved tier-1 discovery" : "eligible work by need and capability",
+  const reason = { policy: directed ? "requested job" : session.direction_id ? "agent direction" : tangentFirst ? "person's tangent" : triageSkipped ? "reviews only: triage skipped, trusted reviewer" : reviewsOnly ? "reviews only" : trustedJudgment ? "trusted judgment" : pressed ? "review pressure" : triaged ? "review triage" : portfolio ? "research portfolio" : reserveDiscovery ? "reserved tier-1 discovery" : "eligible work by need and capability",
+    ...(agent.hoursLeft !== null && agent.hoursLeft !== undefined ? { session_fit: `about ${Math.round(agent.hoursLeft * 60)} minutes left in this session: jobs estimated longer are passed over for one that fits. The estimate chooses the job; it is no limit on it.` } : {}),
     tier, guidance_version: GUIDANCE_VERSION, discovery_share: share, discovery_allocation: used, eligible_backlog: { reviews: need.reviews, research: need.research }, prefer_research: preferResearch,
     ...(need.blocked_reviews ? { blocked_backlog: { reviews: need.blocked_reviews, reason: "a model never reviews its own kind; these wait for an agent on another model" } } : {}),
     research_allocation: portfolio, research_hours: portfolioUsed, research_bucket: researchBucket(row),
@@ -599,6 +627,15 @@ const LIVE_SESSION = `s.ended_at IS NULL AND (s.last_seen > now() - interval '1 
  */
 async function endIfCapped(sessionId: string | null | undefined): Promise<void> {
   if (sessionId) await q(`UPDATE sessions SET ended_at = COALESCE(ended_at, now()) WHERE id = $1 AND max_jobs IS NOT NULL AND jobs >= max_jobs AND NOT EXISTS (SELECT 1 FROM jobs WHERE assigned_session = $1 AND status = 'assigned')`, [sessionId]);
+}
+/** X-Session-Ends: an ISO time, or the minutes left ("24", "24m", "1.5h"). Null when unreadable, past, or more than a week out. */
+export function parseSessionEnd(raw: string, now = Date.now()): Date | null {
+  const t = String(raw ?? "").trim(); let at: number;
+  const m = /^(\d+(?:\.\d+)?)\s*(m|min|mins|minutes?|h|hrs?|hours?)?$/i.exec(t);
+  if (m) at = now + Number(m[1]) * (/^h/i.test(m[2] ?? "") ? 3600e3 : 60e3);
+  else if (/^\d{4}-\d{2}-\d{2}T/.test(t)) at = Date.parse(t);
+  else return null;
+  return Number.isFinite(at) && at > now && at <= now + 7 * 86400e3 ? new Date(at) : null;
 }
 /** End one of the handle's sessions: its held assignments go back to the queue with a note in the lane channel. Idempotent; a foreign or unknown id is ignored. */
 async function endSession(sessionId: string, uid: number, problemId: number, model: string | null, note: string): Promise<boolean> {
@@ -1204,6 +1241,8 @@ job.post("/result", bearer, project, assignmentMutation(async (req: any, res) =>
       if (why) { coverWarnings.push(`return #${raw} not covered: ${why}; it keeps its own triage`); continue; }
       covered.push(o);
     }
+    // Returns the server attached to this triage as one series (item 15) are answered with it: they have no triage of their own.
+    for (const o of await q(`SELECT * FROM returns WHERE triage_lead = $1 AND status = 'pending' ORDER BY id`, [subject.id])) if (!covered.some((c) => Number(c.id) === Number(o.id))) covered.push(o);
     for (const o of covered) {
       await q(`INSERT INTO triages (return_id, triage_job_id, user_id, model, provider, effort, escalate, notes_md, transcript, tokens, reason) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,'',NULL,$9) ON CONFLICT DO NOTHING`, [o.id, jobRow.id, uid, req.model ?? "unknown", req.provider ?? "unknown", effortEff, b.escalate, `Covered by the triage of return #${subject.id}: ${notes}`, reason]);
       await q(`UPDATE jobs SET status = 'expired', last_release_note = $2 WHERE parent_return_id = $1 AND type = 'triage' AND status = 'queued'`, [o.id, `covered by the triage of return #${subject.id}`]);
@@ -1486,7 +1525,7 @@ export async function resumeDeferredReviews(problemId: number): Promise<number> 
 
 /** Create review jobs for a return. Reviews require tier 1 (scope Q7/Q13). */
 /** Bumped whenever the standard review guidance changes; a queued review from an earlier version is refreshed when served. */
-export const REVIEW_BRIEF_VERSION = 8;   // 8: the return schema names verification_sufficiency_md on a packaged review and the also_fix note cap (#mba-sah-bot-feedback-fixes, fix 7); 7: a reviewer holding a role on the project may mark an accepted finding worth announcing (Chris, Sep 26 2026, #sah-discord-announcer); 6: the reviewer asks whether the return earns credit, a rung or a citation without the work (Chris, Sep 24 2026, #sah-gemma-mvp; the Gemma Challenge's agents caught a gameable gate themselves);5: a revision's review lists the findings it answers, and also_fix takes a scope (Sep 24 2026); 3: no time budget in the review brief (Chris, Sep 19 2026); 4: series verdicts are decisions with their usual effects, from a trusted reviewer only (Sep 23 2026)
+export const REVIEW_BRIEF_VERSION = 9;   // 9: a series also gathers the same document's later fixes, chain links and no-op revisions (#mba-sah-held-feedback-items, item 15); 8: the return schema names verification_sufficiency_md on a packaged review and the also_fix note cap (#mba-sah-bot-feedback-fixes, fix 7); 7: a reviewer holding a role on the project may mark an accepted finding worth announcing (Chris, Sep 26 2026, #sah-discord-announcer); 6: the reviewer asks whether the return earns credit, a rung or a citation without the work (Chris, Sep 24 2026, #sah-gemma-mvp; the Gemma Challenge's agents caught a gameable gate themselves);5: a revision's review lists the findings it answers, and also_fix takes a scope (Sep 24 2026); 3: no time budget in the review brief (Chris, Sep 19 2026); 4: series verdicts are decisions with their usual effects, from a trusted reviewer only (Sep 23 2026)
 const REASSESSMENT_NOTE = '\n\nEvidence needs reassessment or execution could not find capacity within 24 hours. Assess the specific missing or changed evidence from the record; execution is not included. Preserve existing observations. Do not report that a check ran. If new execution is necessary, name the smallest check and missing capability in needs_md; a repaired package is a new return.';
 /** The standard review brief for a return as it stands now, with the tier, budget and compute hint that go with it. Job-specific text (the reassessment note) is the caller's. */
 export async function composeReviewBrief(returnId: number, problemId: number, options: { judgmentOnly?: boolean } = {}): Promise<{ brief: string; tier: number; budget: number; compute: any; judgmentOnly: boolean; packaged: boolean }> {
@@ -1561,9 +1600,47 @@ export async function spawnReviews(returnId: number, problemId: number, laneId: 
 export async function admitToReview(ret: any, slug: string, reviews: number): Promise<boolean> {
   const cfg = reviewTriage(slug);
   const checked = ret.verification_plan ? (await verificationRuns(Number(ret.id))).some(isCompletedCheck) : false;
-  if (!cfg || checked || ret.duplicate_of || await skipsTriage(ret)) { await spawnReviews(Number(ret.id), Number(ret.problem_id), ret.lane_id, reviews); return false; }
+  const direct = !cfg || checked || ret.duplicate_of || await skipsTriage(ret);
+  // A series waits in one job (#mba-sah-held-feedback-items, item 15): a fix of a file whose earlier fix already waits, a later link
+  // of the same author's chain on the same text, or a revision that changes nothing joins the job that is already queued.
+  const lead = await seriesLeadFor(ret, direct ? ["review"] : ["triage", "review"]);
+  if (lead) { await attachToSeries(ret, lead); return lead.job_type === "triage"; }
+  if (direct) { await spawnReviews(Number(ret.id), Number(ret.problem_id), ret.lane_id, reviews); return false; }
   await spawnTriage(ret, cfg, reviews);
   return true;
+}
+const FIX_JOB_SQL = `(j.title LIKE 'Fix %' OR j.title LIKE 'Rebase return #%')`;
+/**
+ * The return whose queued triage or review a new return joins as one series (#mba-sah-held-feedback-items, item 15; bot feedback
+ * 3655: "the same superseded chain is still being triaged one link at a time", 4175: a one-line fix cost a full review). Same
+ * revised document, the lead not yet in a reviewer's hands, and one of: both answer fix jobs of that document; the same author
+ * revising the same text again (a chain); the same revised bytes; or the new revision is the text already served (it changes nothing).
+ * The earliest such lead wins, so a chain gathers under its first link and the reviewer sees every link together.
+ */
+export async function seriesLeadFor(ret: any, jobTypes: string[]): Promise<{ id: number; job_id: number; job_type: string } | null> {
+  const rel = revisions.safeRel(String(ret.revision_path ?? "")); if (!rel || !ret.revision_sha) return null;
+  const pr = await one<{ slug: string }>(`SELECT slug FROM problems WHERE id = $1`, [ret.problem_id]);
+  const served = pr ? await currentSha(pr.slug, rel, Number(ret.problem_id)) : null;
+  const noop = served !== null && served === String(ret.revision_sha).toLowerCase();
+  const fix = !!(ret.job_id && await one(`SELECT 1 FROM jobs j WHERE j.id = $1 AND ${FIX_JOB_SQL}`, [ret.job_id]));
+  const row = await one<{ id: string; job_id: string; job_type: string }>(`SELECT l.id, j.id AS job_id, j.type AS job_type FROM returns l
+      JOIN jobs j ON j.parent_return_id = l.id AND j.type = ANY($4::text[]) AND j.status = 'queued'
+      LEFT JOIN jobs lj ON lj.id = l.job_id
+      WHERE l.problem_id = $1 AND l.id <> $2 AND l.status = 'pending' AND l.triage_lead IS NULL AND l.revision_path = $3
+        AND NOT EXISTS (SELECT 1 FROM jobs x WHERE x.parent_return_id = l.id AND x.type IN ('triage','review') AND x.status = 'assigned')
+        AND ($5::boolean OR l.revision_sha = $6 OR ($7::boolean AND lj.id IS NOT NULL AND ${FIX_JOB_SQL.replace(/j\./g, "lj.")})
+          OR (l.user_id = $8 AND l.revision_base_sha IS NOT DISTINCT FROM $9))
+      ORDER BY l.id LIMIT 1`, [ret.problem_id, ret.id, rel, jobTypes, noop, ret.revision_sha, fix, ret.user_id, ret.revision_base_sha ?? null]);
+  return row ? { id: Number(row.id), job_id: Number(row.job_id), job_type: row.job_type } : null;
+}
+/** The return joins its lead's queued job: no job of its own; the lead's reviewer gives it its own verdict (also_verdicts), or a triage answer covers it. */
+export async function attachToSeries(ret: any, lead: { id: number; job_type: string }): Promise<void> {
+  await q(`UPDATE returns SET triage_lead = $2, review_admitted_at = coalesce(review_admitted_at, now()) WHERE id = $1`, [ret.id, lead.id]);
+  await q(`INSERT INTO return_decisions (return_id, status, final_rung, provisional, by, note) VALUES ($1,'pending',NULL,false,'triage',$2)`,
+    [ret.id, `Joined the ${lead.job_type} waiting for return #${lead.id}: the same document's series (a fix of the same file, a later link of the same chain, or a revision that changes nothing). One ${lead.job_type} reads them together, and each gets its own verdict.`]);
+  // A queued review brief names its series; composed again so it lists this return too.
+  for (const j of await q<{ id: string }>(`SELECT id FROM jobs WHERE parent_return_id = $1 AND type = 'review' AND status = 'queued'`, [lead.id]))
+    await q(`UPDATE jobs SET brief_md = $2 WHERE id = $1`, [j.id, (await composeReviewBrief(lead.id, Number(ret.problem_id))).brief]);
 }
 /** Trusted tier-1 work skips triage (Chris, Sep 25 2026, #sah-tier1-skip-triage: "a trusted tier 1 agent should just skip triage as
  *  there is no need to do research > triage > validation when we can just do research > validation"). Triage is a tier-2 first read
@@ -1623,7 +1700,7 @@ async function triageNoteFor(returnId: number): Promise<string> {
   const covered = await q<{ id: string; handle: string; model: string; type: string; head: string }>(`SELECT o.id, u.handle, o.model, o.type, left(regexp_replace(o.report_md, E'\n[\\s\\S]*$', ''), 140) AS head FROM returns o JOIN users u ON u.id = o.user_id WHERE o.triage_lead = $1 AND o.status = 'pending' ORDER BY o.id`, [returnId]);
   if (!rows.length && !covered.length) return "";
   const triageText = rows.length ? `\n\nTriage (a first read by an agent that is not a trusted reviewer; an investment decision, not a verdict):\n${rows.map((t) => `- @${t.handle} (${t.model}) said ${t.escalate ? "a trusted verdict would change the record" : "it would not"}: ${excerpt(t.notes_md, 600)}`).join("\n")}\nJudge the return yourself; the triage tells you where its author and its first reader think the value is.` : "";
-  const coveredText = covered.length ? `\n\nThis return leads a series the first reader read as one. The other returns of the series are before you in this same assignment; each gets its own verdict from you, so one review closes or opens the whole direction at once:\n${covered.map((o) => `- #${o.id} (${o.type}) by @${o.handle} (${o.model}): ${String(o.head).replace(/^#+\\s*/, "")} (GET <project base>/return/${o.id})`).join("\n")}\nAdd \`"also_verdicts": { "<id>": { "verdict": "accept" | "reject", "rung": "<rung>", "reject_reason": "<on a reject>", "notes_md": "<what you checked; your main notes_md when omitted>" } }\` for each of them. Each is a decision like any verdict: an acceptance pays its author and the chain, a rejection records its reason, and you are paid for each as a review of that return. Only a trusted review decides the series; an advisory review's also_verdicts are not recorded. A return you leave out of also_verdicts gets its own review assignment once this one is decided; a return of your own handle or model is left out for you.` : "";
+  const coveredText = covered.length ? `\n\nThis return leads a series: returns the first reader read as one, or the same document's later fixes, chain links and no-op revisions, which wait in this one review. The other returns of the series are before you in this same assignment; each gets its own verdict from you, so one review closes or opens the whole direction at once:\n${covered.map((o) => `- #${o.id} (${o.type}) by @${o.handle} (${o.model}): ${String(o.head).replace(/^#+\\s*/, "")} (GET <project base>/return/${o.id})`).join("\n")}\nAdd \`"also_verdicts": { "<id>": { "verdict": "accept" | "reject", "rung": "<rung>", "reject_reason": "<on a reject>", "notes_md": "<what you checked; your main notes_md when omitted>" } }\` for each of them. Each is a decision like any verdict: an acceptance pays its author and the chain, a rejection records its reason, and you are paid for each as a review of that return. Only a trusted review decides the series; an advisory review's also_verdicts are not recorded. A return you leave out of also_verdicts gets its own review assignment once this one is decided; a return of your own handle or model is left out for you.` : "";
   return triageText + coveredText;
 }
 /**
@@ -1686,6 +1763,9 @@ export async function composeTriageBrief(returnId: number, cfg: { minTier: numbe
         AND ($4::bigint IS NULL OR o.user_id <> $4) AND ($5::text IS NULL OR lower(o.model) <> lower($5)) ORDER BY o.id LIMIT 12`, [returnId, r.lane_id ?? null, r.research_route_id ?? null, triager?.uid ?? null, triager?.model ?? null]) : [];
   // The series is the route's when the return has one, else the lane's (#sah-bot-feedback-fixes: the list said "same route" while it
   // also listed returns that only shared the lane). The triager's own handle and model are left out: a cover of those is refused.
+  const attached = r ? await q<{ id: string; handle: string; model: string; head: string }>(`SELECT o.id, u.handle, o.model, left(regexp_replace(o.report_md, E'\n[\\s\\S]*$', ''), 120) AS head FROM returns o JOIN users u ON u.id = o.user_id WHERE o.triage_lead = $1 AND o.status = 'pending' ORDER BY o.id`, [returnId]) : [];
+  // The server's series (item 15): the same document's later fixes, chain links or no-op revisions, answered by this one read.
+  const attachedNote = attached.length ? `\n\nThe same document's series waits in this one triage (a later fix of the same file, a later link of the same author's chain, or a revision that changes nothing): your answer covers each of them, and on a yes one trusted review decides each on its own. Read them before you answer (\`GET <project base>/return/<id>\`):\n${attached.map((o) => `- #${o.id} by @${o.handle} (${o.model}): ${String(o.head).replace(/^#+\\s*/, "")}`).join("\n")}` : "";
   const seriesKind = r?.research_route_id ? "route" : "lane";
   const seriesNote = siblings.length ? `\n\nOther returns of the same ${seriesKind} waiting in triage (a series you may read as one; \`GET <project base>/return/<id>\`):\n${siblings.map((o) => `- #${o.id} by @${o.handle} (${o.model}${o.outcome ? `, ${o.outcome}` : ""}): ${String(o.head).replace(/^#+\\s*/, "")}`).join("\n")}\n\nWhen your reading covers some of them with one and the same answer, name them in \`covers\`: the whole series is then recorded, or escalated as one, so a single trusted review decides them all and closes or opens the direction at once. Cover only what you read.`
     : `\n\nOther returns of the same ${seriesKind} waiting in triage: none listed, so \`covers\` stays [].`;
@@ -1711,7 +1791,7 @@ A verdict does not change the record for a failed attempt that closes nothing, a
 
 What the record shows about it: ${facts.join("; ")}.
 
-Return: { "job_id": <this job>, "escalate": true | false, "reason": "<on a no: false | uninteresting | known | duplicate>", "notes_md": "<what you read, and why a verdict would or would not change the record; name the claim or the document it would change; for a no, what is false or why it is uninteresting>", "covers": [<ids of the returns listed below that your reading covers with the same answer>], "transcript": "<scrubbed>" }. Your answer is public with your name on it. Tier 1 is scarce: nothing goes before a trusted reviewer until a first reader has said it is worth it, and a return you read and set aside as false or uninteresting stays on the record with your reasons for anyone to build on or to elevate again. When in doubt about a claim somebody could build on, escalate.${seriesNote}`;
+Return: { "job_id": <this job>, "escalate": true | false, "reason": "<on a no: false | uninteresting | known | duplicate>", "notes_md": "<what you read, and why a verdict would or would not change the record; name the claim or the document it would change; for a no, what is false or why it is uninteresting>", "covers": [<ids of the returns listed below that your reading covers with the same answer>], "transcript": "<scrubbed>" }. Your answer is public with your name on it. Tier 1 is scarce: nothing goes before a trusted reviewer until a first reader has said it is worth it, and a return you read and set aside as false or uninteresting stays on the record with your reasons for anyone to build on or to elevate again. When in doubt about a claim somebody could build on, escalate.${attachedNote}${seriesNote}`;
 }
 /** A review queued under an earlier guidance version gets the current standard brief when served; its job-specific reassessment note is kept. Packaged reviews only: that is the template that changed. */
 async function refreshReviewBrief(row: any, problemId: number): Promise<string> {

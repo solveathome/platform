@@ -13,7 +13,7 @@ process.env.REVIEW_QUEUE_NOTE_FROM = '2';
 const {migrate, q, one, pool} = await import('../src/db/index.ts');
 const {issueToken} = await import('../src/lib/auth.ts');
 const {TERMS_VERSION} = await import('../src/lib/terms.ts');
-const {job, composeTriageBrief, spawnTriage, excerpt} = await import('../src/routes/job.ts');
+const {job, composeTriageBrief, spawnTriage, excerpt, admitToReview, composeReviewBrief, parseSessionEnd} = await import('../src/routes/job.ts');
 const {reviewTriage} = await import('../src/lib/scheduler.ts');
 const reputation = await import('../src/lib/reputation.ts');
 let server, base, author, triager, second, trusted, tokens = {}, pid, slug;
@@ -63,15 +63,15 @@ after(async () => {
   await q(`DELETE FROM users WHERE id=ANY($1)`, [[author, triager, second, trusted]]);
   await pool.end();
 });
-async function call(path, {method = 'GET', session, attempt, launch, model = 'claude-opus-5', effort = 'high', body, who = tokens.author} = {}) {
-  const h = {authorization: `Bearer ${who}`, accept: 'application/json', 'content-type': 'application/json'};
+async function call(path, {method = 'GET', session, attempt, launch, model = 'claude-opus-5', effort = 'high', body, who = tokens.author, headers = {}} = {}) {
+  const h = {authorization: `Bearer ${who}`, accept: 'application/json', 'content-type': 'application/json', ...headers};
   if (model) h['x-model'] = model; if (effort) h['x-effort'] = effort; if (session) h['x-session'] = session;
   if (attempt) h['x-attempt'] = attempt; if (launch) h['x-launch-id'] = launch;
   const res = await fetch(base + path, {method, headers: h, body: body ? JSON.stringify(body) : undefined});
   return {status: res.status, body: await res.json()};
 }
 const ok = r => { assert.equal(r.status, 200, JSON.stringify(r.body)); return r.body; };
-const start = async opts => ({...ok(await call('/start?share=0', {launch: randomUUID(), ...opts})), _as: {who: opts.who, model: opts.model, effort: opts.effort}});
+const start = async opts => ({...ok(await call(`/start?share=0${opts.query ? `&${opts.query}` : ''}`, {launch: randomUUID(), ...opts})), _as: {who: opts.who, model: opts.model, effort: opts.effort}});
 const release = async a => { const r = await call('/release', {method: 'POST', ...a._as, session: a.session, attempt: a.attempt_id, body: {job_id: a.job_id, note: 'test complete'}}); assert.equal(r.status, 200, `release: ${JSON.stringify(r.body)}`); return r; };
 const answer = (a, body, who) => call('/result', {method: 'POST', ...(a._as ?? {}), session: a.session, attempt: a.attempt_id, who, body: {job_id: a.job_id, transcript: 't', transcript_approved: true, ...body}});
 /** A self-assigned direction that asks for review: the plain way a return reaches the review queue. */
@@ -232,7 +232,7 @@ test('a series read as one: a triage covers other returns of the same lane; one 
     assert.ok(await one(`SELECT 1 FROM triages WHERE return_id=$1 AND user_id=$2`, [c.return_id, triager]), 'the covered return carries the triage too');
   }
   const brief = (await one(`SELECT brief_md FROM jobs WHERE parent_return_id=$1 AND type='review'`, [lead.return_id])).brief_md;
-  assert.match(brief, /This return leads a series the first reader read as one/); assert.match(brief, new RegExp(`- #${two.return_id} \\(direction\\)`)); assert.match(brief, /also_verdicts/);
+  assert.match(brief, /This return leads a series: returns the first reader read as one/); assert.match(brief, new RegExp(`- #${two.return_id} \\(direction\\)`)); assert.match(brief, /also_verdicts/);
   const tr = await start({who: tokens.trusted, model: 'claude-fable-5-1', effort: 'max'});
   assert.equal(tr.type, 'review'); assert.equal(Number((await one(`SELECT parent_return_id FROM jobs WHERE id=$1`, [tr.job_id])).parent_return_id), lead.return_id);
   const decided = ok(await answer(tr, {verdict: 'accept', rung: 'measured', notes_md: 'The interval bound holds at this fold; the series stands as measured.', also_verdicts: {[two.return_id]: {verdict: 'accept', rung: 'measured'}, [String(three.return_id)]: 'nonsense'}}, tokens.trusted));
@@ -437,6 +437,77 @@ test('research routes page; a review, a finding and a job\'s returns read by id'
   await q(`UPDATE returns SET job_id=$2 WHERE id=$1`, [a.return_id, job.id]);
   assert.deepEqual(ok(await call(`/job/${job.id}?format=json`)).returns.map(r => r.id), [Number(a.return_id)]);
   await q(`DELETE FROM reviews WHERE id=$1`, [rv.id]); await q(`DELETE FROM research_routes WHERE problem_id=$1`, [pid]);
+});
+
+// #mba-sah-held-feedback-items (the client chose to build items 10, 11 and 15 of the Sep 28 bot-feedback review).
+const sourceJob = async (title, budget, priority = 0) => Number((await one(`INSERT INTO jobs (problem_id,type,title,brief_md,git_ref,budget_hours,min_tier,priority) VALUES ($1,'source',$2,'Look up one finite source.','main',$3,99,$4) RETURNING id`, [pid, title, budget, priority])).id);
+test('item 11: ?job=<id> issues that queued job, and says why when it cannot (unknown, taken, done, not eligible)', async () => {
+  const wanted = await sourceJob('Wanted source', 0.5), other = await sourceJob('Other source', 0.5, 10);
+  const a = await start({who: tokens.second, model: 'gemini-3.8-flash', effort: 'high', query: `job=${wanted}`});
+  assert.equal(Number(a.job_id), wanted); assert.equal(a.assignment_reason.policy, 'requested job');
+  const taken = await call(`/start?share=0&job=${wanted}`, {launch: randomUUID(), who: tokens.triager, model: 'claude-opus-5', effort: 'high'});
+  assert.equal(taken.status, 409); assert.match(taken.body.error, /it is taken: another session holds it/);
+  await q(`UPDATE jobs SET status='returned' WHERE id=$1`, [other]);
+  const done = await call(`/start?share=0&job=${other}`, {launch: randomUUID(), who: tokens.triager, model: 'claude-opus-5', effort: 'high'});
+  assert.equal(done.status, 409); assert.match(done.body.error, /it is done: its result is in/);
+  assert.equal((await call(`/start?share=0&job=999999999`, {launch: randomUUID(), who: tokens.triager, model: 'claude-opus-5', effort: 'high'})).status, 404);
+  const r = await askForReview(); await q(`UPDATE jobs SET status='expired' WHERE parent_return_id=$1`, [r.return_id]);
+  await q(`INSERT INTO jobs (problem_id,type,title,brief_md,git_ref,budget_hours,min_tier,parent_return_id) VALUES ($1,'review','Review return','b','main',0.5,1,$2)`, [pid, r.return_id]);
+  const review = Number((await one(`SELECT id FROM jobs WHERE parent_return_id=$1 AND type='review'`, [r.return_id])).id);
+  const no = await call(`/start?share=0&job=${review}`, {launch: randomUUID(), who: tokens.triager, model: 'claude-opus-5', effort: 'high'});
+  assert.equal(no.status, 409); assert.ok(no.body.reasons.includes('it is a review and this session is not a trusted reviewer'), JSON.stringify(no.body));
+  assert.ok(no.body.reasons.some(x => /it asks for tier 1 or better and this session is tier 2/.test(x)), JSON.stringify(no.body));
+  await release(a);
+});
+
+test('item 10: a job is fitted to the time the session has left (X-Session-Ends); the estimate picks the job and limits nothing', () => {
+  const now = Date.parse('2026-09-28T12:00:00Z');
+  assert.equal(parseSessionEnd('24m', now).toISOString(), '2026-09-28T12:24:00.000Z'); assert.equal(parseSessionEnd('1.5h', now).toISOString(), '2026-09-28T13:30:00.000Z');
+  assert.equal(parseSessionEnd('24', now).toISOString(), '2026-09-28T12:24:00.000Z'); assert.equal(parseSessionEnd('2026-09-28T12:30:00Z', now).toISOString(), '2026-09-28T12:30:00.000Z');
+  for (const bad of ['soon', '2026-09-27T12:00:00Z', '20000h', '']) assert.equal(parseSessionEnd(bad, now), null, bad);
+});
+test('item 10: with 20 minutes left the session gets the short job over a longer one it would rank first, and asking for the long one says why', async () => {
+  const long = await sourceJob('Long source', 2, 10), short = await sourceJob('Short source', 0.25);
+  const bad = await call('/start?share=0', {launch: randomUUID(), who: tokens.second, model: 'gemini-3.8-flash', effort: 'high', headers: {'x-session-ends': 'soon'}});
+  assert.equal(bad.status, 400); assert.match(bad.body.error, /never a limit on the job/);
+  const a = await start({who: tokens.second, model: 'gemini-3.8-flash', effort: 'high', headers: {'x-session-ends': '20m'}});
+  assert.equal(Number(a.job_id), short, JSON.stringify(a.assignment_reason)); assert.match(a.assignment_reason.session_fit, /about 20 minutes left in this session/);
+  assert.doesNotMatch(a.brief_md, /Time: [0-9.]+ hours|within 20 minutes/, 'no time limit is written into the brief');
+  await release(a);
+  const b = await call(`/start?share=0&job=${long}`, {launch: randomUUID(), who: tokens.triager, model: 'claude-opus-5', effort: 'high', headers: {'x-session-ends': '20m'}});
+  assert.equal(b.status, 409); assert.ok(b.body.reasons.some(x => /its estimate \(2 h\) is longer than this session has left \(0\.33 h\)/.test(x)), JSON.stringify(b.body));
+  const c = await start({who: tokens.triager, model: 'claude-opus-5', effort: 'high'});
+  assert.equal(Number(c.job_id), long, 'without a declared end nothing is fitted');
+  await release(c);
+});
+
+test('item 15: the same document\'s later fix, chain link or no-op revision joins the queued triage or review of the first; one answer covers the series', async () => {
+  const rel = 'research/OUTCOMES.md', base = 'e'.repeat(64);
+  const lead = await askForReview();
+  await q(`UPDATE returns SET revision_path=$2, revision_sha=$3, revision_base_sha=$4, type='audit' WHERE id=$1`, [lead.return_id, rel, 'a'.repeat(64), base]);
+  const link = async (sha, who = author) => { const r = await one(`INSERT INTO returns (problem_id,type,user_id,model,provider,report_md,transcript,status,revision_path,revision_sha,revision_base_sha) VALUES ($1,'audit',$2,'deepseek-v4-flash','deepseek','The two rows of OUTCOMES.md, one sentence longer.','t','pending',$3,$4,$5) RETURNING *`, [pid, who, rel, sha, base]); await admitToReview(r, slug, 2); return r; };
+  const chain = await link('b'.repeat(64));
+  const elsewhere = await link('c'.repeat(64), second);   // another author, another text: not the series
+  assert.equal(Number((await one(`SELECT triage_lead FROM returns WHERE id=$1`, [chain.id])).triage_lead), Number(lead.return_id));
+  assert.equal((await jobsOf(chain.id, 'triage')).length, 0, 'no triage of its own');
+  assert.equal((await one(`SELECT triage_lead FROM returns WHERE id=$1`, [elsewhere.id])).triage_lead, null);
+  const brief = await composeTriageBrief(Number(lead.return_id), {minTier: 2, budgetHours: 0.25});
+  assert.match(brief, /The same document's series waits in this one triage/); assert.match(brief, new RegExp(`- #${chain.id} by @`));
+  const leadTriage = Number((await jobsOf(lead.return_id, 'triage'))[0].id);
+  const t = await start({who: tokens.triager, model: 'claude-opus-5', effort: 'high', query: `job=${leadTriage}`});
+  const no = ok(await answer(t, {escalate: false, reason: 'duplicate', notes_md: 'The chain restates the same two rows; the head adds one sentence nothing depends on.'}, tokens.triager));
+  assert.ok(no.covers.includes(Number(chain.id)), JSON.stringify(no));
+  assert.equal((await one(`SELECT status FROM returns WHERE id=$1`, [chain.id])).status, 'recorded');
+  // A review waiting: a later fix of the same file joins it, and the lead's review brief names it.
+  delete process.env.REVIEW_TRIAGE_MIN_TIER;
+  const lead2 = await one(`INSERT INTO returns (problem_id,type,user_id,model,provider,report_md,transcript,status,revision_path,revision_sha,revision_base_sha) VALUES ($1,'audit',$2,'deepseek-v4-flash','deepseek','Fix one cell.','t','pending','research/NOTES.md',$3,$4) RETURNING *`, [pid, second, 'd'.repeat(64), base]);
+  await admitToReview(lead2, slug, 2);
+  const noop = await one(`INSERT INTO returns (problem_id,type,user_id,model,provider,report_md,transcript,status,revision_path,revision_sha,revision_base_sha) VALUES ($1,'audit',$2,'gemini-3.8-flash','google','The same cell, the same text.','t','pending','research/NOTES.md',$3,$4) RETURNING *`, [pid, author, 'd'.repeat(64), 'f'.repeat(64)]);
+  await admitToReview(noop, slug, 2);
+  assert.equal(Number((await one(`SELECT triage_lead FROM returns WHERE id=$1`, [noop.id])).triage_lead), Number(lead2.id), 'the same revised bytes join');
+  assert.equal((await jobsOf(noop.id, 'review')).length, 0);
+  const rb = (await one(`SELECT brief_md FROM jobs WHERE parent_return_id=$1 AND type='review' AND status='queued' LIMIT 1`, [lead2.id])).brief_md;
+  assert.match(rb, /This return leads a series/); assert.match(rb, new RegExp(`- #${noop.id} \\(audit\\)`));
 });
 
 // Reviews only falls back to triage (Chris, Sep 23 2026, ask 387: "for a review only agent, if there is nothing to review because
