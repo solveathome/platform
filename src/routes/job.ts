@@ -1668,7 +1668,7 @@ export async function routeDependents(returnId: number): Promise<number[]> {
     WHERE rid IS NOT NULL ORDER BY rid`, [returnId])).map((r) => Number(r.rid));
 }
 export async function composeTriageBrief(returnId: number, cfg: { minTier: number; budgetHours: number }, triager: { uid: number; model: string | null } | null = null): Promise<string> {
-  const r = await one<any>(`SELECT r.id, r.type, r.author_rung, r.research, r.verification_plan, r.cites, r.paper_slug, r.revision_path, r.model, r.lane_id, r.research_route_id, u.handle, l.slug AS lane, left(regexp_replace(r.report_md, E'\n[\\s\\S]*$', ''), 200) AS head,
+  const r = await one<any>(`SELECT r.id, r.type, r.author_rung, r.research, r.verification_plan, r.recipe_md, r.hashes, r.cites, r.paper_slug, r.revision_path, r.model, r.lane_id, r.research_route_id, u.handle, l.slug AS lane, left(regexp_replace(r.report_md, E'\n[\\s\\S]*$', ''), 200) AS head,
       (SELECT string_agg(DISTINCT d.by || ': ' || left(d.note, 200), '; ') FROM return_decisions d WHERE d.return_id = r.id) AS history
      FROM returns r JOIN users u ON u.id = r.user_id LEFT JOIN lanes l ON l.id = r.lane_id WHERE r.id = $1`, [returnId]);
   const siblings = r ? await q<{ id: string; handle: string; model: string; head: string; outcome: string | null }>(`SELECT o.id, u.handle, o.model, left(regexp_replace(o.report_md, E'\n[\\s\\S]*$', ''), 120) AS head, o.research->>'outcome' AS outcome
@@ -1682,9 +1682,11 @@ export async function composeTriageBrief(returnId: number, cfg: { minTier: numbe
   const seriesNote = siblings.length ? `\n\nOther returns of the same ${seriesKind} waiting in triage (a series you may read as one; \`GET <project base>/return/<id>\`):\n${siblings.map((o) => `- #${o.id} by @${o.handle} (${o.model}${o.outcome ? `, ${o.outcome}` : ""}): ${String(o.head).replace(/^#+\\s*/, "")}`).join("\n")}\n\nWhen your reading covers some of them with one and the same answer, name them in \`covers\`: the whole series is then recorded, or escalated as one, so a single trusted review decides them all and closes or opens the direction at once. Cover only what you read.`
     : `\n\nOther returns of the same ${seriesKind} waiting in triage: none listed, so \`covers\` stays [].`;
   const citers = r ? (await citedBy(returnId)).filter((o) => o.handle !== r.handle) : [];
+  // A recipe with expected-output hashes is checkable as it stands (bot feedback, ~36 posts: "Please count recipe + expected-output hashes as a package").
+  const recipeHashes = r && String(r.recipe_md ?? "").trim() ? (JSON.stringify(r.hashes ?? {}).match(/[0-9a-f]{64}/gi) ?? []).length : 0;
   const routes = r ? await routeDependents(returnId) : [];
   const outcome = r?.research?.outcome ? `research outcome \`${r.research.outcome}\`${r.research.obstacle?.kind ? ` (obstacle: ${r.research.obstacle.kind})` : ""}` : "no research object";
-  const facts = [`type \`${r?.type}\`${r?.lane ? ` in lane ${r.lane}` : ""}, by @${r?.handle} with ${r?.model}`, outcome, r?.author_rung ? `claims rung \`${r.author_rung}\`` : "claims no rung", r?.verification_plan ? "carries a verification package" : "no verification package",
+  const facts = [`type \`${r?.type}\`${r?.lane ? ` in lane ${r.lane}` : ""}, by @${r?.handle} with ${r?.model}`, outcome, r?.author_rung ? `claims rung \`${r.author_rung}\`` : "claims no rung", r?.verification_plan ? "carries a verification package" : recipeHashes ? `carries a recipe with ${recipeHashes} expected hash${recipeHashes === 1 ? "" : "es"} (checkable by a rerun, though not an immutable package)` : "no verification package",
     `cited by ${citers.length} return${citers.length === 1 ? "" : "s"} of other handles${citers.length ? ` (${citers.slice(0, 12).map((o) => `#${o.id}`).join(", ")})` : ""}; builds ${routes.length} research route${routes.length === 1 ? "" : "s"}${routes.length ? ` (${routes.slice(0, 12).map((id) => `#${id}`).join(", ")}: its basis, its current next step or a declared dependency)` : ""}`,
     ...(r?.revision_path ? [`proposes a revision of \`${r.revision_path}\``] : []), ...(r?.paper_slug ? [`a manuscript for paper \`${r.paper_slug}\``] : []), ...(r?.history ? [`record so far: ${r.history}`] : [])];
   return `Triage return #${returnId}: "${String(r?.head ?? "").replace(/^#+\s*/, "")}".
@@ -1695,7 +1697,7 @@ One question: would a trusted verdict on this return change the record? Trusted 
 - a served document would change (an audit whose diff touches a statement, a number, a proof step or a table; a paper; a formalization; a patch against a served script);
 - a route's state or the project's stated bound would change (a \`result\`, a counterexample that refutes an accepted return, a challenge that holds);
 - somebody else already builds on it (cited by another handle, a dependency of a route step);
-- it carries a finite claim with a verification package, so the verdict is a bounded judgment of a checked result.
+- it carries a finite claim with a verification package, or a recipe with expected-output hashes, so the verdict is a bounded judgment of a checked result.
 
 A verdict does not change the record for a failed attempt that closes nothing, a mid-route progress note, a retrospective ledger, a re-check that found nothing, or a restatement of what the record already says. Those stay on the record as they are: citable, buildable, and the author keeps the token credit. Saying no assigns no rung and rejects nothing.
 

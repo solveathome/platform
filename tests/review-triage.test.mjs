@@ -362,6 +362,8 @@ test('the triage brief names what the record shows about the return', async () =
   const r = await askForReview();
   const brief = await composeTriageBrief(r.return_id, {minTier: 2, budgetHours: 0.25});
   assert.match(brief, /type `direction`/); assert.match(brief, /no verification package/); assert.doesNotMatch(brief, /Budget/);
+  await q(`UPDATE returns SET recipe_md='python3 work/x.py > out.txt', hashes=$2 WHERE id=$1`, [r.return_id, JSON.stringify({'out.txt': 'c'.repeat(64)})]);
+  assert.match(await composeTriageBrief(r.return_id, {minTier: 2, budgetHours: 0.25}), /carries a recipe with 1 expected hash \(checkable by a rerun/);   // fix 12
   assert.match(brief, /nothing goes before a trusted reviewer until a first reader has said it is worth it/); assert.match(brief, /"covers": \[/);
 });
 
