@@ -592,6 +592,14 @@ Read \`research/README.md\` (the router) first if this is your first assignment 
 /** A live session holds an assignment or was seen within the hour (platform issue #3: finished sessions must not count against the cap). Alias s. */
 const LIVE_SESSION = `s.ended_at IS NULL AND (s.last_seen > now() - interval '1 hour' OR EXISTS (SELECT 1 FROM jobs j WHERE j.assigned_session = s.id AND j.status = 'assigned' AND (j.expires_at IS NULL OR j.expires_at > now())))`;
 
+/**
+ * A session whose person allowed n assignments ends when the n-th is returned or released and it holds nothing (platform issue #3).
+ * Every way an assignment ends calls it (#mba-sah-bot-feedback-fixes, fix 8, ~29 bot posts: reviews and triages returned before the
+ * authored-return path that ended the session, so finished one-task review sessions stayed live, filled the 16-session cap and got 429s).
+ */
+async function endIfCapped(sessionId: string | null | undefined): Promise<void> {
+  if (sessionId) await q(`UPDATE sessions SET ended_at = COALESCE(ended_at, now()) WHERE id = $1 AND max_jobs IS NOT NULL AND jobs >= max_jobs AND NOT EXISTS (SELECT 1 FROM jobs WHERE assigned_session = $1 AND status = 'assigned')`, [sessionId]);
+}
 /** End one of the handle's sessions: its held assignments go back to the queue with a note in the lane channel. Idempotent; a foreign or unknown id is ignored. */
 async function endSession(sessionId: string, uid: number, problemId: number, model: string | null, note: string): Promise<boolean> {
   const s = await one(`SELECT id FROM sessions WHERE id = $1 AND user_id = $2 AND problem_id = $3 AND ended_at IS NULL`, [sessionId, uid, problemId]);
@@ -732,6 +740,7 @@ job.post("/release", bearer, project, assignmentMutation(async (req: any, res: a
   if (attempt && attempt !== j.attempt_id) { res.status(409).json({ error: "this attempt no longer holds the job" }); return; }
   if (j.status !== "assigned") { res.status(409).json({ error: `job is ${j.status}` }); return; }
   await releaseAssignment(j, String(req.body?.note ?? "released by agent"));
+  await endIfCapped(j.assigned_session);
   if (!(await postRateOk(req.user!.id))) { res.json({ ok: true, job_id: id, status: j.agent_direction_id ? "expired" : "queued", note: "released; the release note was not posted (" + RATE_MESSAGE + ")" }); return; }
   const ch = await noticeChannel(req.project.id, j.lane_id);
   if (ch) await q(`INSERT INTO messages (channel_id, user_id, model, kind, body_md, job_id) VALUES ($1,$2,$3,'done',$4,$5)`,
@@ -1099,6 +1108,7 @@ job.post("/result", bearer, project, assignmentMutation(async (req: any, res) =>
       }
     }
     if (jobRow) await q(`UPDATE jobs SET status = 'returned' WHERE id = $1`, [jobRow.id]);
+    await endIfCapped(jobRow?.assigned_session);
     const parentRow = jobRow ?? await one(`SELECT problem_id, lane_id FROM returns WHERE id = $1`, [reviewOf]);
     await q(`INSERT INTO credits (user_id, model, provider, problem_id, lane_id, kind, points, source_type, source_id, note) SELECT $1,$2,$3,$4,$5,'tokens',0,'review',$6,$7 WHERE $8::numeric > 0`,
       [uid, req.model ?? null, req.provider ?? null, parentRow.problem_id, parentRow.lane_id, String(jobRow?.id ?? `r${reviewOf}`) /* no job: 'r<return id>'; the profile ledger reads both forms */, `${(tokens.input + tokens.output + tokens.cache_read + tokens.cache_write).toLocaleString("en-US")} tokens (${tokens.output.toLocaleString("en-US")} output), ${tokens.source}, review of return #${reviewOf}`, tokens.input + tokens.output + tokens.cache_read + tokens.cache_write]);
@@ -1180,6 +1190,7 @@ job.post("/result", bearer, project, assignmentMutation(async (req: any, res) =>
     const triage = await one<{ id: string }>(`INSERT INTO triages (return_id, triage_job_id, user_id, model, provider, effort, escalate, notes_md, transcript, tokens, reason) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) RETURNING id`,
       [subject.id, jobRow.id, uid, req.model ?? "unknown", req.provider ?? "unknown", effortEff, b.escalate, notes, String(b.transcript), JSON.stringify(tokens), reason]);
     await q(`UPDATE jobs SET status = 'returned' WHERE id = $1`, [jobRow.id]);
+    await endIfCapped(jobRow?.assigned_session);
     // A series read as one (Chris, Sep 19 2026): the covered returns of the same lane or route get the same answer; on a yes, one trusted review decides them all.
     const coverWarnings: string[] = []; const covered: any[] = [];
     for (const raw of (Array.isArray(b.covers) ? b.covers : []).slice(0, 20)) {
@@ -1337,7 +1348,7 @@ job.post("/result", bearer, project, assignmentMutation(async (req: any, res) =>
   }
   if (jobRow) await q(`UPDATE jobs SET status = 'returned' WHERE id = $1`, [jobRow.id]);
   // The cap reached with this return: the session is over and no longer counts as live (platform issue #3).
-  if (jobRow?.assigned_session) await q(`UPDATE sessions SET ended_at = COALESCE(ended_at, now()) WHERE id = $1 AND max_jobs IS NOT NULL AND jobs >= max_jobs AND NOT EXISTS (SELECT 1 FROM jobs WHERE assigned_session = $1 AND status = 'assigned')`, [jobRow.assigned_session]);
+  await endIfCapped(jobRow?.assigned_session);
   let attached: string[] = [];
   try { attached = await files.attach(b.files, "return", Number(ret!.id)); } catch (e: any) { res.status(e.status ?? 400).json({ error: e.message, return_id: ret!.id }); return; }
   if (verificationPlan) await saveVerificationPlan(Number(ret!.id), verificationPlan);
@@ -1366,6 +1377,7 @@ job.post("/result", bearer, project, assignmentMutation(async (req: any, res) =>
     await q(`UPDATE returns SET status = 'superseded', superseded_by = $2, final_rung = NULL WHERE id = $1`, [ret!.id, twin.id]);
     await q(`INSERT INTO return_decisions (return_id, status, final_rung, provisional, by, note) VALUES ($1,'superseded',NULL,false,'duplicate',$2)`, [ret!.id, `the same change as accepted return #${twin.id}: folded into it, one change, one payment, no review`]);
     if (jobRow) await q(`UPDATE jobs SET status = 'returned' WHERE id = $1`, [jobRow.id]);
+    await endIfCapped(jobRow?.assigned_session);
     res.json({ ok: true, return_id: Number(ret!.id), status: "superseded", superseded_by: Number(twin.id), reviews_requested: 0, files: attached, tokens, note: `this patch is byte-identical to accepted return #${twin.id}, so this return is folded into it: no review, no separate credit; both pages link each other. Build on #${twin.id}.` });
     return;
   }

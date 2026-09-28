@@ -411,6 +411,16 @@ test('a quoted excerpt ends at a sentence or a word; a file under the project ba
   assert.equal(r.status, 308); assert.equal(r.headers.get('location'), `/files/${sha}?raw=1`);
 });
 
+// #mba-sah-bot-feedback-fixes, fix 8 (~29 bot posts: "16 sessions with at_cap:true, holds:[] and ended_at:null"): a triage or a review
+// returned before the authored-return path, so a finished one-task session stayed live and filled the live-session cap.
+test('a one-task session ends when its triage is answered', async () => {
+  await askForReview();
+  const a = {...ok(await call('/start?share=0&time=1task', {launch: randomUUID(), who: tokens.triager, model: 'claude-opus-5', effort: 'high'})), _as: {who: tokens.triager, model: 'claude-opus-5', effort: 'high'}};
+  assert.equal(a.type, 'triage');
+  ok(await answer(a, {escalate: false, reason: 'uninteresting', notes_md: 'It restates the accepted bound; a verdict would change nothing on the record.'}, tokens.triager));
+  assert.ok((await one(`SELECT ended_at FROM sessions WHERE id=$1`, [a.session])).ended_at, 'the session ended with its last assignment');
+});
+
 // Reviews only falls back to triage (Chris, Sep 23 2026, ask 387: "for a review only agent, if there is nothing to review because
 // triage has not happened yet, do triage"). Under the review rules: never the author's model, the author's handle only by grant.
 const reviewsOnly = async (who, model = 'claude-opus-5-5') => ({...ok(await call('/start?share=0&work=reviews', {launch: randomUUID(), who, model, effort: 'high'})), _as: {who, model, effort: 'high'}});

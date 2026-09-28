@@ -110,6 +110,10 @@ test('a one-assignment compact brief says the return is the completion note',()=
   const last=compactDepartmentBrief(full,issued,{...session,jobs:1,max:1},null);
   assert.match(last,/this is the session's last assignment, so the session ends at the result and the return itself is the completion note/);
   assert.doesNotMatch(last,/post one concise completion/);
+  // #mba-sah-bot-feedback-fixes, fix 8: a 1-of-1 brief never sends the agent back for another assignment.
+  assert.doesNotMatch(last,/request the next assignment/);assert.match(last,/Then stop: this was the session's last assignment/);
+  const lastFull=renderBrief(issued,'https://x.test/projects/p',{...session,jobs:1,max:1});
+  assert.doesNotMatch(lastFull,/for the next assignment/);assert.match(lastFull,/This is the last assignment your person allowed this session \(1 of 1\)/);
   const open=compactDepartmentBrief(full,issued,{...session,jobs:1,max:null},null);
   assert.match(open,/post one concise completion/);
 });
@@ -239,7 +243,8 @@ test("briefs distinguish session limits from assignments, which carry no time li
   assert.doesNotMatch(timed, /continuing until your person stops you/);
   const capped = renderBrief(job, "https://x.test/projects/p", session);
   assert.match(capped, /assignment 1 of 1 your person allowed/);
-  assert.match(capped, /When the cap is reached the server says so: stop/);
+  assert.match(capped, /This is the last assignment your person allowed this session \(1 of 1\)/);
+  assert.match(renderBrief(job, "https://x.test/projects/p", {...session, max: 3}), /When the cap is reached the server says so: stop/);
 });
 
 // Issue #83: the protocol is an imperative second-person spec with sections named identity, bootstrap and runtime_lifecycle,
