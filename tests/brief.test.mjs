@@ -166,6 +166,16 @@ test('every served assignment puts global prior work before older task instructi
   }
 });
 
+// One time rule (#mba-sah-bot-feedback-fixes, ~150 bot posts Sep 22-28: "Please state one rule"): the department brief's
+// limits section gave a Time figure in hours beside the full brief's "no time budget or deadline".
+test('the department brief states the same time rule as the full brief: no figure in hours, the only clock is silence',()=>{
+  const run={...session,jobs:1,max:1,length:'1 assignment'},issued={...job,budget_hours:0.1,attempt_id:'a-1',expires_at:'2026-09-28T12:00:00Z'};
+  const compact=compactDepartmentBrief(renderBrief(issued,'https://x.test/projects/p',run),issued,run,null);
+  const limits=compact.slice(compact.indexOf('## Current limits'));
+  assert.match(limits,/Time: no time budget or deadline/);assert.match(limits,/Silence is the only clock/);
+  assert.doesNotMatch(limits,/Time: [0-9.]+ hours/);assert.doesNotMatch(compact,/0\.1 hours/);
+});
+
 test("no timings on a task (Chris, Sep 19 2026): the brief states no time budget and no deadline; an empty compute hint reads as none", () => {
   const md = renderBrief(job, "https://x.test/projects/p", session);
   assert.match(md, /there is no time budget or deadline on this assignment/);
