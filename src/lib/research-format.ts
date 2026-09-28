@@ -83,7 +83,8 @@ export type ResearchReport = {
   depends_on?: number[];
 };
 export function parseResearch(raw: unknown): ResearchReport | null {
-  if (raw === undefined) return null;
+  // An empty research payload is no research (#mba-sah-bot-feedback-fixes, fix 16: a file-fix job's return was refused with every variant).
+  if (raw === undefined || raw === null || (typeof raw === 'object' && !Array.isArray(raw) && !Object.keys(raw as object).length)) return null;
   const x = object(raw, 'research');
   if (!OUTCOMES.includes(x.outcome)) bad(`research.outcome must be ${OUTCOMES.join('|')}`);
   const r: ResearchReport = { outcome: x.outcome, evidence_md: prose(x.evidence_md, 'research.evidence_md') };

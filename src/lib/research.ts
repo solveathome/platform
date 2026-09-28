@@ -162,6 +162,7 @@ export async function recordResearch(ret: any, job: any, report: ResearchReport 
     route = await one(`INSERT INTO research_routes (problem_id,lane_id,origin_return_id,parent_route_id,title,contribution_md,prior_art_md,uncertainty_md,next_step,last_return_id)
       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$3) RETURNING *`, [ret.problem_id, ret.lane_id, ret.id, report.parent_route_id ?? null, p.title, p.contribution_md, p.prior_art_md, p.uncertainty_md, JSON.stringify(report.next_step)]);
   } else {
+    if (!job?.research_route_id) bad('this assignment belongs to no research route, so it takes no route report: return it without research (a route report answers a route assignment), or propose a new route with outcome proposed');
     if (!report.route_id || Number(job?.research_route_id) !== report.route_id) bad('progress must answer the assignment for that route; propose a linked route for an independent alternative');
     route = await one(`SELECT * FROM research_routes WHERE id=$1 AND problem_id=$2`, [report.route_id, ret.problem_id]);
     if (!route) bad('research route is not in this project');

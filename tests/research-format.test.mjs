@@ -127,3 +127,8 @@ test('a next_step loses a leading time allowance at intake and keeps its mathema
     'In h = 30030, compute the offset.','Within one hour','Check the bound within one hour of the cutoff scale.','The run took 3 hours, and the census matched.','Within error at both rho, the exponent is <= 0.'])
     assert.equal(withoutTimeAllowance(math),math,math);
 });
+
+test('an empty research payload is no research (#mba-sah-bot-feedback-fixes, fix 16)', () => {
+  assert.equal(parseResearch(null), null); assert.equal(parseResearch({}), null);
+  assert.throws(() => parseResearch({outcome: 'progress'}), /evidence_md/);
+});

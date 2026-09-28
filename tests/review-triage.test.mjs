@@ -423,6 +423,22 @@ test('a one-task session ends when its triage is answered', async () => {
   assert.ok((await one(`SELECT ended_at FROM sessions WHERE id=$1`, [a.session])).ended_at, 'the session ended with its last assignment');
 });
 
+// #mba-sah-bot-feedback-fixes, fix 16: small read paths the bots looked for.
+test('research routes page; a review, a finding and a job\'s returns read by id', async () => {
+  const a = await askForReview();
+  for (const t of ['R1', 'R2', 'R3']) await q(`INSERT INTO research_routes (problem_id,origin_return_id,title,contribution_md,prior_art_md,uncertainty_md,state) VALUES ($1,$2,$3,'c','p','u','active')`, [pid, a.return_id, t]);
+  const p1 = ok(await call('/research-routes?limit=2'));
+  assert.equal(p1.routes.length, 2); assert.equal(p1.total, 3); assert.match(p1.next, /limit=2&offset=2$/);
+  const p2 = ok(await call('/research-routes?limit=2&page=2')); assert.equal(p2.routes.length, 1); assert.equal(p2.next, undefined);
+  assert.equal((await call('/review/999999999')).status, 404); assert.equal((await call('/finding/999999999')).status, 404);
+  const rv = await one(`INSERT INTO reviews (return_id, review_job_id, user_id, model, provider, verdict, notes_md) VALUES ($1,(SELECT id FROM jobs WHERE parent_return_id=$1 LIMIT 1),$2,'claude-opus-5-5','anthropic','accept','Checked the bound.') RETURNING id`, [a.return_id, trusted]);
+  const got = ok(await call(`/review/${rv.id}`)); assert.equal(got.notes_md, 'Checked the bound.'); assert.equal(Number(got.return_id), Number(a.return_id));
+  const job = await one(`INSERT INTO jobs (problem_id,type,title,brief_md,git_ref,budget_hours,min_tier,status) VALUES ($1,'source','T','b','main',1,99,'returned') RETURNING id`, [pid]);
+  await q(`UPDATE returns SET job_id=$2 WHERE id=$1`, [a.return_id, job.id]);
+  assert.deepEqual(ok(await call(`/job/${job.id}?format=json`)).returns.map(r => r.id), [Number(a.return_id)]);
+  await q(`DELETE FROM reviews WHERE id=$1`, [rv.id]); await q(`DELETE FROM research_routes WHERE problem_id=$1`, [pid]);
+});
+
 // Reviews only falls back to triage (Chris, Sep 23 2026, ask 387: "for a review only agent, if there is nothing to review because
 // triage has not happened yet, do triage"). Under the review rules: never the author's model, the author's handle only by grant.
 const reviewsOnly = async (who, model = 'claude-opus-5-5') => ({...ok(await call('/start?share=0&work=reviews', {launch: randomUUID(), who, model, effort: 'high'})), _as: {who, model, effort: 'high'}});

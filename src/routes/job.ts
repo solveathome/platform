@@ -669,8 +669,12 @@ job.get('/research-protocol', project, (req: any, res) => {
   res.type('text/markdown').send(readFileSync(join(ROOT, 'docs', 'research-process.md'), 'utf8'));
 });
 job.get('/research-routes', project, async (req: any, res) => {
-  const rows = await q(`SELECT id,title,state,contribution_md,uncertainty_md,next_step,obstacle,origin_return_id,parent_route_id,last_return_id,revision,updated_at FROM research_routes WHERE problem_id=$1 ORDER BY updated_at DESC,id DESC LIMIT 100`, [req.project.id]);
-  if ((req.header('accept') ?? '').includes('application/json')) { res.json({ routes: rows }); return; }
+  // Paged (#mba-sah-bot-feedback-fixes, fix 16: "?page=2, ?offset=100 and ?limit=500 all return the same 100").
+  const limit = Math.min(Math.max(Number.parseInt(String(req.query.limit ?? 100), 10) || 100, 1), 500);
+  const offset = Math.max(Number.parseInt(String(req.query.offset ?? ""), 10) || (Math.max(Number.parseInt(String(req.query.page ?? 1), 10) || 1, 1) - 1) * limit, 0);
+  const rows = await q(`SELECT id,title,state,contribution_md,uncertainty_md,next_step,obstacle,origin_return_id,parent_route_id,last_return_id,revision,updated_at FROM research_routes WHERE problem_id=$1 ORDER BY updated_at DESC,id DESC LIMIT $2 OFFSET $3`, [req.project.id, limit, offset]);
+  const total = Number((await one<{ n: string }>(`SELECT count(*) AS n FROM research_routes WHERE problem_id=$1`, [req.project.id]))?.n ?? 0);
+  if ((req.header('accept') ?? '').includes('application/json')) { res.json({ routes: rows, total, limit, offset, ...(offset + rows.length < total ? { next: `/projects/${req.project.slug}/research-routes?limit=${limit}&offset=${offset + rows.length}` } : {}) }); return; }
   const P = `/projects/${req.project.slug}`;
   const text = `# Research routes\n\nInvestment states describe what to investigate, not what has been proved.\n\n${rows.map(r => `- [${r.title}](${P}/research-routes/${r.id}): ${r.state}. ${r.uncertainty_md}`).join('\n') || 'No routes proposed yet.'}`;
   if (wantsHtml(req)) res.type('text/html').send(page({ title: `Research routes · ${req.project.name}`, heading: 'Research routes', path: `${P}/research-routes`, description: `The research routes proposed on ${req.project.name}, each with its investment state and what is still uncertain. A route's state says what to investigate, not what has been proved.`, crumbs: `<a href="${P}">${escHtml(req.project.name)}</a>`, body: (() => { const m = protectMath(text.replace(/</g, '&lt;').replace(/>/g, '&gt;')); return m.restore(marked.parse(m.text) as string); })() }));
@@ -888,7 +892,7 @@ job.post("/start", bearer, project, assignmentMutation(async (req: any, res: any
 job.get("/job/:id", optionalAuth, project, async (req: any, res) => {
   const row = await one(`SELECT j.*, l.slug AS lane_slug, p.repo_url, u.handle AS assigned_handle FROM jobs j JOIN problems p ON p.id=j.problem_id LEFT JOIN lanes l ON l.id=j.lane_id LEFT JOIN users u ON u.id = j.assigned_to WHERE j.id = $1 AND j.problem_id = $2`, [req.params.id, req.project.id]);
   if (!row) { res.status(404).json({ error: "no such job" }); return; }
-  if (req.query.format === "json" || !wantsHtml(req)) { const { assigned_session, attempt_id, ...pub } = row; res.json(pub); return; }
+  if (req.query.format === "json" || !wantsHtml(req)) { const { assigned_session, attempt_id, ...pub } = row; res.json({ ...pub, returns: (await q(`SELECT id, status, final_rung FROM returns WHERE job_id = $1 ORDER BY id`, [row.id])).map((r: any) => ({ ...r, id: Number(r.id) })) }); return; }
   const P = `/projects/${req.project.slug}`;
   const pages = await paperPages(req.project.slug);
   const md = async (t: string) => { const m = protectMath(String(t ?? "").replace(/<!--[\s\S]*?-->/g, "")); return linkPaths(await linkPeople(m.restore(marked.parse(m.text.replace(/</g, "&lt;").replace(/>/g, "&gt;"), { gfm: true }) as string)), req.project.slug, "", pages); };
@@ -2078,6 +2082,17 @@ async function openLaneFromDirection(ret: any): Promise<void> {
   await q(`UPDATE reputation SET directions_accepted = directions_accepted + 1 WHERE user_id = $1`, [ret.user_id]);
 }
 
+/** One review or one finding by id, as JSON (#mba-sah-bot-feedback-fixes, fix 16: "got 404 at /review/292 and /finding/152"). The review's transcript is its own resource. */
+job.get("/review/:id", optionalAuth, project, async (req: any, res) => {
+  const r = await one(`SELECT rv.id, rv.return_id, u.handle, rv.model, rv.verdict, rv.rung, rv.reject_reason, rv.notes_md, rv.also_fix, rv.verification, rv.trusted, rv.created_at FROM reviews rv JOIN users u ON u.id = rv.user_id JOIN returns r ON r.id = rv.return_id WHERE rv.id = $1 AND r.problem_id = $2`, [Number(req.params.id) || 0, req.project.id]);
+  if (!r) { res.status(404).json({ error: `no such review #${String(req.params.id).slice(0, 20)} (a replaced review is in its return's review_history)` }); return; }
+  res.json({ ...r, return_url: `/projects/${req.project.slug}/return/${r.return_id}` });
+});
+job.get("/finding/:id", optionalAuth, project, async (req: any, res) => {
+  const f = await one(`SELECT f.id, f.path, f.note, f.scope, f.status, f.content_sha, f.return_id, f.review_id, f.job_id, f.created_at FROM findings f WHERE f.id = $1 AND f.problem_id = $2`, [Number(req.params.id) || 0, req.project.id]);
+  if (!f) { res.status(404).json({ error: `no such finding #${String(req.params.id).slice(0, 20)}` }); return; }
+  res.json({ ...f, ...(f.review_id ? { review_url: `/projects/${req.project.slug}/review/${f.review_id}` } : {}) });
+});
 /** The returns that cite or build on a return, and the routes it feeds; also on GET /return/:id as cited_by and route_dependents. */
 /** A file under the project base is the site's file (bot feedback: "<project base>/files/<sha> is 404; only /files/<sha> works"). */
 job.get(/^\/files\/([0-9a-fA-F]{64})(\/meta)?$/, (req: any, res) => { const q = req.originalUrl.indexOf("?"); res.redirect(308, `/files/${req.params[0].toLowerCase()}${req.params[1] ?? ""}${q >= 0 ? req.originalUrl.slice(q) : ""}`); });
