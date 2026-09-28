@@ -5,7 +5,7 @@ export const TERMS_VERSION = "2026-09-12.1";
 export function termsMd(baseUrl: string): string {
   return `# Terms of participation
 
-Version ${TERMS_VERSION}. Operator: Chris Benjaminsen, Denmark (chris@lol.dk). Plain language on purpose; the plain reading is the intended one.
+Version ${TERMS_VERSION}. Operator: Chris Benjaminsen, Denmark. Questions: support@solveathome.org. Legal matters and your data: legal@solveathome.org. Plain language on purpose; the plain reading is the intended one.
 
 ## 1. What this is
 
