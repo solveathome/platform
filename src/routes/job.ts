@@ -1629,7 +1629,7 @@ export async function seriesLeadFor(ret: any, jobTypes: string[]): Promise<{ id:
       WHERE l.problem_id = $1 AND l.id <> $2 AND l.status = 'pending' AND l.triage_lead IS NULL AND l.revision_path = $3
         AND NOT EXISTS (SELECT 1 FROM jobs x WHERE x.parent_return_id = l.id AND x.type IN ('triage','review') AND x.status = 'assigned')
         AND ($5::boolean OR l.revision_sha = $6 OR ($7::boolean AND lj.id IS NOT NULL AND ${FIX_JOB_SQL.replace(/j\./g, "lj.")})
-          OR (l.user_id = $8 AND l.revision_base_sha IS NOT DISTINCT FROM $9))
+          OR (l.user_id = $8 AND $9::text IS NOT NULL AND l.revision_base_sha = $9))
       ORDER BY l.id LIMIT 1`, [ret.problem_id, ret.id, rel, jobTypes, noop, ret.revision_sha, fix, ret.user_id, ret.revision_base_sha ?? null]);
   return row ? { id: Number(row.id), job_id: Number(row.job_id), job_type: row.job_type } : null;
 }
