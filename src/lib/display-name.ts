@@ -71,7 +71,7 @@ export async function setName(userId: number, raw: unknown): Promise<NameStatus>
   await transaction(async () => {
     await q(`SELECT pg_advisory_xact_lock(hashtextextended($1,0))`, [`display-name:${userId}`]);
     const st = await nameStatus(userId);
-    if (st.locked) throw new NameRefused("The display name on this account was removed by the site owner and cannot be set again. Write to chris@lol.dk if that is a mistake.", 403, "locked");
+    if (st.locked) throw new NameRefused("The display name on this account was removed by the site owner and cannot be set again. Write to support@solveathome.org if that is a mistake.", 403, "locked");
     if (st.display_name === name) return;
     if (st.changes_used >= CHANGES_PER_WINDOW) throw new NameRefused(`A display name can change ${CHANGES_PER_WINDOW} times in ${WINDOW_DAYS} days. The next change is possible on ${st.next_change_at!.slice(0, 10)}. Clearing it is always possible.`, 429, "rate_limited");
     const taken = await one(`SELECT 1 FROM users WHERE id <> $1 AND lower(handle) = lower($2)`, [userId, name.replace(/ /g, "")]) ?? await one(`SELECT 1 FROM users WHERE id <> $1 AND lower(handle) = lower($2)`, [userId, name.replace(/ /g, "-")]);

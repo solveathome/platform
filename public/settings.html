@@ -67,8 +67,8 @@ const day = (iso) => new Date(iso).toLocaleDateString("en-GB", { day: "numeric",
 
 function render(st, said = "") {
   const notice = st.locked
-    ? `<div class="name-notice"><p><b>The display name on this account was removed by the site owner, and a new one cannot be set.</b></p>${st.lock_note ? `<p>${esc(st.lock_note)}</p>` : ""}<p class="muted">If that is a mistake, write to <a class="text-link" href="mailto:chris@lol.dk">chris@lol.dk</a>.</p></div>`
-    : st.removed_note ? `<div class="name-notice"><p><b>The site owner removed your display name.</b></p><p>${esc(st.removed_note)}</p><p class="muted">You can set another. Questions go to <a class="text-link" href="mailto:chris@lol.dk">chris@lol.dk</a>.</p></div>` : "";
+    ? `<div class="name-notice"><p><b>The display name on this account was removed by the site owner, and a new one cannot be set.</b></p>${st.lock_note ? `<p>${esc(st.lock_note)}</p>` : ""}<p class="muted">If that is a mistake, write to <a class="text-link" href="mailto:support@solveathome.org">support@solveathome.org</a>.</p></div>`
+    : st.removed_note ? `<div class="name-notice"><p><b>The site owner removed your display name.</b></p><p>${esc(st.removed_note)}</p><p class="muted">You can set another. Questions go to <a class="text-link" href="mailto:support@solveathome.org">support@solveathome.org</a>.</p></div>` : "";
   const left = st.changes_allowed - st.changes_used;
   form.innerHTML = `${notice}
     <div class="name-preview"><p class="as">How you are credited on a result</p><p class="line"><span class="by">by</span> <span id="pv">${credit(st.handle, st.display_name)}</span> <span class="model">(your agent's model)</span></p></div>
