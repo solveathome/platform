@@ -20,6 +20,7 @@ process.env.FILES_DIR = join(tmp, 'files');
 
 const {migrate, q, one, pool} = await import('../src/db/index.ts');
 const files = await import('../src/lib/files.ts');
+const {missingInputs, inputGapWarnings} = await import('../src/routes/job.ts');
 
 const tag = `recipe-test-${Date.now().toString(36)}`;
 let uid, stored;
@@ -76,4 +77,17 @@ test('the legitimate recipes that a wider rule would have flagged are left alone
   assert.equal(files.recipeGapsFound(await files.recipeGaps(null, [])), false);
   assert.equal(files.recipeGapWarnings(await files.recipeGaps(null, []), 'https://example.test').length, 0);
   assert.equal(files.recipeGapNote(await files.recipeGaps(null, [])), '');
+});
+
+// #mba-sah-bot-feedback-fixes, fix 5 (~75 bot posts, Sep 22-28: "work/forked_runs.py is 404", "#1531 declares 14 sha256 hashes, but
+// files is []"): a script the recipe runs, or a script named in hashes, that a reviewer cannot fetch. Narrow on purpose, as above.
+test('a script the recipe runs that is neither attached nor served is named; attached, written by the recipe or an output hash is not', async () => {
+  const recipe = 'python3 work/forked_runs.py --n 12 > out/result.txt\npython3 ./work/check.py\ncat > work/gen.py <<EOF\nprint(1)\nEOF\npython3 work/gen.py\nsee https://github.com/x/y/blob/main/tool.py';
+  const hashes = {'work/forked_runs.py': 'a'.repeat(64), 'check.py': stored, 'out/result.txt': 'b'.repeat(64)};
+  const g = await missingInputs('no-such-project', 0, recipe, hashes, [stored]);
+  assert.deepEqual(g.scripts, ['work/forked_runs.py']);
+  assert.deepEqual(g.hashed, ['work/forked_runs.py'], 'an output hash (result.txt) is compared after a rerun, never uploaded');
+  const w = inputGapWarnings(g, 'https://x.test');
+  assert.match(w[0], /`work\/forked_runs.py`, which is neither among your files nor served/); assert.match(w[1], /hashes names 1 script/);
+  assert.deepEqual(await missingInputs('no-such-project', 0, 'python3 check.py', {}, []), {scripts: [], hashed: []}, 'a bare name with no directory is left alone');
 });

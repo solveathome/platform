@@ -1417,6 +1417,7 @@ job.post("/result", bearer, project, assignmentMutation(async (req: any, res) =>
   // A recipe that cannot be carried out at all (issue #84): a /files/<sha256> URL for bytes nobody has, or artifacts said to be
   // attached to a return that attaches nothing. Warned, never refused; the reviewer is told the same thing in their brief.
   const recipeGap = await recipeGaps(recipe, attached);
+  const inputGap = await missingInputs(problem.slug, Number(problem.id), recipe, b.hashes, attached, String(b.report_md ?? ""));
   const ledgerWarn = await ledgerWarnings(req.project.slug, b.patch ?? null, rtype === "audit" && b.revision?.path && b.revision?.file ? { path: revisions.safeRel(String(b.revision.path)) ?? "", text: files.read(String(b.revision.file).toLowerCase()) ?? "" } : null);
   // Omission notes (issue #46): reads of served documents and of the author's own files are public and must stay; a transcript that is mostly notes is labelled.
   // Sub-agent turns the transcript never carried (issue #93): the count is low by whatever the children spent, and the person
@@ -1428,7 +1429,7 @@ job.post("/result", bearer, project, assignmentMutation(async (req: any, res) =>
   const twinWarn = twin ? [`this change is byte-identical to pending return #${twin.id}: the two are one change; when #${twin.id} is decided this return is folded into it (accepted: superseded; rejected: rejected with it; unpaid either way), and reviewers see both as one.`] : [];
   const returnReport = tokens.log === "unknown" ? await reportHarness(String(b.transcript), { returnId: Number(ret!.id), uid, model: req.model ?? null }) : null;
   const returnLogWarn = logWarning(tokens, `POST ${BASE()}/projects/${req.project.slug}/return/${Number(ret!.id)}/transcript (same headers)`, returnReport);
-  const warnings = [...(effortNote ? [effortNote] : []), ...(returnLogWarn ? [returnLogWarn] : []), ...onceWarning(tokens), ...scrubWarnings, ...fileWarn, ...mathWarn, ...patchWarning, ...ledgerWarn, ...omissionWarn, ...subWarn, ...twinWarn, ...recipeGapWarnings(recipeGap, BASE()), ...(stray.length ? [`recipe_md names ${stray.length} sha256 value(s) that are neither in hashes, nor among your or cited files, nor a served document: ${stray.map((x: string) => x.slice(0, 12) + "…").join(", ")}. If one is an expected output hash, put it in hashes too; if it is a typo, a reviewer's rerun will not match.`] : [])];
+  const warnings = [...(effortNote ? [effortNote] : []), ...(returnLogWarn ? [returnLogWarn] : []), ...onceWarning(tokens), ...scrubWarnings, ...fileWarn, ...mathWarn, ...patchWarning, ...ledgerWarn, ...omissionWarn, ...subWarn, ...twinWarn, ...recipeGapWarnings(recipeGap, BASE()), ...inputGapWarnings(inputGap, BASE()), ...(stray.length ? [`recipe_md names ${stray.length} sha256 value(s) that are neither in hashes, nor among your or cited files, nor a served document: ${stray.map((x: string) => x.slice(0, 12) + "…").join(", ")}. If one is an expected output hash, put it in hashes too; if it is a typo, a reviewer's rerun will not match.`] : [])];
   if (jobRow?.ask_id) {
     const ask = await one(`SELECT a.id, a.message_id, m.channel_id FROM asks a JOIN messages m ON m.id = a.message_id WHERE a.id = $1 AND a.status IN ('open','researching')`, [jobRow.ask_id]);
     if (ask) {
@@ -1915,6 +1916,44 @@ export async function staleRevision(given: unknown, slug: string, rel: string, p
 async function revisionBase(given: unknown, slug: string, rel: string, problemId: number): Promise<string | null> {
   const g = String(given ?? "").toLowerCase();
   return /^[0-9a-f]{64}$/.test(g) ? g : currentSha(slug, rel, problemId);
+}
+/**
+ * Inputs a reviewer needs and cannot fetch (#mba-sah-bot-feedback-fixes, fix 5, ~75 bot posts and 5 open asks: "#1531 declares 14 sha256
+ * hashes, but files is []", "work/forked_runs.py is 404"): a script path named in recipe_md that is neither attached (by file name) nor a
+ * served document, and a hashes entry named like a script whose bytes are neither attached nor in the store. Warned, never refused
+ * (Chris, Sep 12 2026: a recipe gap is recorded as sent and the reviewer hears it too).
+ */
+const INPUT_EXT = "py|c|cc|cpp|h|hpp|js|mjs|ts|sh|lean|jl|rs|go|java|r|sql|gp|sage|m";
+export async function missingInputs(slug: string, problemId: number, recipe: string, hashes: unknown, attached: string[], report = ""): Promise<{ scripts: string[]; hashed: string[] }> {
+  const written = `${recipe}\n${report}`;
+  const have = new Set(attached.map((x) => String(x).toLowerCase()));
+  const names = new Set((attached.length ? await q<{ name: string }>(`SELECT name FROM files WHERE sha256 = ANY($1)`, [[...have]]) : []).map((f) => String(f.name).split("/").pop()!.toLowerCase()));
+  const paths = [...new Set((recipe.match(new RegExp(`(?<![\\w/.:-])(?:\\./)?(?:[\\w.-]+/)+[\\w.-]+\\.(?:${INPUT_EXT})(?![\\w/])`, "gi")) ?? []).map((m) => m.replace(/^\.\//, "")))];
+  const scripts: string[] = [];
+  for (const path of paths.slice(0, 40)) {
+    if (/^(?:files|docs|projects|https?)\//i.test(path) || names.has(path.split("/").pop()!.toLowerCase())) continue;
+    // A recipe that writes the file itself (a heredoc from a verbatim block, a download) needs no upload.
+    const esc = path.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    if (new RegExp(`(?:>|\\btee\\s+|-o\\s*|--output[= ])\\s*(?:\\./)?${esc}`).test(written)) continue;
+    const rel = revisions.safeRel(path);
+    if (rel && await revisions.exists(slug, rel, problemId)) continue;
+    scripts.push(path);
+  }
+  const hashed: string[] = [];
+  const entries = hashes && typeof hashes === "object" && !Array.isArray(hashes) ? Object.entries(hashes as Record<string, unknown>) : [];
+  for (const [name, v] of entries.slice(0, 100)) {
+    const sha = String(v ?? "").toLowerCase();
+    if (!new RegExp(`\\.(?:${INPUT_EXT})$`, "i").test(name) || !/^[0-9a-f]{64}$/.test(sha) || have.has(sha)) continue;
+    if (await one(`SELECT 1 FROM files WHERE sha256 = $1 AND deleted_at IS NULL`, [sha])) continue;
+    hashed.push(name);
+  }
+  return { scripts, hashed };
+}
+export function inputGapWarnings(g: { scripts: string[]; hashed: string[] }, base: string): string[] {
+  const out: string[] = [];
+  if (g.scripts.length) out.push(`your recipe runs ${g.scripts.map((x) => `\`${x}\``).join(", ")}, which is neither among your files nor served at <project base>/docs/: a reviewer gets a 404. Upload it (POST ${base}/files) and resubmit the files with POST <project base>/return/<id>/files, or put its text in the report.`);
+  if (g.hashed.length) out.push(`hashes names ${g.hashed.length} script(s) whose bytes are neither attached nor in the store (${g.hashed.slice(0, 6).map((x) => `\`${x}\``).join(", ")}${g.hashed.length > 6 ? ", …" : ""}): a reviewer can compare a hash only with the file. Upload them and list them in files.`);
+  return out;
 }
 export const FILE_FIX_TITLE = "Fix files of return ";
 /** An accepted return on a "Fix files" job: the original's note on each same-named file is marked fixed by the corrected copy, as the author's own replacement is. A fix shipped as a patch marks nothing. */
