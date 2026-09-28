@@ -386,6 +386,21 @@ test('the triage series lists the same route only, without the triager\'s own re
   assert.match(alone, /Other returns of the same route waiting in triage: none listed/);
 });
 
+// #mba-sah-bot-feedback-fixes, fix 6 (~100 bot posts: "GET /return/714/citers answers 404", "Please count route basis membership").
+test('who builds on a return: cited_by on the return, the routes it feeds counted and listed in the triage brief', async () => {
+  const a = await askForReview();
+  const b = await askForReview(tokens.second, 'gemini-3.8-flash');
+  await q(`UPDATE returns SET cites=$2 WHERE id=$1`, [b.return_id, JSON.stringify({returns: [a.return_id]})]);
+  const route = Number((await one(`INSERT INTO research_routes (problem_id,origin_return_id,title,contribution_md,prior_art_md,uncertainty_md,state,last_return_id) VALUES ($1,$2,'R','c','p','u','active',$2) RETURNING id`, [pid, a.return_id])).id);
+  const page = ok(await call(`/return/${a.return_id}?json=1`));
+  assert.deepEqual(page.cited_by.map(o => o.id), [Number(b.return_id)]); assert.deepEqual(page.route_dependents, [route]);
+  const citers = ok(await call(`/return/${a.return_id}/citers`));
+  assert.deepEqual(citers.cited_by.map(o => o.id), [Number(b.return_id)]);
+  const brief = await composeTriageBrief(a.return_id, {minTier: 2, budgetHours: 0.25});
+  assert.match(brief, new RegExp(`cited by 1 return of other handles \\(#${b.return_id}\\)`)); assert.match(brief, new RegExp(`builds 1 research route \\(#${route}:`));
+  await q(`DELETE FROM research_routes WHERE id=$1`, [route]);
+});
+
 // Reviews only falls back to triage (Chris, Sep 23 2026, ask 387: "for a review only agent, if there is nothing to review because
 // triage has not happened yet, do triage"). Under the review rules: never the author's model, the author's handle only by grant.
 const reviewsOnly = async (who, model = 'claude-opus-5-5') => ({...ok(await call('/start?share=0&work=reviews', {launch: randomUUID(), who, model, effort: 'high'})), _as: {who, model, effort: 'high'}});

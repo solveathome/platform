@@ -1629,10 +1629,27 @@ export async function releaseSeries(leadId: number): Promise<number> {
   }
   return left.length;
 }
+/**
+ * Who builds on a return (#mba-sah-bot-feedback-fixes, fix 6, ~100 bot posts: "GET /return/714/citers answers 404", "Please count route
+ * basis membership"): the returns citing it or declaring it a premise, and the research routes it feeds: a declared route dependency,
+ * the route it opened, the route whose current next step it set, a route step assigned from it, and a route return that depends on it.
+ */
+export async function citedBy(returnId: number): Promise<Array<{ id: number; handle: string; status: string }>> {
+  return (await q<{ id: string; handle: string; status: string }>(`SELECT o.id, u.handle, o.status FROM returns o JOIN users u ON u.id = o.user_id
+      WHERE o.id <> $1 AND ((o.cites->'returns') @> to_jsonb($1::bigint) OR (o.research->'depends_on') @> to_jsonb($1::bigint) OR EXISTS (SELECT 1 FROM return_dependencies d WHERE d.return_id = o.id AND d.depends_on_id = $1))
+      ORDER BY o.id LIMIT 200`, [returnId])).map((o) => ({ id: Number(o.id), handle: o.handle, status: o.status }));
+}
+export async function routeDependents(returnId: number): Promise<number[]> {
+  return (await q<{ rid: string }>(`SELECT DISTINCT rid FROM (
+      SELECT route_id AS rid FROM research_dependencies WHERE return_id = $1
+      UNION SELECT id FROM research_routes WHERE origin_return_id = $1 OR last_return_id = $1
+      UNION SELECT research_route_id FROM jobs WHERE research_source_return_id = $1
+      UNION SELECT o.research_route_id FROM returns o WHERE o.id <> $1 AND (o.research->'depends_on') @> to_jsonb($1::bigint)
+      UNION SELECT o.research_route_id FROM return_dependencies d JOIN returns o ON o.id = d.return_id WHERE d.depends_on_id = $1) x
+    WHERE rid IS NOT NULL ORDER BY rid`, [returnId])).map((r) => Number(r.rid));
+}
 export async function composeTriageBrief(returnId: number, cfg: { minTier: number; budgetHours: number }, triager: { uid: number; model: string | null } | null = null): Promise<string> {
   const r = await one<any>(`SELECT r.id, r.type, r.author_rung, r.research, r.verification_plan, r.cites, r.paper_slug, r.revision_path, r.model, r.lane_id, r.research_route_id, u.handle, l.slug AS lane, left(regexp_replace(r.report_md, E'\n[\\s\\S]*$', ''), 200) AS head,
-      (SELECT count(*) FROM returns o WHERE o.id <> r.id AND o.user_id <> r.user_id AND (o.cites->'returns') @> to_jsonb(r.id)) AS cited_by_others,
-      (SELECT count(*) FROM returns o WHERE o.id <> r.id AND (o.research->'depends_on') @> to_jsonb(r.id)) AS route_dependents,
       (SELECT string_agg(DISTINCT d.by || ': ' || left(d.note, 200), '; ') FROM return_decisions d WHERE d.return_id = r.id) AS history
      FROM returns r JOIN users u ON u.id = r.user_id LEFT JOIN lanes l ON l.id = r.lane_id WHERE r.id = $1`, [returnId]);
   const siblings = r ? await q<{ id: string; handle: string; model: string; head: string; outcome: string | null }>(`SELECT o.id, u.handle, o.model, left(regexp_replace(o.report_md, E'\n[\\s\\S]*$', ''), 120) AS head, o.research->>'outcome' AS outcome
@@ -1645,9 +1662,11 @@ export async function composeTriageBrief(returnId: number, cfg: { minTier: numbe
   const seriesKind = r?.research_route_id ? "route" : "lane";
   const seriesNote = siblings.length ? `\n\nOther returns of the same ${seriesKind} waiting in triage (a series you may read as one; \`GET <project base>/return/<id>\`):\n${siblings.map((o) => `- #${o.id} by @${o.handle} (${o.model}${o.outcome ? `, ${o.outcome}` : ""}): ${String(o.head).replace(/^#+\\s*/, "")}`).join("\n")}\n\nWhen your reading covers some of them with one and the same answer, name them in \`covers\`: the whole series is then recorded, or escalated as one, so a single trusted review decides them all and closes or opens the direction at once. Cover only what you read.`
     : `\n\nOther returns of the same ${seriesKind} waiting in triage: none listed, so \`covers\` stays [].`;
+  const citers = r ? (await citedBy(returnId)).filter((o) => o.handle !== r.handle) : [];
+  const routes = r ? await routeDependents(returnId) : [];
   const outcome = r?.research?.outcome ? `research outcome \`${r.research.outcome}\`${r.research.obstacle?.kind ? ` (obstacle: ${r.research.obstacle.kind})` : ""}` : "no research object";
   const facts = [`type \`${r?.type}\`${r?.lane ? ` in lane ${r.lane}` : ""}, by @${r?.handle} with ${r?.model}`, outcome, r?.author_rung ? `claims rung \`${r.author_rung}\`` : "claims no rung", r?.verification_plan ? "carries a verification package" : "no verification package",
-    `cited by ${Number(r?.cited_by_others ?? 0)} return${Number(r?.cited_by_others ?? 0) === 1 ? "" : "s"} of other handles; a dependency of ${Number(r?.route_dependents ?? 0)} route step${Number(r?.route_dependents ?? 0) === 1 ? "" : "s"}`,
+    `cited by ${citers.length} return${citers.length === 1 ? "" : "s"} of other handles${citers.length ? ` (${citers.slice(0, 12).map((o) => `#${o.id}`).join(", ")})` : ""}; builds ${routes.length} research route${routes.length === 1 ? "" : "s"}${routes.length ? ` (${routes.slice(0, 12).map((id) => `#${id}`).join(", ")}: its basis, its current next step or a declared dependency)` : ""}`,
     ...(r?.revision_path ? [`proposes a revision of \`${r.revision_path}\``] : []), ...(r?.paper_slug ? [`a manuscript for paper \`${r.paper_slug}\``] : []), ...(r?.history ? [`record so far: ${r.history}`] : [])];
   return `Triage return #${returnId}: "${String(r?.head ?? "").replace(/^#+\s*/, "")}".
 
@@ -2029,6 +2048,12 @@ async function openLaneFromDirection(ret: any): Promise<void> {
   await q(`UPDATE reputation SET directions_accepted = directions_accepted + 1 WHERE user_id = $1`, [ret.user_id]);
 }
 
+/** The returns that cite or build on a return, and the routes it feeds; also on GET /return/:id as cited_by and route_dependents. */
+job.get("/return/:id/citers", optionalAuth, project, async (req: any, res) => {
+  const r = await one<{ id: string }>(`SELECT id FROM returns WHERE id = $1 AND problem_id = $2`, [Number(req.params.id) || 0, req.project.id]);
+  if (!r) { res.status(404).json({ error: `no such return #${String(req.params.id).slice(0, 20)}` }); return; }
+  res.json({ return_id: Number(r.id), cited_by: await citedBy(Number(r.id)), route_dependents: await routeDependents(Number(r.id)) });
+});
 job.get("/return/:id", optionalAuth, project, async (req: any, res) => {
   if (wantsHtml(req) && !req.query.json) { await returnPage(req, res); return; }
   const r = await one(`SELECT r.*, u.handle, j.brief_md AS job_brief FROM returns r JOIN users u ON u.id = r.user_id LEFT JOIN jobs j ON j.id = r.job_id WHERE r.id = $1 AND r.problem_id=$2`, [req.params.id, req.project.id]);
@@ -2043,6 +2068,8 @@ job.get("/return/:id", optionalAuth, project, async (req: any, res) => {
   r.canonical_return = r.verification_plan && r.duplicate_of ? await one(`SELECT id,status,final_rung,provisional FROM returns WHERE id=$1`, [r.duplicate_of]) : null;
   r.review_history = await q(`SELECT h.review-'transcript'||jsonb_build_object('handle',u.handle) AS review,h.archived_at FROM review_history h LEFT JOIN users u ON u.id=(h.review->>'user_id')::bigint WHERE h.return_id=$1 ORDER BY h.id`, [r.id]);
   r.dependencies = await q(`SELECT source.id,source.status,source.final_rung,source.duplicate_of AS canonical_return_id FROM return_dependencies d JOIN returns source ON source.id=d.depends_on_id WHERE d.return_id=$1 ORDER BY source.id`, [r.id]);
+  r.cited_by = await citedBy(Number(r.id));   // the returns that cite it or build on it as a premise
+  r.route_dependents = await routeDependents(Number(r.id));   // the research routes it is a basis, next step or dependency of
   r.research_url = r.research_route_id ? `/projects/${req.project.slug}/research-routes/${r.research_route_id}` : null;
   r.transcript_url = `/projects/${req.project.slug}/return/${r.id}/transcript`; delete r.transcript;   // the transcript is its own resource (cached at the edge)
   r.files = (await q(`SELECT f.sha256, f.name, f.bytes FROM file_refs x JOIN files f ON f.sha256 = x.file_sha WHERE x.ref_type = 'return' AND x.ref_id = $1 AND f.deleted_at IS NULL`, [r.id])).map((f: any) => ({ ...f, bytes: Number(f.bytes) }));
