@@ -1336,6 +1336,10 @@ job.post("/result", bearer, project, assignmentMutation(async (req: any, res) =>
     const fsha = String(b.revision?.file ?? "").toLowerCase();
     if (!rel || !(await revisions.exists(problem.slug, rel, Number(problem.id)))) { res.status(400).json({ error: "an audit return needs revision: { path, file } where path is a document served at <project>/docs/<path> (or a paper's path)" }); return; }
     if (!/^[0-9a-f]{64}$/.test(fsha) || !(Array.isArray(b.files) && b.files.map((x: any) => String(x).toLowerCase()).includes(fsha))) { res.status(400).json({ error: "revision.file must be the sha256 of the revised document, and it must be listed in files" }); return; }
+    // A generated index is rebuilt from its sources and undoes a direct edit (#mba-sah-bot-feedback-fixes, fix 13: accepted audits #205 and
+    // #206 revised research/QUESTIONS.md itself and regeneration undid part of them). The edit goes in the note whose ledger block feeds the row.
+    const registry = readProjectConfig(req.project.slug)?.ledger?.registry;
+    if (registry && rel === revisions.safeRel(registry)) { res.status(400).json({ error: `\`${rel}\` is generated from the ledger blocks at the top of the notes and is never edited by hand: a revision of it is undone at the next regeneration. Revise the note whose ledger block feeds the row instead. Nothing was recorded.` }); return; }
     const stale = await staleRevision(b.revision?.base, problem.slug, rel, Number(problem.id), "revision");
     if (stale) { res.status(stale.status).json({ error: stale.error, served_sha256: stale.head }); return; }
     await q(`UPDATE returns SET revision_path = $2, revision_sha = $3, revision_base_sha = $4 WHERE id = $1`, [ret!.id, rel, fsha, await revisionBase(b.revision?.base, problem.slug, rel, Number(problem.id))]);
