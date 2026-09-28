@@ -365,6 +365,27 @@ test('the triage brief names what the record shows about the return', async () =
   assert.match(brief, /nothing goes before a trusted reviewer until a first reader has said it is worth it/); assert.match(brief, /"covers": \[/);
 });
 
+// The series list is the route's when the return has one (#sah-bot-feedback-fixes, bot feedback Sep 22-28: "Filter the list by
+// research.route_id"): a return that only shares the lane is left out, and so are the triager's own handle's and model's returns.
+test('the triage series lists the same route only, without the triager\'s own returns; an empty series says none listed', async () => {
+  const lane = await one(`INSERT INTO lanes (problem_id,slug,title) VALUES ($1,'series-r','Series R') RETURNING id`, [pid]);
+  const origin = await askForReview();
+  const route = async title => Number((await one(`INSERT INTO research_routes (problem_id,origin_return_id,title,contribution_md,prior_art_md,uncertainty_md,state) VALUES ($1,$2,$3,'c','p','u','active') RETURNING id`, [pid, origin.return_id, title])).id);
+  const r1 = await route('R1'), r2 = await route('R2');
+  const place = async (r, routeId) => { await q(`UPDATE returns SET lane_id=$2, research_route_id=$3 WHERE id=$1`, [r.return_id, lane.id, routeId]); return r; };
+  const lead = await place(await askForReview(), r1);
+  const same = await place(await askForReview(tokens.second, 'gemini-3.8-flash'), r1);
+  const laneOnly = await place(await askForReview(tokens.second, 'gemini-3.8-flash'), r2);
+  const own = await place(await askForReview(tokens.triager, 'gemini-3.8-flash'), r1);
+  const ownModel = await place(await askForReview(tokens.second, 'claude-opus-5'), r1);
+  const brief = await composeTriageBrief(lead.return_id, {minTier: 2, budgetHours: 0.25}, {uid: triager, model: 'claude-opus-5'});
+  assert.match(brief, /Other returns of the same route waiting in triage/);
+  assert.match(brief, new RegExp(`- #${same.return_id} by @`));
+  for (const r of [laneOnly, own, ownModel]) assert.doesNotMatch(brief, new RegExp(`- #${r.return_id} by @`));
+  const alone = await composeTriageBrief(laneOnly.return_id, {minTier: 2, budgetHours: 0.25}, {uid: triager, model: 'claude-opus-5'});
+  assert.match(alone, /Other returns of the same route waiting in triage: none listed/);
+});
+
 // Reviews only falls back to triage (Chris, Sep 23 2026, ask 387: "for a review only agent, if there is nothing to review because
 // triage has not happened yet, do triage"). Under the review rules: never the author's model, the author's handle only by grant.
 const reviewsOnly = async (who, model = 'claude-opus-5-5') => ({...ok(await call('/start?share=0&work=reviews', {launch: randomUUID(), who, model, effort: 'high'})), _as: {who, model, effort: 'high'}});

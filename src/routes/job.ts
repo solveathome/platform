@@ -371,7 +371,7 @@ ${ENDED_LAUNCH_GUIDANCE}
   // A check worker reconstructs the package, so it gets the record in full; a reviewer gets the summary and the judgment asked, with the record one GET away.
   row.brief_md = await refreshReviewBrief(row, Number(req.project.id));
   // A triage brief is composed when served: the series waiting beside the return (covers) is whatever waits now, not what waited when the job was made.
-  if (row.type === 'triage' && row.parent_return_id && triageCfg) { row.brief_md = await composeTriageBrief(Number(row.parent_return_id), triageCfg); await q(`UPDATE jobs SET brief_md = $2 WHERE id = $1`, [row.id, row.brief_md]); }
+  if (row.type === 'triage' && row.parent_return_id && triageCfg) { row.brief_md = await composeTriageBrief(Number(row.parent_return_id), triageCfg, { uid, model: req.model ?? null }); await q(`UPDATE jobs SET brief_md = $2 WHERE id = $1`, [row.id, row.brief_md]); }
   if (row.evidence_return_id || row.parent_return_id) row.brief_md += await verificationBrief(Number(row.evidence_return_id ?? row.parent_return_id), row.parent_return_id && row.type === 'review' ? 'review' : 'record');
   let md = renderBrief(row, `${BASE()}/projects/${req.project.slug}`, sess);
   { const note = unservedNote(String(row.brief_md ?? ""), req.project.slug, `${BASE()}/projects/${req.project.slug}`); if (note) md = md.replace(/\n## /, () => `\n${note}## `); }
@@ -1187,7 +1187,7 @@ job.post("/result", bearer, project, assignmentMutation(async (req: any, res) =>
     for (const raw of (Array.isArray(b.covers) ? b.covers : []).slice(0, 20)) {
       const id = Number(raw);
       const o = Number.isInteger(id) && id !== Number(subject.id) ? await one(`SELECT * FROM returns WHERE id = $1 AND problem_id = $2`, [id, req.project.id]) : null;
-      const why = !o ? "not a return of this project" : o.status !== "pending" || o.triage_lead ? `is ${o.triage_lead ? `already covered by a triage of #${o.triage_lead}` : o.status}` : Number(o.user_id) === uid && !triagerGranted ? "is your own handle's" : String(o.model).toLowerCase() === String(req.model ?? "").toLowerCase() ? "is on your own model" : !(await one(`SELECT 1 FROM jobs WHERE parent_return_id = $1 AND type = 'triage' AND status = 'queued'`, [id])) ? "is not waiting in triage" : !((subject.lane_id && Number(o.lane_id) === Number(subject.lane_id)) || (subject.research_route_id && Number(o.research_route_id) === Number(subject.research_route_id))) ? `is not of the same ${subject.research_route_id ? "route" : "lane"} as #${subject.id}` : await one(`SELECT 1 FROM triages WHERE return_id = $1 AND user_id = $2`, [id, uid]) ? "you already triaged" : null;
+      const why = !o ? "not a return of this project" : o.status !== "pending" || o.triage_lead ? `is ${o.triage_lead ? `already covered by a triage of #${o.triage_lead}` : o.status}` : Number(o.user_id) === uid && !triagerGranted ? "is your own handle's" : String(o.model).toLowerCase() === String(req.model ?? "").toLowerCase() ? "is on your own model" : !(await one(`SELECT 1 FROM jobs WHERE parent_return_id = $1 AND type = 'triage' AND status = 'queued'`, [id])) ? "is not waiting in triage" : !((subject.research_route_id ? Number(o.research_route_id) === Number(subject.research_route_id) : subject.lane_id && Number(o.lane_id) === Number(subject.lane_id))) ? `is not of the same ${subject.research_route_id ? "route" : "lane"} as #${subject.id}` : await one(`SELECT 1 FROM triages WHERE return_id = $1 AND user_id = $2`, [id, uid]) ? "you already triaged" : null;
       if (why) { coverWarnings.push(`return #${raw} not covered: ${why}; it keeps its own triage`); continue; }
       covered.push(o);
     }
@@ -1626,7 +1626,7 @@ export async function releaseSeries(leadId: number): Promise<number> {
   }
   return left.length;
 }
-export async function composeTriageBrief(returnId: number, cfg: { minTier: number; budgetHours: number }): Promise<string> {
+export async function composeTriageBrief(returnId: number, cfg: { minTier: number; budgetHours: number }, triager: { uid: number; model: string | null } | null = null): Promise<string> {
   const r = await one<any>(`SELECT r.id, r.type, r.author_rung, r.research, r.verification_plan, r.cites, r.paper_slug, r.revision_path, r.model, r.lane_id, r.research_route_id, u.handle, l.slug AS lane, left(regexp_replace(r.report_md, E'\n[\\s\\S]*$', ''), 200) AS head,
       (SELECT count(*) FROM returns o WHERE o.id <> r.id AND o.user_id <> r.user_id AND (o.cites->'returns') @> to_jsonb(r.id)) AS cited_by_others,
       (SELECT count(*) FROM returns o WHERE o.id <> r.id AND (o.research->'depends_on') @> to_jsonb(r.id)) AS route_dependents,
@@ -1635,8 +1635,13 @@ export async function composeTriageBrief(returnId: number, cfg: { minTier: numbe
   const siblings = r ? await q<{ id: string; handle: string; model: string; head: string; outcome: string | null }>(`SELECT o.id, u.handle, o.model, left(regexp_replace(o.report_md, E'\n[\\s\\S]*$', ''), 120) AS head, o.research->>'outcome' AS outcome
       FROM returns o JOIN users u ON u.id = o.user_id WHERE o.problem_id = (SELECT problem_id FROM returns WHERE id = $1) AND o.id <> $1 AND o.status = 'pending' AND o.triage_lead IS NULL
         AND EXISTS (SELECT 1 FROM jobs j WHERE j.parent_return_id = o.id AND j.type = 'triage' AND j.status = 'queued')
-        AND (($2::bigint IS NOT NULL AND o.lane_id = $2) OR ($3::bigint IS NOT NULL AND o.research_route_id = $3)) ORDER BY o.id LIMIT 12`, [returnId, r.lane_id ?? null, r.research_route_id ?? null]) : [];
-  const seriesNote = siblings.length ? `\n\nOther returns of the same ${r?.research_route_id ? "route" : "lane"} waiting in triage (a series you may read as one; \`GET <project base>/return/<id>\`):\n${siblings.map((o) => `- #${o.id} by @${o.handle} (${o.model}${o.outcome ? `, ${o.outcome}` : ""}): ${String(o.head).replace(/^#+\\s*/, "")}`).join("\n")}\n\nWhen your reading covers some of them with one and the same answer, name them in \`covers\`: the whole series is then recorded, or escalated as one, so a single trusted review decides them all and closes or opens the direction at once. Cover only what you read.` : "";
+        AND (CASE WHEN $3::bigint IS NOT NULL THEN o.research_route_id = $3 ELSE $2::bigint IS NOT NULL AND o.lane_id = $2 END)
+        AND ($4::bigint IS NULL OR o.user_id <> $4) AND ($5::text IS NULL OR lower(o.model) <> lower($5)) ORDER BY o.id LIMIT 12`, [returnId, r.lane_id ?? null, r.research_route_id ?? null, triager?.uid ?? null, triager?.model ?? null]) : [];
+  // The series is the route's when the return has one, else the lane's (#sah-bot-feedback-fixes: the list said "same route" while it
+  // also listed returns that only shared the lane). The triager's own handle and model are left out: a cover of those is refused.
+  const seriesKind = r?.research_route_id ? "route" : "lane";
+  const seriesNote = siblings.length ? `\n\nOther returns of the same ${seriesKind} waiting in triage (a series you may read as one; \`GET <project base>/return/<id>\`):\n${siblings.map((o) => `- #${o.id} by @${o.handle} (${o.model}${o.outcome ? `, ${o.outcome}` : ""}): ${String(o.head).replace(/^#+\\s*/, "")}`).join("\n")}\n\nWhen your reading covers some of them with one and the same answer, name them in \`covers\`: the whole series is then recorded, or escalated as one, so a single trusted review decides them all and closes or opens the direction at once. Cover only what you read.`
+    : `\n\nOther returns of the same ${seriesKind} waiting in triage: none listed, so \`covers\` stays [].`;
   const outcome = r?.research?.outcome ? `research outcome \`${r.research.outcome}\`${r.research.obstacle?.kind ? ` (obstacle: ${r.research.obstacle.kind})` : ""}` : "no research object";
   const facts = [`type \`${r?.type}\`${r?.lane ? ` in lane ${r.lane}` : ""}, by @${r?.handle} with ${r?.model}`, outcome, r?.author_rung ? `claims rung \`${r.author_rung}\`` : "claims no rung", r?.verification_plan ? "carries a verification package" : "no verification package",
     `cited by ${Number(r?.cited_by_others ?? 0)} return${Number(r?.cited_by_others ?? 0) === 1 ? "" : "s"} of other handles; a dependency of ${Number(r?.route_dependents ?? 0)} route step${Number(r?.route_dependents ?? 0) === 1 ? "" : "s"}`,
