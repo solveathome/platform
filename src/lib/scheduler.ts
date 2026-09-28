@@ -93,6 +93,8 @@ export function unmetRequirements(row: { required_tools?: string[] | null; requi
   return { tools: (row.required_tools ?? []).filter(t => !tools.has(t)), sources: (row.required_sources ?? []).filter(x => !sources.has(x)) };
 }
 
+/** The tier a review of return `pr` asks for: composeReviewBrief's reviewTier (job.ts), for a triage that would become that review. */
+const REVIEW_TIER_SQL = `(CASE WHEN pr.verification_plan IS NOT NULL THEN 1 WHEN pr.type IN ('break','measure','formalize') THEN 99 WHEN pr.type = 'source' THEN 2 ELSE 1 END)`;
 /** Shared predicates: the backlog and selection must count exactly the same eligible work. */
 function eligibility(a: SchedulingAgent, omitCompute = false, sameKindOnly = false) {
   const values: any[] = [];
@@ -113,13 +115,16 @@ function eligibility(a: SchedulingAgent, omitCompute = false, sameKindOnly = fal
     `(pr.id IS NULL OR j.type = 'triage' OR ${p(a.trusted)}::boolean)`,
     // Review triage (Sep 18 2026): a first read by a session that is not trusted, on another handle and model than the author's;
     // a trusted session reviews instead, and nobody triages one return twice. A reviews-only trusted session with no review
-    // waiting takes a triage under the review rules (Chris, Sep 23 2026, ask 387: "for a review only agent, if there is nothing
-    // to review because triage has not happened yet, do triage"): never its own model's return, its own handle's only by grant.
+    // waiting selects a triage under the review rules (never its own model's return, its own handle's only by grant) only to
+    // turn it into its review: a trusted session never triages (Sep 28 2026, #mba-sah-bot-feedback-fixes-skip-triage).
     `(j.type <> 'triage' OR ((${fallback}::boolean OR (NOT ${p(a.trusted)}::boolean AND ${p(a.reviewStreak < 4)}::boolean)) AND NOT EXISTS (SELECT 1 FROM triages t WHERE t.return_id = j.parent_return_id AND t.user_id = ${uid})))`,
     `NOT EXISTS (SELECT 1 FROM reviews rv WHERE rv.return_id = j.parent_return_id AND rv.user_id = ${uid} AND NOT rv.needs_reassessment)`,
     `NOT EXISTS (SELECT 1 FROM jobs j2 WHERE j2.parent_return_id = j.parent_return_id AND j2.id <> j.id AND j2.assigned_to = ${uid} AND j2.status = 'assigned')`,
     sameKindOnly ? `(pr.id IS NOT NULL AND pr.model IS NOT DISTINCT FROM ${model}::text)` : `(pr.id IS NULL OR pr.model IS DISTINCT FROM ${model}::text)`,
-    `(pr.id IS NULL OR j.type = 'triage' OR j.min_tier >= 99 OR ${tier} <= coalesce(amt.tier, 99))`,
+    // A trusted session never triages (Chris, Sep 28 2026, #mba-sah-bot-feedback-fixes-skip-triage): a triage it falls back to becomes
+    // its review, so it only falls back to a triage whose return it may review.
+    `(pr.id IS NULL OR (j.type = 'triage' AND NOT ${fallback}::boolean) OR (j.type <> 'triage' AND j.min_tier >= 99) OR ${tier} <= coalesce(amt.tier, 99))`,
+    `(j.type <> 'triage' OR NOT ${fallback}::boolean OR ${tier} <= ${REVIEW_TIER_SQL})`,
   ];
   clauses.push(a.directionId
     ? `((j.agent_direction_id=${p(a.directionId)} AND j.agent_direction_revision=${p(a.directionRevision)}) OR (j.agent_direction_id IS NULL AND EXISTS(SELECT 1 FROM agent_direction_links dl WHERE dl.job_id=j.id AND dl.direction_id=${p(a.directionId)} AND dl.revision=${p(a.directionRevision)})))`

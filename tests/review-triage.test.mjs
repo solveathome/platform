@@ -396,20 +396,31 @@ test('reviews only: with no review waiting a trusted tier-1 session skips the tr
   assert.deepEqual(await ready(tokens.second), {ready: 1, urgency: 'normal', reviews: 0, triage: 1, trusted: true, tier: 1, facts: '0 reviews and 1 triage this agent may take (never its own model\'s returns, nor its handle\'s)'});
   // Chris, Sep 25 2026 (#sah-tier1-skip-triage): "no need to do research > triage > validation when we can just do research > validation".
   const a = await reviewsOnly(tokens.second);
-  assert.equal(a.type, 'review', JSON.stringify(a.assignment_reason)); assert.equal(a.assignment_reason.policy, 'reviews only: triage skipped, trusted tier 1');
+  assert.equal(a.type, 'review', JSON.stringify(a).slice(0, 1500)); assert.equal(a.assignment_reason.policy, 'reviews only: triage skipped, trusted reviewer');
   assert.equal(Number((await one(`SELECT parent_return_id FROM jobs WHERE id=$1`, [a.job_id])).parent_return_id), Number(r.return_id));
   assert.deepEqual((await jobsOf(r.return_id, 'triage')).map(j => j.status), ['expired'], 'the triage job is kept, expired with the reason');
   assert.equal((await q(`SELECT 1 FROM triages WHERE return_id=$1`, [r.return_id])).length, 0, 'nobody triaged it');
-  assert.match((await one(`SELECT note FROM return_decisions WHERE return_id=$1 AND by='triage' ORDER BY id DESC LIMIT 1`, [r.return_id])).note, /^Triage skipped: a trusted tier-1 reviewer/);
+  assert.match((await one(`SELECT note FROM return_decisions WHERE return_id=$1 AND by='triage' ORDER BY id DESC LIMIT 1`, [r.return_id])).note, /^Triage skipped: a trusted reviewer/);
   const page = ok(await call(`/return/${r.return_id}?json=1`));
   assert.equal(page.in_triage, false); assert.equal(page.status, 'pending');
   await release(a);
 });
 
-test('reviews only: a trusted session below tier 1 still takes the triage when no review waits', async () => {
-  await askForReview();
-  const a = ok(await call('/start?share=0&work=reviews', {launch: randomUUID(), who: tokens.trusted, model: 'claude-opus-5', effort: 'high'}));
-  assert.equal(a.type, 'triage', JSON.stringify(a.assignment_reason)); assert.equal(a.assignment_reason.policy, 'reviews only: triage, no review waiting');
+// Chris, Sep 28 2026 (#mba-sah-bot-feedback-fixes-skip-triage): triage is an early read by a bot that may not review, never a required
+// stage; a bot good enough to review has no need to triage. ~210 bot posts Sep 22-28 read "the reviewer judged their own remedy".
+test('reviews only: a trusted session below tier 1 skips the triage of a return it may review and reviews it directly; it triages nothing', async () => {
+  const judgment = await askForReview();   // a direction: its review is tier-1 judgment, not this session's
+  const r = await askForReview();
+  await q(`UPDATE returns SET type='source' WHERE id=$1`, [r.return_id]);   // a source's review is a tier-2 page check
+  const a = await reviewsOnly(tokens.trusted, 'claude-opus-5');
+  assert.equal(a.type, 'review', JSON.stringify(a.assignment_reason)); assert.equal(a.assignment_reason.policy, 'reviews only: triage skipped, trusted reviewer');
+  assert.equal(Number((await one(`SELECT parent_return_id FROM jobs WHERE id=$1`, [a.job_id])).parent_return_id), Number(r.return_id));
+  assert.equal((await q(`SELECT 1 FROM triages WHERE return_id=$1`, [r.return_id])).length, 0, 'nobody triaged it');
+  await release(a);
+  const b = await reviewsOnly(tokens.trusted, 'claude-opus-5');
+  assert.notEqual(b.type, 'triage', 'a return it may not review is not its to triage either');
+  if (b.job_id) { assert.notEqual(Number((await one(`SELECT parent_return_id FROM jobs WHERE id=$1`, [b.job_id])).parent_return_id), Number(judgment.return_id)); await release(b); }
+  assert.ok((await jobsOf(judgment.return_id, 'triage')).some(j => j.status === 'queued'), 'it waits in triage for a bot that may not review');
 });
 
 test('a trusted tier-1 author skips triage: the return goes to review directly; a trusted handle below tier 1 and an untrusted tier-1 model still get triage', async () => {

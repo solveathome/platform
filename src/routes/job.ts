@@ -286,25 +286,23 @@ ${ENDED_LAUNCH_GUIDANCE}
   // sets `work=reviews` in the instruction; a trusted session then takes review jobs and nothing else, with the same eligibility
   // (never its own model's returns, its own handle's only by grant). When none is waiting it holds nothing and is told to ask
   // again. A session that is not a trusted reviewer cannot take a review, so the setting does not apply to it.
-  // Triage first when nothing is left to review (Chris, Sep 23 2026, ask 387: "for a review only agent, if there is nothing to
-  // review because triage has not happened yet, do triage"): with no review waiting it takes a queued triage under the same
-  // rules as a review (never its own model's return, its own handle's only by grant), and waits only when neither is open.
-  // A trusted tier-1 session does not triage at all (Chris, Sep 25 2026, #sah-tier1-skip-triage: "a trusted tier 1 agent should just
-  // skip triage"): the return it would have triaged goes to review directly, and it takes the review. The eligibility is the triage
-  // fallback's, so it is never its own model's return; a review it cannot take after all (compute) stays queued for another reviewer.
+  // A trusted session does not triage at all (Chris, Sep 25 2026, #sah-tier1-skip-triage, for tier 1; Sep 28 2026, for every trusted
+  // reviewer, #mba-sah-bot-feedback-fixes-skip-triage: triage is an early read by a bot that may not review, never a required stage,
+  // and a bot good enough to review has no need to triage): the return it would have triaged goes to review directly, and it takes
+  // the review. The eligibility is the triage fallback's plus the review tier rule, so it is never its own model's return nor one
+  // above its tier; a review it cannot take after all (compute) stays queued for another reviewer.
   const reviewsOnly = settings.ai?.reviews_only === true && trusted && !recovery && !session.direction_id && !tangentFirst;
-  let reviewsOnlyTriage = false, triageSkipped = false;
+  let triageSkipped = false;
   if (reviewsOnly && !row) {
     row = await selectJob(agent, false, false, undefined, false, true);
-    for (let tries = 0; !row && tier === 1 && reviewTriage(req.project.slug) && tries < 5; tries++) {
+    for (let tries = 0; !row && reviewTriage(req.project.slug) && tries < 5; tries++) {
       const waiting = await selectJob({ ...agent, triageFallback: true }, false, false, undefined, false, false, true);
       if (!waiting) break;
-      await skipTriage(waiting, `a trusted tier-1 reviewer (${req.model ?? "unknown"}) reviews it directly`);
+      await skipTriage(waiting, `a trusted reviewer (${req.model ?? "unknown"}) reviews it directly`);
       row = await selectJob(agent, false, false, undefined, false, true); triageSkipped = !!row;
     }
-    if (!row && tier !== 1 && reviewTriage(req.project.slug)) { row = await selectJob({ ...agent, triageFallback: true }, false, false, undefined, false, false, true); reviewsOnlyTriage = !!row; }
     if (!row) {
-      let md = `# solveathome / ${req.project.name}: no review waiting for you\n\nYour person set this agent to reviews only, and no review or triage you may take is waiting right now (a model never reviews or triages its own kind${granted ? "" : ", nor a handle its own returns"}${need.blocked_reviews ? `; ${need.blocked_reviews} wait for an agent on another model` : ""}). You hold nothing. Call \`GET ${BASE()}/projects/${req.project.slug}/start\` again with your \`X-Session\` header in ${Math.round(REVIEWS_ONLY_RETRY_S / 60)} minutes; do not start other work, your person asked for reviews.`;
+      let md = `# solveathome / ${req.project.name}: no review waiting for you\n\nYour person set this agent to reviews only, and no review you may take is waiting right now (a model never reviews its own kind${granted ? "" : ", nor a handle its own returns"}${need.blocked_reviews ? `; ${need.blocked_reviews} wait for an agent on another model` : ""}). You hold nothing. Call \`GET ${BASE()}/projects/${req.project.slug}/start\` again with your \`X-Session\` header in ${Math.round(REVIEWS_ONLY_RETRY_S / 60)} minutes; do not start other work, your person asked for reviews.`;
       if (req.justRegistered && !session.department_id) md = (await orientation(req.project, BASE(), { ...member, ...settings, capabilities: session.capabilities, contact_id: session.contact_id, session: session.id, session_max_jobs: session.max_jobs, length: lengthWords(session), disk }, true, { model: req.model ?? null, uid, trusted, tier, effort: req.effort ?? null, tier_note: tf.note }, true)) + "\n\n---\n\n" + md;
       if (inboxMd) md += `\n\n${inboxMd}`;
       res.setHeader("Retry-After", String(REVIEWS_ONLY_RETRY_S));
@@ -348,7 +346,7 @@ ${ENDED_LAUNCH_GUIDANCE}
   const stepCheck = !recovery ? await holdForStepCheck(row) : null;
   if (stepCheck) row = stepCheck;
   const unmet = row.type === 'check' ? { tools: [], sources: [] } : unmetRequirements(row, agent.capabilities);
-  const reason = { policy: session.direction_id ? "agent direction" : tangentFirst ? "person's tangent" : reviewsOnlyTriage ? "reviews only: triage, no review waiting" : triageSkipped ? "reviews only: triage skipped, trusted tier 1" : reviewsOnly ? "reviews only" : trustedJudgment ? "trusted judgment" : pressed ? "review pressure" : triaged ? "review triage" : portfolio ? "research portfolio" : reserveDiscovery ? "reserved tier-1 discovery" : "eligible work by need and capability",
+  const reason = { policy: session.direction_id ? "agent direction" : tangentFirst ? "person's tangent" : triageSkipped ? "reviews only: triage skipped, trusted reviewer" : reviewsOnly ? "reviews only" : trustedJudgment ? "trusted judgment" : pressed ? "review pressure" : triaged ? "review triage" : portfolio ? "research portfolio" : reserveDiscovery ? "reserved tier-1 discovery" : "eligible work by need and capability",
     tier, guidance_version: GUIDANCE_VERSION, discovery_share: share, discovery_allocation: used, eligible_backlog: { reviews: need.reviews, research: need.research }, prefer_research: preferResearch,
     ...(need.blocked_reviews ? { blocked_backlog: { reviews: need.blocked_reviews, reason: "a model never reviews its own kind; these wait for an agent on another model" } } : {}),
     research_allocation: portfolio, research_hours: portfolioUsed, research_bucket: researchBucket(row),
@@ -1484,7 +1482,7 @@ export async function composeReviewBrief(returnId: number, problemId: number, op
   const verificationNote = parent?.verification_plan ? `\n\nHow deep to go (verification): \`"verification": "read"\` is judging from the Verification section: the claim, its assumptions, the argument connecting the check to the claim, the generated summary, the caveats and the receipts. That is the default and it is enough when the receipts and caveats support the claim at the rung you assign. A receipt that already exists is reused, never repeated. \`"spot"\` or \`"rerun"\` only against a weakness you name in \`"rerun_reason"\`, with the smallest check that addresses it.` : `\n\nHow deep to go (verification): the author's captured outputs, hashes and transcript are the evidence. Read the code and the recipe against the claim, and check that the outputs are what that code would produce and that the claim follows from them; that is \`"verification": "read"\`, the default, and it is enough when code, outputs and claim agree. Rerun only with a reason: an output is missing or does not match the code, a bug you found changes the result, no independent execution of a cheap decisive check exists, or the claim rests on something the captured output does not show. Then \`"verification": "spot"\` (one cheap piece rerun) or \`"rerun"\` (the whole recipe), with \`"rerun_reason"\`. Rerunning captured work without a reason wastes the CPU your person offered.`;
   // Who checks what: mechanical checks (a counterexample runs, a hash reproduces, a proof compiles) go to any tier; a page check to tier 2 and up; judgment stays with the top tier.
   const mechanical = !parent?.verification_plan && ["break", "measure", "formalize"].includes(parent?.type ?? "");
-  const reviewTier = parent?.verification_plan ? 1 : mechanical ? 99 : parent?.type === "source" ? 2 : 1;
+  const reviewTier = parent?.verification_plan ? 1 : mechanical ? 99 : parent?.type === "source" ? 2 : 1;   // REVIEW_TIER_SQL in scheduler.ts says the same
   const reviewBudget = judgmentBudget(parent?.verification_plan);
   const judgmentOnly = options.judgmentOnly || await checkWaitExpired(returnId);
   // One path for a packaged review (agent review, Sep 16): the Verification section first, deeper material for a named obligation. Never "read everything before judging".
