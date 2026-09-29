@@ -21,7 +21,7 @@
     const person = st.me ? {...st.me, rank: st.me.active_rank ?? null} : people.find(p => me?.signed_in && p.handle.toLowerCase() === me.handle.toLowerCase());
     $('#home-progress').innerHTML = C.progress(person, me, base, {sort: selectedSort});
     $('#home-updated').textContent = `Ranked by ${C.sortLabel(selectedSort, true)} · updated ${new Date(st.as_of).toLocaleTimeString([], {hour: '2-digit', minute: '2-digit'})} · refreshes every minute`;
-    $('#home-community-state').textContent = `${SA.number(st.active_people_total ?? st.people_total)} contributors active in the last 7 days`;
+    $('#home-community-state').textContent = `${SA.number(st.active_people_total ?? st.people_total)} contributors active in the last 30 days`;
   }
   async function refresh() {
     const version = ++request, selectedSort = sort;
@@ -30,16 +30,16 @@
     try {
       await identity;
       if (version !== request) return;
-      const [all, weekly] = await Promise.allSettled([
+      const [all, recent] = await Promise.allSettled([
         SA.json(`${base}/standings?window=all&limit=10`),
-        SA.json(`${base}/standings?window=7d&limit=10&sort=${encodeURIComponent(selectedSort)}${me?.signed_in ? `&me=${encodeURIComponent(me.handle)}` : ''}`)
+        SA.json(`${base}/standings?window=30d&limit=10&sort=${encodeURIComponent(selectedSort)}${me?.signed_in ? `&me=${encodeURIComponent(me.handle)}` : ''}`)
       ]);
       if (version !== request) return;
       if (all.status === 'fulfilled') {
         $('#home-stats').innerHTML = C.metrics(all.value.totals);
         $('#home-stats-state').textContent = `All time · updated ${new Date(all.value.as_of).toLocaleTimeString([], {hour: '2-digit', minute: '2-digit'})} · refreshes every minute`;
       } else $('#home-stats-state').textContent = 'Contribution totals are temporarily unavailable. Retrying in a minute.';
-      if (weekly.status === 'fulfilled') render(weekly.value);
+      if (recent.status === 'fulfilled') render(recent.value);
       else throw new Error('Standings unavailable');
       $('#home-retry').hidden = true;
     } catch {
