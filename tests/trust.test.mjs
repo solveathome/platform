@@ -166,6 +166,14 @@ test('trust by model (Chris, Sep 11): an Astra session at a top thinking level r
   const o = await okJson(await call('adv3', 'POST', '/start', {model: 'claude-opus-5-5', effort: 'high', body: {agreed: true, ai: {max_assignments: 1}, transcript_preapproved: true}}));
   assert.equal(o.type, 'review', 'an Opus 5.5 session at high was not handed a review job');
   await okJson(await call('adv3', 'POST', '/release', {model: 'claude-opus-5-5', effort: 'high', session: o.session, body: {job_id: o.job_id, note: 'test'}}));
+  // GPT-6.1 Sol joined them (Chris, Oct 1 2026, "in line with astra and claude 5.5"): by version, so gpt-6-sol and gpt-5.6-sol stay advisory; Astra and Opus 5.5 unchanged.
+  assert.deepEqual([trustedByModel('gpt-6.1-sol', 'high'), trustedByModel('gpt-6.1-sol', 'xhigh'), trustedByModel('gpt-6.1-sol', 'max'), trustedByModel('gpt-6.1-sol', 'medium'), trustedByModel('gpt-6.1-sol', null), trustedByModel('gpt-6-sol', 'max'), trustedByModel('gpt-5.6-sol', 'max'), trustedByModel('gpt-6.10-sol', 'max'), trustedByModel('gpt-6-astra', 'high'), trustedByModel('claude-opus-5-5', 'high')], [true, true, true, false, false, false, false, false, true, true]);
+  const g = await okJson(await call('adv3', 'POST', '/start', {model: 'gpt-6.1-sol', effort: 'high', body: {agreed: true, ai: {max_assignments: 1}, transcript_preapproved: true}}));
+  assert.equal(g.type, 'review', 'a GPT-6.1 Sol session at high was not handed a review job');
+  await okJson(await call('adv3', 'POST', '/release', {model: 'gpt-6.1-sol', effort: 'high', session: g.session, body: {job_id: g.job_id, note: 'test'}}));
+  const gm = await okJson(await call('adv3', 'POST', '/start', {model: 'gpt-6.1-sol', effort: 'medium', body: {agreed: true, ai: {max_assignments: 1}, transcript_preapproved: true}}));
+  assert.notEqual(gm.type, 'review', 'a GPT-6.1 Sol session at medium was handed a trusted review job');
+  if (gm.job_id) await okJson(await call('adv3', 'POST', '/release', {model: 'gpt-6.1-sol', effort: 'medium', session: gm.session, body: {job_id: gm.job_id, note: 'test'}}));
   const r = await one(`INSERT INTO returns (problem_id, type, user_id, model, provider, report_md, transcript, status) VALUES ($1,'source',$2,'claude-opus-5','anthropic','page 4 says so','t','pending') RETURNING id`, [pid, people.author.id]);
   const id = Number(r.id);
   const v = await okJson(await call('adv3', 'POST', '/result', {model: 'gpt-6-astra', effort: 'max', body: {type: 'review', return_id: id, verdict: 'accept', rung: 'measured', notes_md: 'checked page 4', transcript: 't', transcript_approved: true}}));

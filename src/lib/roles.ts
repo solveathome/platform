@@ -10,14 +10,15 @@ import { TOP_EFFORTS, type Effort } from "./model-id.js";
  *  of these families at a top thinking level reviews as trusted, because the granted group is one person and reviews wait. Its verdicts
  *  decide like a grant's, except on its own handle's returns. Off with TRUSTED_MODEL_FAMILIES= (empty) in the environment.
  *  Opus 5.5 joined Astra (Chris, Sep 22 2026, "as long as it runs in high+"): the entry is the version, so claude-opus-5 and 4.x stay out.
+ *  GPT-6.1 Sol joined them (Chris, Oct 1 2026, "in line with astra and claude 5.5"): gpt-6.1-sol only, so gpt-6-sol and gpt-5.6-sol stay out.
  *  An entry matches whole id segments ("astra" in gpt-6-astra-pro, claude-opus-5-5 in claude-opus-5-5-high, never claude-opus-5-50). */
-export const TRUSTED_MODEL_FAMILIES: string[] = (process.env.TRUSTED_MODEL_FAMILIES === undefined ? "astra,claude-opus-5-5" : process.env.TRUSTED_MODEL_FAMILIES).split(",").map((s) => s.trim().toLowerCase().replace(/\./g, "-")).filter(Boolean);
-const FAMILY_LABELS: Record<string, string> = { astra: "Astra (gpt-6-astra)", "claude-opus-5-5": "Opus 5.5 (claude-opus-5-5)" };
-/** The trusted families as the trust page and orientation name them: "Astra (gpt-6-astra) or Opus 5.5 (claude-opus-5-5)". */
-export const trustedModelsLabel = (): string => TRUSTED_MODEL_FAMILIES.map((f) => FAMILY_LABELS[f] ?? f).join(" or ");
+export const TRUSTED_MODEL_FAMILIES: string[] = (process.env.TRUSTED_MODEL_FAMILIES === undefined ? "astra,claude-opus-5-5,gpt-6-1-sol" : process.env.TRUSTED_MODEL_FAMILIES).split(",").map((s) => s.trim().toLowerCase().replace(/\./g, "-")).filter(Boolean);
+const FAMILY_LABELS: Record<string, string> = { astra: "Astra (gpt-6-astra)", "claude-opus-5-5": "Opus 5.5 (claude-opus-5-5)", "gpt-6-1-sol": "GPT-6.1 Sol (gpt-6.1-sol)" };
+/** The trusted families as the trust page and orientation name them: "Astra (gpt-6-astra), Opus 5.5 (claude-opus-5-5) or GPT-6.1 Sol (gpt-6.1-sol)". */
+export const trustedModelsLabel = (): string => { const l = TRUSTED_MODEL_FAMILIES.map((f) => FAMILY_LABELS[f] ?? f); return l.length > 1 ? `${l.slice(0, -1).join(", ")} or ${l.at(-1)}` : l.join(""); };
 export type Agent = { model?: string | null; effort?: Effort | string | null };
 export function trustedByModel(model: string | null | undefined, effort: string | null | undefined): boolean {
-  const m = String(model ?? "").toLowerCase().replace(/\./g, "-");   // "claude-opus-5.5" is claude-opus-5-5
+  const m = String(model ?? "").toLowerCase().replace(/\./g, "-");   // "claude-opus-5.5" is claude-opus-5-5, "gpt-6.1-sol" is gpt-6-1-sol
   if (!m || !TRUSTED_MODEL_FAMILIES.some((f) => (`-${m}-`).includes(`-${f}-`))) return false;
   return !!effort && TOP_EFFORTS.has(effort as Effort);
 }

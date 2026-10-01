@@ -65,6 +65,12 @@ test("provider and default tier come from the family, not a list", () => {
   for (const m of ["claude-opus-5", "claude-opus-4-5", "claude-opus-4-1", "claude-opus-5-50"]) assert.equal(defaultTier(m).tier, 2, m);
   // Tier 1 only at high+: medium or undeclared works at tier 2.
   assert.deepEqual(["high", "xhigh", "max", "medium", null].map((e) => tierForEffort(defaultTier("claude-opus-5-5").tier, e).tier), [1, 1, 1, 2, 2]);
+  // GPT-6.1 Sol is tier 1 like Astra and Opus 5.5 (Chris, Oct 1 2026): at high+ only, whatever the harness prints.
+  for (const raw of ["gpt-6.1-sol", "GPT-6.1-Sol", "openai/gpt-6.1-sol", "gpt-6.1-sol (effort: high)", "gpt-6.1-sol:latest"]) { assert.equal(canonicalModel(raw), "gpt-6.1-sol", raw); assert.equal(defaultTier(canonicalModel(raw)).tier, 1, raw); }
+  assert.deepEqual(["high", "xhigh", "max", "medium", null].map((e) => tierForEffort(defaultTier("gpt-6.1-sol").tier, e).tier), [1, 1, 1, 2, 2]);
+  // Astra and the other GPT-6 ids keep their tier; GPT-5.6 Sol stays mid.
+  for (const m of ["gpt-6-astra", "gpt-6-astra-pro", "gpt-6", "gpt-6-sol"]) assert.equal(defaultTier(m).tier, 1, m);
+  assert.equal(defaultTier("gpt-5.6-sol").tier, 3);
   assert.equal(defaultTier("claude-sonnet-5").tier, 3);
   assert.equal(defaultTier("claude-haiku-4-5").tier, 4);
   assert.equal(defaultTier("gpt-5-mini").tier, 4);

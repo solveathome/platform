@@ -20,6 +20,7 @@ const tiers: Array<[string, string, number, string]> = [
   ["gpt-6-astra", "openai", 1, "top tier at launch (Q13)"],
   ["claude-fable-5-1", "anthropic", 1, "top tier at launch (Q13)"],
   ["claude-opus-5-5", "anthropic", 1, "tier 1 at high, xhigh or max (Chris, Sep 22 2026)"],
+  ["gpt-6.1-sol", "openai", 1, "tier 1 at high, xhigh or max (Chris, Oct 1 2026)"],
   ["claude-opus-5", "anthropic", 2, ""],
   ["claude-sonnet-5", "anthropic", 3, ""],
   ["claude-haiku-4-5", "anthropic", 4, ""],

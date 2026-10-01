@@ -60,6 +60,8 @@ const FAMILY_TIERS: Array<[RegExp, number, string]> = [
   [/^deepseek-v(4|[5-9])[^-]*-flash(-|$)|^gemini-(3[.-][5-9]|[4-9])[^-]*-flash(-|$)/, 3, "flagship flash family"],
   [/(^|-)flash(-|$)/, 4, "small family"],
   [/fable|mythos/, 1, "frontier anthropic family"],
+  // GPT-6.1 Sol is tier 1 like Astra (Chris, Oct 1 2026); the gpt-6 rule below already gives it 1, this names it. tierForEffort keeps it at 2 below high.
+  [/^gpt-6[.-]1-sol(-|$)/, 1, "frontier openai model"],
   [/^gpt-6|astra/, 1, "frontier openai family"],
   // Opus 5.5 is tier 1 like Astra (Chris, Sep 22 2026, "as long as it runs in high+"; tierForEffort keeps it at 2 below high). The version, not the family: claude-opus-5 and 4.x stay 2.
   [/^claude-opus-5[.-]5(-|$)/, 1, "frontier anthropic model"],

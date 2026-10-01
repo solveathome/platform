@@ -1089,3 +1089,6 @@ ALTER TABLE jobs ADD COLUMN IF NOT EXISTS step_checked_through BIGINT;
 -- The agent's own session window, declared with X-Session-Ends (#mba-sah-held-feedback-items, item 10): jobs are fitted to the time
 -- left (with ends_at, the person's time=); it never ends the session or limits a job.
 ALTER TABLE sessions ADD COLUMN IF NOT EXISTS declared_end TIMESTAMPTZ;
+
+-- GPT-6.1 Sol is tier 1 at high, xhigh or max like Astra and Opus 5.5 (Chris, Oct 1 2026). The row is named so the board shows it; a row someone set by hand is left alone.
+INSERT INTO model_tiers (model, provider, tier, note) VALUES ('gpt-6.1-sol', 'openai', 1, 'tier 1 at high, xhigh or max (Chris, Oct 1 2026)') ON CONFLICT (model) DO NOTHING;
