@@ -5,6 +5,7 @@
  */
 import { existsSync, readFileSync } from "node:fs";
 import { q } from "../db/index.js";
+import { liveRepairSql } from "./findings.js";
 import * as files from "./files.js";
 import { mirrorPath } from "./revisions.js";
 import { listPapers } from "../routes/papers.js";
@@ -32,7 +33,7 @@ export async function inventory(problemId: number, slug: string) {
   }
   const unintegrated = (await q(`SELECT r.id, r.revision_path, r.integration FROM returns r WHERE r.problem_id = $1 AND r.status = 'accepted' AND NOT r.provisional AND r.revision_sha IS NOT NULL
       AND (r.integration IN ('conflict','missing') OR (r.integration IS NULL AND NOT EXISTS (SELECT 1 FROM document_versions v WHERE v.return_id = r.id))) ORDER BY r.id`, [problemId])).map((r: any) => ({ return_id: Number(r.id), path: r.revision_path, integration: r.integration ?? "never recorded" }));
-  const unworked = (await q(`SELECT f.id, f.path, f.scope, f.note, f.job_id, j.status AS job_status FROM findings f LEFT JOIN jobs j ON j.id = f.job_id WHERE f.problem_id = $1 AND f.status = 'open' AND f.scope <> 'advisory' AND (j.id IS NULL OR j.status NOT IN ('queued','assigned','returned')) ORDER BY f.id`, [problemId])).map((f: any) => ({ ...f, id: Number(f.id) }));
+  const unworked = (await q(`SELECT f.id, f.path, f.scope, f.note, f.job_id, j.status AS job_status FROM findings f LEFT JOIN jobs j ON j.id = f.job_id WHERE f.problem_id = $1 AND f.status = 'open' AND f.scope <> 'advisory' AND (j.id IS NULL OR NOT ${liveRepairSql}) ORDER BY f.id`, [problemId])).map((f: any) => ({ ...f, id: Number(f.id) }));
   const reassessing = (await q(`SELECT r.id, r.revision_path FROM returns r WHERE r.problem_id = $1 AND r.status = 'pending' AND r.revision_sha IS NOT NULL AND EXISTS (SELECT 1 FROM return_decisions d WHERE d.return_id = r.id AND d.status = 'accepted' AND NOT d.provisional) ORDER BY r.id`, [problemId])).map((r: any) => ({ return_id: Number(r.id), path: r.revision_path }));
   return { project: slug, observed_at: new Date().toISOString(), papers, mislabelled, displaced, stale_mirror: staleMirror, unintegrated, findings_without_work: unworked, under_reassessment: reassessing,
     not_checked: "Whether a manuscript and a research note share one address (a paper derived from a note that replaced it) is a reviewer's judgment; this inventory does not infer it." };

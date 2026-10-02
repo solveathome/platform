@@ -19,7 +19,7 @@ const {job,resumeDeferredReviews,REVIEW_BRIEF_VERSION}=await import('../src/rout
 const {board}=await import('../src/routes/board.ts');
 const {filesRouter}=await import('../src/routes/files.ts');
 const files=await import('../src/lib/files.ts');
-const {prepareRescue,reconsiderDependents}=await import('../src/lib/research.ts');
+const {prepareRescue,retireRedundantRescueSamples,reconsiderDependents}=await import('../src/lib/research.ts');
 const {researchAllocation}=await import('../src/lib/scheduler.ts');
 let server,pid,slug,base;
 const users={};
@@ -79,6 +79,63 @@ const proposal=()=>({outcome:'proposed',proposal:{title:'A route with a weaker h
 const obstacle={kind:'attempt_failed',statement:'The uniform bound fails.',assumptions:'This proof attempt requires uniformity.',evidence:'A witness violates that bound.',revisit_when:'An average bound might suffice.'};
 async function proposed() {return ok(await submit('author',{research:proposal()}));}
 async function activeRoute(){const r=await proposed(),a=await start();const p=ok(await submit('astra',{research:{route_id:r.research.route_id,outcome:'promising',evidence_md:'The first test leaves a specific viable implication.',next_step:step()}},a));return {r,a,p};}
+
+test('legacy rescue sampling excludes established refutations, manuscripts, structured routes and rescue reports', async()=>{
+  const negative = async (type='explore', extra={}) => {
+    const r=await one(`INSERT INTO returns (problem_id,type,user_id,model,provider,report_md,transcript,status,created_at,final_rung,research,job_id) VALUES ($1,$2,$3,$4,'anthropic','A scoped negative.','t',$5,now()-interval '40 days',$6,$7,$8) RETURNING id`,
+      [pid,type,users.author.id,models.author,extra.status??'rejected',extra.rung??null,extra.research?JSON.stringify(extra.research):null,extra.jobId??null]);
+    return Number(r.id);
+  };
+  await negative('break',{status:'accepted',rung:'refuted'});
+  const refuted=await negative();
+  await q(`INSERT INTO reviews (return_id,user_id,model,provider,verdict,reject_reason,notes_md,weight,transcript,trusted) VALUES ($1,$2,$3,'openai','reject','refuted','A decisive counterexample.',1,'t',true)`,[refuted,users.astra.id,models.astra]);
+  await negative('paper'); await negative('audit');
+  await negative('explore',{research:{outcome:'blocked',obstacle}});
+  const job=await one(`INSERT INTO jobs (problem_id,type,title,brief_md,research_stage,status) VALUES ($1,'explore','Rescue','Inspect a changed ingredient.','rescue','accepted') RETURNING id`,[pid]);
+  await negative('explore',{jobId:job.id});
+  await projectTransaction(pid,()=>prepareRescue(pid,models.astra,null));
+  assert.equal((await one(`SELECT count(*)::int AS n FROM jobs WHERE problem_id=$1 AND origin_key LIKE 'rescue-sample:%'`,[pid])).n,0);
+  const eligible=await negative();
+  await projectTransaction(pid,()=>prepareRescue(pid,models.astra,null));
+  const sample=await one(`SELECT * FROM jobs WHERE problem_id=$1 AND origin_key LIKE 'rescue-sample:%'`,[pid]);
+  assert.equal(Number(sample.research_source_return_id),eligible);
+  assert.match(sample.brief_md,/If none is found, preserve the scoped negative and stop/);
+  await q(`UPDATE jobs SET status='accepted' WHERE id=$1`,[sample.id]);
+  await negative();
+  await projectTransaction(pid,()=>prepareRescue(pid,models.astra,null));
+  assert.equal((await one(`SELECT count(*)::int AS n FROM jobs WHERE problem_id=$1 AND origin_key LIKE 'rescue-sample:%'`,[pid])).n,1,'at most one legacy sample per project in 30 days');
+  await q(`UPDATE jobs SET created_at=now()-interval '31 days' WHERE id=$1`,[sample.id]);
+  await q(`UPDATE jobs SET assigned_at=now() WHERE id=$1`,[sample.id]);
+  await projectTransaction(pid,()=>prepareRescue(pid,models.astra,null));
+  assert.equal((await one(`SELECT count(*)::int AS n FROM jobs WHERE problem_id=$1 AND origin_key LIKE 'rescue-sample:%'`,[pid])).n,1,'a delayed assignment consumes the current allowance');
+  await q(`UPDATE jobs SET assigned_at=NULL WHERE id=$1`,[sample.id]);
+  await projectTransaction(pid,()=>prepareRescue(pid,models.astra,null));
+  const samples=await q(`SELECT research_source_return_id FROM jobs WHERE problem_id=$1 AND origin_key LIKE 'rescue-sample:%'`,[pid]);
+  assert.equal(samples.length,2); assert.equal(samples.filter(s=>Number(s.research_source_return_id)===eligible).length,1,'the same negative never enters a monthly loop');
+});
+
+test('a paused repeated experiment without an obstacle does not trigger automatic rescue',async()=>{
+  const {r}=await activeRoute();
+  await q(`UPDATE jobs SET status='expired' WHERE research_route_id=$1 AND status='queued'`,[r.research.route_id]);
+  await q(`UPDATE research_routes SET state='paused',obstacle=NULL WHERE id=$1`,[r.research.route_id]);
+  await projectTransaction(pid,()=>prepareRescue(pid,models.judge,null));
+  assert.equal((await one(`SELECT count(*)::int AS n FROM jobs WHERE research_route_id=$1 AND research_stage='rescue'`,[r.research.route_id])).n,0);
+});
+
+test('queued legacy samples are retired under the new exclusions and allowance without interrupting held work',async()=>{
+  const negative=async(type='explore')=>one(`INSERT INTO returns (problem_id,type,user_id,model,provider,report_md,transcript,status,created_at) VALUES ($1,$2,$3,$4,'anthropic','A legacy negative.','t','rejected',now()-interval '40 days') RETURNING id`,[pid,type,users.author.id,models.author]);
+  const sample=async(r,status='queued')=>one(`INSERT INTO jobs (problem_id,type,title,brief_md,research_stage,research_source_return_id,origin_key,status) VALUES ($1,'explore','Reassess','A legacy sample.','rescue',$2,$3,$4) RETURNING id`,[pid,r.id,`rescue-sample:${r.id}:${randomUUID()}`,status]);
+  const invalid=await sample(await negative('paper'));
+  const old=await sample(await negative());
+  const duplicate=await sample({id:(await one(`SELECT research_source_return_id FROM jobs WHERE id=$1`,[old.id])).research_source_return_id});
+  const excess=await sample(await negative());
+  await projectTransaction(pid,()=>retireRedundantRescueSamples(pid));
+  const status=async(j)=>(await one(`SELECT status FROM jobs WHERE id=$1`,[j.id])).status;
+  assert.equal(await status(invalid),'expired'); assert.equal(await status(old),'queued'); assert.equal(await status(duplicate),'expired'); assert.equal(await status(excess),'expired');
+  const held=await sample(await negative('paper'),'assigned');
+  await projectTransaction(pid,()=>retireRedundantRescueSamples(pid));
+  assert.equal(await status(held),'assigned','held instructions are preserved'); assert.equal(await status(old),'expired','a running sample consumes the allowance');
+});
 
 test('proposal → first look → pursuit → scoped obstacle → different-model rescue, with replay-safe follow-ups',async()=>{
   const r=await proposed();assert.equal(r.status,'recorded');assert.equal(r.reviews_requested,0);

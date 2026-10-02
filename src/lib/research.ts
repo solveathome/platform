@@ -203,25 +203,48 @@ export async function recordResearch(ret: any, job: any, report: ResearchReport 
   return { route_id: Number(route.id), state: route.state, next_job_id: next ? Number(next.id) : null };
 }
 
+const LEGACY_NEGATIVE_SQL = `r.type IN ('explore','direction','break','measure','formalize','source','challenge')
+    AND r.research IS NULL AND r.research_route_id IS NULL
+    AND NOT EXISTS (SELECT 1 FROM jobs source WHERE source.id=r.job_id AND (source.research_stage='rescue' OR source.follow_up_of IS NOT NULL))
+    AND NOT (coalesce(r.final_rung='refuted',false) AND r.status='accepted' AND NOT r.provisional)
+    AND NOT EXISTS (SELECT 1 FROM reviews rv WHERE rv.return_id=r.id AND rv.trusted AND NOT rv.needs_reassessment AND rv.verdict='reject' AND rv.reject_reason='refuted')`;
+
+/** Old queued samples obey the same exclusions and project allowance as new samples. Held attempts keep their instructions. */
+export async function retireRedundantRescueSamples(problemId: number): Promise<void> {
+  await q(`UPDATE jobs sample SET status='expired',last_release_note='Legacy sample retired: established refutation, structured route, repair, rescue report or previously sampled return.'
+    FROM returns r WHERE sample.problem_id=$1 AND sample.research_source_return_id=r.id AND sample.status='queued' AND sample.origin_key LIKE 'rescue-sample:%'
+    AND (NOT (${LEGACY_NEGATIVE_SQL}) OR NOT (r.status='rejected' OR coalesce(r.final_rung='refuted',false)) OR EXISTS (
+      SELECT 1 FROM jobs prior WHERE prior.id<>sample.id AND prior.research_source_return_id=r.id AND prior.research_stage='rescue' AND (prior.status<>'queued' OR prior.id<sample.id)))`, [problemId]);
+  await q(`UPDATE jobs sample SET status='expired',last_release_note='Legacy sample retired: at most one project sample per 30 days.'
+    WHERE sample.problem_id=$1 AND sample.status='queued' AND sample.origin_key LIKE 'rescue-sample:%' AND EXISTS (
+      SELECT 1 FROM jobs prior WHERE prior.problem_id=sample.problem_id AND prior.id<>sample.id AND prior.origin_key LIKE 'rescue-sample:%'
+      AND ((prior.status='queued' AND prior.id<sample.id) OR prior.status='assigned' OR (prior.status IN ('returned','accepted','rejected','recorded')
+        AND coalesce((SELECT max(a.started_at) FROM assignment_attempts a WHERE a.job_id=prior.id),prior.assigned_at,prior.created_at)>now()-interval '30 days')))`, [problemId]);
+}
+
 /** Materialize one eligible rescue when its allocation needs it. No repeated rechecks of the same obstacle. */
 export async function prepareRescue(problemId: number, model: string | null, lane: string | null): Promise<void> {
   const candidate = await one(`SELECT rr.*,r.model AS source_model FROM research_routes rr JOIN returns r ON r.id=rr.last_return_id LEFT JOIN lanes l ON l.id=rr.lane_id
-    WHERE rr.problem_id=$1 AND rr.state IN ('blocked','paused') AND r.model IS DISTINCT FROM $2::text AND ($3::text IS NULL OR l.slug=$3)
+    WHERE rr.problem_id=$1 AND rr.state IN ('blocked','paused') AND rr.obstacle IS NOT NULL AND r.model IS DISTINCT FROM $2::text AND ($3::text IS NULL OR l.slug=$3)
     AND NOT EXISTS (SELECT 1 FROM jobs j WHERE j.research_route_id=rr.id AND j.status IN ('queued','assigned'))
     AND NOT EXISTS (SELECT 1 FROM jobs j WHERE j.problem_id=rr.problem_id AND j.origin_key='rescue:'||rr.id||':'||rr.revision)
     AND (NOT EXISTS (SELECT 1 FROM jobs j WHERE j.id=r.job_id AND j.research_stage='rescue') OR EXISTS (SELECT 1 FROM research_events e WHERE e.route_id=rr.id AND e.outcome='dependency_changed' AND e.id>(SELECT coalesce(max(last.id),0) FROM research_events last WHERE last.route_id=rr.id AND last.return_id=r.id)))
     ORDER BY (SELECT count(*) FROM research_dependencies d WHERE d.return_id=rr.last_return_id) DESC,rr.updated_at,rr.id LIMIT 1`, [problemId, model, lane]);
   if (candidate) { await queueInvestigation(candidate, 'rescue', { id: candidate.last_return_id, model: candidate.source_model }); return; }
-  // A monthly sample catches over-broad legacy negatives, one assignment per selected return per month.
+  // One legacy sample per project in 30 days, once per return. Structured routes already have an obstacle-specific rescue;
+  // sampling them or a rescue's own negative used to restart the same investigation every month. A trusted refutation stands
+  // until new evidence or an explicit alternative warrants reconsideration, not merely because another month passed.
   const r = await one(`SELECT r.id,r.lane_id,r.model FROM returns r LEFT JOIN lanes l ON l.id=r.lane_id
-    WHERE r.problem_id=$1 AND (r.status='rejected' OR r.final_rung='refuted') AND r.type NOT IN ('check','curate')
+    WHERE r.problem_id=$1 AND (r.status='rejected' OR r.final_rung='refuted') AND ${LEGACY_NEGATIVE_SQL}
     AND r.model IS DISTINCT FROM $2::text AND ($3::text IS NULL OR l.slug=$3) AND r.created_at<now()-interval '7 days'
-    AND NOT EXISTS (SELECT 1 FROM jobs j WHERE j.research_source_return_id=r.id AND j.research_stage='rescue' AND (j.status IN ('queued','assigned') OR j.created_at>now()-interval '30 days'))
+    AND NOT EXISTS (SELECT 1 FROM jobs j WHERE j.research_source_return_id=r.id AND j.research_stage='rescue')
+    AND NOT EXISTS (SELECT 1 FROM jobs j WHERE j.problem_id=r.problem_id AND j.origin_key LIKE 'rescue-sample:%' AND (j.status IN ('queued','assigned')
+      OR coalesce((SELECT max(a.started_at) FROM assignment_attempts a WHERE a.job_id=j.id),j.assigned_at,j.created_at)>now()-interval '30 days'))
     ORDER BY r.created_at,r.id LIMIT 1`, [problemId, model, lane]);
   if (!r) return;
   await q(`INSERT INTO jobs (problem_id,lane_id,type,title,brief_md,budget_hours,min_tier,purpose,research_stage,research_source_return_id,avoid_model,origin_key)
     VALUES ($1,$2,'explore',$3,$4,0.5,99,'discovery','rescue',$5,$6,$7)`, [problemId, r.lane_id, `Reassess return #${r.id}`,
-    `Read return #${r.id} and its search record, then search online for the method and changed alternatives before testing them. Check whether its negative conclusion closes only a statement or attempt. Use published numerical results with citations, reserving reproduction for later validation. Inspect the decisive evidence, then seek a concrete alternative. Preserve valid refutations. A promising alternative should return research.proposal with parent evidence in cites.returns, a prior-art comparison and the cheapest next experiment. If nothing changes, record the scoped obstacle and stop. This is a bounded sample; do not reproduce the whole investigation.`, r.id, r.model, `rescue-sample:${r.id}:${new Date().toISOString().slice(0, 7)}`]);
+    `Read return #${r.id}, its decisions and its search record. Identify a specific defect in the negative's scope, an unmet revisit condition that can now be met, a changed premise, new source or concrete alternative before any experiment. If none is found, preserve the scoped negative and stop; do not repeat the investigation. Search online for a changed ingredient only when it could change that conclusion. Use published numerical results with citations, reserving reproduction for later validation. A promising alternative should return research.proposal with parent evidence in cites.returns, a prior-art comparison and the cheapest next experiment. This is a one-time legacy sample, not a new review of an established refutation.`, r.id, r.model, `rescue-sample:${r.id}`]);
 }
 
 /** A changed premise flags affected routes; it never silently refutes their descendants. */

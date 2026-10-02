@@ -19,12 +19,16 @@ async function event(findingId: number, status: string, note: string, returnId: 
 
 /** Record a finding once per origin; the same note from the same return is the same finding. Returns its id. */
 export async function recordFinding(f: { problemId: number; path: string; note: string; scope?: unknown; contentSha: string | null; returnId: number | null; reviewId?: number | null }): Promise<number> {
-  const row = await one<{ id: string; fresh: boolean }>(
-    `INSERT INTO findings (problem_id, path, content_sha, return_id, review_id, note, scope) VALUES ($1,$2,$3,$4,$5,$6,$7)
-     ON CONFLICT (COALESCE(return_id, 0), path, md5(note)) DO UPDATE SET scope = CASE WHEN findings.scope = 'unspecified' THEN EXCLUDED.scope ELSE findings.scope END
-     RETURNING id, (xmax = 0) AS fresh`,
+  const row = await one<{ id: string; fresh: boolean; scope: string; status: string; previous_scope: string | null }>(
+    `WITH prior AS (SELECT scope FROM findings WHERE problem_id=$1 AND path=$2 AND return_id IS NOT DISTINCT FROM $4::bigint AND md5(note)=md5($6))
+     INSERT INTO findings (problem_id, path, content_sha, return_id, review_id, note, scope) VALUES ($1,$2,$3,$4,$5,$6,$7)
+     ON CONFLICT (COALESCE(return_id, 0), path, md5(note)) DO UPDATE SET scope = CASE
+       WHEN findings.scope = 'before_circulation' OR EXCLUDED.scope = 'before_circulation' THEN 'before_circulation'
+       WHEN EXCLUDED.scope = 'unspecified' THEN findings.scope ELSE EXCLUDED.scope END
+     RETURNING id, scope, status, (xmax = 0) AS fresh, (SELECT scope FROM prior) AS previous_scope`,
     [f.problemId, f.path, f.contentSha, f.returnId, f.reviewId ?? null, f.note, scopeOf(f.scope)]);
   if (row!.fresh) await event(Number(row!.id), "open", f.reviewId ? `review #${f.reviewId}` : f.returnId ? `return #${f.returnId}` : "");
+  else if (row!.previous_scope && row!.previous_scope !== row!.scope) await event(Number(row!.id), row!.status, `scope changed: ${row!.previous_scope} → ${row!.scope}${f.reviewId ? ` (review #${f.reviewId})` : ''}`);
   return Number(row!.id);
 }
 
@@ -37,6 +41,10 @@ export async function linkToJob(findingId: number, jobId: number): Promise<boole
 const SELECT = `SELECT f.id, f.path, f.note, f.scope, f.status, f.content_sha, f.return_id, f.review_id, f.job_id, j.status AS job_status, f.resolved_by_return_id, f.resolved_sha, f.created_at
   FROM findings f LEFT JOIN jobs j ON j.id = f.job_id`;
 const shape = (r: any): Finding => ({ ...r, id: Number(r.id), return_id: r.return_id === null ? null : Number(r.return_id), review_id: r.review_id === null ? null : Number(r.review_id), job_id: r.job_id === null ? null : Number(r.job_id), resolved_by_return_id: r.resolved_by_return_id === null ? null : Number(r.resolved_by_return_id) });
+
+/** A returned job still carries work only while a return awaits trusted judgment; superseded/abandoned rows are not live repairs. */
+export const liveRepairSql = `(j.status IN ('queued','assigned') OR (j.status='returned' AND EXISTS
+  (SELECT 1 FROM returns waiting WHERE waiting.job_id=j.id AND (waiting.status='pending' OR waiting.provisional))))`;
 
 export async function openFindings(problemId: number, path: string): Promise<Finding[]> {
   return (await q(`${SELECT} WHERE f.problem_id = $1 AND f.path = $2 AND f.status = 'open' ORDER BY f.id`, [problemId, path])).map(shape);
@@ -53,12 +61,22 @@ export async function findingsByIds(ids: number[]): Promise<Finding[]> {
  * open findings on its document, else the findings its job carried when the job was taken. A finding put on the job later was not in the
  * brief the author worked from and stays open. Nothing closes on a revision that was not applied.
  */
-export async function resolveByReturn(ret: { id: number; problem_id: number; job_id: number | null; revision_path: string; resolves: any; created_at?: string }, sha: string): Promise<number[]> {
+type RepairReturn = { id: number; problem_id: number; job_id: number | null; revision_path: string; resolves: any; created_at?: string };
+
+/** The same target set is shown to reviewers and closed on integration. An explicit empty list answers nothing. */
+export async function findingsForReturn(ret: RepairReturn): Promise<Finding[]> {
   const named = Array.isArray(ret.resolves) ? ret.resolves.map(Number).filter((n: number) => Number.isInteger(n) && n > 0) : null;
   const rows = named
-    ? await q<{ id: string }>(`SELECT id FROM findings WHERE id = ANY($1::bigint[]) AND problem_id = $2 AND path = $3 AND status = 'open'`, [named, ret.problem_id, ret.revision_path])
-    : ret.job_id ? await q<{ id: string }>(`SELECT f.id FROM findings f JOIN jobs j ON j.id = f.job_id JOIN returns r ON r.id = $4 WHERE f.job_id = $1 AND f.problem_id = $2 AND f.path = $3 AND f.status = 'open' AND f.linked_at <= COALESCE(j.assigned_at, r.created_at)`, [ret.job_id, ret.problem_id, ret.revision_path, ret.id]) : [];
-  const ids = rows.map((r) => Number(r.id));
+    ? await q(`${SELECT} WHERE f.id = ANY($1::bigint[]) AND f.problem_id = $2 AND f.path = $3 AND f.status = 'open' ORDER BY f.id`, [named, ret.problem_id, ret.revision_path])
+    : ret.job_id ? await q(`${SELECT} JOIN returns r ON r.id = $4 WHERE f.job_id = $1 AND f.problem_id = $2 AND f.path = $3 AND f.status = 'open'
+        AND f.linked_at <= COALESCE((SELECT a.started_at FROM assignment_attempts a WHERE a.job_id = $1 AND a.user_id = r.user_id
+          AND a.started_at <= r.created_at AND (a.ended_at IS NULL OR a.ended_at >= r.created_at) ORDER BY a.started_at DESC LIMIT 1),
+          LEAST(j.assigned_at, r.created_at), r.created_at) ORDER BY f.id`, [ret.job_id, ret.problem_id, ret.revision_path, ret.id]) : [];
+  return rows.map(shape);
+}
+
+export async function resolveByReturn(ret: RepairReturn, sha: string): Promise<number[]> {
+  const ids = (await findingsForReturn(ret)).map((r) => r.id);
   for (const id of ids) {
     await q(`UPDATE findings SET status = 'resolved', resolved_by_return_id = $2, resolved_sha = $3, resolved_at = now() WHERE id = $1`, [id, ret.id, sha]);
     await event(id, "resolved", `revision of return #${ret.id} accepted and integrated`, ret.id);
@@ -75,5 +93,5 @@ export async function reopenRegressed(problemId: number, path: string, sha: stri
 
 /** Findings still open on a job that has ended (accepted without answering them, rejected, expired): they need the next fix job. */
 export async function orphanedFindings(jobId: number): Promise<Finding[]> {
-  return (await q(`${SELECT} WHERE f.job_id = $1 AND f.status = 'open' AND (j.id IS NULL OR j.status NOT IN ('queued','assigned','returned')) ORDER BY f.id`, [jobId])).map(shape);
+  return (await q(`${SELECT} WHERE f.job_id = $1 AND f.status = 'open' AND (j.id IS NULL OR NOT ${liveRepairSql}) ORDER BY f.id`, [jobId])).map(shape);
 }

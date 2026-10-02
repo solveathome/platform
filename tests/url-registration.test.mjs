@@ -44,6 +44,7 @@ before(async () => {
 });
 after(async () => {
   server?.close();
+  await q(`DELETE FROM findings WHERE problem_id=$1`, [pid]);
   await q(`DELETE FROM file_refs WHERE file_sha IN (SELECT sha256 FROM files WHERE user_id = $1)`, [uid]);
   await q(`DELETE FROM files WHERE user_id = $1`, [uid]);
   await q(`DELETE FROM project_roles WHERE problem_id = $1`, [pid]);
@@ -534,8 +535,8 @@ test('a trusted reviewer\'s also_fix on a served file opens one audit fix job in
   assert.ok(mine.length >= 2, 'two pending returns of this handle to review');
   const rv = await fetch(base + '/result', {method: 'POST', headers: H, body: JSON.stringify({type: 'review', return_id: Number(mine[0].id), verdict: 'accept', rung: 'measured', notes_md: 'checked; the served tool prints ticks to stdout', also_fix: [{path: 'research/tool.js', note: 'line 1 prints a progress tick to stdout every 30 s; send it to stderr and re-embed the hash'}, {path: 'research/not-served.js', note: 'x'}], transcript: 't', transcript_approved: true})});
   const r = await rv.json(); assert.equal(rv.status, 200, JSON.stringify(r).slice(0, 300)); assert.equal(r.trusted_by, 'grant');
-  const jobs = await q(`SELECT id, type, status, min_tier, title, brief_md FROM jobs WHERE problem_id = $1 AND title LIKE 'Fix %' AND title NOT LIKE 'Fix files%'`, [pid]);
-  assert.equal(jobs.length, 1, JSON.stringify(jobs.map(x => x.title))); assert.deepEqual([jobs[0].type, jobs[0].status, jobs[0].min_tier, jobs[0].title], ['audit', 'queued', 99, 'Fix research/tool.js']);
+  const jobs = await q(`SELECT id, type, status, min_tier, requires_trust, title, brief_md FROM jobs WHERE problem_id = $1 AND title LIKE 'Fix %' AND title NOT LIKE 'Fix files%'`, [pid]);
+  assert.equal(jobs.length, 1, JSON.stringify(jobs.map(x => x.title))); assert.deepEqual([jobs[0].type, jobs[0].status, jobs[0].min_tier, jobs[0].requires_trust, jobs[0].title], ['audit', 'queued', 1, true, 'Fix research/tool.js']);
   assert.match(jobs[0].brief_md, /> line 1 prints a progress tick to stdout every 30 s/); assert.match(jobs[0].brief_md, new RegExp(`review #${r.review_id} by @${handle}`)); assert.match(jobs[0].brief_md, /"revision": \{ "path": "research\/tool.js"/);
   // The same path from another review: still one open job.
   const rv2 = await fetch(base + '/result', {method: 'POST', headers: H, body: JSON.stringify({type: 'review', return_id: Number(mine[1].id), verdict: 'accept', rung: 'measured', notes_md: 'same defect', also_fix: [{path: 'research/tool.js', note: 'same'}], transcript: 't', transcript_approved: true})});
@@ -650,4 +651,32 @@ test('a model correction on result rolls back on rejection and preserves its suc
   assert.deepEqual(await (await submit('deepseek-v4.1-flash')).json(), receipt);
   assert.equal((await one(`SELECT model FROM returns WHERE id=$1`, [receipt.return_id])).model, 'deepseek-v4.1-flash');
   await end(reg.session);
+});
+
+test('revision intake preserves empty resolves and freezes default findings before later annotations arrive', async () => {
+  const finding = await import('../src/lib/findings.ts');
+  const {spawnFixJob, composeReviewBrief} = await import('../src/routes/job.ts');
+  const files = await import('../src/lib/files.ts');
+  const headers = {authorization: `Bearer ${token}`, accept: 'application/json', 'content-type': 'application/json', 'x-model': 'claude-opus-5-5', 'x-effort': 'high'};
+  const origin = Number((await one(`SELECT id FROM returns WHERE problem_id=$1 ORDER BY id LIMIT 1`, [pid])).id);
+  for (const explicitEmpty of [true,false]) {
+    const path = `research/intake-target-${explicitEmpty}.md`;
+    mkdirSync(join(tmp,'repos',slug,'research'), {recursive:true}); writeFileSync(join(tmp,'repos',slug,path), '# Original\n');
+    const first = await finding.recordFinding({problemId:pid,path,note:'Correct this statement.',contentSha:null,returnId:origin});
+    const jobId = await spawnFixJob(pid,laneId,slug,path,'Correct this statement.',{findingId:first});
+    const response = await fetch(base + `/start?job=${jobId}&share=0`, {headers:{...headers,'x-launch-id':`${tag}-target-${explicitEmpty}`}});
+    const reg = await response.json(); assert.equal(response.status,200,JSON.stringify(reg)); assert.equal(Number(reg.job_id),jobId);
+    const revised = await files.store(uid,'claude-opus-5-5',`${tag}-target-${explicitEmpty}.md`,'md','# Revised\n');
+    const result = await fetch(base+'/result',{method:'POST',headers:{...headers,'x-session':reg.session},body:JSON.stringify({job_id:jobId,attempt_id:reg.attempt_id,report_md:'An editorial revision.',transcript:'t',transcript_approved:true,files:[revised.sha],revision:{path,file:revised.sha,base:files.sha256('# Original\n')},...(explicitEmpty?{resolves:[]}: {})})});
+    const ret = await result.json(); assert.equal(result.status,200,JSON.stringify(ret));
+    const later = await finding.recordFinding({problemId:pid,path,note:'A later annotation.',contentSha:null,returnId:origin});
+    await spawnFixJob(pid,laneId,slug,path,'A later annotation.',{findingId:later});
+    await q(`UPDATE jobs SET assigned_at=now() WHERE id=$1`,[jobId]);
+    assert.deepEqual((await one(`SELECT resolves FROM returns WHERE id=$1`,[ret.return_id])).resolves,explicitEmpty?[]:[first]);
+    const brief = (await composeReviewBrief(ret.return_id,pid)).brief;
+    assert.doesNotMatch(brief,new RegExp(`finding #${later}:`));
+    if(explicitEmpty) assert.doesNotMatch(brief,/This revision claims to answer/);
+    else assert.match(brief,new RegExp(`finding #${first}:`));
+    await end(reg.session);
+  }
 });

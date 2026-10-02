@@ -17,7 +17,8 @@ const {migrate, q, one, pool} = await import('../src/db/index.ts');
 const {TERMS_VERSION} = await import('../src/lib/terms.ts');
 const files = await import('../src/lib/files.ts');
 const {recordMirrorCut, restoreVersion, history, servedDrift} = await import('../src/lib/revisions.ts');
-const {resolveReturn, spawnFixJob, staleRevision} = await import('../src/routes/job.ts');
+const {resolveReturn, spawnFixJob, recoverCorrectionJobs, staleRevision, composeReviewBrief} = await import('../src/routes/job.ts');
+const {selectJob, whyNotEligible} = await import('../src/lib/scheduler.ts');
 const findings = await import('../src/lib/findings.ts');
 const {paperReview} = await import('../src/lib/paper-state.ts');
 const {listPapers} = await import('../src/routes/papers.ts');
@@ -185,6 +186,13 @@ test('a before-circulation finding qualifies the status, survives job turnover, 
   const f1 = await findings.recordFinding({problemId: pid, path: rel, note: 'State the sieve constant in dimension 2.', scope: 'before_circulation', contentSha: head, returnId: correction});
   assert.equal(await findings.recordFinding({problemId: pid, path: rel, note: 'State the sieve constant in dimension 2.', contentSha: head, returnId: correction}), f1, 'the same note from the same return is one finding');
   const job1 = await spawnFixJob(pid, null, slug, rel, 'State the sieve constant in dimension 2.', {findingId: f1, returnId: correction});
+  const agent = {problemId: pid, slug, sessionId: 'repair-test', uid: author, tier: 1, model: 'claude-fable-5-1', provider: 'anthropic', trusted: false, granted: false, lane: null, cpuHours: 0, ramGb: 8, hasGpu: false, disk: 1, maxHours: 2, reviewStreak: 0, capabilities: {}, jobId: job1};
+  assert.equal((await one(`SELECT min_tier,requires_trust FROM jobs WHERE id=$1`, [job1])).min_tier, 1);
+  assert.equal(await selectJob(agent, true), undefined, 'Tier 1 alone does not authorize a correction');
+  assert.ok((await whyNotEligible(agent, job1)).includes('it requires a trusted session'));
+  assert.equal(await selectJob({...agent, tier: 2, trusted: true}, true), undefined, 'trust alone does not authorize a correction');
+  assert.equal(Number((await selectJob({...agent, trusted: true}, true)).id), job1, 'a trusted Tier 1 session can carry the correction');
+  assert.match((await one(`SELECT brief_md FROM jobs WHERE id=$1`, [job1])).brief_md, /For a manuscript/);
   let p = await paper();
   assert.equal(p.review.state, 'corrections_required'); assert.equal(p.status, 'reviewed');
   assert.deepEqual(p.review.findings.map((f) => f.id), [f1]);
@@ -238,4 +246,146 @@ test('the inventory names unworked findings and never-integrated acceptances wit
   assert.ok(Array.isArray(inv.findings_without_work));
   const after = await one(`SELECT (SELECT count(*) FROM document_versions WHERE problem_id = $1) AS v, (SELECT count(*) FROM jobs WHERE problem_id = $1) AS j`, [pid]);
   assert.deepEqual(after, before);
+});
+
+test('historical and reopened required findings recover work once; advisory findings do not generate work', async () => {
+  const required = await findings.recordFinding({problemId: pid, path: note, note: 'Correct the cited definition.', scope: 'before_circulation', contentSha: files.sha256(served(note)), returnId: correction});
+  const optional = await findings.recordFinding({problemId: pid, path: note, note: 'Optional editorial preference.', scope: 'advisory', contentSha: files.sha256(served(note)), returnId: correction});
+  assert.equal(await spawnFixJob(pid, null, slug, note, 'Optional editorial preference.', {findingId: optional}), null, 'optional annotations do not schedule work at intake either');
+  await recoverCorrectionJobs(pid, slug);
+  const f = (await findings.findingsByIds([required]))[0];
+  assert.equal(f.job_status, 'queued');
+  assert.equal((await one(`SELECT requires_trust FROM jobs WHERE id=$1`, [f.job_id])).requires_trust, true);
+  assert.equal((await findings.findingsByIds([optional]))[0].job_id, null);
+  await recoverCorrectionJobs(pid, slug);
+  assert.equal((await findings.findingsByIds([required]))[0].job_id, f.job_id);
+  await q(`UPDATE jobs SET status='expired' WHERE id=$1`, [f.job_id]);
+  await recoverCorrectionJobs(pid, slug);
+  assert.notEqual((await findings.findingsByIds([required]))[0].job_id, f.job_id, 'expired work never leaves a required correction without work');
+});
+
+test('an accepted audit queues its required corrections to another document immediately', async () => {
+  const id = await submit({path: note, text: served(note) + '\nA supported citation.\n'});
+  await q(`UPDATE returns SET also_fix=$2 WHERE id=$1`, [id, JSON.stringify([{path: rel, note: 'Update the related citation.', scope: 'before_circulation'}])]);
+  await decide(id);
+  const f = (await findings.openFindings(pid, rel)).find(f => f.note === 'Update the related citation.');
+  assert.ok(f.job_id); assert.equal(f.job_status, 'queued');
+  assert.equal((await one(`SELECT requires_trust,min_tier FROM jobs WHERE id=$1`, [f.job_id])).requires_trust, true);
+});
+
+test('a conflicting correction carries its finding through one rebase and closes after reconciliation', async () => {
+  const path = 'research/conflicting-correction.md'; mirror(path, '# Original\n');
+  const f = await findings.recordFinding({problemId: pid, path, note: 'Qualify the estimate.', scope: 'before_circulation', contentSha: files.sha256(served(path)), returnId: correction});
+  const jobId = await spawnFixJob(pid, null, slug, path, 'Qualify the estimate.', {findingId: f});
+  const base = files.sha256(served(path));
+  const earlier = await submit({path, text: '# Original\n\nA citation.\n', base});
+  const repair = await submit({path, text: '# Original\n\nA conditional estimate.\n', base, jobId, resolves: [f]});
+  await q(`UPDATE jobs SET status='returned',assigned_at=now() WHERE id=$1`, [jobId]);
+  await decide(earlier); await decide(repair);
+  const rebase = await one(`SELECT * FROM jobs WHERE follow_up_of=$1 AND status='queued'`, [repair]);
+  assert.ok(rebase); assert.equal(rebase.requires_trust, true); assert.equal(rebase.min_tier, 1);
+  assert.equal((await findings.findingsByIds([f]))[0].job_id, Number(rebase.id));
+  assert.equal(Number((await one(`SELECT count(*) AS n FROM jobs WHERE problem_id=$1 AND status='queued' AND (title=$2 OR title=$3)`, [pid, `Fix ${path}`, `Rebase return #${repair} onto ${path}`])).n), 1, 'no parallel redo of the accepted correction');
+  assert.match(rebase.brief_md, new RegExp(`finding #${f}:`));
+  assert.match(rebase.brief_md, /"resolves"/);
+  await q(`UPDATE jobs SET status='returned',assigned_at=now() WHERE id=$1`, [rebase.id]);
+  const reconciled = await submit({path, text: '# Original\n\nA citation.\n\nA conditional estimate.\n', jobId: Number(rebase.id)});
+  await decide(reconciled);
+  assert.equal((await findings.findingsByIds([f]))[0].status, 'resolved');
+  assert.match(served(path), /A citation/); assert.match(served(path), /A conditional estimate/);
+});
+
+test('review and closure use the same path-filtered assignment targets; later findings stay open', async () => {
+  const path = 'research/target-snapshot.md'; mirror(path, '# Snapshot\n');
+  const first = await findings.recordFinding({problemId: pid, path, note: 'Correct the original statement.', contentSha: null, returnId: correction});
+  const jobId = await spawnFixJob(pid, null, slug, path, 'Correct the original statement.', {findingId: first});
+  await q(`UPDATE jobs SET status='assigned',assigned_at=now() WHERE id=$1`, [jobId]);
+  const later = await findings.recordFinding({problemId: pid, path, note: 'A finding after assignment.', contentSha: null, returnId: correction});
+  await spawnFixJob(pid, null, slug, path, 'A finding after assignment.', {findingId: later});
+  const ret = await submit({path, text: '# Snapshot\n\nCorrected original statement.\n', jobId});
+  const brief = (await composeReviewBrief(ret, pid)).brief;
+  assert.match(brief, new RegExp(`finding #${first}:`));
+  assert.doesNotMatch(brief, new RegExp(`finding #${later}:`));
+  assert.match(brief, /notes alone do not exclude/);
+  await q(`UPDATE jobs SET status='returned' WHERE id=$1`, [jobId]);
+  await decide(ret);
+  assert.equal((await findings.findingsByIds([first]))[0].status, 'resolved');
+  assert.equal((await findings.findingsByIds([later]))[0].status, 'open');
+  const foreign = await findings.recordFinding({problemId: pid, path: note, note: 'Different document obligation.', contentSha: null, returnId: ret});
+  const explicit = await submit({path, text: served(path) + '\nEditorial addition.\n', resolves: [later, foreign]});
+  const explicitBrief = (await composeReviewBrief(explicit, pid)).brief;
+  assert.match(explicitBrief, new RegExp(`finding #${later}:`));
+  assert.doesNotMatch(explicitBrief, new RegExp(`finding #${foreign}:`));
+  const empty = await submit({path, text: served(path) + '\nA citation only.\n', jobId: (await findings.findingsByIds([later]))[0].job_id, resolves: []});
+  assert.doesNotMatch((await composeReviewBrief(empty, pid)).brief, /This revision claims to answer/);
+  await decide(empty);
+  assert.equal((await findings.findingsByIds([later]))[0].status, 'open', 'an explicit empty target never closes a required correction');
+});
+
+test('an unverifiable trusted correction retains eligibility and findings in one follow-up', async () => {
+  const path = 'research/checkable-correction.md'; mirror(path, '# Checkable\n');
+  const jobId = Number((await one(`INSERT INTO jobs (problem_id,type,title,brief_md,min_tier,requires_trust,status) VALUES ($1,'audit','Clarify the cited lemma','Correct the lemma.',1,true,'returned') RETURNING id`, [pid])).id);
+  const f = await findings.recordFinding({problemId: pid, path, note: 'Correct the lemma.', contentSha: null, returnId: correction});
+  await findings.linkToJob(f, jobId);
+  const ret = await submit({path, text: '# Checkable\n\nClaim without the promised source.\n', jobId, resolves: [f]});
+  await q(`INSERT INTO reviews (return_id,user_id,model,provider,verdict,notes_md,weight,transcript,trusted,unverifiable,needs_md,reject_reason) VALUES ($1,$2,'claude-opus-5-5','anthropic','reject','Missing cited source.',1,'',true,true,'Supply the cited source.','unverifiable')`, [ret, reviewer]);
+  await resolveReturn(ret);
+  const follow = await one(`SELECT * FROM jobs WHERE follow_up_of=$1`, [ret]);
+  assert.ok(follow); assert.equal(follow.requires_trust, true); assert.equal(follow.min_tier, 1);
+  assert.equal((await findings.findingsByIds([f]))[0].job_id, Number(follow.id));
+  assert.equal(Number((await one(`SELECT count(*) AS n FROM jobs WHERE problem_id=$1 AND title=$2 AND status='queued'`, [pid, `Fix ${path}`])).n), 0, 'the continuation already carries this repair');
+});
+
+test('an advisory annotation can become required, and schema replay preserves historical explicit scopes', async () => {
+  const path = 'research/scope-recovery.md'; mirror(path, '# Scope\n');
+  const promoted = await findings.recordFinding({problemId: pid, path, note: 'An obligation becomes mandatory.', scope: 'advisory', contentSha: null, returnId: correction});
+  assert.equal(await findings.recordFinding({problemId: pid, path, note: 'An obligation becomes mandatory.', scope: 'before_circulation', contentSha: null, returnId: correction}), promoted);
+  assert.equal((await findings.findingsByIds([promoted]))[0].scope, 'before_circulation');
+  assert.match((await one(`SELECT note FROM finding_events WHERE finding_id=$1 ORDER BY id DESC LIMIT 1`,[promoted])).note,/scope changed: advisory/);
+  const ret = await submit({path, text: '# Scope\n\nCitation.\n'});
+  await q(`UPDATE returns SET status='accepted',also_fix=$2 WHERE id=$1`, [ret, JSON.stringify([{path, note: 'Optional historical suggestion.', scope: 'advisory'}])]);
+  const optional = await findings.recordFinding({problemId: pid, path, note: 'Optional historical suggestion.', contentSha: null, returnId: ret});
+  const archived = await findings.recordFinding({problemId: pid, path, note: 'An archived optional suggestion.', contentSha: null, returnId: ret});
+  await q(`INSERT INTO review_history (return_id,review) VALUES ($1,$2)`, [ret,JSON.stringify({trusted:true,also_fix:[{path,note:'An archived optional suggestion.',scope:'advisory'}]})]);
+  await q(`INSERT INTO reviews (return_id,user_id,model,provider,verdict,notes_md,weight,transcript,trusted,also_fix) VALUES ($1,$2,'claude-opus-5-5','anthropic','accept','Historical annotation.',1,'',true,$3)`, [ret, reviewer, JSON.stringify([{path, note: 'Optional review suggestion.', scope: 'advisory'}, {path, note: 'Mandatory review correction.', scope: 'before_circulation'}])]);
+  await migrate();
+  assert.equal((await findings.findingsByIds([optional]))[0].scope, 'advisory');
+  assert.equal((await findings.findingsByIds([archived]))[0].scope, 'advisory', 'archiving a review does not erase its optional scope');
+  const recovered = await findings.openFindings(pid, path);
+  assert.equal(recovered.find(f => f.note === 'Optional review suggestion.').scope, 'advisory');
+  assert.equal(recovered.find(f => f.note === 'Mandatory review correction.').scope, 'before_circulation');
+  await recoverCorrectionJobs(pid, slug);
+  assert.equal((await findings.findingsByIds([optional]))[0].job_id, null);
+  const legacy = Number((await one(`INSERT INTO jobs (problem_id,type,title,brief_md,status) VALUES ($1,'audit',$2,'Legacy optional assignment.','queued') RETURNING id`,[pid,`Fix ${path}`])).id);
+  await findings.linkToJob(optional,legacy);
+  await recoverCorrectionJobs(pid,slug);
+  assert.equal((await one(`SELECT status FROM jobs WHERE id=$1`,[legacy])).status,'expired', 'an unheld optional-only legacy job is retired');
+  const events = Number((await one(`SELECT count(*) AS n FROM finding_events WHERE finding_id=$1`, [optional])).n);
+  await migrate();
+  assert.equal(Number((await one(`SELECT count(*) AS n FROM finding_events WHERE finding_id=$1`, [optional])).n), events, 'scope recovery is idempotent');
+});
+
+test('unavailable old findings cannot starve a later served correction in bounded recovery batches', async () => {
+  await q(`INSERT INTO findings (problem_id,path,note) SELECT $1,'research/unavailable-' || n || '.md','Old unavailable correction.' FROM generate_series(1,100) n`, [pid]);
+  const path = 'research/available-recovery.md'; mirror(path, '# Available\n');
+  const f = await findings.recordFinding({problemId: pid, path, note: 'Repair an available document.', contentSha: null, returnId: correction});
+  for (let i=0; i<3; i++) await recoverCorrectionJobs(pid, slug);
+  assert.equal((await findings.findingsByIds([f]))[0].job_status, 'queued');
+  assert.equal(Number((await one(`SELECT count(*) AS n FROM findings WHERE problem_id=$1 AND path LIKE 'research/unavailable-%' AND last_recovery_at IS NOT NULL`, [pid])).n), 100);
+});
+
+test('a superseded return does not strand corrections on a returned job, while provisional review still counts as work', async () => {
+  const path = 'research/superseded-correction.md'; mirror(path, '# Superseded\n');
+  const f = await findings.recordFinding({problemId: pid, path, note: 'Preserve the outstanding correction.', contentSha: null, returnId: correction});
+  const jobId = await spawnFixJob(pid, null, slug, path, 'Preserve the outstanding correction.', {findingId: f});
+  const ret = await submit({path, text: '# Superseded\n\nUnintegrated fix.\n', jobId});
+  await q(`UPDATE jobs SET status='returned' WHERE id=$1`, [jobId]);
+  await q(`UPDATE returns SET status='accepted',provisional=true WHERE id=$1`, [ret]);
+  assert.equal((await inventory(pid,slug)).findings_without_work.some(x => x.id === f),false);
+  await recoverCorrectionJobs(pid, slug);
+  assert.equal((await findings.findingsByIds([f]))[0].job_id, jobId);
+  await q(`UPDATE returns SET status='superseded',provisional=false WHERE id=$1`, [ret]);
+  assert.equal((await inventory(pid,slug)).findings_without_work.some(x => x.id === f),true,'the inventory sees an unworked obligation before recovery');
+  await recoverCorrectionJobs(pid, slug);
+  assert.notEqual((await findings.findingsByIds([f]))[0].job_id, jobId);
 });

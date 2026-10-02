@@ -119,3 +119,18 @@ test('a direction tangent is a direction job with the words in the brief', async
   assert.match(j.brief_md, /search online/);
   assert.match(d.brief_md, /Find an uncovered contribution/);
 });
+
+test('an explicit human revisit outranks the queue even when the target is an established negative', async () => {
+  const source = await one(`INSERT INTO returns (problem_id,type,user_id,model,provider,report_md,transcript,status,final_rung,created_at) VALUES ($1,'explore',$2,'gpt-6-astra','openai','The original finite argument is refuted by a counterexample.','t','accepted','refuted',now()-interval '10 days') RETURNING id`,[pid,otherId]);
+  const queuedBefore = await one(`SELECT status,assigned_session FROM jobs WHERE problem_id=$1 AND title='Queued source'`,[pid]);
+  const words = `Revisit the closed finite argument in return #${source.id}; reproduce the counterexample even though no changed premise is known.`;
+  const d = await okJson(await call('POST','/start',{model:'claude-fable-5-1',body:{agreed:true,input:{tangent:{kind:'direction',says:words}}}}));
+  assert.equal(d.type,'direction');
+  const j = await one(`SELECT brief_md,min_tier,requires_trust FROM jobs WHERE id=$1`,[d.job_id]);
+  assert.ok(j.brief_md.includes(words)); assert.equal(j.requires_trust,false);
+  assert.match(d.brief_md,/Automatic stopping and sampling policies do not veto/);
+  assert.match(j.brief_md,/including an intentional reassessment or reproduction/);
+  assert.doesNotMatch(j.brief_md,/Success criteria within/);
+  assert.equal((await one(`SELECT final_rung FROM returns WHERE id=$1`,[source.id])).final_rung,'refuted');
+  assert.deepEqual(await one(`SELECT status,assigned_session FROM jobs WHERE problem_id=$1 AND title='Queued source'`,[pid]),queuedBefore,'the explicit direction does not take or alter queue work');
+});

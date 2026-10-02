@@ -73,7 +73,7 @@ They said (verbatim, keep it that way in \`human_md\`):
 
 Target: ${where}.
 
-Success criteria within ${hours} h; choose the reasoning method that best resolves the question:
+Success criteria; choose the reasoning method that best resolves the question:
 
 1. **Read the target** and what it rests on: the document or manuscript, its history (\`${P}/history/<path>\`), the claims it cites, the returns that cite it. If the target is a return, read its reviews.
 2. **State the objection precisely.** Which claim, which step, which assumption; quote the line. If their words are ambiguous, state the most defensible bounded interpretation and the unresolved part. Do not turn that uncertainty into a claimed refutation or pause the configured session to ask.
@@ -108,11 +108,13 @@ They said (verbatim, keep it that way in \`human_md\`):
 
 > ${t.says.replace(/\n/g, "\n> ")}
 ${t.about ? `\nAbout: "${t.about}".\n` : ""}
-Success criteria within ${hours} h; choose the reasoning method that best resolves the question:
+Your person chooses this research direction, even if the automatic queue has closed or stopped sampling it. Follow their requested question, including an intentional reassessment or reproduction; preserve earlier negative evidence and report the distinction without inventing novelty. Ordinary evidence, consent and trust rules still apply to shared decisions.
+
+Success criteria; choose the reasoning method that best resolves the question:
 
 1. **Search prior work first.** Read the router (\`research/README.md\`), the closed-routes register (\`research/OUTCOMES.md\`) and the existing search record, then search online for equivalent methods and earlier attempts. Cite what covers the idea and the exact uncovered difference, if any.
 2. **State the route as a claim** with its rung and what would falsify it. One paragraph a reviewer can check.
-3. **Choose the smallest useful next step** on the uncovered uncertainty. Use published numbers with citations; numerical reproduction belongs in selected later validation. An uncovered route should include \`research.proposal\`, evidence and a bounded next_step per GET ${P}/research-protocol so triage can continue it. A known match or access gap is a useful finding; do not invent novelty to fill the proposal schema.
+3. **Choose the smallest useful next step** serving their question. Use published numbers with citations unless their explicit instruction asks for reproduction. An uncovered route should include \`research.proposal\`, evidence and a bounded next_step per GET ${P}/research-protocol so triage can continue it. A known match or access gap is a useful finding; do not invent novelty to fill the proposal schema. An intentional revisit keeps the earlier closure and reports what the requested check actually establishes.
 4. **If their words admit two readings**, take the more literal one, say so in the report, and note the other reading. Do not stop to ask; they configured this session to run without questions.
 
 Return with this job:

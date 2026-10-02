@@ -992,13 +992,13 @@ CREATE TABLE IF NOT EXISTS finding_events (
   created_at  TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 -- Corrections recorded before findings existed: a trusted reviewer's also_fix and an accepted audit's also_fix become open findings of
--- unspecified scope against unknown text. Nothing is presumed fixed; an agent or a reviewer closes them.
-INSERT INTO findings (problem_id, path, return_id, review_id, note, created_at)
-  SELECT r.problem_id, x->>'path', r.id, rv.id, x->>'note', rv.created_at FROM reviews rv JOIN returns r ON r.id = rv.return_id, jsonb_array_elements(rv.also_fix) x
+-- unknown text, preserving explicit optional/required scope. Nothing is presumed fixed; an agent or a reviewer closes them.
+INSERT INTO findings (problem_id, path, return_id, review_id, note, scope, created_at)
+  SELECT r.problem_id, x->>'path', r.id, rv.id, x->>'note', CASE WHEN x->>'scope' IN ('advisory','before_circulation') THEN x->>'scope' ELSE 'unspecified' END, rv.created_at FROM reviews rv JOIN returns r ON r.id = rv.return_id, jsonb_array_elements(rv.also_fix) x
   WHERE rv.trusted AND jsonb_typeof(rv.also_fix) = 'array' AND coalesce(x->>'path', '') <> '' AND coalesce(x->>'note', '') <> ''
   ON CONFLICT (COALESCE(return_id, 0), path, md5(note)) DO NOTHING;
-INSERT INTO findings (problem_id, path, return_id, note, created_at)
-  SELECT r.problem_id, x->>'path', r.id, x->>'note', r.created_at FROM returns r, jsonb_array_elements(r.also_fix) x
+INSERT INTO findings (problem_id, path, return_id, note, scope, created_at)
+  SELECT r.problem_id, x->>'path', r.id, x->>'note', CASE WHEN x->>'scope' IN ('advisory','before_circulation') THEN x->>'scope' ELSE 'unspecified' END, r.created_at FROM returns r, jsonb_array_elements(r.also_fix) x
   WHERE r.type = 'audit' AND r.status = 'accepted' AND NOT r.provisional AND jsonb_typeof(r.also_fix) = 'array' AND coalesce(x->>'path', '') <> '' AND coalesce(x->>'note', '') <> ''
   ON CONFLICT (COALESCE(return_id, 0), path, md5(note)) DO NOTHING;
 -- The first step on a new route is a first look, not a triage (Chris, Sep 25 2026, #sah-route-triage-title: "If this was not a triage task, it
@@ -1092,3 +1092,34 @@ ALTER TABLE sessions ADD COLUMN IF NOT EXISTS declared_end TIMESTAMPTZ;
 
 -- GPT-6.1 Sol is tier 1 at high, xhigh or max like Astra and Opus 5.5 (Chris, Oct 1 2026). The row is named so the board shows it; a row someone set by hand is left alone.
 INSERT INTO model_tiers (model, provider, tier, note) VALUES ('gpt-6.1-sol', 'openai', 1, 'tier 1 at high, xhigh or max (Chris, Oct 1 2026)') ON CONFLICT (model) DO NOTHING;
+
+-- Required corrections are Tier 1 trusted work (Oct 2 2026). Existing held attempts keep their instructions; queued repairs,
+-- including rebases of accepted changes, use the new eligibility. Additive for the previous container during a release.
+ALTER TABLE jobs ADD COLUMN IF NOT EXISTS requires_trust BOOLEAN NOT NULL DEFAULT false;
+-- Scope was omitted by the older backfill. Reconcile from the immutable annotations without reopening resolved work; an explicit
+-- before-circulation obligation wins over optional wording. Group origins so repeated review annotations remain idempotent.
+WITH annotations AS (
+  SELECT r.id AS return_id, x->>'path' AS path, md5(x->>'note') AS note_hash, x->>'scope' AS scope
+    FROM reviews rv JOIN returns r ON r.id=rv.return_id, jsonb_array_elements(rv.also_fix) x WHERE rv.trusted
+  UNION ALL
+  SELECT h.return_id, x->>'path', md5(x->>'note'), x->>'scope'
+    FROM review_history h, jsonb_array_elements(CASE WHEN jsonb_typeof(h.review->'also_fix')='array' THEN h.review->'also_fix' ELSE '[]'::jsonb END) x
+    WHERE h.review->>'trusted'='true'
+  UNION ALL
+  SELECT r.id, x->>'path', md5(x->>'note'), x->>'scope'
+    FROM returns r, jsonb_array_elements(r.also_fix) x WHERE r.type='audit' AND r.status='accepted' AND NOT r.provisional
+), scopes AS (
+  SELECT return_id,path,note_hash, CASE WHEN bool_or(scope='before_circulation') THEN 'before_circulation' ELSE 'advisory' END AS scope
+    FROM annotations WHERE scope IN ('advisory','before_circulation') GROUP BY return_id,path,note_hash
+), changed AS (
+  UPDATE findings f SET scope=s.scope FROM scopes s WHERE f.return_id=s.return_id AND f.path=s.path AND md5(f.note)=s.note_hash
+    AND (f.scope='unspecified' OR (f.scope='advisory' AND s.scope='before_circulation')) AND f.scope<>s.scope RETURNING f.id,f.status,f.scope
+)
+INSERT INTO finding_events (finding_id,status,note) SELECT id,status,'annotation scope recovered: ' || scope FROM changed;
+-- Failed recovery attempts rotate behind untried findings: unavailable historical paths cannot starve later served corrections.
+ALTER TABLE findings ADD COLUMN IF NOT EXISTS last_recovery_at TIMESTAMPTZ;
+CREATE INDEX IF NOT EXISTS findings_recovery_idx ON findings (problem_id,last_recovery_at NULLS FIRST,id) WHERE status='open' AND scope<>'advisory';
+UPDATE jobs SET min_tier=1, requires_trust=true
+  WHERE status='queued' AND type='audit' AND (title LIKE 'Fix %' OR title LIKE 'Rebase return #%'
+    OR EXISTS (SELECT 1 FROM findings f WHERE f.job_id=jobs.id AND f.status='open' AND f.scope<>'advisory'))
+    AND (min_tier<>1 OR NOT requires_trust);

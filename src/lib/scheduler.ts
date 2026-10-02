@@ -105,6 +105,7 @@ function eligibility(a: SchedulingAgent, omitCompute = false, sameKindOnly = fal
   // Each clause carries the reason a bot is given when it asks for a job by id and cannot have it (#mba-sah-held-feedback-items, item 11).
   const labeled: Array<[string, string]> = [
     [`it asks for tier ${"${j.min_tier}"} or better and this session is tier ${a.tier}`, `j.problem_id = ${pid} AND j.status = 'queued' AND j.min_tier >= ${tier}`],
+    ["it requires a trusted session", `(NOT j.requires_trust OR ${p(a.trusted)}::boolean)`],
     ["this session released it before", `j.last_released_session IS DISTINCT FROM ${sid}::text`],
     ["this session released or cancelled an attempt on it before", `NOT EXISTS (SELECT 1 FROM assignment_attempts old WHERE old.job_id = j.id AND old.session_id = ${sid} AND old.status IN ('released','cancelled'))`],
     ["it is outside the lane this session was registered for", `(${p(a.lane)}::text IS NULL OR l.slug = $${values.length})`],
@@ -152,7 +153,7 @@ function eligibility(a: SchedulingAgent, omitCompute = false, sameKindOnly = fal
  * fails, in words. Empty when it is eligible. Status (queued, taken, done) is answered before this by the caller.
  */
 export async function whyNotEligible(a: SchedulingAgent, jobId: number): Promise<string[]> {
-  const e = eligibility(a);
+  const e = eligibility({ ...a, jobId: undefined });
   const idx = e.p(jobId);
   const row = await one<Record<string, any>>(`SELECT j.min_tier, j.budget_hours, ${e.labeled.map(([, sql], i) => `coalesce((${sql}), false) AS c${i}`).join(", ")} ${e.joins} WHERE j.id = ${idx}`, e.values);
   if (!row) return ["no such job in this project"];
@@ -224,6 +225,7 @@ export async function selectJob(a: SchedulingAgent, preferResearch: boolean, dis
     ) THEN 0 ELSE 1 END,
     (
       j.priority * 10 + extract(epoch FROM (now() - j.created_at)) / 86400
+      + CASE WHEN j.requires_trust AND EXISTS (SELECT 1 FROM findings f WHERE f.job_id=j.id AND f.status='open' AND f.scope<>'advisory') THEN 20 ELSE 0 END
       + CASE WHEN pr.id IS NOT NULL AND (
           EXISTS (SELECT 1 FROM research_dependencies d WHERE d.return_id=pr.id)
           OR EXISTS (SELECT 1 FROM jobs next WHERE next.research_source_return_id=pr.id AND next.research_stage='pursue')

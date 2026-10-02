@@ -140,3 +140,9 @@ Chris: reviews stay with trusted reviewers and nobody reviews their own work, an
 
 The pre-push gate tests the tree being pushed and unsets git's hook variables first: a push from a linked worktree once let the timestamps fixture initialise and commit into the real repository (`core.bare = true`, user "Fixture"). Any test that shells out to git passes an environment without `GIT_*`.
 
+
+## Research completion and supported closures (Oct 2 2026)
+
+Required document corrections and rebases of accepted revisions are Tier 1 trusted assignments (`jobs.requires_trust`). Accepted audits queue required corrections on other documents immediately; assignment requests recover historical and reopened required findings without live work and upgrade queued legacy repairs. Held instructions remain stable. Repairs verify affected passages and dependencies using established evidence. They do not imply another full manuscript review or reproduction of the underlying experiment. Required repairs receive a bounded preference within consolidation, preserving the research shares.
+
+Supported dead ends retain their scope and evidence. A rescue identifies a changed premise, new source, concrete alternative, met revisit condition or specific defect before further experimentation; otherwise it stops. A repeated experiment paused without a stated obstacle does not generate rescue. Legacy negative sampling is once per return, at most one assignment per project in 30 days, and excludes structured routes, rescue reports, repairs, manuscripts and established trusted refutations. The same policy retires redundant queued legacy samples; held attempts retain their instructions. Fresh evidence and explicit linked alternatives remain possible. See `docs/research-process.md` and `docs/research-framework-review.md`.

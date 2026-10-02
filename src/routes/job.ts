@@ -12,7 +12,7 @@ import { checkInstruction, ENDED_LAUNCH_GUIDANCE, folderLaunchContract } from ".
 import { isDeepStrictEqual } from "node:util";
 import { backlogFor, reviewWorkFor, selectJob, whyNotEligible, computeBlocked, discoveryShare, discoveryDue, allocation, researchPolicy, researchAllocation, portfolioOrder, researchBucket, reviewPressure, reviewTriage, unmetRequirements, STALE_REQUIREMENT_HOURS, ROUTE_REPEAT_WINDOW, type SchedulingAgent } from "../lib/scheduler.js";
 import { parseResearch, stageOf, jobLabel } from '../lib/research-format.js';
-import { recordResearch, prepareRescue, researchBrief, routeContext, reconsiderDependents, holdForStepCheck } from '../lib/research.js';
+import { recordResearch, prepareRescue, retireRedundantRescueSamples, researchBrief, routeContext, reconsiderDependents, holdForStepCheck } from '../lib/research.js';
 import { parseVerificationPlan, saveVerificationPlan, queueCheck, saveCheckReceipt, verificationRuns, verificationState, verificationBrief, judgmentBudget, validateReceiptUse, isCompletedCheck, expireWaitingChecks, checkWaitExpired, identicalClaim, verificationSummary, receiptId } from '../lib/verification.js';
 import { readFileSync } from 'node:fs';
 import { ROOT } from '../lib/paths.js';
@@ -242,6 +242,8 @@ ${ENDED_LAUNCH_GUIDANCE}
   const ends = [session.ends_at, session.declared_end].filter(Boolean).map((d: any) => new Date(d).getTime()).filter(Number.isFinite);
   agent.hoursLeft = ends.length ? Math.max(0, Math.round((Math.min(...ends) - Date.now()) / 36e3) / 100) : null;
   await resumeDeferredReviews(agent.problemId);
+  await recoverCorrectionJobs(agent.problemId, req.project.slug);
+  await retireRedundantRescueSamples(agent.problemId);
   if (reviewTriage(req.project.slug)) await releaseTrustedTriage(agent.problemId);
   for (const waiting of await expireWaitingChecks(agent.problemId)) {
     if (!await one(`SELECT 1 FROM jobs WHERE parent_return_id=$1 AND type='review' AND status IN ('queued','assigned')`, [waiting.id]))
@@ -1190,7 +1192,7 @@ job.post("/result", bearer, project, assignmentMutation(async (req: any, res) =>
     if (Array.isArray(b.also_fix)) {
       const fixes = alsoFix(b.also_fix);
       if (fixes.length) await q(`UPDATE reviews SET also_fix = $2 WHERE return_id = $1 AND user_id = $3 AND id = (SELECT max(id) FROM reviews WHERE return_id = $1 AND user_id = $3)`, [reviewOf, JSON.stringify(fixes), uid]);
-      // A trusted reviewer's fix is a finding and a job (Chris, Sep 12 2026; findings Sep 24 2026): one audit job per served file, for whoever comes next.
+      // A trusted reviewer's fix is a finding and a job (Chris, Sep 12 2026; findings Sep 24 2026): one Tier 1 trusted audit job per served file.
       if (fixes.length && reviewerTrusted) {
         const rv = await one<{ id: string }>(`SELECT max(id) AS id FROM reviews WHERE return_id = $1 AND user_id = $2`, [reviewOf, uid]);
         const reviewed = await one<{ revision_path: string | null; revision_sha: string | null }>(`SELECT revision_path, revision_sha FROM returns WHERE id = $1`, [reviewOf]);
@@ -1350,7 +1352,7 @@ job.post("/result", bearer, project, assignmentMutation(async (req: any, res) =>
     if (fixes.length) await q(`UPDATE returns SET also_fix = $2 WHERE id = $1`, [ret!.id, JSON.stringify(fixes)]);
   }
   // A repair names the findings it answers (Sep 24 2026); without the list, the findings its job carried when taken are the ones checked.
-  if (Array.isArray(b.resolves)) { const ids = b.resolves.map(Number).filter((n: number) => Number.isInteger(n) && n > 0).slice(0, 50); if (ids.length) await q(`UPDATE returns SET resolves = $2 WHERE id = $1`, [ret!.id, JSON.stringify(ids)]); }
+  if (Array.isArray(b.resolves)) { const ids = b.resolves.map(Number).filter((n: number) => Number.isInteger(n) && n > 0).slice(0, 50); await q(`UPDATE returns SET resolves = $2 WHERE id = $1`, [ret!.id, JSON.stringify(ids)]); }
   const cites = b.cites && typeof b.cites === "object" ? { ...b.cites } : {};
   if (jobRow?.follow_up_of) { const arr = Array.isArray(cites.returns) ? cites.returns.map(Number) : []; if (!arr.includes(Number(jobRow.follow_up_of))) arr.push(Number(jobRow.follow_up_of)); cites.returns = arr; }
   if (Object.keys(cites).length) await q(`UPDATE returns SET cites = $2 WHERE id = $1`, [ret!.id, JSON.stringify(cites)]);
@@ -1392,6 +1394,12 @@ job.post("/result", bearer, project, assignmentMutation(async (req: any, res) =>
   if (rtype === "curate") {
     if (!b.decision || typeof b.decision !== "object") { res.status(400).json({ error: "curate returns need a decision object" }); return; }
     await q(`UPDATE returns SET decision = $2 WHERE id = $1`, [ret!.id, JSON.stringify(b.decision)]);
+  }
+  // Freeze the default target while this assignment still owns the job. Later findings and reassignments cannot change the review.
+  if (!Array.isArray(b.resolves) && (rtype === 'audit' || paperPlan)) {
+    const repair = await one(`SELECT * FROM returns WHERE id=$1`, [ret!.id]);
+    const targets = await findings.findingsForReturn({ ...repair, id: Number(ret!.id), problem_id: Number(problem.id), job_id: jobRow ? Number(jobRow.id) : null });
+    await q(`UPDATE returns SET resolves=$2 WHERE id=$1`, [ret!.id, JSON.stringify(targets.map(f => f.id))]);
   }
   if (jobRow) await q(`UPDATE jobs SET status = 'returned' WHERE id = $1`, [jobRow.id]);
   // The cap reached with this return: the session is over and no longer counts as live (platform issue #3).
@@ -1525,7 +1533,7 @@ export async function resumeDeferredReviews(problemId: number): Promise<number> 
 
 /** Create review jobs for a return. Reviews require tier 1 (scope Q7/Q13). */
 /** Bumped whenever the standard review guidance changes; a queued review from an earlier version is refreshed when served. */
-export const REVIEW_BRIEF_VERSION = 9;   // 9: a series also gathers the same document's later fixes, chain links and no-op revisions (#mba-sah-held-feedback-items, item 15); 8: the return schema names verification_sufficiency_md on a packaged review and the also_fix note cap (#mba-sah-bot-feedback-fixes, fix 7); 7: a reviewer holding a role on the project may mark an accepted finding worth announcing (Chris, Sep 26 2026, #sah-discord-announcer); 6: the reviewer asks whether the return earns credit, a rung or a citation without the work (Chris, Sep 24 2026, #sah-gemma-mvp; the Gemma Challenge's agents caught a gameable gate themselves);5: a revision's review lists the findings it answers, and also_fix takes a scope (Sep 24 2026); 3: no time budget in the review brief (Chris, Sep 19 2026); 4: series verdicts are decisions with their usual effects, from a trusted reviewer only (Sep 23 2026)
+export const REVIEW_BRIEF_VERSION = 11;   // 11: review targets match integration closure, including explicit empty lists (Oct 2 2026); 10: required document repairs go to Tier 1 trusted agents and reviews reuse established evidence (Oct 2 2026); 9: a series also gathers the same document's later fixes, chain links and no-op revisions (#mba-sah-held-feedback-items, item 15); 8: the return schema names verification_sufficiency_md on a packaged review and the also_fix note cap (#mba-sah-bot-feedback-fixes, fix 7); 7: a reviewer holding a role on the project may mark an accepted finding worth announcing (Chris, Sep 26 2026, #sah-discord-announcer); 6: the reviewer asks whether the return earns credit, a rung or a citation without the work (Chris, Sep 24 2026, #sah-gemma-mvp; the Gemma Challenge's agents caught a gameable gate themselves);5: a revision's review lists the findings it answers, and also_fix takes a scope (Sep 24 2026); 3: no time budget in the review brief (Chris, Sep 19 2026); 4: series verdicts are decisions with their usual effects, from a trusted reviewer only (Sep 23 2026)
 const REASSESSMENT_NOTE = '\n\nEvidence needs reassessment or execution could not find capacity within 24 hours. Assess the specific missing or changed evidence from the record; execution is not included. Preserve existing observations. Do not report that a check ran. If new execution is necessary, name the smallest check and missing capability in needs_md; a repaired package is a new return.';
 /** The standard review brief for a return as it stands now, with the tier, budget and compute hint that go with it. Job-specific text (the reassessment note) is the caller's. */
 export async function composeReviewBrief(returnId: number, problemId: number, options: { judgmentOnly?: boolean } = {}): Promise<{ brief: string; tier: number; budget: number; compute: any; judgmentOnly: boolean; packaged: boolean }> {
@@ -1564,14 +1572,15 @@ export async function composeReviewBrief(returnId: number, problemId: number, op
   const noLogNote = parent && notSessionLog(parent.author_tokens) ? `\n\nThis return's transcript is not a session log: the author sent ${parent.author_tokens.log === "summary" ? "a summary they wrote" : "something no harness writes"} instead of the harness's own record, so you cannot see what they read or ran, and no tokens are counted for it. Judge from the report, the files and the recipe; say in your notes that the transcript was not a session log. The author has been told how to resubmit it.` : "";
   // Portability (Chris, Sep 12 2026: never refuse, let reviewers fix): a hard-coded path or a progress line is a defect to fix in passing, not a reason to reject.
   const fileNotes: { sha: string; name: string; notes: string[] }[] = Array.isArray((parent as any)?.file_notes) ? (parent as any).file_notes : [];
-  const portabilityNote = parent?.verification_plan ? `\n\nKeep this immutable package unchanged. A repair may inform your judgment but requires a new package and fingerprint; record the original failure separately. Do not attribute a repaired run to the original package.` : `\n\nA script that fails only because of a hard-coded path, or whose output differs from the embedded hash only by progress, timing or rate lines: fix the path or strip those lines when you rerun, say so in your notes, and judge the result on its merits. That alone is not a rejection reason. A defect in a served file goes in also_fix with the path and what to change: a trusted reviewer's also_fix opens a fix job in the queue for whoever comes next.${fileNotes.length ? `\n\nFiles that will not run as shipped, as far as the server can tell (a fix job is queued; the author may have replaced them since, the return page says):\n${fileNotes.map((f) => `- ${f.name} (<base>/files/${f.sha}): ${f.notes.join(" ")}`).join("\n")}` : ""}`;
+  const portabilityNote = parent?.verification_plan ? `\n\nKeep this immutable package unchanged. A repair may inform your judgment but requires a new package and fingerprint; record the original failure separately. Do not attribute a repaired run to the original package.` : `\n\nA script that fails only because of a hard-coded path, or whose output differs from the embedded hash only by progress, timing or rate lines: fix the path or strip those lines when you rerun, say so in your notes, and judge the result on its merits. That alone is not a rejection reason. A defect in a served file goes in also_fix with the path and what to change: a trusted reviewer's required annotation opens a Tier 1 trusted repair job; an optional advisory annotation does not. Review the affected passages and dependencies using established evidence; do not repeat the underlying investigation without a specific unresolved obligation.${fileNotes.length ? `\n\nFiles that will not run as shipped, as far as the server can tell (a fix job is queued; the author may have replaced them since, the return page says):\n${fileNotes.map((f) => `- ${f.name} (<base>/files/${f.sha}): ${f.notes.join(" ")}`).join("\n")}` : ""}`;
   const mismatchNote = parent?.author_tokens?.mismatch ? `\n\nThis return's transcript belongs to another assignment (${parent.author_tokens.mismatch.reason}), so it does not show what the author read or ran for this one, and no tokens are counted for it. Judge from the report, the files and the recipe; say in your notes that the transcript was not this assignment's. The author has been told how to resubmit it.` : "";
   const twinNote = parent?.duplicate_of ? `\n\nThis return carries the same change as pending return #${parent.duplicate_of} (byte-identical patch or revised file): treat the two as one change. Your verdict on either decides that change; when one is decided the other is folded into it.` : "";
   const triageNote = await triageNoteFor(returnId);
   const recipeNote = recipeGapNote(await recipeGaps(parent?.recipe_md, (await q<{ file_sha: string }>(`SELECT file_sha FROM file_refs WHERE ref_type = 'return' AND ref_id = $1`, [returnId])).map((f) => f.file_sha)));
   // Findings this return answers (Sep 24 2026): the ones it names in resolves, else the ones its job carried. Accepting it closes them.
-  const answers = parent?.revision_path ? await (async () => { const r = await one<{ resolves: any; job_id: string | null }>(`SELECT resolves, job_id FROM returns WHERE id = $1`, [returnId]); return Array.isArray(r?.resolves) ? findings.findingsByIds(r!.resolves.map(Number)) : r?.job_id ? findings.findingsOfJob(Number(r.job_id)) : []; })() : [];
-  const findingNote = answers.filter((f) => f.status === "open").length ? `\n\nThis revision answers these open findings on \`${parent!.revision_path}\`:\n${answers.filter((f) => f.status === "open").map((f) => `- finding #${f.id}${f.scope === "before_circulation" ? " (before circulation)" : ""}: ${f.note}`).join("\n")}\nCheck each against the changed passages. Accepting closes the ones it answers on the integrated text; name any it does not satisfy in your notes (it stays open and goes to the next fix job), and reject if the revision damages what it touches.` : "";
+  const repair = parent?.revision_path ? await one(`SELECT * FROM returns WHERE id=$1`, [returnId]) : null;
+  const answers = repair ? await findings.findingsForReturn(repair) : [];
+  const findingNote = answers.length ? `\n\nThis revision claims to answer these open findings on \`${parent!.revision_path}\`:\n${answers.map((f) => `- finding #${f.id}${f.scope === "before_circulation" ? " (before circulation)" : ""}: ${f.note}`).join("\n")}\nCheck each against the changed passages. Accepting and integrating closes this target set. If a claimed correction is not satisfied, reject and name the remaining obligation in notes_md; notes alone do not exclude a finding from closure. Reject too if the revision damages what it touches.` : "";
   const auditNote = parent?.type === "audit" ? `\n\nThis return is a change proposal for \`${parent.revision_path}\`. Fetch the current document (GET <project base>/docs/${parent.revision_path}) and the revised file; read the diff. For every issue the author raises, check that it is real; for every change, check that it fixes the issue without lowering rigour or overclaiming; check nothing else was altered silently. Accept means: integrate this revision as the document's next version, credited to the author and verified by you. Reject means: name the changes that must not go in.` : "";
   // Worth announcing (#sah-discord-announcer): asked only where a finding can be news, never on audits, curation or papers.
   const announceNote = ANNOUNCE_TYPES.has(parent?.type ?? "") ? `\n\nWorth announcing: only if you review as a person holding a role on this project (an owner, or trust granted on the trust page; trust by model does not count) and you accept. Add \`"announce": true\` with \`"announce_md": "<one sentence, at most ${ANNOUNCE_MD_MAX} characters>"\` only if this finding would matter to someone following the project who reads nothing else this week: a proof, a refutation, a computation reproduced by an independent agent, or a genuinely new direction that changes what the project should do next. Most accepted work is not. Your sentence goes out publicly under the finder's name, the return's author, who gets the whole credit in the post: say what was shown and at what rung, in the record's words, with no adjectives. The post goes out only if the final decision is a trusted acceptance of that kind, after a hold, and it is corrected if the decision is revisited.` : "";
@@ -1919,8 +1928,14 @@ async function resolveReturnLocked(returnId: number): Promise<string> {
       if (outcome === "applied" || outcome === "unchanged") await findings.resolveByReturn({ ...ret, id: Number(ret.id), problem_id: Number(ret.problem_id), job_id: ret.job_id === null ? null : Number(ret.job_id) }, String(ret.revision_sha));
       if (outcome === "conflict" && pr) await spawnRebaseJob(final, pr.slug);
     }
-    // An accepted audit's own also_fix: corrections routed to other documents, recorded as findings (shown there, as before; no job).
-    if (ret.type === "audit" && Array.isArray(ret.also_fix)) { const pr = await one<{ slug: string }>(`SELECT slug FROM problems WHERE id = $1`, [ret.problem_id]); for (const f of ret.also_fix) if (f?.path && f?.note) await findings.recordFinding({ problemId: Number(ret.problem_id), path: String(f.path), note: String(f.note), scope: f.scope, contentSha: pr ? await currentSha(pr.slug, String(f.path), Number(ret.problem_id)) : null, returnId: Number(ret.id) }); }
+    // An accepted audit's corrections are work, just like a trusted reviewer's corrections, not merely annotations.
+    if (ret.type === "audit" && Array.isArray(ret.also_fix)) {
+      const pr = await one<{ slug: string }>(`SELECT slug FROM problems WHERE id = $1`, [ret.problem_id]);
+      for (const f of ret.also_fix) if (f?.path && f?.note) {
+        const findingId = await findings.recordFinding({ problemId: Number(ret.problem_id), path: String(f.path), note: String(f.note), scope: f.scope, contentSha: pr ? await currentSha(pr.slug, String(f.path), Number(ret.problem_id)) : null, returnId: Number(ret.id) });
+        if (pr && findings.scopeOf(f.scope) !== 'advisory') await spawnFixJob(Number(ret.problem_id), ret.lane_id, pr.slug, String(f.path), String(f.note), { findingId, returnId: Number(ret.id) });
+      }
+    }
     await credit.payAcceptedReturn(final, deciding);
     if (ret.type === "curate" && ret.decision) await files.applyCuration(Number(ret.id), Number(ret.user_id), ret.decision);
     // An upheld challenge reopens the return it challenged: the objection is now part of the record and trusted reviewers look again.
@@ -1974,29 +1989,54 @@ async function settlePaper(ret: any, status: string): Promise<void> {
 
 /**
  * A fix is a job like any other (Chris, Sep 12 2026: "everything is fast forward; it's just a queue"). A trusted reviewer's also_fix on a
- * served file opens an audit job for that file, for whoever comes next; the reviewer's note is the brief. One open job per file.
+ * served file opens a Tier 1 trusted audit job for that file; the reviewer's note is the brief. One open job per file.
  */
 export async function spawnFixJob(problemId: number, laneId: number | null, slug: string, path: string, note: string, by: { reviewId?: number | null; returnId?: number | null; handle?: string | null; findingId?: number | null }): Promise<number | null> {
+  if (by.findingId && (await one(`SELECT scope FROM findings WHERE id=$1 AND problem_id=$2`, [by.findingId, problemId]))?.scope === 'advisory') return null;
   const rel = revisions.safeRel(path); if (!rel || !(await revisions.exists(slug, rel, problemId))) return null;
   const title = `Fix ${rel}`.slice(0, 200);
   const said = `${by.findingId ? `finding #${by.findingId}` : "a defect"}${by.reviewId ? ` (review #${by.reviewId} of return #${by.returnId}${by.handle ? `, @${by.handle}` : ""})` : by.returnId ? ` (return #${by.returnId})` : ""}`;
   // One open fix job per file, including one whose fix is under review: a further finding joins it rather than starting a second repair loop.
   // Added to the brief, it reaches whoever takes the job next and the reviewer; a finding added after the job was taken stays open when it closes.
-  const open = await one<{ id: string; status: string }>(`SELECT id, status FROM jobs WHERE problem_id = $1 AND type = 'audit' AND title = $2 AND status IN ('queued','assigned','returned') ORDER BY id DESC LIMIT 1`, [problemId, title]);
+  const open = await one<{ id: string; status: string }>(`SELECT j.id, j.status FROM jobs j LEFT JOIN returns r ON r.id=j.follow_up_of
+    WHERE j.problem_id=$1 AND j.type='audit' AND (j.title=$2 OR (j.title LIKE 'Rebase return #%' AND r.revision_path=$3))
+    AND ${findings.liveRepairSql} ORDER BY j.id DESC LIMIT 1`, [problemId, title, rel]);
   if (open) {
+    await q(`UPDATE jobs SET min_tier=1, requires_trust=true WHERE id=$1 AND status='queued'`, [open.id]);
     if (by.findingId && await findings.linkToJob(by.findingId, Number(open.id))) await q(`UPDATE jobs SET brief_md = brief_md || $2 WHERE id = $1`, [open.id, `\n\nAlso ${said}:\n> ${note.replace(/\n/g, "\n> ")}\n`]);
     return Number(open.id);
   }
   const P = "<project base>";
   const brief = `A reviewer found a defect in the served file \`${rel}\`${by.reviewId ? ` while reviewing return #${by.returnId} (review #${by.reviewId}${by.handle ? ` by @${by.handle}` : ""})` : ""}${by.findingId ? `, recorded as finding #${by.findingId}` : ""}. Fix it; do not redo the work it belongs to.
 
+This correction is assigned to a Tier 1 trusted agent. Read the finding and its source review or return first. Correct the affected passages and check their dependencies; reuse established observations. Do not repeat the underlying investigation or a full manuscript review without a specific unresolved obligation. For a manuscript, check the corrected statements, calibration, citations and authorship disclosure. For executable files, check the affected behavior and portable output.
+
 What the reviewer said:
 > ${note.replace(/\n/g, "\n> ")}
 
-Fetch the current file (GET ${P}/docs/${rel}), make the change, check it still runs and that its stdout reproduces byte for byte elsewhere (progress, timing and rates go to stderr; paths relative to the repository), upload the revised file (POST /files) and return as this job with \`"revision": { "path": "${rel}", "file": "<sha256 of the revised file>", "base": "<X-Content-SHA256 of the text you fetched>" }\`, the sha in \`files\`, a one-line report of what changed and why${by.returnId ? `, and \`"cites": { "returns": [${by.returnId}] }\`` : ""}. If the file's embedded hashes depend on the change, re-embed them and say so. Send \`"revision": { …, "base": "<X-Content-SHA256 of the text you edited>" }\` so a later change to the file is caught rather than overwritten, and list the findings your revision answers in \`"resolves": [<finding ids>]\` (GET ${P}/findings?path=${rel} lists the open ones). Accepted, the revision becomes the served version and closes the findings it answered; a finding it leaves open goes to the next fix job.`;
-  const j = await one<{ id: string }>(`INSERT INTO jobs (problem_id, lane_id, type, title, brief_md, git_ref, compute_hint, budget_hours, min_tier, quorum) VALUES ($1,$2,'audit',$3,$4,'main','{}',1,99,1) RETURNING id`, [problemId, laneId, title, brief]);
+Fetch the current file (GET ${P}/docs/${rel}), make the change, upload the revised file (POST /files) and return as this job with \`"revision": { "path": "${rel}", "file": "<sha256 of the revised file>", "base": "<X-Content-SHA256 of the text you fetched>" }\`, the sha in \`files\`, a concise report of what changed and the checks that support it${by.returnId ? `, and \`"cites": { "returns": [${by.returnId}] }\`` : ""}. For executable files, stdout must reproduce byte for byte elsewhere (progress, timing and rates go to stderr; paths relative to the repository); if embedded hashes depend on the change, re-embed them and say so. The base hash catches later changes rather than overwriting them. List only findings your revision actually answers in \`"resolves": [<finding ids>]\` (GET ${P}/findings?path=${rel} lists the open ones). Accepted, the revision becomes the served version and closes the findings it answered; a finding it leaves open goes to the next fix job.`;
+  const j = await one<{ id: string }>(`INSERT INTO jobs (problem_id, lane_id, type, title, brief_md, git_ref, compute_hint, budget_hours, min_tier, quorum, requires_trust) VALUES ($1,$2,'audit',$3,$4,'main','{}',1,1,1,true) RETURNING id`, [problemId, laneId, title, brief]);
   if (j && by.findingId) await findings.linkToJob(by.findingId, Number(j.id));
   return j ? Number(j.id) : null;
+}
+/** Recover historical annotations and reopened findings without work. Called under the project's assignment lock; no model runs here. */
+export async function recoverCorrectionJobs(problemId: number, slug: string): Promise<void> {
+  // Older intake queued optional annotations too. Retire only generated, unheld fixes carrying optional findings alone.
+  await q(`UPDATE jobs j SET status='expired',last_release_note='Optional annotations do not require a repair assignment.'
+    WHERE j.problem_id=$1 AND j.type='audit' AND j.title LIKE 'Fix %' AND j.status='queued'
+    AND EXISTS (SELECT 1 FROM findings f WHERE f.job_id=j.id AND f.status='open' AND f.scope='advisory')
+    AND NOT EXISTS (SELECT 1 FROM findings f WHERE f.job_id=j.id AND f.status='open' AND f.scope<>'advisory')`, [problemId]);
+  // A previously held legacy repair may be released after the schema upgrade, or queued by the old release during overlap.
+  await q(`UPDATE jobs SET min_tier=1, requires_trust=true WHERE problem_id=$1 AND status='queued' AND type='audit'
+    AND (title LIKE 'Fix %' OR title LIKE 'Rebase return #%' OR EXISTS (SELECT 1 FROM findings f WHERE f.job_id=jobs.id AND f.status='open' AND f.scope<>'advisory'))
+    AND (min_tier<>1 OR NOT requires_trust)`, [problemId]);
+  const rows = await q<any>(`SELECT f.*,r.lane_id FROM findings f LEFT JOIN jobs j ON j.id=f.job_id LEFT JOIN returns r ON r.id=f.return_id
+    WHERE f.problem_id=$1 AND f.status='open' AND f.scope<>'advisory'
+      AND (j.id IS NULL OR NOT ${findings.liveRepairSql}) ORDER BY f.last_recovery_at NULLS FIRST,f.id LIMIT 100`, [problemId]);
+  for (const f of rows) {
+    await q(`UPDATE findings SET last_recovery_at=now() WHERE id=$1`, [f.id]);
+    await spawnFixJob(problemId, f.lane_id ?? null, slug, f.path, f.note, { findingId: Number(f.id), returnId: f.return_id, reviewId: f.review_id });
+  }
 }
 /** Open findings on a fix job that has ended go to the next fix job for their file (one per file). */
 export async function requeueFindings(jobId: number, problemId: number, laneId: number | null): Promise<void> {
@@ -2012,13 +2052,19 @@ export async function requeueFindings(jobId: number, problemId: number, laneId: 
 export async function spawnRebaseJob(ret: any, slug: string): Promise<number | null> {
   const rel = revisions.safeRel(ret.revision_path); if (!rel) return null;
   const title = `Rebase return #${ret.id} onto ${rel}`.slice(0, 200);
-  const open = await one<{ id: string }>(`SELECT id FROM jobs WHERE problem_id = $1 AND title = $2 AND status IN ('queued','assigned','returned')`, [ret.problem_id, title]);
-  if (open) return Number(open.id);
+  const open = await one<{ id: string }>(`SELECT j.id FROM jobs j WHERE j.problem_id = $1 AND j.title = $2 AND ${findings.liveRepairSql}`, [ret.problem_id, title]);
+  const targets = await findings.findingsForReturn(ret);
+  if (open) {
+    for (const f of targets) await findings.linkToJob(f.id, Number(open.id));
+    return Number(open.id);
+  }
   const P = "<project base>";
   const brief = `${ret.paper_slug ? `paper.slug: ${ret.paper_slug}\n\n` : ""}Return #${ret.id} (${P}/return/${ret.id}) is an accepted revision of \`${rel}\`, made against the text with sha256 ${ret.revision_base_sha}. The document has changed since (GET ${P}/docs/${rel}; its history at ${P}/history/${rel}), so the revision was not applied: it would have undone the change in between.
 
 Carry the accepted revision's changes onto the current text. Compare the revised file (GET /files/${ret.revision_sha}) with the version it was made against (the history page links every version), apply those changes to the current text, and keep everything the newer version changed. Where the two touch the same passage, say in your report how you reconciled them. Upload the result and return as this job with \`"revision": { "path": "${rel}", "file": "<sha256>", "base": "<X-Content-SHA256 of the current text>" }\`${ret.paper_slug ? `, \`"paper": { "slug": "${ret.paper_slug}", "file": "<sha256>" }\`` : ""}, the sha in \`files\`, and \`"cites": { "returns": [${ret.id}] }\`. Reviewers check the reconciliation; accepted, it becomes the served version.`;
-  const j = await one<{ id: string }>(`INSERT INTO jobs (problem_id, lane_id, type, title, brief_md, git_ref, compute_hint, budget_hours, min_tier, quorum, follow_up_of) VALUES ($1,$2,'audit',$3,$4,'main','{}',1,99,1,$5) RETURNING id`, [ret.problem_id, ret.lane_id ?? null, title, brief, ret.id]);
+  const findingNote = `\n\nPreserve the correction obligations while rebasing. List only the findings the resulting text actually satisfies in \`"resolves": [<finding ids>]\`; send an empty list if it satisfies none. Fetch open findings at GET ${P}/findings?path=${rel}.${targets.length ? `\n${targets.map(f => `- finding #${f.id}: ${f.note}`).join('\n')}` : ''} Review only the reconciliation and affected dependencies, reusing the accepted evidence. For a manuscript, check corrected statements, calibration, citations and authorship disclosure; for executable files, check affected behavior and portable output.`;
+  const j = await one<{ id: string }>(`INSERT INTO jobs (problem_id, lane_id, type, title, brief_md, git_ref, compute_hint, budget_hours, min_tier, quorum, follow_up_of, requires_trust) VALUES ($1,$2,'audit',$3,$4,'main','{}',1,1,1,$5,true) RETURNING id`, [ret.problem_id, ret.lane_id ?? null, title, brief + findingNote, ret.id]);
+  if (j) for (const f of targets) await findings.linkToJob(f.id, Number(j.id));
   return j ? Number(j.id) : null;
 }
 /** also_fix entries as stored: a served path, the note, and the scope when the reviewer gave one (before_circulation | advisory). */
@@ -2128,7 +2174,7 @@ Fix ${notes.length === 1 ? "it" : "them"}; do not redo the work. Upload a correc
 /** A follow-up job: bring a return that could not be checked to a checkable state. Any tier for mechanical types; the original work travels with it; the follow-up cites the original so its author is paid on acceptance. */
 async function spawnFollowUp(ret: any, needs: string[]): Promise<void> {
   if (await one(`SELECT 1 FROM jobs WHERE follow_up_of = $1 AND status IN ('queued','assigned')`, [ret.id])) return;
-  const orig = ret.job_id ? await one(`SELECT title, brief_md, budget_hours, min_tier, compute_hint, git_ref FROM jobs WHERE id = $1`, [ret.job_id]) : null;
+  const orig = ret.job_id ? await one(`SELECT title, brief_md, budget_hours, min_tier, requires_trust, compute_hint, git_ref FROM jobs WHERE id = $1`, [ret.job_id]) : null;
   const P = "<project base>";
   const mechanical = ["break", "measure", "formalize"].includes(ret.type);
   const files = await q(`SELECT f.sha256, f.name FROM file_refs x JOIN files f ON f.sha256 = x.file_sha WHERE x.ref_type = 'return' AND x.ref_id = $1 AND f.deleted_at IS NULL`, [ret.id]);
@@ -2146,9 +2192,13 @@ Return as this job with \`"recipe_md"\` filled in and \`"cites": { "returns": [$
 Original assignment:
 
 ${orig?.brief_md ?? "(the return was self-assigned; its report states the task)"}`;
-  await q(`INSERT INTO jobs (problem_id, lane_id, type, title, brief_md, git_ref, compute_hint, budget_hours, min_tier, quorum, follow_up_of)
-           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,1,$10)`,
-    [ret.problem_id, ret.lane_id, ret.type, `${orig?.title ?? `${ret.type} return #${ret.id}`}`.slice(0, 200), brief, orig?.git_ref ?? "main", JSON.stringify(orig?.compute_hint ?? {}), Number(orig?.budget_hours ?? 2), mechanical ? 99 : Number(orig?.min_tier ?? 99), ret.id]);
+  const follow = await one<{ id: string }>(`INSERT INTO jobs (problem_id, lane_id, type, title, brief_md, git_ref, compute_hint, budget_hours, min_tier, quorum, follow_up_of, requires_trust)
+           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,1,$10,$11) RETURNING id`,
+    [ret.problem_id, ret.lane_id, ret.type, `${orig?.title ?? `${ret.type} return #${ret.id}`}`.slice(0, 200), brief, orig?.git_ref ?? "main", JSON.stringify(orig?.compute_hint ?? {}), Number(orig?.budget_hours ?? 2), orig?.requires_trust ? Number(orig.min_tier) : mechanical ? 99 : Number(orig?.min_tier ?? 99), ret.id, Boolean(orig?.requires_trust)]);
+  // The follow-up is the continuation of this correction, not a second repair in parallel.
+  if (follow && orig?.requires_trust && ret.job_id) for (const f of await findings.findingsOfJob(Number(ret.job_id))) {
+    if (f.status === 'open' && f.scope !== 'advisory') await findings.linkToJob(f.id, Number(follow.id));
+  }
 }
 
 /** An accepted direction opens a lane only when it carries the person's own words (human_md): a person's idea gets a place for the swarm to gather.
