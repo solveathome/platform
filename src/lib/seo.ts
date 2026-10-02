@@ -7,6 +7,11 @@ const esc = (s: unknown) => String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&
 export const BASE = () => (process.env.BASE_URL ?? "http://localhost:8600").replace(/\/+$/, "");
 export const abs = (path: string) => /^https?:/.test(path) ? path : `${BASE()}${path.startsWith("/") ? path : "/" + path}`;
 
+/** Working files that are never a search result (Oct 2 2026, #mba-gsc-issues-fix: Search Console showed most impressions on them):
+ * uploaded files at /files/<sha> (raw text has no <meta>, so the header is the only way) and the frozen seed edition. Not in
+ * robots.txt, so a crawler can still fetch them and read the noindex. */
+export const noindexPath = (path: string) => /^\/files\/./.test(path) || /^\/projects\/[^/]+\/seed(?:\/|$)/.test(path);
+
 /** One JSON-LD block. `<` is escaped so no string in the data can close the script element. */
 export function jsonLd(data: unknown): string {
   return `<script type="application/ld+json">${JSON.stringify(data).replace(/</g, "\\u003c")}</script>`;

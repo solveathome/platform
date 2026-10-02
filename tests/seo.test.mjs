@@ -6,7 +6,7 @@ import assert from "node:assert/strict";
 process.env.BASE_URL = "https://example.org";
 const { shareMeta } = await import("../src/lib/share.ts");
 const { page } = await import("../src/lib/page.ts");
-const { jsonLd, plainDescription, demoteHeadings, crumbsFromHtml, notFoundPage } = await import("../src/lib/seo.ts");
+const { jsonLd, plainDescription, demoteHeadings, crumbsFromHtml, notFoundPage, noindexPath } = await import("../src/lib/seo.ts");
 
 test("a page without a path gets no canonical and no og:url, never the home page's", () => {
   const html = shareMeta({ title: "Asks" });
@@ -45,4 +45,9 @@ test("headings demote one level, closing tags included; crumbs read back from HT
   const t = crumbsFromHtml(`<a href="/projects/p">P &amp; Q</a> / <a href="/projects/p#papers">Papers</a>`, { name: "Doc", path: "/projects/p/docs/d.md" });
   assert.deepEqual(t.itemListElement.map((i) => i.name), ["P & Q", "Doc"]);
   assert.match(notFoundPage("<x>"), /noindex[\s\S]*&lt;x&gt;/);
+});
+
+test("uploaded files and the seed edition carry X-Robots-Tag noindex; pages worth finding do not", () => {
+  for (const p of ["/files/" + "a".repeat(64), "/files/" + "a".repeat(64) + "/meta", "/projects/twin-primes/seed", "/projects/twin-primes/seed/research/x.md"]) assert.ok(noindexPath(p), p);
+  for (const p of ["/", "/files", "/projects/twin-primes", "/projects/twin-primes/return/7", "/projects/twin-primes/papers/a", "/projects/twin-primes/research-routes/3", "/projects/twin-primes/docs/research/OUTCOMES.md", "/projects/twin-primes/seedling"]) assert.ok(!noindexPath(p), p);
 });

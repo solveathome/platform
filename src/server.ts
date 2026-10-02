@@ -31,7 +31,7 @@ import { perIp } from "./lib/ratelimit.js";
 import { pathGuard } from "./lib/guards.js";
 import { responseCache } from "./lib/cache.js";
 import { shareMeta, SITE_DESCRIPTION } from "./lib/share.js";
-import { jsonLd, notFoundPage, ORGANIZATION, WEBSITE } from "./lib/seo.js";
+import { jsonLd, noindexPath, notFoundPage, ORGANIZATION, WEBSITE } from "./lib/seo.js";
 import { seo } from "./routes/seo.js";
 import { visualizations, visualizationsRoot } from "./routes/visualizations.js";
 
@@ -64,6 +64,7 @@ app.use(responseCache([/^\/projects\/?$/, /^\/projects\/[a-z0-9-]+\/(board|activ
 app.use("/assets", express.static(join(PUBLIC_DIR, "assets"), { index: false, maxAge: "1h", setHeaders: (res) => { if ((res as any).req?.query?.v) res.setHeader("Cache-Control", "public, max-age=31536000, immutable"); } }));
 // The API answers on the same URLs as the pages; a JSON body is never a search result (#sah-seo-optimize).
 app.use((_req, res, next) => { const json = res.json.bind(res); res.json = ((body: any) => { res.setHeader("X-Robots-Tag", "noindex"); return json(body); }) as any; next(); });
+app.use((req, res, next) => { if (noindexPath(req.path)) res.setHeader("X-Robots-Tag", "noindex"); next(); });
 app.use(seo);
 // Body limits by route (src/lib/body-limits.ts): big parsers only for a known token, and only for requests that carry a body.
 app.use("/projects/:slug/result", bigBody("50mb"));
