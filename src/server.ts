@@ -11,7 +11,7 @@ import { lane } from "./routes/lane.js";
 import { board, root } from "./routes/board.js";
 import { chat } from "./routes/chat.js";
 import { asks } from "./routes/asks.js";
-import { featuredProject, projectPartial } from "./lib/projects.js";
+import { featuredProject, projectPartial, listProjectConfigs } from "./lib/projects.js";
 import { dumps } from "./routes/dumps.js";
 import { terms } from "./routes/terms.js";
 import { papers } from "./routes/papers.js";
@@ -29,7 +29,7 @@ import { splash } from "./lib/splash.js";
 import "./lib/markdown.js";   // safe link and image schemes in every Markdown render
 import { perIp } from "./lib/ratelimit.js";
 import { pathGuard } from "./lib/guards.js";
-import { responseCache } from "./lib/cache.js";
+import { responseCache, warmCache } from "./lib/cache.js";
 import { shareMeta, SITE_DESCRIPTION } from "./lib/share.js";
 import { jsonLd, noindexPath, notFoundPage, ORGANIZATION, WEBSITE } from "./lib/seo.js";
 import { seo } from "./routes/seo.js";
@@ -58,7 +58,8 @@ app.use(perIp("all", Number(process.env.RATE_LIMIT_PER_MIN ?? 1200), 60_000));
 app.use("/auth", perIp("auth", 30, 60_000));
 app.use("/auth/github/callback", perIp("oauth-callback", 5, 60_000));
 // Anonymous aggregate pages are served from a 20 s cache: one Postgres pass per page per 20 s, however many people are looking.
-app.use(responseCache([/^\/projects\/?$/, /^\/projects\/[a-z0-9-]+\/(board|activity|standings|leaderboard|who|chat|papers|sequences|lanes|questions|timeline)\/?$/, /^\/projects\/[a-z0-9-]+\/?$/, /^\/leaderboard\/?$/, /^\/credit\/?$/]));
+// Past 20 s the last copy is served while it rebuilds in the background (src/lib/cache.ts): no visitor waits for the rebuild.
+app.use(responseCache([/^\/dumps\/?$/, /^\/projects\/?$/, /^\/projects\/[a-z0-9-]+\/(board|activity|standings|leaderboard|who|chat|papers|sequences|lanes|questions|timeline)\/?$/, /^\/projects\/[a-z0-9-]+\/?$/, /^\/leaderboard\/?$/, /^\/credit\/?$/]));
 
 // Assets are referenced with ?v=, bumped whenever the file changes, so a versioned URL is immutable: a year, and no revalidation.
 app.use("/assets", express.static(join(PUBLIC_DIR, "assets"), { index: false, maxAge: "1h", setHeaders: (res) => { if ((res as any).req?.query?.v) res.setHeader("Cache-Control", "public, max-age=31536000, immutable"); } }));
@@ -134,7 +135,17 @@ migrate().then(async () => {
   setInterval(() => { flushFileEffects().catch(error => console.error("publication retry:", error)); }, 30000).unref();
   // Announcements (#sah-discord-announcer): scan and send once a minute; off unless a project turns it on, ANNOUNCE_ENABLED=0 stops it.
   setInterval(() => { announceTick().catch(error => console.error("announce:", error)); }, 60_000).unref();
-  const srv = app.listen(port, () => console.log(`solveathome on :${port}`));
+  const srv = app.listen(port, () => {
+    console.log(`solveathome on :${port}`);
+    // What every visitor fetches: the project page and board, and the standings the home and project pages ask for by default
+    // (public/assets/home.js, project-community.js), with the exact query strings, since the cache keys on the full URL.
+    const html = "text/html", json = "application/json";
+    warmCache(Number(port), [{ url: "/dumps", accept: html }, ...listProjectConfigs().flatMap(({ slug }) => {
+      const base = `/projects/${encodeURIComponent(slug)}`;
+      return [{ url: base, accept: html }, { url: `${base}/board`, accept: html }, { url: `${base}/standings?window=all&limit=10`, accept: json },
+        { url: `${base}/standings?window=30d&limit=10&sort=points`, accept: json }, { url: `${base}/standings?window=7d&limit=10&sort=points`, accept: json }];
+    })]);
+  });
   // A deploy replaces the container: finish in-flight requests (a 50 MB result upload among them) before going.
   process.on("SIGTERM", () => { console.log("SIGTERM: draining"); srv.close(() => process.exit(0)); setTimeout(() => process.exit(0), 15_000).unref(); });
 }).catch((e) => { console.error("migration failed; not starting:", e?.stack ?? e); process.exit(1); });
