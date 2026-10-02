@@ -15,7 +15,7 @@ const {TERMS_VERSION} = await import('../src/lib/terms.ts');
 const {job} = await import('../src/routes/job.ts');
 const {asks} = await import('../src/routes/asks.ts');
 const {board} = await import('../src/routes/board.ts');
-const {backlogFor, selectJob, allocation, discoveryDue, discoveryShare, workConcentration, ROUTE_REPEAT_PENALTY} = await import('../src/lib/scheduler.ts');
+const {backlogFor, selectJob, selectRequiredCorrection, allocation, discoveryDue, discoveryShare, workConcentration, ROUTE_REPEAT_PENALTY} = await import('../src/lib/scheduler.ts');
 const {parseCapabilities, matchingMetadata} = await import('../src/lib/agent-profile.ts');
 let server, base, uid, other, token, otherToken, pid, slug;
 const tag = `scheduler-${Date.now().toString(36)}`;
@@ -36,6 +36,7 @@ beforeEach(async () => {
   base = `http://127.0.0.1:${server.address().port}/projects/${slug}`;
 });
 afterEach(async () => {
+  await q(`DELETE FROM findings WHERE problem_id=$1`,[pid]);
   await q(`DELETE FROM asks WHERE problem_id=$1`,[pid]);
   await q(`DELETE FROM messages WHERE channel_id IN (SELECT id FROM channels WHERE problem_id=$1)`,[pid]);
   await q(`DELETE FROM channel_members WHERE channel_id IN (SELECT id FROM channels WHERE problem_id=$1)`,[pid]);
@@ -48,6 +49,33 @@ afterEach(async () => {
   await q(`DELETE FROM returns WHERE problem_id=$1`,[pid]);
   for (const table of ['project_roles','sessions','pool','channels']) await q(`DELETE FROM ${table} WHERE problem_id=$1`,[pid]);
   await q(`DELETE FROM problems WHERE id=$1`,[pid]);
+});
+
+test('concurrent one-task launches reserve bounded trusted repairs despite an overallocated consolidation portfolio',async()=>{
+  await q(`INSERT INTO project_roles(problem_id,user_id,role,note) VALUES ($1,$2,'trusted','repair fixture')`,[pid,uid]);
+  await q(`UPDATE problems SET research_allocation='{"discover":0.3,"pursue":0.4,"rescue":0.15,"consolidate":0.15}' WHERE id=$1`,[pid]);
+  // Historical consolidation made every live-batch registration choose pursuit.
+  const past=await one(`INSERT INTO sessions(id,problem_id,user_id,model,started_at,ended_at) VALUES ($1,$2,$3,'claude-fable-5-1',now(),now()) RETURNING id`,[randomUUID(),pid,uid]);
+  const done=await queued({type:'audit'});await q(`UPDATE jobs SET status='accepted' WHERE id=$1`,[done.id]);
+  await q(`INSERT INTO assignment_attempts(id,job_id,problem_id,session_id,user_id,model,tier,purpose,scheduled,budget_hours,reason,research_stage,status) VALUES ($1,$2,$3,$4,$5,'claude-fable-5-1',1,'work',true,95,'{}','consolidate','completed')`,[randomUUID().replaceAll('-',''),done.id,pid,past.id,uid]);
+  const author=await one(`INSERT INTO returns(problem_id,type,user_id,model,provider,report_md,transcript,status) VALUES ($1,'audit',$2,'claude-opus-5','anthropic','Established correction.','t','accepted') RETURNING id`,[pid,other]);
+  for(let i=0;i<5;i++){
+    const j=await queued({type:'audit'});await q(`UPDATE jobs SET min_tier=1,requires_trust=true WHERE id=$1`,[j.id]);
+    await q(`INSERT INTO findings(problem_id,path,return_id,note,scope,job_id) VALUES ($1,$2,$3,'Correct the false clause.','before_circulation',$4)`,[pid,`paper/repair-${i}.md`,author.id,j.id]);
+  }
+  for(let i=0;i<15;i++)await queued({type:'explore',purpose:'discovery'});
+  const agent={problemId:pid,slug,sessionId:'fixture-reserve',uid,tier:1,model:'claude-fable-5-1',provider:'anthropic',trusted:true,granted:true,lane:null,cpuHours:4,ramGb:8,hasGpu:false,disk:1,maxHours:2,reviewStreak:0,capabilities:{}};
+  for (const override of [{trusted:false},{tier:2},{directionId:1},{jobId:1}]) assert.equal(await selectRequiredCorrection({...agent,...override}),null);
+  await q(`UPDATE findings SET scope='advisory' WHERE problem_id=$1`,[pid]);
+  assert.equal(await selectRequiredCorrection(agent),null,'advisory findings never receive reserved repair work');
+  await q(`UPDATE findings SET scope='before_circulation' WHERE problem_id=$1`,[pid]);
+
+  const assignments=await Promise.all(Array.from({length:10},()=>start()));
+  const repairs=assignments.filter(a=>a.assignment_reason.policy==='required correction');
+  assert.equal(repairs.length,3,'one reserve at positions 1, 5 and 9, shared by concurrent launches');
+  assert.equal(new Set(assignments.map(a=>a.job_id)).size,10);
+  assert.ok(repairs.every(a=>a.type==='audit'&&a.assignment_reason.required_correction));
+  assert.ok(assignments.filter(a=>!repairs.includes(a)).every(a=>a.type==='explore'));
 });
 after(async () => {
   await new Promise(r=>server.close(r));

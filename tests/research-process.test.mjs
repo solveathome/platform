@@ -811,3 +811,41 @@ test('an unanswered fresh step with no linked returns since it was set goes out 
   const p=await start('author');assert.equal(p.research_stage,'pursue');assert.equal(Number(p.job_id),Number(held.id));
   assert.equal((await q(`SELECT 1 FROM jobs WHERE step_check_of=$1`,[held.id])).length,0);
 });
+
+test('an unchanged-step check on a shared-premise route cannot trigger checks of checks or create a new citation bridge',async()=>{
+  const {stepCandidates,holdForStepCheck,retireRedundantStepChecks}=await import('../src/lib/research.ts');
+  const premise=await otherRoute();
+  const r=ok(await submit('author',{research:{...proposal(),depends_on:[premise.return_id]}})),a=await start();
+  const setter=ok(await submit('astra',{research:{route_id:r.research.route_id,outcome:'promising',evidence_md:'An uncovered question.',next_step:step(),depends_on:[premise.return_id]}},a));
+  const linked=await otherRoute({depends_on:[premise.return_id]});
+  const held=await pursuitOf(r.research.route_id);
+  // First check consumes the real new evidence, then has nothing new to repeat.
+  const check=await start('author');assert.equal(check.research_stage,'first_look');
+  const cert=ok(await submit('author',{research:{route_id:r.research.route_id,outcome:'promising',evidence_md:'The linked proposal does not answer this step.',next_step:step(),depends_on:[premise.return_id,linked.return_id]}},check));
+  const unrelated=await otherRoute();
+  const foreignJob=await one(`INSERT INTO jobs(problem_id,type,title,brief_md,research_stage,research_route_id,step_check_of,research_source_return_id,status) VALUES ($1,'explore','Comparison','Read the record.','first_look',$2,$3,$4,'returned') RETURNING id`,[pid,unrelated.research.route_id,held.id,held.research_source_return_id]);
+  const foreign=await one(`INSERT INTO returns(problem_id,type,user_id,model,provider,report_md,transcript,status,research_route_id,job_id,research,cites) VALUES ($1,'explore',$2,'claude-opus-5','anthropic','Still open.','t','recorded',$3,$4,$5,$6) RETURNING id`,[pid,users.author.id,unrelated.research.route_id,foreignJob.id,JSON.stringify({outcome:'promising',next_step:step()}),JSON.stringify({returns:[premise.return_id]})]);
+  // Model a queued legacy repeat that was triggered only by this comparison.
+  const heldRow=await one(`SELECT * FROM jobs WHERE id=$1`,[held.id]);
+  await q(`UPDATE returns SET research=jsonb_set(research,'{outcome}','"progress"') WHERE id=$1`,[foreign.id]);
+  const repeat=await holdForStepCheck(heldRow);assert.ok(repeat);
+  await q(`UPDATE returns SET research=jsonb_set(research,'{outcome}','"promising"') WHERE id=$1`,[foreign.id]);
+  assert.deepEqual(await stepCandidates(pid,r.research.route_id,cert.return_id),[]);
+  await retireRedundantStepChecks(pid);
+  assert.equal((await one(`SELECT status FROM jobs WHERE id=$1`,[repeat.id])).status,'expired');
+  const pursuit=await start('author');assert.equal(pursuit.research_stage,'pursue');assert.equal(Number(pursuit.job_id),Number(held.id));
+  // Even a promising comparison is material when it proposes a different experiment.
+  await q(`UPDATE returns SET research=jsonb_set(research,'{next_step,question}','"A different uncertainty?"') WHERE id=$1`,[foreign.id]);
+  assert.ok((await stepCandidates(pid,r.research.route_id,cert.return_id)).some(x=>Number(x.id)===Number(foreign.id)));
+  // A genuine changed-step finding by the same check remains a material candidate.
+  await q(`UPDATE returns SET research=jsonb_set(research,'{outcome}','"progress"') WHERE id=$1`,[foreign.id]);
+  assert.ok((await stepCandidates(pid,r.research.route_id,cert.return_id)).some(x=>Number(x.id)===Number(foreign.id)));
+});
+
+test('a human-requested pursuit is not replaced by an automatic age-based step check',async()=>{
+  const {r}=await activeRoute(),held=await pursuitOf(r.research.route_id);
+  await q(`UPDATE jobs SET created_at=now()-interval '4 days' WHERE id=$1`,[held.id]);
+  const a=ok(await call(`/start?share=25&job=${held.id}`,{who:'author',launch:randomUUID()}));
+  assert.equal(a.research_stage,'pursue');assert.equal(Number(a.job_id),Number(held.id));
+  assert.equal(a.assignment_reason.policy,'requested job');
+});

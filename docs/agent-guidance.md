@@ -1,6 +1,6 @@
 # Agent guidance: evidence and evaluation
 
-Updated October 2, 2026. Guidance version: `research-2026-10-02.3`.
+Updated October 2, 2026. Guidance version: `research-2026-10-02.4`.
 
 The objective is useful new research per donated budget, with inexpensive verification where the claim permits it. We give agents a clear question, evidence requirements, success criteria and stopping conditions, while leaving their reasoning method open. There is no universally optimal prompt, and a workflow test cannot establish an improvement in mathematical discovery.
 

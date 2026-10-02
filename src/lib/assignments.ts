@@ -155,8 +155,10 @@ export async function claimAssignment(row: any, session: any, userId: number, ti
     expires_at = now() + ($4::int * interval '1 minute'), attempt_id = $5 WHERE id = $1 AND status = 'queued' RETURNING *`,
     [row.id, userId, session.id, ABANDON_AFTER_MIN, id]);   // the only clock is silence: every request of the session moves this forward (auth.ts)
   if (!assigned) throw new Error("assignment candidate was no longer queued");
-  await q(`INSERT INTO assignment_attempts (id, job_id, problem_id, session_id, user_id, model, tier, purpose, scheduled, budget_hours, reason,research_stage,department_id,run_id,direction_snapshot)
-    VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)`,
+  // Claim time follows the project lock: transaction start times can precede an
+  // earlier grant under concurrent launches, breaking shared reserve ordering.
+  await q(`INSERT INTO assignment_attempts (id, job_id, problem_id, session_id, user_id, model, tier, purpose, scheduled, budget_hours, reason,research_stage,department_id,run_id,direction_snapshot,started_at)
+    VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,clock_timestamp())`,
     [id, row.id, row.problem_id, session.id, userId, session.model, tier, row.purpose ?? "work", scheduled, hours, JSON.stringify(reason), stageOf(row),session.department_id ?? null,session.run_id ?? null,session.direction_snapshot ? JSON.stringify(session.direction_snapshot) : null]);
   const updated = await one(`UPDATE sessions SET jobs = jobs + 1, last_seen = now(), last_type = $2,
     review_streak = CASE WHEN $2 IN ('review','audit','triage') THEN review_streak + 1 ELSE 0 END WHERE id = $1 RETURNING jobs`, [session.id, row.type]);

@@ -3,7 +3,7 @@ import {test} from 'node:test';
 
 // A transcript that still carries harness-written identifiers is not scrubbed (issue #28): Claude Code's signed `atis`
 // latch value and the account, organisation and bridge ids the brief names. Redacted values pass; opaque ones are named with their line.
-const {findHarnessId, findHomePath, redactHarnessIds} = await import('../src/lib/files.ts');
+const {findHarnessId, findHomePath, redactHarnessIds, checkUpload} = await import('../src/lib/files.ts');
 
 const atis = 'v1.5bd3062313744de1.NvQETbIz66ofBWZ7.8e9298b0.vPSkzMiroJKX_9f9LbjfP7Lv_BFf4saxqJz9JbsbbfUft-hIkVf9eTTFwHG8yQjACV8cU6MsaC4yhPQHBmfArV0WjW10uhR2RXP368DBNWetw35AaJI1JqnCV-27TkTNs3P8Q_feEtQxOg';
 const uuid = '0f9c2a1e-4d5b-4c6a-9e8f-1a2b3c4d5e6f';
@@ -12,6 +12,21 @@ test('an atis-latch line with its signed value is caught, with the line number',
   const t = `{"type": "message"}\n{"type": "atis-latch", "atis": "${atis}", "sessionId": "[REDACTED]"}\n`;
   assert.equal(findHarnessId(t), 'atis (line 2)');
   assert.equal(findHarnessId(t.replace(/": "/g, '":"')), 'atis (line 2)', 'compact JSON is caught too');
+});
+
+test('historical attempt and provider IDs are found inside nested escaped tool strings; redaction preserves usage', () => {
+  const attempt = '0123456789abcdef0123456789abcdef';
+  const line = JSON.stringify({type:'response_item',payload:{output:JSON.stringify({report_md:`Attempt\n\`${attempt}\`\nThe witness is 2+2=4.`,accountId:uuid})},usage:{input_tokens:12,output_tokens:7},run_id:'public-run-123',return_id:42});
+  assert.ok(findHarnessId(line));
+  assert.equal(checkUpload('evidence.jsonl',line).ok,false);
+  const redacted = redactHarnessIds(line);
+  assert.equal(redacted.n,2);assert.equal(findHarnessId(redacted.text),null);
+  assert.deepEqual(JSON.parse(redacted.text).usage,{input_tokens:12,output_tokens:7});
+  assert.equal(JSON.parse(redacted.text).run_id,'public-run-123');
+  assert.match(redacted.text,/2\+2=4/);
+  assert.equal(checkUpload('evidence.jsonl',redacted.text).ok,true);
+  assert.equal(findHarnessId(`Attempt \`${'a'.repeat(64)}\` is an artifact hash.`),null);
+  assert.equal(redactHarnessIds(redacted.text).n,0);
 });
 
 test('account, organisation and bridge ids left as UUIDs are caught; redacted ones pass', () => {
@@ -34,4 +49,12 @@ test('redactHarnessIds replaces the values in place and leaves the line valid JS
   assert.equal(findHarnessId(r.text), null);
   assert.deepEqual(JSON.parse(r.text), {type: 'atis-latch', atis: '[REDACTED]', ownerAccountUuid: '[REDACTED]', sessionId: '[REDACTED]'});
   assert.equal(redactHarnessIds('{"atis": "[REDACTED]"}').n, 0);
+});
+
+
+test('multiline historical attempt headers redact without dropping the following evidence', () => {
+  const text='Attempt\n`0123456789abcdef0123456789abcdef`\nThe measured witness is 17.';
+  const redacted=redactHarnessIds(text);
+  assert.equal(redacted.n,1);assert.equal(findHarnessId(redacted.text),null);
+  assert.match(redacted.text,/The measured witness is 17/);
 });

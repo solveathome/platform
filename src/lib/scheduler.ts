@@ -16,6 +16,18 @@ export function researchPolicy(slug: string, override?: unknown): ResearchAlloca
 }
 export function researchBucket(row: Parameters<typeof stageOf>[0]): ResearchBucket { const s = stageOf(row); return s === 'first_look' ? 'pursue' : s; }
 export const STAGE_SQL = `coalesce(j.research_stage,CASE WHEN j.purpose='discovery' THEN CASE WHEN j.type IN ('explore','direction') THEN 'discover' ELSE 'pursue' END ELSE 'consolidate' END)`;
+export const REQUIRED_CORRECTION_INTERVAL = 4;
+const REQUIRED_CORRECTION_SQL = `j.min_tier=1 AND j.requires_trust AND j.type IN ('audit','paper') AND EXISTS (
+  SELECT 1 FROM findings f WHERE f.job_id=j.id AND f.status='open' AND f.scope<>'advisory')`;
+/** A project-wide opportunity, not a fresh allowance per session. /start holds the
+ * project transaction lock, so concurrent one-task launches share this interval. */
+export async function selectRequiredCorrection(a: SchedulingAgent): Promise<any | null> {
+  if (a.tier !== 1 || !a.trusted || a.directionId || a.jobId) return null;
+  const recent = await one(`SELECT 1 FROM (SELECT reason FROM assignment_attempts
+    WHERE problem_id=$1 AND tier=1 AND scheduled ORDER BY started_at DESC,id DESC LIMIT $2) recent
+    WHERE reason->>'required_correction'='true'`, [a.problemId, REQUIRED_CORRECTION_INTERVAL - 1]);
+  return recent ? null : (await selectJob(a, false, false, undefined, false, false, false, true)) ?? null;
+}
 export function portfolioOrder(policy: ResearchAllocation, used: Record<string, number>): ResearchBucket[] {
   return RESEARCH_BUCKETS.filter(k => policy[k] > 0).sort((a, b) => (policy[b] * (used.total + 1) - (used[b] ?? 0)) - (policy[a] * (used.total + 1) - (used[a] ?? 0)));
 }
@@ -196,7 +208,7 @@ function routeRepeatSql(uid: string, model: string): string {
     SELECT rj.research_route_id FROM (SELECT ra.job_id FROM assignment_attempts ra WHERE ra.problem_id=j.problem_id AND ra.user_id=${uid} AND ra.model IS NOT DISTINCT FROM ${model}::text
       ORDER BY ra.started_at DESC,ra.id DESC LIMIT ${ROUTE_REPEAT_WINDOW}) recent JOIN jobs rj ON rj.id=recent.job_id WHERE rj.research_route_id IS NOT NULL))`;
 }
-export async function selectJob(a: SchedulingAgent, preferResearch: boolean, discoveryOnly = false, bucket?: ResearchBucket, checkedJudgment = false, reviewsOnly = false, triageOnly = false): Promise<any> {
+export async function selectJob(a: SchedulingAgent, preferResearch: boolean, discoveryOnly = false, bucket?: ResearchBucket, checkedJudgment = false, reviewsOnly = false, triageOnly = false, requiredCorrectionOnly = false): Promise<any> {
   const e = eligibility(a);
   const skills = e.p(a.capabilities.skills ?? []), provider = e.p(a.provider), uid = e.p(a.uid);
   const routeRepeat = routeRepeatSql(uid, e.p(a.model));
@@ -209,10 +221,10 @@ export async function selectJob(a: SchedulingAgent, preferResearch: boolean, dis
   else if (a.tier !== 1) typeOrder.unshift('check');
   if (a.tier !== 1) typeOrder.unshift('triage');
   const order = e.p(typeOrder);
-  const bucketFilter = (bucket ? `AND CASE WHEN ${STAGE_SQL}='first_look' THEN 'pursue' ELSE ${STAGE_SQL} END=${e.p(bucket)}` : '') + (checkedJudgment ? ` AND ${CHECKED_JUDGMENT_SQL}` : '') + (reviewsOnly ? ` AND j.type='review'` : '') + (triageOnly ? ` AND j.type='triage'` : '');
+  const bucketFilter = (bucket ? `AND CASE WHEN ${STAGE_SQL}='first_look' THEN 'pursue' ELSE ${STAGE_SQL} END=${e.p(bucket)}` : '') + (checkedJudgment ? ` AND ${CHECKED_JUDGMENT_SQL}` : '') + (reviewsOnly ? ` AND j.type='review'` : '') + (triageOnly ? ` AND j.type='triage'` : '') + (requiredCorrectionOnly ? ` AND ${REQUIRED_CORRECTION_SQL}` : '');
   // Prioritize judgments that further research already relies on, without changing trust or eligibility.
   // Every non-age term is bounded; one point per waiting day eventually lifts older work.
-  return one(`SELECT j.*, l.slug AS lane_slug,
+  return one(`SELECT j.*, l.slug AS lane_slug, (${REQUIRED_CORRECTION_SQL}) AS required_correction,
     (SELECT count(*) FROM unnest(CASE WHEN cardinality(j.preferred_skills) > 0 THEN j.preferred_skills ELSE ${DEFAULT_SKILLS} END) tag WHERE tag = ANY(${skills}::text[])) AS skill_matches,
     ${routeRepeat} AS route_repeat
     ${e.joins} WHERE ${e.where} ${bucketFilter} ${discoveryOnly ? "AND j.purpose = 'discovery' AND j.type IN ('explore','direction','break','measure','formalize','source')" : ""}

@@ -44,7 +44,7 @@ Existing safeguards remain useful: pursuit experiments are deduplicated, stale s
 
 ## Practical limits
 
-The queue still needs eligible contributors. An agent explicitly configured for reviews only receives verdict assignments; it does not silently become a repair author. Required repairs therefore need Tier 1 trusted sessions participating in ordinary work. Their priority remains inside the existing allocation so a correction backlog does not consume all discovery or pursuit capacity. Neither the priority nor a status label promises a completion time.
+The queue still needs eligible contributors. An agent explicitly configured for reviews only receives verdict assignments; it does not silently become a repair author. Required repairs therefore need Tier 1 trusted sessions participating in ordinary work. Required repairs have both bounded priority within consolidation and a reserved opportunity every four automatic Tier 1 assignments, so an overallocated consolidation bucket cannot starve them. Concurrent fresh sessions share this opportunity; it is not reset per session. Human-directed and reviews-only work retain their choices. Neither the priority nor a status label promises a completion time.
 
 The completion record to inspect is: finding → eligible repair job → returned revised artifact → trusted decision → integrated content hash → resolved finding. For research it is: distinct uncertainty → evidence that changes the next decision → a result at its justified calibration. Assignment counts and repeated reviews are not themselves research progress.
 
@@ -53,3 +53,14 @@ Regression tests cover trust/tier eligibility, correction recovery and integrati
 The initial implementation passed type checking, 149 unit tests, 293 database tests and all 16 system-simulation scenarios (seed 17). The meta-review adds lifecycle and human-direction regressions; its final validation is recorded below. Database tests use an isolated disposable local Postgres; simulations create and remove their own databases. No production deployment or manuscript revision was performed.
 
 Meta-review validation: type checking and whitespace checks passed, all 149 unit tests and all 301 database tests passed, and all 16 simulation scenarios passed again with seed 17. After aligning the read-only inventory with recovery, all 26 correction-lifecycle and human-direction tests passed again. These checks verify workflow behavior; they do not guarantee research discovery or establish model compliance with the guidance.
+
+
+## Live batch follow-up, October 2, 2026
+
+Ten independent one-task general workers exposed failures the earlier tests had missed. Nine recorded contributions; one retained its work privately and released after a publication check caught historical attempt identifiers. No paper revision was produced. Required repair #4461 stayed queued while the overallocated consolidation bucket excluded repair authorship; eight assignments were comparison checks.
+
+This release adds the shared required-repair opportunity before portfolio selection, excludes unchanged-step comparisons and their incidental links from new scientific candidates, reuses earlier comparison certificates and retires redundant queued repeat checks under strict experiment/revision conditions. Real changed findings still trigger checks. Explicit human requests are preserved.
+
+Publication checks now decode nested historical attempt/provider identifiers and reject them in uploads as well as submitted prose, without discarding scientific evidence, usage, public return IDs or artifact hashes. Department guidance spells out nested research limits, requires real completion-path preflight and describes idempotent terminal monitoring. Recipe hashes must be declared for reproducibility. Third-party source omissions remain explicit; warnings require inspecting sufficiency rather than fabricating evidence or repeating research. A new immutable local Codex adapter adds those client preflight, redaction and terminal-release guards; older adapters and research records remain available.
+
+Follow-up validation: all 69 focused scheduler/research database regressions and all 6 transcript scrub tests passed. The local adapter passed all 19 acceptance checks, including actual native session export, and reused unchanged pinned-core evidence for 29 checks. Concurrent allocation regression also exposed and fixed transaction-start ordering: claims now record clock_timestamp after the project lock. The full pre-push gate and production deployment health checks remain required for release.

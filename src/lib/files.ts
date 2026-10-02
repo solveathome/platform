@@ -46,21 +46,54 @@ export function findHomePath(text: unknown): string | null {
   return `${m[1]} (line ${line})`;
 }
 
-/** A harness-written identifier a scrub should have removed (issue #28): Claude Code's signed `atis` latch value, or an account, organisation or bridge id still carrying a UUID. Returns "<key> (line N)" or null. */
-const HARNESS_ID = /"(atis|ownerAccountUuid|ownerOrganizationUuid|bridgeSessionId|accountUuid|organizationUuid)"\s*:\s*"(?:v1\.[0-9a-f]{16}\.[A-Za-z0-9_.-]{8,}|[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})"/;
+const PRIVATE_ID_KEYS = 'atis|ownerAccountUuid|ownerOrganizationUuid|bridgeSessionId|accountUuid|organizationUuid|accountId|organizationId|organisationId|session_id|sessionId|thread_id|turn_id|attempt_id|attemptId';
+const PRIVATE_ID_VALUE = String.raw`(?:v1\.[0-9a-f]{16}\.[A-Za-z0-9_.-]{8,}|[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}|[0-9a-f]{32})`;
+const PRIVATE_KEY = new RegExp(`^(?:${PRIVATE_ID_KEYS})$`, 'i');
+const PRIVATE_VALUE = new RegExp(`^${PRIVATE_ID_VALUE}$`, 'i');
+const HARNESS_VALUE = new RegExp(`("(${PRIVATE_ID_KEYS})"\\s*:\\s*")${PRIVATE_ID_VALUE}(")`, 'gi');
+const HISTORICAL_ATTEMPT = /(\battempt\s*(?:[:=]\s*)?[`"']?)([0-9a-f]{32})(?![0-9a-f])/gi;
+/** Decode nested tool output, preserving original bytes when nothing changes. */
+function scrubIdentifiers(text: string): { text: string; n: number; first: string | null } {
+  let n = 0, first: string | null = null;
+  function strings(s: string, depth = 0): string {
+    if (depth < 20) {
+      try {
+        const decoded = JSON.parse(s), before = n, changed = walk(decoded, depth + 1);
+        return n === before ? s : JSON.stringify(changed);
+      } catch { /* prose or a JSONL block: redact labelled values */ }
+    }
+    return s.replace(HARNESS_VALUE, (_m, prefix, key, end) => { n++; first ??= key; return `${prefix}[REDACTED]${end}`; })
+      .replace(HISTORICAL_ATTEMPT, (_m, prefix) => { n++; first ??= 'attempt'; return `${prefix}[REDACTED]`; });
+  }
+  function walk(v: any, depth: number): any {
+    if (typeof v === 'string') return strings(v, depth);
+    if (Array.isArray(v)) return v.map(x => walk(x, depth));
+    if (v && typeof v === 'object') return Object.fromEntries(Object.entries(v).map(([k, value]) => {
+      if (PRIVATE_KEY.test(k) && typeof value === 'string' && PRIVATE_VALUE.test(value)) {
+        n++; first ??= k; return [k, '[REDACTED]'];
+      }
+      return [k, walk(value, depth)];
+    }));
+    return v;
+  }
+  return { text: strings(text), n, first };
+}
+/** Label-only diagnostics, including identifiers inside decoded JSON strings. */
 export function findHarnessId(text: unknown): string | null {
   const t = String(text ?? "");
-  const m = HARNESS_ID.exec(t);
-  if (!m) return null;
-  const line = t.slice(0, m.index).split("\n").length;
-  return `${m[1]} (line ${line})`;
+  for (const [i, line] of t.split('\n').entries()) {
+    const hit = scrubIdentifiers(line);
+    if (hit.first) return `${hit.first} (line ${i + 1})`;
+  }
+  const hit = scrubIdentifiers(t);
+  return hit.first ? `${hit.first} (line 1)` : null;
 }
 
 /** Replace every harness identifier value with [REDACTED], keeping the JSON line intact (the nightly scan and the one-off cleanup of Sep 11 2026). */
-const HARNESS_VALUE = /("(?:atis|ownerAccountUuid|ownerOrganizationUuid|bridgeSessionId|accountUuid|organizationUuid)"\s*:\s*")(?:v1\.[0-9a-f]{16}\.[A-Za-z0-9_.-]{8,}|[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})(")/g;
 export function redactHarnessIds(text: string): { text: string; n: number } {
-  let n = 0;
-  const out = String(text ?? "").replace(HARNESS_VALUE, (_m, a, b) => { n++; return `${a}[REDACTED]${b}`; });
+  const whole = scrubIdentifiers(String(text ?? ""));
+  let n = whole.n;
+  const out = whole.text.split('\n').map(line => { const r = scrubIdentifiers(line); n += r.n; return r.text; }).join('\n');
   return { text: out, n };
 }
 
@@ -74,6 +107,8 @@ export function checkUpload(name: string, content: string): Check {
   if (Buffer.byteLength(content) > MAX_BYTES) return { ok: false, error: `file exceeds ${MAX_BYTES} bytes` };
   if (CONTROL.test(content)) return { ok: false, error: "control characters found; text files only" };
   for (const [label, re] of SECRET_PATTERNS) if (re.test(content)) return { ok: false, error: `looks like it contains a secret (${label}); scrub it and retry` };
+  const identifier = findHarnessId(content);
+  if (identifier) return { ok: false, error: `private execution identifier (${identifier}); redact it and retry` };
   if (needsSourceReview(content)) return { ok: false, error: `${SOURCE_REVIEW_MESSAGE} The check tripped on this line: "${sourceReviewHit(content) ?? "?"}". Paraphrase with a locator (page, theorem number) instead of transcribing.` };
   return { ok: true, ext, name: clean };
 }
