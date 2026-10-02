@@ -6,7 +6,7 @@ import assert from "node:assert/strict";
 process.env.BASE_URL = "https://example.org";
 const { shareMeta } = await import("../src/lib/share.ts");
 const { page } = await import("../src/lib/page.ts");
-const { jsonLd, plainDescription, demoteHeadings, crumbsFromHtml, notFoundPage, noindexPath } = await import("../src/lib/seo.ts");
+const { jsonLd, plainDescription, demoteHeadings, crumbsFromHtml, notFoundPage, noindexPath, readerDoc } = await import("../src/lib/seo.ts");
 
 test("a page without a path gets no canonical and no og:url, never the home page's", () => {
   const html = shareMeta({ title: "Asks" });
@@ -49,5 +49,13 @@ test("headings demote one level, closing tags included; crumbs read back from HT
 
 test("uploaded files and the seed edition carry X-Robots-Tag noindex; pages worth finding do not", () => {
   for (const p of ["/files/" + "a".repeat(64), "/files/" + "a".repeat(64) + "/meta", "/projects/twin-primes/seed", "/projects/twin-primes/seed/research/x.md"]) assert.ok(noindexPath(p), p);
-  for (const p of ["/", "/files", "/projects/twin-primes", "/projects/twin-primes/return/7", "/projects/twin-primes/papers/a", "/projects/twin-primes/research-routes/3", "/projects/twin-primes/docs/research/OUTCOMES.md", "/projects/twin-primes/seedling"]) assert.ok(!noindexPath(p), p);
+  for (const p of ["/", "/files", "/projects/twin-primes", "/projects/twin-primes/return/7", "/projects/twin-primes/papers/a", "/projects/twin-primes/research-routes/3", "/projects/twin-primes/seedling"]) assert.ok(!noindexPath(p), p);
+});
+
+test("working files under /docs/ carry noindex and leave the sitemap; the reader-facing documents and the /docs index do not", () => {
+  for (const p of ["/projects/twin-primes/docs/research/OUTCOMES.md", "/projects/twin-primes/docs/research/history/staging/x.md", "/projects/twin-primes/docs/research", "/projects/twin-primes/docs/TODO.md", "/projects/twin-primes/docs/AGENTS.md",
+    "/projects/twin-primes/docs/paper/wall-note.md", "/projects/twin-primes/docs/paper/proposals/PROPOSALS.md", "/projects/twin-primes/docs/bench/README.md", "/projects/twin-primes/docs/attestation/EXTERNAL-SOURCES.md", "/projects/twin-primes/docs/data%20x.csv"]) assert.ok(noindexPath(p), p);
+  for (const p of ["/projects/twin-primes/docs", "/projects/twin-primes/docs/", "/projects/twin-primes/docs/README.md", "/projects/twin-primes/docs/PUBLICATION-POLICY.md", "/projects/twin-primes/docs/MIRROR.md", "/projects/twin-primes/docs/attestation/README.md"]) assert.ok(!noindexPath(p), p);
+  for (const f of ["README.md", "MIRROR.md", "PUBLICATION-POLICY.md", "attestation/README.md"]) assert.ok(readerDoc(f), f);
+  for (const f of ["research/OUTCOMES.md", "paper/wall-note.md", "TODO.md"]) assert.ok(!readerDoc(f), f);
 });

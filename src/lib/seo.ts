@@ -10,7 +10,21 @@ export const abs = (path: string) => /^https?:/.test(path) ? path : `${BASE()}${
 /** Working files that are never a search result (Oct 2 2026, #mba-gsc-issues-fix: Search Console showed most impressions on them):
  * uploaded files at /files/<sha> (raw text has no <meta>, so the header is the only way) and the frozen seed edition. Not in
  * robots.txt, so a crawler can still fetch them and read the noindex. */
-export const noindexPath = (path: string) => /^\/files\/./.test(path) || /^\/projects\/[^/]+\/seed(?:\/|$)/.test(path);
+export const noindexPath = (path: string) => /^\/files\/./.test(path) || /^\/projects\/[^/]+\/seed(?:\/|$)/.test(path) || workingDoc(path);
+
+/** The documents under /projects/<slug>/docs/ written for a reader; every other file there (research notes, logs, state, staging,
+ * paper drafts that have their own /papers/ page, proposals, tool READMEs, agent instructions) is a working file and noindexed
+ * (Oct 2 2026, client, #mba-gsc-issues-fix: Google indexed them for junk queries; overrides #sah-seo-optimize's "list every
+ * published document"). The /docs index itself stays indexable. The sitemap lists only these. */
+const READER_DOCS = new Set(["README.md", "PUBLICATION-POLICY.md", "MIRROR.md", "attestation/README.md"]);
+export const readerDoc = (rel: string) => READER_DOCS.has(rel);
+function workingDoc(path: string): boolean {
+  const m = /^\/projects\/[^/]+\/docs\/(.+)$/.exec(path);
+  if (!m) return false;
+  let rel = m[1];
+  try { rel = decodeURIComponent(rel); } catch { /* a raw path from a renderer: already decoded */ }
+  return !readerDoc(rel.replace(/\/+$/, ""));
+}
 
 /** One JSON-LD block. `<` is escaped so no string in the data can close the script element. */
 export function jsonLd(data: unknown): string {

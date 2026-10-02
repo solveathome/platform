@@ -1,7 +1,7 @@
 /**
  * robots.txt and sitemap.xml (Sep 25 2026, #sah-seo-optimize). The sitemap lists every public page worth finding: the projects,
  * their papers, research routes, results, the published documents of the body of work, and the people with work on the record.
- * Operational pages (jobs, asks, who holds what, file attachments, history, the seed edition) carry noindex and are left out.
+ * Operational pages (jobs, asks, who holds what, file attachments, history, the seed edition, working files under /docs/) carry noindex and are left out.
  * It is built from the database on request and held for ten minutes, so it stays current without a job to run.
  */
 import { Router } from "express";
@@ -9,7 +9,7 @@ import { join } from "node:path";
 import { q } from "../db/index.js";
 import { ROOT } from "../lib/paths.js";
 import { readPublication, publishedDocument } from "../lib/document-publication.js";
-import { BASE } from "../lib/seo.js";
+import { BASE, readerDoc } from "../lib/seo.js";
 
 export const seo = Router();
 const REPOS = process.env.DOCS_DIR ?? join(ROOT, "data", "repos");
@@ -46,7 +46,7 @@ export async function sitemapUrls(): Promise<Url[]> {
     for (const x of await q(`SELECT slug, updated_at FROM papers WHERE problem_id = $1 ORDER BY id`, [p.id])) urls.push({ loc: `${P}/papers/${x.slug}`, lastmod: x.updated_at });
     for (const x of await q(`SELECT id, updated_at FROM research_routes WHERE problem_id = $1 ORDER BY id`, [p.id])) urls.push({ loc: `${P}/research-routes/${x.id}`, lastmod: x.updated_at });
     const root = join(REPOS, p.slug), publication = readPublication(root);
-    if (publication) for (const f of Object.keys(publication.files).sort()) if (f.endsWith(".md") && publishedDocument(root, f, publication)) urls.push({ loc: `${P}/docs/${f}` });
+    if (publication) for (const f of Object.keys(publication.files).sort()) if (readerDoc(f) && publishedDocument(root, f, publication)) urls.push({ loc: `${P}/docs/${f}` });
     for (const x of await q(`SELECT r.id, GREATEST(r.created_at, (SELECT max(d.decided_at) FROM return_decisions d WHERE d.return_id = r.id)) AS lastmod FROM returns r WHERE r.problem_id = $1 ORDER BY r.id`, [p.id])) urls.push({ loc: `${P}/return/${x.id}`, lastmod: x.lastmod });
   }
   // People with work on the record; a handle with none is served with noindex, so it is not listed.
