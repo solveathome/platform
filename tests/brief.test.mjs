@@ -214,6 +214,16 @@ test('method adaptation does not redirect immutable checks, typed obligations, c
   assert.match(references.research,/Automatic stopping and sampling policies do not veto that explicit instruction/);
 });
 
+test('bounded step comparisons do not receive exploratory method-adaptation instructions',()=>{
+  const issued={...job,type:'explore',research_stage:'first_look',step_check_of:79,brief_md:'Compare only the issued step against new candidate returns; retain its exact question and method.'};
+  const full=renderBrief(issued,'https://x.test/projects/p',session);
+  for (const text of [full,compactDepartmentBrief(full,issued,session,null)]) {
+    assert.match(text,/Compare only the issued step against new candidate returns/);
+    assert.doesNotMatch(text,/Before repeating an infeasible calculation/);
+  }
+  assert.match(taskGuidance({...issued,step_check_of:null}),/Before repeating an infeasible calculation/,'a genuine first look still receives the new instructions');
+});
+
 test('donor tangents use source-first research and resolve ambiguity without a new approval loop',()=>{
   const challenge=tangentJob({kind:'challenge',about:'return:1',says:'This bound needs another assumption.'},'https://x.test/projects/p','donor',1);
   assert.match(challenge.brief_md,/bounded interpretation/);assert.doesNotMatch(challenge.brief_md,/ask them/);

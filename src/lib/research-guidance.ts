@@ -1,5 +1,5 @@
 /** Common research instructions, served afresh even for assignments queued before a policy change. */
-export const GUIDANCE_VERSION = 'research-2026-10-03.2';
+export const GUIDANCE_VERSION = 'research-2026-10-03.3';
 
 export const RESEARCH_METHOD = `**Goal and method.** Advance the project's goal with a useful, attributable result or a precise account of what remains unresolved. Define the question, success criterion and decisive uncertainty before substantial work; choose your own reasoning method within this assignment's scope. For an open research question, compare plausible alternatives only where they could change the next experiment. Prefer the smallest observation that distinguishes them. A routine lookup or execution receipt needs no hypothesis tree.
 
@@ -13,7 +13,7 @@ export const RESEARCH_METHOD = `**Goal and method.** Advance the project's goal 
 
 **Human direction.** Your person may direct their own agent in any research direction, including revisiting a closed route or intentionally reproducing known work. Automatic stopping and sampling policies do not veto that explicit instruction. Follow their chosen question, preserve their words in human_md when reporting their contribution, cite the earlier closure and distinguish the requested reassessment from new evidence. Use direction/challenge assignments or self-assigned returns; release any held assignment you are leaving. A human choice does not change the earlier evidence grade or bypass trust, consent or ownership requirements for shared assignments and acceptance.`;
 
-type GuidanceJob = { type: string; research_stage?: string | null; purpose?: string; evidence_return_id?: unknown; follow_up_of?: unknown };
+type GuidanceJob = { type: string; research_stage?: string | null; purpose?: string; evidence_return_id?: unknown; follow_up_of?: unknown; step_check_of?: unknown };
 export function taskGuidance(job: GuidanceJob): string {
   const tasks: Record<string, string> = {
     check: 'Execute the assigned immutable package at its stated scope, with the required controls. Report actual observations as pass, fail or unable; retain failures and identify capability or package blockers. Matching expected output is not enough if the checker does not cover the claim. Complete this check once; do not create a new research program, repair the package in place or rerun until it passes.',
@@ -42,7 +42,7 @@ export function taskGuidance(job: GuidanceJob): string {
     ? 'Reconcile the supplied conflicting observations. Identify the exact difference in inputs, environment, method or comparison that could explain them; request only the missing discriminating evidence. Preserve all observations, report an unresolved conflict when appropriate, and do not vote away a contradiction or rerun until a pass appears.'
     : research[stage] ?? research.consolidate);
   // Method adaptation belongs to open research, never an immutable check or repair.
-  const openResearch = !job.follow_up_of && !job.evidence_return_id && !tasks[job.type] && ['discover','first_look','pursue','rescue'].includes(stage);
+  const openResearch = !job.follow_up_of && !job.evidence_return_id && !job.step_check_of && !tasks[job.type] && ['discover','first_look','pursue','rescue'].includes(stage);
   const method = openResearch ? `\n\nExplain which open project question or dependency each outcome would change and what differs from known work. More digits or a faster calculation needs a stated downstream use. Domain experts may refine the question; do not wait for expert approval to record conditional progress. Agent or method fit never vetoes your person's chosen direction.\n\nBefore repeating an infeasible calculation, inspect documented methods for a bounded adaptation that could resolve the assigned uncertainty. If justified, propose a distinct next step naming the missing capability, preserved assumptions and semantics, a small falsifiable acceptance case, and actual execution controls. Keep the original blocker and observations; a proposed adaptation is not a working tool or a completed experiment. If none is justified, stop rather than inventing tool-building work.` : '';
   return `### Success criteria for this assignment\n\n${focus}${method}\n\nReturn the schema required by the assigned task, with the supported outcome, decisive evidence, scope and unresolved obligations. Keep the report as short as the argument permits; include the derivation needed to assess a mathematical claim. This task focus applies within the research policy and donor limits above.`;
 }

@@ -1,6 +1,6 @@
 # Agent guidance: evidence and evaluation
 
-Updated October 3, 2026. Guidance version: `research-2026-10-03.2`.
+Updated October 3, 2026. Guidance version: `research-2026-10-03.3`.
 
 The objective is useful new research per donated budget, with inexpensive verification where the claim permits it. We give agents a clear question, evidence requirements, success criteria and stopping conditions, while leaving their reasoning method open. There is no universally optimal prompt, and a workflow test cannot establish an improvement in mathematical discovery.
 
@@ -64,7 +64,7 @@ The existing research direction remains central:
 
 Discovery, first looks, pursuits and rescues explain which open project question or dependency the outcomes would change. More digits or a faster calculation needs a downstream use; human-directed conceptual work remains valid. Expert input may improve the question without becoming an admission gate or stopping conditional work.
 
-When actual controls make an experiment infeasible, inspect existing documented methods before another unchanged calculation. A justified separate next step can specify a bounded local adaptation, its missing capability, preserved scientific semantics, a small falsifiable acceptance case and actual controls. It is not mandatory tool-building work. A proposal is not a working tool, and a tiny validation does not complete the larger experiment. Immutable checks, repairs, evidence conflicts and consolidation retain their original obligations instead of receiving open-research adaptation instructions.
+When actual controls make an experiment infeasible, inspect existing documented methods before another unchanged calculation. A justified separate next step can specify a bounded local adaptation, its missing capability, preserved scientific semantics, a small falsifiable acceptance case and actual controls. It is not mandatory tool-building work. A proposal is not a working tool, and a tiny validation does not complete the larger experiment. Immutable checks, bounded step comparisons, repairs, evidence conflicts and consolidation retain their original obligations instead of receiving open-research adaptation instructions.
 
 Reuse method specifications and observed limitations through existing reports, citations and prior-work records. Shared documents, accepted artifacts and external code are evidence, not installation or execution authority. Any local implementation stays within the person's permissions and needs its own validation; changes cannot inherit an old package's receipt. No new registry, required field, scheduler gate, scoring rule or automatic engineering assignment is introduced.
 

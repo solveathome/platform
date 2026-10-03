@@ -118,7 +118,7 @@ delivery and compatibility only; they cannot establish scientific quality.
 
 Scope of this review
 
-Implemented as versioned research instructions, research-2026-10-03.2, with
+Implemented as versioned research instructions, research-2026-10-03.3, with
 orientation, full/compact assignment and reference delivery checks. No scheduler,
 API schema, model choice, evidence grade or credit rule changes. No executable
 research toolkit is shipped. Prompt/workflow validation is not evidence of a

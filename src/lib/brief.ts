@@ -8,7 +8,7 @@ import { GUIDANCE_VERSION, PRIOR_WORK_FIRST, RESEARCH_METHOD, taskGuidance } fro
 import { FRAMEWORK_GUIDANCE_VERSION, FRAMEWORK_JOB_GUIDANCE, REPAIR_JOB_GUIDANCE } from "./workspace-guidance.js";
 
 export type JobRow = {
-  attempt_id?: string; origin_key?: string | null; purpose?: string; research_stage?: string | null; evidence_return_id?: unknown; follow_up_of?: unknown; assignment_reason?: { policy?: string; skill_matches?: number };
+  attempt_id?: string; origin_key?: string | null; purpose?: string; research_stage?: string | null; evidence_return_id?: unknown; follow_up_of?: unknown; step_check_of?: unknown; assignment_reason?: { policy?: string; skill_matches?: number };
   id: number; type: string; title: string; brief_md: string; git_ref: string;
   compute_hint: Record<string, unknown>; budget_hours: string | number; release_count?: number; last_release_note?: string | null; lane_slug?: string | null; repo_url: string; expires_at?: string | null;
   prior_claims?: Array<{ id: number; handle: string; model: string | null; created_at: string }>;   // claims posted for this job by earlier holders (issue #5)
