@@ -17,6 +17,7 @@ import { hit } from "../lib/ratelimit.js";
 import * as E from "../lib/email.js";
 import { preview } from "../lib/email-update.js";
 import { send } from "../lib/postmark.js";
+import * as tpl from "../lib/email-template.js";
 
 export const email = Router();
 const BASE = () => (process.env.BASE_URL ?? "http://localhost:8600").replace(/\/+$/, "");
@@ -51,7 +52,8 @@ async function sendConfirmation(userId: number, address: string): Promise<{ sent
   if (hit(`email-confirm:${userId}`, 5, 3600_000).over) return { sent: false, reason: "Five confirmation emails in an hour is the limit. Try again later." };
   const link = `${BASE()}/email/confirm?t=${encodeURIComponent(E.confirmToken(userId, address))}`;
   const text = `Confirm this address for solveathome updates:\n${link}\n\nThe link works for 48 hours. If you did not ask for this, ignore it: nothing is sent to an address until it is confirmed.`;
-  const html = `<p>Confirm this address for solveathome updates:</p><p><a href="${esc(link)}">Confirm my address</a></p><p style="color:#666">The link works for 48 hours. If you did not ask for this, ignore it: nothing is sent to an address until it is confirmed.</p>`;
+  const html = tpl.shell({ title: "Confirm your email", preheader: "One click and your agent's results start arriving.", eyebrow: "Confirm your email", footerWhy: "You get this because this address was typed on solveathome.org. If that was not you, ignore it.", footerLinks: [[`${BASE()}/settings#email`, "Email settings"]],
+    body: tpl.hero({ eyebrow: "One click", head: "Confirm this address for your solveathome updates", why: "The link works for 48 hours. Nothing is sent to an address until it is confirmed, and you never get more than one email a day.", href: link, cta: "Confirm my address" }) });
   // The one email outside the one-a-day cap (decision 11): the person asked for it a second ago, and it carries nothing else.
   const r = await send({ to: address, subject: "Confirm your email for solveathome", text, html, stream: "transactional", tag: "confirm" });
   if (!r.ok) console.log(`email: confirmation for user ${userId} not sent (${r.reason})${process.env.POSTMARK_SERVER_TOKEN ? "" : `; dev link: ${link}`}`);
@@ -126,7 +128,7 @@ email.get("/me/email/preview", optionalAuth, async (req, res) => {
   const wd = /^[1-7]$/.test(String(req.query.weekday ?? "")) ? Number(req.query.weekday) : undefined;
   const p = await preview(req.user!.id, wd);
   if (!p) { res.type("text/html").send(`<!doctype html><meta charset="utf-8"><title>No email today</title><body style="font:15px/1.5 sans-serif;max-width:600px;margin:40px auto"><p><b>No email would go out right now.</b> Nothing new happened to your work since your last email, and an update is only sent on a day with news${wd === 1 ? " (or, on Mondays, a week with activity)" : ""}.</p><p><a href="/settings#email">Back to settings</a></p></body>`); return; }
-  res.type("text/html").send(p.html.replace(/<div style="max-width:600px/, () => `<p style="max-width:600px;margin:0 auto 18px;font:13px sans-serif;color:#666">Preview, not sent. Subject: <b>${esc(p.subject)}</b></p><div style="max-width:600px`));
+  res.type("text/html").send(p.html.replace(/<body([^>]*)>/, (m) => `${m}<p style="max-width:600px;margin:0 auto;padding:18px 16px 0;font:13px/1.5 -apple-system,Helvetica,Arial,sans-serif;color:#6a6963">Preview, not sent. Subject: <b>${esc(p.subject)}</b></p>`));
 });
 
 /** GET /email/confirm?t= : the confirmation link. */

@@ -19,6 +19,7 @@ import { BASE_POINTS_SQL } from "./standings.js";
 import { creditText } from "./display-name.js";
 import { prefsOf, unsubToken, type Prefs, type UnsubAction } from "./email.js";
 import { send, letterFromAddress } from "./postmark.js";
+import * as tpl from "./email-template.js";
 
 const BASE = () => (process.env.BASE_URL ?? "http://localhost:8600").replace(/\/+$/, "");
 export const SEND_HOUR = 8;
@@ -323,63 +324,102 @@ export async function compose(userId: number, opts: { weekday: number; day: stri
   return { edition: d.edition, subject: "", lead, asks, rest: others.slice(0, LIST_MAX), more: Math.max(0, others.length - LIST_MAX), stats: d.edition === "letter" ? null : s, letters: d.letters, items: [...d.items, ...d.letters], quietSince: quiet, offerLetter, prefs };
 }
 
+/** The small label beside a line in the list, and the eyebrow over the lead. */
+export function labelOf(it: Item): string {
+  const f = it.facts ?? {};
+  switch (it.kind) {
+    case "record": return f.what === "revision" ? "In the record" : f.what === "route" ? "Route closed" : "Announced";
+    case "first": return "First result";
+    case "breakthrough": return "It held";
+    case "accepted": return "Accepted";
+    case "cited": return "Built on";
+    case "milestone": return "Milestone";
+    case "rank": return "Rank";
+    case "verdict": return f.status === "contested" ? "Contested" : "Not accepted";
+    case "queue": return "To review";
+    case "ask": return "Question";
+    default: return "";
+  }
+}
+
 /** Text and HTML for a composed email. Every link carries ?e=<outbox id> so a click is counted against this email. */
 export async function render(c: Composed, userId: number, outboxId: number): Promise<{ subject: string; text: string; html: string; unsubscribe: string }> {
   const x = await context(c, outboxId);
   const subject = subjectOf(c, x);
   const u = (a: UnsubAction) => `${BASE()}/email/u/${unsubToken(userId, a)}`;
-  const T: string[] = [], H: string[] = [];
-  const p = (html: string, text: string) => { H.push(`<p style="margin:0 0 14px">${html}</p>`); T.push(text, ""); };
-  const a = (path: string, label: string) => `<a href="${esc(x.link(path))}" style="color:#111">${esc(label)}</a>`;
-  const h = (title: string) => { H.push(`<h2 style="font-size:15px;margin:26px 0 8px;letter-spacing:.02em;text-transform:uppercase;color:#555">${esc(title)}</h2>`); T.push(title.toUpperCase(), ""); };
-  if (c.quietSince && c.lead) p(`<i>Your agent was last seen on ${esc(day(c.quietSince))}. While it was away:</i>`, `Your agent was last seen on ${day(c.quietSince)}. While it was away:`);
+  const me = await one<any>(`SELECT handle FROM users WHERE id = $1`, [userId]);
+  const page = `/@${me?.handle ?? ""}`;
+  const T: string[] = [], B: string[] = [];
+  let preheader = "";
+  const quiet = c.quietSince && c.lead ? `Your agent was last seen on ${day(c.quietSince)}. While it was away:` : "";
+  if (quiet) T.push(quiet, "");
   if (c.lead) {
     const d = describe(c.lead, x);
-    H.push(`<p style="margin:0 0 8px;font-size:19px;line-height:1.35"><b>${esc(d.head)}</b></p>`); T.push(d.head);
-    p(`${esc(d.why)} ${a(d.path, "See it →")}`, `${d.why}\n${x.link(d.path)}`);
+    T.push(d.head, `${d.why}\n${x.link(d.path)}`, "");
+    preheader = d.why;
+    B.push(tpl.hero({ eyebrow: labelOf(c.lead), head: d.head, why: d.why, href: x.link(d.path), cta: c.lead.kind === "ask" ? "Answer" : c.lead.kind === "record" && c.lead.facts?.what === "revision" ? "See the change" : "See it", note: quiet || undefined }));
   } else if (c.stats && c.edition === "weekly") {
     const s = c.stats;
-    p(`<b>Your agent made ${n(s.returns7.made)} return${s.returns7.made === 1 ? "" : "s"} and ${n(s.agent.reviews)} review${s.agent.reviews === 1 ? "" : "s"} this week.</b>${s.pending ? ` ${n(s.pending)} ${s.pending === 1 ? "is" : "are"} waiting on review, worth up to ${n(s.pending_points)} points if accepted.` : ""}`,
-      `Your agent made ${s.returns7.made} returns and ${s.agent.reviews} reviews this week.${s.pending ? ` ${s.pending} waiting on review, worth up to ${s.pending_points} points if accepted.` : ""}`);
+    const head = `Your agent made ${n(s.returns7.made)} return${s.returns7.made === 1 ? "" : "s"} and ${n(s.agent.reviews)} review${s.agent.reviews === 1 ? "" : "s"} this week.`;
+    const why = s.pending ? `${n(s.pending)} ${s.pending === 1 ? "is" : "are"} waiting on review, worth up to ${n(s.pending_points)} points if accepted.` : "Here is where it stands.";
+    T.push(`Your agent made ${s.returns7.made} returns and ${s.agent.reviews} reviews this week.${s.pending ? ` ${s.pending} waiting on review, worth up to ${s.pending_points} points if accepted.` : ""}`, "");
+    preheader = why;
+    B.push(tpl.hero({ eyebrow: "Your week", head, why, href: x.link(page), cta: "Your page" }));
   }
-  if (c.offerLetter) p(`Want the monthly letter too? It's one email a month about what the whole project moved. ${a("/settings#email", "Turn it on")}`, `Want the monthly letter too? ${x.link("/settings#email")}`);
+  if (c.offerLetter) {
+    B.push(tpl.spacer(20), tpl.paragraph(`Want the monthly letter too? It's one email a month about what the whole project moved. <a href="${esc(x.link("/settings#email"))}" style="color:inherit;text-decoration:underline">Turn it on</a>`));
+    T.push(`Want the monthly letter too? ${x.link("/settings#email")}`, "");
+  }
   if (c.asks.length) {
-    h("Needs your answer");
-    for (const it of c.asks) { const d = describe(it, x); p(`${esc(d.head)} ${esc(d.why)} ${a(d.path, "Answer →")}`, `${d.head} ${d.why}\n${x.link(d.path)}`); }
+    T.push("NEEDS YOUR ANSWER", "");
+    const asks = c.asks.map((it) => { const d = describe(it, x); T.push(`${d.head} ${d.why}\n${x.link(d.path)}`, ""); return { head: d.head, why: d.why, href: x.link(d.path) }; });
+    B.push(tpl.askBlock(asks));
   }
   if (c.rest.length) {
-    h(c.edition === "weekly" ? "Also this week" : "Also since your last email");
-    H.push(`<ul style="margin:0 0 14px;padding-left:20px">`);
-    for (const it of c.rest) { const d = describe(it, x); H.push(`<li style="margin:0 0 6px">${a(d.path, d.head)}</li>`); T.push(`- ${d.head}  ${x.link(d.path)}`); }
-    if (c.more) { const me = await one<any>(`SELECT handle FROM users WHERE id = $1`, [userId]); H.push(`<li style="margin:0 0 6px">${a(`/@${me?.handle ?? ""}`, `and ${c.more} more on your page`)}</li>`); T.push(`- and ${c.more} more on your page`); }
-    H.push(`</ul>`); T.push("");
+    const title = c.edition === "weekly" ? "Also this week" : "Also since your last email";
+    T.push(title.toUpperCase(), "");
+    const lines = c.rest.map((it) => { const d = describe(it, x); T.push(`- ${d.head}  ${x.link(d.path)}`); return { label: labelOf(it), head: d.head, href: x.link(d.path) }; });
+    if (c.more) T.push(`- and ${c.more} more on your page`);
+    T.push("");
+    B.push(tpl.rows(title, lines, c.more ? { label: `and ${c.more} more on your page`, href: x.link(page) } : undefined));
   }
   if (c.stats?.project) {
-    const s = c.stats, r = s.rank30;
-    h(c.edition === "weekly" ? "Your week in numbers" : "Your stats");
+    const s = c.stats, r = s.rank30, r7 = s.returns7, ag = s.agent;
+    const title = c.edition === "weekly" ? "Your week in numbers" : "Your stats";
     const lines: Array<[string, string]> = [];
     lines.push([`Points <b>${n(s.points)}</b> (+${n(s.points_since)} since your last email, +${n(s.points_7d)} this week)`, `Points ${n(s.points)} (+${n(s.points_since)} since your last email, +${n(s.points_7d)} this week)`]);
-    if (s.pending) lines.push([`Pending: <b>${n(s.pending)}</b> return${s.pending === 1 ? "" : "s"}, worth up to ${n(s.pending_points)} if accepted`, `Pending: ${s.pending} returns, worth up to ${s.pending_points} if accepted`]);
-    if (r.rank) {
-      const nb = [r.above ? `@${r.above.handle} ${n(r.above.points)}` : "", `you ${n(r.me)}`, r.below ? `@${r.below.handle} ${n(r.below.points)}` : ""].filter(Boolean).join(" · ");
-      lines.push([`Rank, 30 days: <b>#${r.rank}</b>${s.rank7 ? ` · 7 days: #${s.rank7}` : ""} <span style="color:#666">(${esc(nb)})</span>`, `Rank, 30 days: #${r.rank}${s.rank7 ? ` · 7 days: #${s.rank7}` : ""} (${nb})`]);
-    }
-    const r7 = s.returns7;
-    if (r7.made) lines.push([`Returns this week: ${n(r7.made)} made, ${n(r7.accepted)} accepted, ${n(r7.rejected)} not accepted, ${n(r7.pending)} pending`, `Returns this week: ${r7.made} made, ${r7.accepted} accepted, ${r7.rejected} not accepted, ${r7.pending} pending`]);
-    if (s.routes.result || s.routes.active) lines.push([`Routes: ${n(s.routes.result)} reached a result, ${n(s.routes.active)} open`, `Routes: ${s.routes.result} reached a result, ${s.routes.active} open`]);
-    const ag = s.agent;
-    if (!ag.returns && !ag.reviews) lines.push([`Your agent made no returns or reviews this week${ag.last_seen ? `; last seen ${esc(day(ag.last_seen))}` : ""}`, `Your agent made no returns or reviews this week${ag.last_seen ? `; last seen ${day(ag.last_seen)}` : ""}`]);
-    else lines.push([`Your agent this week: ${n(ag.returns)} returns, ${n(ag.reviews)} reviews, ${tok(ag.tokens)} tokens, ${ag.cpu_hours.toFixed(1)} CPU hours${ag.last_seen ? `, last seen ${esc(day(ag.last_seen))}` : ""}`, `Your agent this week: ${ag.returns} returns, ${ag.reviews} reviews, ${tok(ag.tokens)} tokens, ${ag.cpu_hours.toFixed(1)} CPU hours${ag.last_seen ? `, last seen ${day(ag.last_seen)}` : ""}`]);
-    if (s.streak >= 2) lines.push([`${s.streak} weeks in a row with an accepted result`, `${s.streak} weeks in a row with an accepted result`]);
-    H.push(`<p style="margin:0 0 14px;line-height:1.7">${lines.map((l) => l[0]).join("<br>")}</p>`); T.push(...lines.map((l) => l[1]), "");
-    const me = await one<any>(`SELECT handle FROM users WHERE id = $1`, [userId]);
-    p(a(`/@${me?.handle ?? ""}`, "Your page →"), `Your page: ${x.link(`/@${me?.handle ?? ""}`)}`);
+    if (s.pending) lines.push(["", `Pending: ${s.pending} returns, worth up to ${s.pending_points} if accepted`]);
+    const nb = r.rank ? [r.above ? `@${r.above.handle} ${n(r.above.points)}` : "", `you ${n(r.me)}`, r.below ? `@${r.below.handle} ${n(r.below.points)}` : ""].filter(Boolean).join(" · ") : "";
+    if (r.rank) lines.push(["", `Rank, 30 days: #${r.rank}${s.rank7 ? ` · 7 days: #${s.rank7}` : ""} (${nb})`]);
+    if (r7.made) lines.push(["", `Returns this week: ${r7.made} made, ${r7.accepted} accepted, ${r7.rejected} not accepted, ${r7.pending} pending`]);
+    if (s.routes.result || s.routes.active) lines.push(["", `Routes: ${s.routes.result} reached a result, ${s.routes.active} open`]);
+    const agentLine = !ag.returns && !ag.reviews ? `Your agent made no returns or reviews this week${ag.last_seen ? `; last seen ${day(ag.last_seen)}` : ""}`
+      : `Your agent this week: ${ag.returns} returns, ${ag.reviews} reviews, ${tok(ag.tokens)} tokens, ${ag.cpu_hours.toFixed(1)} CPU hours${ag.last_seen ? `, last seen ${day(ag.last_seen)}` : ""}`;
+    lines.push(["", agentLine]);
+    if (s.streak >= 2) lines.push(["", `${s.streak} weeks in a row with an accepted result`]);
+    T.push(title.toUpperCase(), "", ...lines.map((l) => l[1]), "", `Your page: ${x.link(page)}`, "");
+    const cards: Array<{ value: string; label: string; sub?: string }> = [
+      { value: n(s.points), label: "Points", sub: `+${n(s.points_since)} since your last email` },
+      ...(r.rank ? [{ value: `#${r.rank}`, label: "Rank, 30 days", sub: s.rank7 ? `#${s.rank7} over 7 days` : undefined }] : []),
+      ...(s.pending ? [{ value: n(s.pending), label: "Waiting on review", sub: `worth up to ${n(s.pending_points)} if accepted` }] : []),
+      r7.made ? { value: n(r7.made), label: "Returns this week", sub: `${n(r7.accepted)} accepted · ${n(r7.rejected)} not · ${n(r7.pending)} pending` }
+        : { value: "0", label: "Returns this week", sub: ag.last_seen ? `agent last seen ${day(ag.last_seen)}` : undefined },
+    ];
+    const details = [
+      ...(nb ? [`Around you this month: ${esc(nb)}`] : []),
+      ...(s.routes.result || s.routes.active ? [`Routes: ${n(s.routes.result)} reached a result, ${n(s.routes.active)} open`] : []),
+      ...(ag.returns || ag.reviews ? [`Your agent this week: ${n(ag.returns)} returns, ${n(ag.reviews)} reviews, ${tok(ag.tokens)} tokens, ${ag.cpu_hours.toFixed(1)} CPU hours${ag.last_seen ? `, last seen ${esc(day(ag.last_seen))}` : ""}`] : []),
+      ...(s.streak >= 2 ? [`<b class="txt" style="color:inherit">${s.streak} weeks in a row</b> with an accepted result`] : []),
+    ];
+    B.push(tpl.statCards(title, cards, details, { href: x.link(page), label: "Your page →" }));
   }
   for (const l of c.letters) {
     const L = x.letters.get(Number(l.facts?.letter_id)); if (!L) continue;
-    if (c.edition !== "letter") h(L.kind === "project" ? "New on solveathome" : "From Chris this month");
-    if (c.edition !== "letter" || L.kind === "project") H.push(`<p style="margin:0 0 8px"><b>${esc(L.subject)}</b></p>`), T.push(L.subject);
-    H.push(`<div style="margin:0 0 14px">${marked.parse(String(L.body_md), { async: false }) as string}</div>`); T.push(String(L.body_md), "");
+    const title = c.edition !== "letter" ? (L.kind === "project" ? "New on solveathome" : "From Chris this month") : null;
+    if (title) T.push(title.toUpperCase(), "");
+    T.push(L.subject, String(L.body_md), "");
+    if (!preheader) preheader = cap(String(L.body_md).replace(/[*_#>`]/g, ""), 140);
+    B.push(c.edition === "letter" && !B.length ? tpl.letterBlock(null, L.subject, marked.parse(String(L.body_md), { async: false }) as string).replace(/^<tr><td style="height:\d+px[^]*?<\/tr>/, "") : tpl.letterBlock(title, L.subject, marked.parse(String(L.body_md), { async: false }) as string));
   }
   const why = c.edition === "letter"
     ? `You get this because you asked for ${c.letters.some((l) => l.kind === "project") ? "news of new projects" : "the monthly letter"}. We never send more than one email a day.`
@@ -387,9 +427,9 @@ export async function render(c: Composed, userId: number, outboxId: number): Pro
   const links: Array<[string, string]> = c.edition === "letter"
     ? [[u(c.letters.some((l) => l.kind === "letter") ? "newsletter-off" : "projects-off"), "Stop these"], [`${BASE()}/settings#email`, "All settings"]]
     : [...(c.prefs.updates === "daily" ? [[u("weekly"), "Weekly instead"] as [string, string]] : []), [u("updates-off"), "Off"], [`${BASE()}/settings#email`, "All settings"]];
-  H.push(`<p style="margin:28px 0 0;font-size:12px;color:#777;border-top:1px solid #ddd;padding-top:12px">${esc(why)} ${links.map(([href, label]) => `<a href="${esc(href)}" style="color:#777">${esc(label)}</a>`).join(" · ")}</p>`);
   T.push("--", why, ...links.map(([href, label]) => `${label}: ${href}`));
-  const html = `<!doctype html><html><body style="margin:0;padding:24px;background:#fff"><div style="max-width:600px;margin:0 auto;font:15px/1.5 -apple-system,Segoe UI,Helvetica,Arial,sans-serif;color:#111">${H.join("\n")}</div></body></html>`;
+  const eyebrow = `${c.stats?.project?.name ?? "solveathome"} · ${c.edition === "weekly" ? "Weekly edition" : c.edition === "letter" ? "Letter" : "Daily update"}`;
+  const html = tpl.shell({ title: subject, preheader: preheader || subject, eyebrow, body: B.join("\n"), footerWhy: why, footerLinks: links });
   const unsubscribe = c.edition === "letter" ? u(c.letters.some((l) => l.kind === "letter") ? "newsletter-off" : "projects-off") : u("updates-off");
   return { subject, text: T.join("\n"), html, unsubscribe };
 }
