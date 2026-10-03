@@ -169,9 +169,10 @@ export async function stats(userId: number, since: Date | null): Promise<Stats> 
 export function composeTimeItems(userId: number, s: Stats, prev: Stats | null, day: string): Item[] {
   const out: Item[] = [], pid = s.project?.id ?? null, now = new Date();
   const r = s.rank30.rank, pr = prev?.rank30?.rank ?? null;
-  if (r && pr && pr - r >= RANK_JUMP) out.push({ kind: "rank", score: SCORES.rank, news: true, problem_id: pid, facts: { from: pr, to: r }, happened_at: now, dedupe_key: `rank:${userId}:${day}` });
-  if (r === 1 && pr !== 1 && pr != null) out.push({ kind: "milestone", score: SCORES.milestone + 5, news: true, problem_id: pid, facts: { what: "first_place" }, happened_at: now, dedupe_key: `top1:${pid}:${userId}:${day}` });
-  else if (r && r <= 10 && pr != null && pr > 10) out.push({ kind: "milestone", score: SCORES.milestone, news: true, problem_id: pid, facts: { what: "top10" }, happened_at: now, dedupe_key: `top10:${pid}:${userId}:${day}` });
+  // Reaching #1 or the top 10 says the move itself; a plain jump of RANK_JUMP or more places is its own line.
+  if (r === 1 && pr !== 1 && pr != null) out.push({ kind: "milestone", score: SCORES.milestone + 5, news: true, problem_id: pid, facts: { what: "first_place", from: pr, to: r }, happened_at: now, dedupe_key: `top1:${pid}:${userId}:${day}` });
+  else if (r && r <= 10 && pr != null && pr > 10) out.push({ kind: "milestone", score: SCORES.milestone, news: true, problem_id: pid, facts: { what: "top10", from: pr, to: r }, happened_at: now, dedupe_key: `top10:${pid}:${userId}:${day}` });
+  else if (r && pr && pr - r >= RANK_JUMP) out.push({ kind: "rank", score: SCORES.rank, news: true, problem_id: pid, facts: { from: pr, to: r }, happened_at: now, dedupe_key: `rank:${userId}:${day}` });
   if (s.queue != null && prev?.queue != null && s.queue - prev.queue >= QUEUE_JUMP) out.push({ kind: "queue", score: SCORES.queue, news: true, problem_id: pid, facts: { waiting: s.queue }, happened_at: now, dedupe_key: `queue:${userId}:${day}` });
   return out;
 }
@@ -256,7 +257,7 @@ async function context(c: Composed, outboxId: number): Promise<Ctx> {
     slug: (pid) => (pid != null && projects.get(pid)?.slug) || fallback?.slug || "",
     projectName: (pid) => (pid != null && projects.get(pid)?.name) || fallback?.name || "the project",
     handleOfReturn, asks, letters,
-    link: (path) => `${BASE()}${path}${path.includes("?") ? "&" : "?"}e=${outboxId}`,
+    link: (path) => { const [p, hash] = path.split("#"); return `${BASE()}${p}${p.includes("?") ? "&" : "?"}e=${outboxId}${hash ? `#${hash}` : ""}`; },
   };
 }
 
@@ -274,8 +275,8 @@ export function describe(it: Item, x: Pick<Ctx, "slug" | "projectName" | "handle
     case "accepted": return { head: `Accepted: your agent's ${typeName(f.type)}${plus}`, why: `Trusted reviewers accepted return #${f.return_id}${f.final_rung ? ` as ${f.final_rung}` : ""}. It is now part of the project's record.`, path: ret(f.return_id) };
     case "cited": { const who = x.handleOfReturn.get(Number(f.by_return_id)) ?? "Another contributor"; return { head: `${who} built on your work${plus}`, why: `Their accepted return #${f.by_return_id} cites your return #${f.return_id}.`, path: ret(f.by_return_id ?? f.return_id) }; }
     case "milestone":
-      if (f.what === "top10") return { head: `You're in this month's top 10 on ${x.projectName(it.problem_id)}`, why: `Ranked by points over the last 30 days.`, path: `/projects/${slug}#contributors` };
-      if (f.what === "first_place") return { head: `You're #1 this month on ${x.projectName(it.problem_id)}`, why: `Ranked by points over the last 30 days.`, path: `/projects/${slug}#contributors` };
+      if (f.what === "top10") return { head: `You're in this month's top 10 on ${x.projectName(it.problem_id)}${f.to ? `: #${f.to}, up from #${f.from}` : ""}`, why: `Ranked by points over the last 30 days.`, path: `/projects/${slug}#contributors` };
+      if (f.what === "first_place") return { head: `You're #1 this month on ${x.projectName(it.problem_id)}${f.from ? `, up from #${f.from}` : ""}`, why: `Ranked by points over the last 30 days.`, path: `/projects/${slug}#contributors` };
       return { head: `You passed ${n(Number(f.points))} points on ${x.projectName(it.problem_id)}`, why: `Points are paid only on trusted acceptance.`, path: `/projects/${slug}#contributors` };
     case "rank": return { head: `Up ${f.from - f.to} places this month, to #${f.to}`, why: `From #${f.from} at your last email, in the 30-day standings.`, path: `/projects/${slug}#contributors` };
     case "verdict":
@@ -285,7 +286,7 @@ export function describe(it: Item, x: Pick<Ctx, "slug" | "projectName" | "handle
     case "ask": {
       const a = x.asks.get(Number(f.ask_id));
       const who = a ? creditText(a) : "Someone";
-      return { head: `${who} asks: "${cap(a?.body_md, 280)}"`, why: a?.expires_at ? `Open until ${day(a.expires_at)}.` : "", path: a?.return_id ? ret(a.return_id) : `/projects/${slug}` };
+      return { head: `${who} asks: "${cap(a?.body_md, 280)}"`, why: a?.expires_at ? `Open until ${day(a.expires_at)}.` : "", path: `/projects/${slug}/asks/${f.ask_id}` };
     }
     default: return { head: "", why: "", path: `/projects/${slug}` };
   }

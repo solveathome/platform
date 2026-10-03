@@ -102,7 +102,7 @@ test('items worked out at send time: a rank jump of 3 or more, entering the top 
   assert.deepEqual(U.composeTimeItems(5, s(12), s(15), '2026-10-03').map((i) => i.kind), ['rank']);
   assert.deepEqual(U.composeTimeItems(5, s(13), s(15), '2026-10-03'), []);
   assert.deepEqual(U.composeTimeItems(5, s(9), s(11), '2026-10-03').map((i) => i.facts.what ?? i.kind), ['top10']);
-  assert.deepEqual(U.composeTimeItems(5, s(1), s(5), '2026-10-03').map((i) => i.facts.what ?? i.kind), ['rank', 'first_place']);
+  assert.deepEqual(U.composeTimeItems(5, s(1), s(5), '2026-10-03').map((i) => i.facts.what ?? i.kind), ['first_place']);   // one line says the move
   assert.deepEqual(U.composeTimeItems(5, s(4, 10), s(4, 6), '2026-10-03').map((i) => i.kind), ['queue']);
   assert.deepEqual(U.composeTimeItems(5, s(4), null, '2026-10-03'), []);   // the first email compares with nothing
 });
