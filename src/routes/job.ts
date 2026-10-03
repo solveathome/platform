@@ -407,7 +407,7 @@ ${ENDED_LAUNCH_GUIDANCE}
   row.operational_deferrals = await deferralHistory(Number(row.id));
   row.handoffs = await handoffHistory(Number(row.id));
   row.brief_md += handoffBrief(row.handoffs);
-  if (row.operational_deferrals.length) row.brief_md += `\n\n## Prior assignment-fit checkpoints\n\nThese are source/execution limits, not mathematical refutations. Compare the current sources and controls cheaply before reopening work. ${row.operational_deferrals.map((d:any)=>`${d.kind}: ${d.evidence_md} Reopen when: ${d.reopen_when}`).join("\n\n")}`;
+  if (row.operational_deferrals.length) row.brief_md += `\n\n## Prior assignment-fit checkpoints\n\nThese are source/execution limits, not mathematical refutations. Compare the current sources and controls cheaply before reopening work. ${row.operational_deferrals.map((d:any)=>`${d.kind} (fit scope: ${d.fit_scope}): ${d.evidence_md} Reopen when: ${d.reopen_when}`).join("\n\n")}`;
   if (Number(row.release_count ?? 0) > 0) row.prior_claims = await q(`SELECT m.id, u.handle, m.model, m.created_at FROM messages m JOIN users u ON u.id = m.user_id WHERE m.job_id = $1 AND m.kind = 'claim' ORDER BY m.id`, [row.id]);
   if (row.research_route_id) row.brief_md += await researchBrief(Number(row.research_route_id));
   // A check worker reconstructs the package, so it gets the record in full; a reviewer gets the summary and the judgment asked, with the record one GET away.

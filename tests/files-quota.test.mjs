@@ -72,3 +72,18 @@ test('a content address of the wrong shape says so, and a well-formed unknown on
   const found = await fetch(`${base}/files/${real}`);
   assert.equal(found.status, 200);
 });
+
+test('a CommonJS research helper uploads and serves inert with its original module filename', async () => {
+  // Job3902's bounded regeneration helper had to disguise its .cjs name as .js.
+  // The extension controls Node's module mode; preserve it for later reproduction.
+  await q(`UPDATE files SET created_at=now()-interval '2 days' WHERE user_id=$1`,[uid]);
+  const name='bounded-reembed.cjs', content='// Question: reproduce the saved output hash without a new census.\nconst crypto = require("node:crypto");\nconsole.log(crypto.createHash("sha256").update("fixture").digest("hex"));\n';
+  const uploaded=await fetch(`${base}/files`,{method:'POST',headers:{authorization:`Bearer ${token}`,'content-type':'application/json',accept:'application/json'},body:JSON.stringify({name,content})});
+  assert.equal(uploaded.status,200,await uploaded.clone().text());
+  const receipt=await uploaded.json();
+  const stored=await one('SELECT name,ext FROM files WHERE sha256=$1',[receipt.sha256]);
+  assert.deepEqual(stored,{name,ext:'cjs'});
+  const served=await fetch(`${base}/files/${receipt.sha256}`);
+  assert.equal(served.status,200);assert.match(served.headers.get('content-type'),/^text\/plain/);
+  assert.equal(await served.text(),content,'the helper remains exact text, never server-executed');
+});

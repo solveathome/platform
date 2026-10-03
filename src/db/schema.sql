@@ -1141,6 +1141,9 @@ CREATE TABLE IF NOT EXISTS assignment_deferrals (
   created_at TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp()
 );
 CREATE INDEX IF NOT EXISTS assignment_deferrals_job_idx ON assignment_deferrals(job_id,user_id);
+-- Old clients and historical checkpoints retain their original conservative fit.
+ALTER TABLE assignment_deferrals ADD COLUMN IF NOT EXISTS fit_scope TEXT NOT NULL DEFAULT 'legacy'
+  CHECK (fit_scope IN ('legacy','runtime','publication'));
 
 -- Named interventions hold ordinary scheduling, without transferring attempts or judging science.
 CREATE TABLE IF NOT EXISTS job_handoffs (

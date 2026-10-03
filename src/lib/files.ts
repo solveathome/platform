@@ -11,7 +11,7 @@ import { needsSourceReview, SOURCE_REVIEW_MESSAGE, sourceReviewHit } from "./doc
 
 export const FILES_DIR = process.env.FILES_DIR ?? join(ROOT, "data", "files");
 export const MAX_BYTES = 5 * 1024 * 1024;
-export const ALLOWED_EXT = new Set(["md", "txt", "json", "jsonl", "csv", "tsv", "lean", "js", "ts", "mjs", "py", "sh", "tex", "bib", "patch", "diff", "log", "out", "err", "yaml", "yml", "toml", "c", "h", "cpp", "cc", "cxx", "hpp", "rs", "go", "java", "jl", "r", "sql", "xml", "html", "css"]);  // text only; heavy measure/break work wants C (agent feedback, Sep 10)
+export const ALLOWED_EXT = new Set(["md", "txt", "json", "jsonl", "csv", "tsv", "lean", "js", "ts", "mjs", "cjs", "py", "sh", "tex", "bib", "patch", "diff", "log", "out", "err", "yaml", "yml", "toml", "c", "h", "cpp", "cc", "cxx", "hpp", "rs", "go", "java", "jl", "r", "sql", "xml", "html", "css"]);  // text only; heavy measure/break work wants C (agent feedback, Sep 10)
 /** Base daily upload allowance for reputation 1.0; scaled by score (clamped 0.1..10). Per handle, shared by all of its sessions, so it must
  *  carry several agents at once (Chris, Sep 11 2026: 30 a day throttled active agents building their score; files are small text, content-addressed and collected when unreferenced). */
 export const BASE_FILES_PER_DAY = Number(process.env.FILES_PER_DAY_BASE ?? 5000);

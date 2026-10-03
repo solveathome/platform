@@ -485,6 +485,61 @@ test('generated index waits for co-origin source findings without erasing correc
   assert.ok(!(await selectJob({...agent,trusted:false,jobId:Number(j.id)},false)),'human override never weakens trust');
 });
 
+test('explicit runtime deferrals ignore publication changes and retain the original release and fit',async()=>{
+  const j=await queued({priority:10});
+  const capabilities={tools:['python3'],execution:{cpu_seconds:10,wall_seconds:20,publication_context_privacy:'export-v1'}};
+  const a=await start({capabilities});assert.equal(Number(a.job_id),Number(j.id));
+  const opts={method:'POST',session:a.session,attempt:a.attempt_id,body:{job_id:a.job_id,note:'Producer does not fit runtime limits',deferral:{kind:'execution',fit_scope:'runtime',evidence_md:'The producer has no resumable path within the process limit.',reopen_when:'A bounded substitute or relevant runtime control changes.'}}};
+  const receipt=ok(await call('/release',opts));assert.deepEqual(ok(await call('/release',opts)),receipt);
+  const stored=await one('SELECT * FROM assignment_deferrals WHERE job_id=$1',[j.id]);
+  assert.equal(stored.fit_scope,'runtime');assert.deepEqual(stored.session_fit[3],capabilities.execution);
+  const next={...capabilities,execution:{...capabilities.execution,publication_context_privacy:'export-v2'}};
+  const b=await start({capabilities:next});assert.notEqual(Number(b.job_id),Number(j.id));ok(await release(b));
+  const agent={problemId:pid,slug,sessionId:b.session,uid,tier:1,model:'claude-fable-5-1',provider:'anthropic',trusted:true,granted:true,lane:null,cpuHours:0,ramGb:0,hasGpu:false,disk:5,maxHours:2,reviewStreak:0,capabilities:next};
+  assert.ok(!await selectJob(agent,false),'unrelated publication update does not reopen runtime work');
+  assert.equal(Number((await selectJob({...agent,jobId:Number(j.id)},false)).id),Number(j.id),'explicit human direction still works');
+  await q(`UPDATE sessions SET capabilities=jsonb_set(capabilities,'{execution,cpu_seconds}','20') WHERE id=$1`,[b.session]);
+  assert.equal(Number((await selectJob(agent,false)).id),Number(j.id),'an actual runtime control change permits a focused check');
+  assert.deepEqual((await one('SELECT session_fit FROM assignment_deferrals WHERE id=$1',[stored.id])).session_fit,stored.session_fit,'the historical snapshot is never rewritten');
+  assert.deepEqual((await one('SELECT receipt FROM assignment_attempts WHERE id=$1',[a.attempt_id])).receipt,receipt,'no terminal release is resent or replaced');
+});
+
+test('publication deferrals reopen only for publication controls; old clients keep legacy matching',async()=>{
+  const capabilities={execution:{cpu_seconds:10,publication_context_privacy:'export-v1'}};
+  const j=await queued({priority:10});const a=await start({capabilities});
+  const body={job_id:a.job_id,note:'Export prerequisite',deferral:{kind:'execution',fit_scope:'publication',evidence_md:'The actual export fails its publication guard.',reopen_when:'A validated successor exporter is available.'}};
+  for(const fit_scope of ['invalid',{}]) {
+    assert.equal((await call('/release',{method:'POST',session:a.session,attempt:a.attempt_id,body:{...body,deferral:{...body.deferral,fit_scope}}})).status,400);
+  }
+  assert.equal((await one('SELECT status FROM assignment_attempts WHERE id=$1',[a.attempt_id])).status,'assigned');
+  assert.equal((await one('SELECT count(*) AS n FROM assignment_deferrals WHERE job_id=$1',[j.id])).n,'0');
+  assert.equal((await call('/release',{method:'POST',session:a.session,attempt:a.attempt_id,body:{...body,deferral:{...body.deferral,kind:'source'}}})).status,400,'source evidence never silently drops its runtime/access fit');
+  ok(await call('/release',{method:'POST',session:a.session,attempt:a.attempt_id,body}));
+  const b=await start({capabilities:{execution:{cpu_seconds:20,publication_context_privacy:'export-v1'}}});
+  assert.notEqual(Number(b.job_id),Number(j.id),'more CPU does not fix the exporter');ok(await release(b));
+  const agent={problemId:pid,slug,sessionId:b.session,uid,tier:1,model:'claude-fable-5-1',provider:'anthropic',trusted:true,granted:true,lane:null,cpuHours:0,ramGb:0,hasGpu:false,disk:5,maxHours:2,reviewStreak:0,capabilities:{}};
+  await q(`UPDATE sessions SET capabilities=jsonb_set(capabilities,'{execution,publication_context_privacy}','"export-v2"') WHERE id=$1`,[b.session]);
+  assert.equal(Number((await selectJob(agent,false)).id),Number(j.id),'validated publication change permits new ownership normally');
+  assert.equal((await one('SELECT fit_scope FROM assignment_deferrals WHERE job_id=$1',[j.id])).fit_scope,'publication');
+  await q(`UPDATE jobs SET status='expired' WHERE id=$1`,[j.id]);
+  const old=await queued({priority:10});const c=await start({capabilities});
+  ok(await call('/release',{method:'POST',session:c.session,attempt:c.attempt_id,body:{job_id:c.job_id,deferral:{kind:'execution',evidence_md:'Historical unclassified checkpoint.',reopen_when:'Compare the original controls and sources.'}}}));
+  assert.equal((await one('SELECT fit_scope FROM assignment_deferrals WHERE job_id=$1',[old.id])).fit_scope,'legacy');
+  const d=await start({capabilities:{execution:{cpu_seconds:10,publication_context_privacy:'export-v2'}}});
+  assert.equal(Number(d.job_id),Number(old.id),'legacy checkpoint behavior is not retroactively changed');
+});
+
+test('runtime scope treats omitted, empty and publication-only execution metadata as the same runtime',async()=>{
+  for(const [before,after] of [[{}, {execution:{publication_context_privacy:'export-v2'}}], [{execution:{publication_context_privacy:'export-v1'}}, {}], [{execution:{}}, {execution:{publication_context_privacy:'export-v2'}}]]) {
+    const j=await queued({priority:10});const a=await start({capabilities:before});assert.equal(Number(a.job_id),Number(j.id));
+    ok(await call('/release',{method:'POST',session:a.session,attempt:a.attempt_id,body:{job_id:a.job_id,deferral:{kind:'execution',fit_scope:'runtime',evidence_md:'Runtime limits are not yet declared and validated.',reopen_when:'Actual runtime controls or a bounded substitute become available.'}}}));
+    const b=await start({capabilities:after});assert.notEqual(Number(b.job_id),Number(j.id),'publication-only presence or absence is not a runtime change');ok(await release(b));
+    const agent={problemId:pid,slug,sessionId:b.session,uid,tier:1,model:'claude-fable-5-1',provider:'anthropic',trusted:true,granted:true,lane:null,cpuHours:0,ramGb:0,hasGpu:false,disk:5,maxHours:2,reviewStreak:0,capabilities:after};
+    assert.ok(!await selectJob(agent,false));
+    await q(`UPDATE jobs SET status='expired' WHERE problem_id=$1 AND status='queued'`,[pid]);
+  }
+});
+
 test('named handoffs isolate one task, preserve human direction and resume without judging science',async()=>{
   const target=await queued({type:'audit',priority:10});await q('UPDATE jobs SET min_tier=1,requires_trust=true WHERE id=$1',[target.id]);
   const alternate=await queued();
