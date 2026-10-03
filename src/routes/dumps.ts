@@ -1,10 +1,10 @@
 import { Router } from "express";
 import { wantsHtml } from "../lib/negotiate.js";
 import express from "express";
-import { existsSync, readFileSync } from "node:fs";
-import { join } from "node:path";
+import { closeSync, createReadStream, existsSync, readFileSync } from "node:fs";
+import { join, resolve, sep } from "node:path";
 import { ROOT } from "../lib/paths.js";
-import { dumpDays } from "../lib/dump.js";
+import { dumpDays, openDumpSnapshot } from "../lib/dump.js";
 import { shareMeta } from "../lib/share.js";
 import { jsonLd, BASE, ORGANIZATION } from "../lib/seo.js";
 
@@ -40,5 +40,33 @@ dumps.get("/dumps", (req, res) => {
     return;
   }
   res.json({ license: "CC BY 4.0", dumps: entries });
+});
+// Normalize exactly once, then scan/serve the same descriptor for full and
+// ranged JSONL downloads. Manifests and timestamp proofs remain untouched.
+dumps.use('/dumps',async(req,res,next)=>{
+  let name:string;try{name=decodeURIComponent(req.path);}catch{res.status(400).end();return;}
+  const path=resolve(DIR,'.'+name);
+  if(!path.startsWith(resolve(DIR)+sep) || !path.endsWith('.jsonl') || !existsSync(path)){next();return;}
+  let snapshot:Awaited<ReturnType<typeof openDumpSnapshot>>=null;
+  try {
+    snapshot=await openDumpSnapshot(path);
+    if(!snapshot){res.status(409).set('Cache-Control','no-store').json({error:'This unchanged snapshot requires publication privacy review. Its original bytes, manifest and timestamp proofs are preserved; use current public result views.'});return;}
+    const {fd,size,modified}=snapshot;
+    if(res.destroyed||req.aborted){closeSync(fd);snapshot=null;return;}
+    let start=0,end=size-1;
+    const range=req.header('range');
+    if(range){
+      const match=/^bytes=(\d*)-(\d*)$/.exec(range);
+      if(!match || !(match[1]||match[2])){closeSync(fd);snapshot=null;res.status(416).set('Content-Range',`bytes */${size}`).end();return;}
+      if(!match[1])start=Math.max(0,size-Number(match[2]));else start=Number(match[1]);
+      if(match[1]&&match[2])end=Math.min(end,Number(match[2]));
+      if(!Number.isSafeInteger(start)||!Number.isSafeInteger(end)||start>end||start>=size){closeSync(fd);snapshot=null;res.status(416).set('Content-Range',`bytes */${size}`).end();return;}
+      res.status(206).set('Content-Range',`bytes ${start}-${end}/${size}`);
+    }
+    res.set({'Content-Type':'application/x-ndjson','X-Content-Type-Options':'nosniff','Accept-Ranges':'bytes','Cache-Control':'public, max-age=3600','Last-Modified':modified.toUTCString(),'Content-Length':String(Math.max(0,end-start+1))});
+    if(req.method==='HEAD'||size===0){closeSync(fd);snapshot=null;res.end();return;}
+    const stream=createReadStream(path,{fd,start,end,autoClose:true});snapshot=null;
+    res.on('close',()=>stream.destroy());stream.on('error',()=>res.destroy());stream.pipe(res);
+  }catch{if(snapshot)closeSync(snapshot.fd);if(!res.headersSent)res.status(503).set('Cache-Control','no-store').json({error:'Snapshot publication check unavailable; original bytes are preserved.'});else res.destroy();}
 });
 dumps.use("/dumps", express.static(DIR, { index: false, maxAge: "1h", setHeaders: (res, p) => { if (p.endsWith(".jsonl")) res.type("application/x-ndjson"); if (p.endsWith(".ots")) res.type("application/octet-stream"); } }));

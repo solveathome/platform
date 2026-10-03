@@ -121,3 +121,9 @@ test('historical ownership diagnostics redact run labels and replacement/current
   assert.equal(checkUpload("diagnostic-run-0123456789abcdef.json", "{\"observation\":42}").ok,false);
   assert.equal(checkUpload("run-"+"a".repeat(64)+".json", "{\"observation\":42}").ok,true);
  });
+
+test('encoded private key/value tokens cannot bypass the harmless-text fast path',()=>{
+  const value=String.raw`{"\u0073ession_id":"\u0030\u0031\u0032\u0033\u0034\u0035\u0036\u0037\u0038\u0039abcdef0123456789abcdef","anchor":75053614359224265389282351}`;
+  assert.ok(findHarnessId(value));const clean=redactHarnessIds(value).text;
+  assert.ok(!findHarnessId(clean));assert.match(clean,/75053614359224265389282351/);
+});

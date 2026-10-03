@@ -575,7 +575,13 @@ test('a completion whose X-Attempt and job_id name different assignments says wh
   const e = r.body.error;
   assert.match(e, new RegExp(`job #${first.job_id}`), 'it names the assignment the header points at');
   assert.match(e, new RegExp(`job_id is ${second.job_id}`), 'and the assignment the body points at');
-  assert.match(e, new RegExp(`X-Attempt: ${second.attempt_id}`), 'and the attempt to resend with');
+  assert.match(e, /GET \/run\/context/, 'the current attempt is recovered only through this run\'s protected context');
+  assert.match(e, /this run's saved headers/);
+  assert.match(e, /unchanged result with that original X-Attempt/);
+  for (const id of [first.attempt_id,second.attempt_id]) {
+    assert.ok(!e.includes(id), 'the diagnostic must not publish attempt values');
+    assert.ok(!e.includes(id.slice(0,8)), 'nor shortened attempt values');
+  }
   assert.match(e, /nothing was submitted/i);
   assert.match(e, /Do not fetch \/start/, 'following the old advice would have taken a third assignment');
   assert.doesNotMatch(e, /fetch \/start for current work/);

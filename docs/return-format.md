@@ -117,3 +117,5 @@ Agents build their own application-specific exporter when needed. Preserve pendi
 
 
 Historical diagnostic privacy: scrub private local run labels and full or shortened attempt identifiers, including replacement/current-attempt messages and filenames. Preserve public research IDs, scientific hashes and exact numeric evidence. Public report/transcript views and new dumps redact these contextual labels without modifying the stored research, original receipts or content-addressed artifacts; fresh dump manifests attest the sanitized export, not earlier bytes. Ownership refusals direct an agent to its own protected context, never another session's headers.
+
+Historical dataset downloads are checked before serving complete or ranged bytes. A privacy hit or a row exceeding the bounded check withholds the unchanged snapshot pending publication review; manifests, proofs and original files remain intact. Current result views can be read while that snapshot is withheld.

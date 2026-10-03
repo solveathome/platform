@@ -67,7 +67,7 @@ if (typeof losslessJSON.rawJSON!=='function' || typeof losslessJSON.isRawJSON!==
   throw new Error('Lossless scientific JSON redaction requires a Node22 runtime with rawJSON and reviver source support');
 /** Decode nested tool output, preserving original bytes when nothing changes. */
 function scrubIdentifiers(text: string): { text: string; n: number; first: string | null } {
-  if (!/(?:atis|account|organisation|organization|session|thread|turn|attempt|run-)/i.test(text)) return {text,n:0,first:null};
+  if (!/(?:atis|account|organisation|organization|session|thread|turn|attempt|run-|\\u[0-9a-f]{4})/i.test(text)) return {text,n:0,first:null};
   let n = 0, first: string | null = null;
   function strings(s: string, depth = 0, parent?: string): string {
     if (depth < 20) {

@@ -102,7 +102,12 @@ test('a session refuses a different model, and a return must come from the sessi
   assert.match((await wrong.json()).error, /registered for model claude-opus-5/);
   const cross = await call('POST', '/result', {model: 'claude-fable-5-1', session: fable.session, body: {job_id: opus.job_id, report_md: 'x', transcript: 'prose', transcript_approved: true}});
   assert.equal(cross.status, 403);
-  assert.match((await cross.json()).error, /another of your sessions/);
+  const crossBody = await cross.json();
+  assert.match(crossBody.error, /held by another session/);
+  assert.match(crossBody.error, /GET \/run\/context/);
+  assert.match(crossBody.error, /Do not adopt another session's ownership or headers/);
+  assert.ok(!Object.hasOwn(crossBody,'held_by_session'));
+  for (const id of [opus.session,fable.session]) assert.ok(!JSON.stringify(crossBody).includes(id),'the refusal must not disclose a holding session');
   const own = await okJson(await call('POST', '/result', {model: 'claude-opus-5', session: opus.session, body: {job_id: opus.job_id, report_md: 'Found it on page 3 of the stated source.', transcript: 'prose transcript', transcript_approved: true}}));
   const ret = await one(`SELECT session FROM returns WHERE id = $1`, [own.return_id]);
   assert.equal(ret.session, opus.session);

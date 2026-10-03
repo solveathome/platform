@@ -10,10 +10,12 @@
  * beside it and moved in one by one, so a withheld export never partially replaces a published day. Proofs from an earlier run
  * of the same day (manifest.json.ots, superseded proofs, attestation.json) stay where they are; scripts/attest-dumps.sh re-stamps.
  */
+import { StringDecoder } from "node:string_decoder";
+import { createReadStream, fstatSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { closeSync, existsSync, mkdirSync, openSync, readdirSync, renameSync, rmSync, writeFileSync, writeSync } from "node:fs";
 import { join } from "node:path";
-import { redactHarnessIds } from "./files.js";
+import { findHarnessId, redactHarnessIds } from "./files.js";
 import { needsSourceReview } from "./document-publication.js";
 
 export const DUMP_TABLES: Record<string, string> = {
@@ -118,4 +120,43 @@ export async function writeDump(opts: { day: string; dumpDir: string; rows: RowS
 export function dumpDays(dumpDir: string): string[] {
   if (!existsSync(dumpDir)) return [];
   return readdirSync(dumpDir).filter((d) => /^\d{4}-\d{2}-\d{2}$/.test(d) && existsSync(join(dumpDir, d, "manifest.json"))).sort().reverse();
+}
+
+// Snapshot writers atomically rename staged files; scan and serve the same open
+// inode so a new snapshot cannot replace the bytes verified for this request.
+const privacyChecks = new Map<string,{stamp:string,proof:Promise<boolean>}>();
+let scanning=0;const waiting:Array<()=>void>=[];
+async function scanSlot():Promise<()=>void> {
+  if(scanning>=2){if(waiting.length>=16)throw new Error('Snapshot scan capacity');await new Promise<void>(resolve=>waiting.push(resolve));}
+  else scanning++;
+  return ()=>{const next=waiting.shift();if(next)next();else scanning--;};
+}
+const fileStamp=(st:ReturnType<typeof fstatSync>)=>[st.dev,st.ino,st.size,st.mtimeMs,st.ctimeMs].join(':');
+export async function openDumpSnapshot(path:string):Promise<{fd:number,size:number,modified:Date}|null> {
+  const fd=openSync(path,'r');let retained=false;
+  try {
+    const st=fstatSync(fd),stamp=fileStamp(st);const cached=privacyChecks.get(path);
+    let proof:Promise<boolean>;
+    if(cached?.stamp===stamp)proof=cached.proof;
+    else {
+      proof=(async()=>{
+        const release=await scanSlot();try {
+          const decoder=new StringDecoder('utf8');let pending='';
+          for await(const chunk of createReadStream(path,{fd,start:0,autoClose:false})) {
+            pending+=decoder.write(chunk as Buffer);let newline;
+            while((newline=pending.indexOf('\n'))>=0) {
+              const line=pending.slice(0,newline);pending=pending.slice(newline+1);
+              if(line.length>8*1024*1024 || findHarnessId(line))return false;
+            }
+            if(pending.length>8*1024*1024)return false;
+          }
+          pending+=decoder.end();return !findHarnessId(pending) && stamp===fileStamp(fstatSync(fd));
+        }finally{release();}
+      })();
+      privacyChecks.set(path,{stamp,proof});while(privacyChecks.size>64)privacyChecks.delete(privacyChecks.keys().next().value!);
+      proof.catch(()=>{if(privacyChecks.get(path)?.proof===proof)privacyChecks.delete(path);});
+    }
+    if(!await proof || stamp!==fileStamp(fstatSync(fd)))return null;
+    retained=true;return {fd,size:st.size,modified:st.mtime};
+  }finally{if(!retained)closeSync(fd);}
 }
