@@ -270,7 +270,7 @@ export async function guidanceDelivery(w) {
     assert.match(job.brief_md,/Build and validate missing essentials now/);
     assert.match(job.brief_md,/ALL issued attempts, including those with no submission/);
     assert.match(job.brief_md,/model\/thinking-level lookup/);assert.match(job.brief_md,/compatible pinned tools across folders/);
-    assert.match(job.brief_md,/If you cannot read your own session, follow runtime_lifecycle/);
+    assert.match(job.brief_md,/If your own session is inaccessible, checkpoint under runtime_lifecycle and ask the user to resume/);
     assert.match(job.brief_md,/automated extraction and submission scripts/);
     assert.match(job.brief_md,/detect agent\/model\/effort changes and preserve each turn's attribution/);
     assert.ok(job.brief_md.indexOf('## Your local research framework')<job.brief_md.indexOf('## The task'));
