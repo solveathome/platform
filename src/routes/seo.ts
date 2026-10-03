@@ -38,7 +38,7 @@ const loc = (path: string) => BASE() + path.split("/").map((seg) => seg.startsWi
 const day = (d: string | Date | null | undefined) => { if (!d) return undefined; const t = new Date(d); return Number.isNaN(t.getTime()) ? undefined : t.toISOString().slice(0, 10); };
 
 export async function sitemapUrls(): Promise<Url[]> {
-  const urls: Url[] = [{ loc: "/" }, { loc: "/terms" }, { loc: "/dumps" }];
+  const urls: Url[] = [{ loc: "/" }, { loc: "/terms" }, { loc: "/privacy" }, { loc: "/dumps" }];
   const projects = await q(`SELECT p.id, p.slug, (SELECT max(r.created_at) FROM returns r WHERE r.problem_id = p.id) AS last FROM problems p ORDER BY p.id`);
   for (const p of projects) {
     const P = `/projects/${p.slug}`;
