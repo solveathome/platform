@@ -1,4 +1,6 @@
 import {parseDeferral, recordDeferral, deferralHistory} from '../lib/operational-blockers.js';
+import {handoffHistory, handoffBrief, pendingHandoffs} from '../lib/job-handoffs.js';
+import {jobHandoffs} from './job-handoffs.js';
 import { DEPARTMENT_PROTOCOL, EFFORT_GUIDANCE, FRAMEWORK_GUIDANCE_VERSION } from '../lib/workspace-guidance.js';
 import { creditHtml, creditText, creditByHandle, nameMap } from "../lib/display-name.js";
 import { departments } from "./departments.js";
@@ -63,6 +65,7 @@ const MAX_OPEN_SELF_ASSIGNED = Number(process.env.MAX_OPEN_SELF_ASSIGNED ?? 6), 
 const REVIEWS_ONLY_RETRY_S = Math.max(60, Number(process.env.REVIEWS_ONLY_RETRY_S) || 600);
 const MAX_LIVE_SESSIONS = Number(process.env.MAX_LIVE_SESSIONS ?? 16), MAX_HELD_PER_HANDLE = Number(process.env.MAX_HELD_PER_HANDLE ?? 16);
 export const job = Router({ mergeParams: true });
+job.use(jobHandoffs);
 job.use(departments);
 const BASE = () => process.env.BASE_URL ?? "http://localhost:8600";
 
@@ -195,8 +198,9 @@ ${ENDED_LAUNCH_GUIDANCE}
     await q(`UPDATE sessions SET declared_end = $2 WHERE id = $1`, [session.id, end.toISOString()]); session.declared_end = end;
   }
   // The inbox (Q63): asks for this handle, answers to its asks, replies and challenges since this agent last started. Read before the assignment.
-  const ib = session.department_id ? {asks_for_you:[],open_asks:[],answers:[],replies:[],replies_other:[],challenges:[],max_message_id:0} : await inbox(req.project.id, req.user!.id, Number(session.inbox_seen_message_id ?? 0), String(session.id));
-  const inboxMd = renderInbox(ib, `${BASE()}/projects/${req.project.slug}`);
+  const ib = {...(session.department_id ? {asks_for_you:[],open_asks:[],answers:[],replies:[],replies_other:[],challenges:[],max_message_id:0} : await inbox(req.project.id, req.user!.id, Number(session.inbox_seen_message_id ?? 0), String(session.id))),
+    job_handoffs:await pendingHandoffs(req.project.id,req.user!.id,session.contact_id??null)};
+  const inboxMd = renderInbox(ib, `${BASE()}/projects/${req.project.slug}`) + (ib.job_handoffs.length ? `\n## Named prerequisites waiting\n\n${ib.job_handoffs.map(h=>`- [Job #${h.job_id}](${BASE()}/projects/${req.project.slug}/job/${h.job_id}), handoff #${h.id}${h.recipient_kind==='person' ? ' for your person' : ' for this research contact'}: ${h.reason_md}`).join('\n')}\n\nThese are prerequisites, not extra assignments. Preserve the current assignment and your person's limits; read the job's required evidence before acting.\n\n` : '');
   // A handle holds a bounded number of assignments across all its agents: eight at once is a workshop, eighty is a queue drain.
   const heldAll = await one<{ c: string }>(`SELECT count(*) AS c FROM jobs WHERE problem_id = $1 AND assigned_to = $2 AND status = 'assigned' AND (expires_at IS NULL OR expires_at > now())`, [req.project.id, req.user!.id]);
   if (Number(heldAll?.c ?? 0) >= MAX_HELD_PER_HANDLE) { const msg = `Your handle already holds ${heldAll!.c} assignments across its sessions (limit ${MAX_HELD_PER_HANDLE}). Finish or release some first.`; if (wantsJson) res.status(429).json({ error: msg }); else res.status(429).type("text/markdown").send(`# Too many assignments held\n\n${msg}\n`); return; }
@@ -401,6 +405,8 @@ ${ENDED_LAUNCH_GUIDANCE}
   row.repo_url = req.project.repo_url;
   const sess = { id: String(session.id), jobs: Number(session.jobs), max: session.max_jobs === null ? null : Number(session.max_jobs), length: lengthWords(session), disk, abandonAfterMin: ABANDON_AFTER_MIN, maxHours: agent.maxHours, compute: describeOffer(offer), transcriptPreapproved: settings.ai?.transcript_preapproved === true, subagents: settings.ai?.subagents?.allowed === false ? "not allowed" : settings.ai?.subagents?.max_parallel ? `allowed, up to ${settings.ai.subagents.max_parallel} at a time` : "allowed", files: await files.quota(uid).then((f) => ({ left: f.files_left, bytes_left: f.bytes_left, per_day: f.files_per_day })) };
   row.operational_deferrals = await deferralHistory(Number(row.id));
+  row.handoffs = await handoffHistory(Number(row.id));
+  row.brief_md += handoffBrief(row.handoffs);
   if (row.operational_deferrals.length) row.brief_md += `\n\n## Prior assignment-fit checkpoints\n\nThese are source/execution limits, not mathematical refutations. Compare the current sources and controls cheaply before reopening work. ${row.operational_deferrals.map((d:any)=>`${d.kind}: ${d.evidence_md} Reopen when: ${d.reopen_when}`).join("\n\n")}`;
   if (Number(row.release_count ?? 0) > 0) row.prior_claims = await q(`SELECT m.id, u.handle, m.model, m.created_at FROM messages m JOIN users u ON u.id = m.user_id WHERE m.job_id = $1 AND m.kind = 'claim' ORDER BY m.id`, [row.id]);
   if (row.research_route_id) row.brief_md += await researchBrief(Number(row.research_route_id));
@@ -942,15 +948,17 @@ job.post("/start", bearer, project, assignmentMutation(async (req: any, res: any
 job.get("/job/:id", optionalAuth, project, async (req: any, res) => {
   const row = await one(`SELECT j.*, l.slug AS lane_slug, p.repo_url, u.handle AS assigned_handle FROM jobs j JOIN problems p ON p.id=j.problem_id LEFT JOIN lanes l ON l.id=j.lane_id LEFT JOIN users u ON u.id = j.assigned_to WHERE j.id = $1 AND j.problem_id = $2`, [req.params.id, req.project.id]);
   if (!row) { res.status(404).json({ error: "no such job" }); return; }
+  row.handoffs = await handoffHistory(Number(row.id));
+  row.dispatch_state = row.status === 'queued' && row.handoffs.some((h:any)=>h.status==='waiting') ? 'waiting_for_named_recipient' : row.status;
   if (req.query.format === "json" || !wantsHtml(req)) { const { assigned_session, attempt_id, ...pub } = row; res.json({ ...pub, returns: (await q(`SELECT id, status, final_rung FROM returns WHERE job_id = $1 ORDER BY id`, [row.id])).map((r: any) => ({ ...r, id: Number(r.id) })) }); return; }
   const P = `/projects/${req.project.slug}`;
   const pages = await paperPages(req.project.slug);
   const md = async (t: string) => { const m = protectMath(String(t ?? "").replace(/<!--[\s\S]*?-->/g, "")); return linkPaths(await linkPeople(m.restore(marked.parse(m.text.replace(/</g, "&lt;").replace(/>/g, "&gt;"), { gfm: true }) as string)), req.project.slug, "", pages); };
   const returns = await q(`SELECT id, status, final_rung, model, created_at FROM returns WHERE job_id = $1 ORDER BY id`, [row.id]);
-  const meta = `<p class="doc-meta"><span>Created: ${timeHtml(row.created_at)}</span><span class="tag">${escHtml(row.status)}</span><span>${escHtml(jobLabel(row))}${row.lane_slug ? ` in <a href="${P}#discussion">${escHtml(row.lane_slug)}</a>` : ""}</span><span>budget ${escHtml(String(row.budget_hours))} h · tier ${row.min_tier >= 99 ? "any" : `≤ ${escHtml(String(row.min_tier))}`}</span>${row.assigned_handle ? `<span>held by <a href="/@${escHtml(row.assigned_handle)}">@${escHtml(row.assigned_handle)}</a></span>` : ""}${Number(row.release_count ?? 0) > 0 ? `<span>handed back ${row.release_count}×</span>` : ""}${row.parent_return_id ? `<span>reviews <a href="${P}/return/${row.parent_return_id}">return #${row.parent_return_id}</a></span>` : ""}${row.follow_up_of ? `<span>follow-up of <a href="${P}/return/${row.follow_up_of}">return #${row.follow_up_of}</a></span>` : ""}</p>`;
+  const meta = `<p class="doc-meta"><span>Created: ${timeHtml(row.created_at)}</span><span class="tag">${escHtml(row.dispatch_state === "waiting_for_named_recipient" ? "Needs a specific person or agent" : row.status)}</span><span>${escHtml(jobLabel(row))}${row.lane_slug ? ` in <a href="${P}#discussion">${escHtml(row.lane_slug)}</a>` : ""}</span><span>budget ${escHtml(String(row.budget_hours))} h · tier ${row.min_tier >= 99 ? "any" : `≤ ${escHtml(String(row.min_tier))}`}</span>${row.assigned_handle ? `<span>held by <a href="/@${escHtml(row.assigned_handle)}">@${escHtml(row.assigned_handle)}</a></span>` : ""}${Number(row.release_count ?? 0) > 0 ? `<span>handed back ${row.release_count}×</span>` : ""}${row.parent_return_id ? `<span>reviews <a href="${P}/return/${row.parent_return_id}">return #${row.parent_return_id}</a></span>` : ""}${row.follow_up_of ? `<span>follow-up of <a href="${P}/return/${row.follow_up_of}">return #${row.follow_up_of}</a></span>` : ""}</p>`;
   const rlist = returns.length ? `<ul>${returns.map((r: any) => `<li><a href="${P}/return/${r.id}">Return #${r.id}</a> <span class="tag">${escHtml(r.status)}${r.final_rung ? `, ${escHtml(r.final_rung)}` : ""}</span> ${escHtml(r.model ?? "")}, ${timeHtml(r.created_at)}</li>`).join("")}</ul>` : `<p class="muted">No return yet.</p>`;
   const aside = `<div class="doc-side"><div><h3>Returns</h3>${rlist}</div><div><h3>Compute hint</h3><p class="panel-note"><code>${escHtml(JSON.stringify(row.compute_hint ?? {}))}</code></p><p class="panel-note"><a href="${P}/job/${row.id}?format=json">JSON</a></p></div></div>`;
-  res.type("text/html").send(page({ title: `Job #${row.id}`, dataPage: "job", robots: "noindex, follow", description: `${row.type} assignment on ${req.project.name}: ${row.title}. ${row.status}.`, path: `${P}/job/${row.id}`, crumbs: `<a href="${P}">${escHtml(req.project.name)}</a><span>/ jobs /</span>#${row.id}`, eyebrow: "Assignment", heading: row.title, meta, aside, body: await md(row.brief_md) }));
+  res.type("text/html").send(page({ title: `Job #${row.id}`, dataPage: "job", robots: "noindex, follow", description: `${row.type} assignment on ${req.project.name}: ${row.title}. ${row.status}.`, path: `${P}/job/${row.id}`, crumbs: `<a href="${P}">${escHtml(req.project.name)}</a><span>/ jobs /</span>#${row.id}`, eyebrow: "Assignment", heading: row.title, meta, aside, body: await md(row.brief_md + handoffBrief(row.handoffs)) }));
 });
 
 /**

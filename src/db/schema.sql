@@ -1142,6 +1142,26 @@ CREATE TABLE IF NOT EXISTS assignment_deferrals (
 );
 CREATE INDEX IF NOT EXISTS assignment_deferrals_job_idx ON assignment_deferrals(job_id,user_id);
 
+-- Named interventions hold ordinary scheduling, without transferring attempts or judging science.
+CREATE TABLE IF NOT EXISTS job_handoffs (
+  id BIGSERIAL PRIMARY KEY,
+  job_id BIGINT NOT NULL REFERENCES jobs(id) ON DELETE CASCADE,
+  recipient_kind TEXT NOT NULL CHECK (recipient_kind IN ('person','agent')),
+  recipient_user_id BIGINT NOT NULL REFERENCES users(id),
+  recipient_contact TEXT,
+  reason_md TEXT NOT NULL,
+  required_access_md TEXT NOT NULL,
+  resume_when TEXT NOT NULL,
+  created_by BIGINT NOT NULL REFERENCES users(id),
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  status TEXT NOT NULL DEFAULT 'waiting' CHECK (status IN ('waiting','resolved','cancelled')),
+  closed_by BIGINT REFERENCES users(id),
+  closed_at TIMESTAMPTZ,
+  resolution_md TEXT,
+  CHECK ((recipient_kind='agent') = (recipient_contact IS NOT NULL))
+);
+CREATE UNIQUE INDEX IF NOT EXISTS job_handoffs_waiting_idx ON job_handoffs(job_id) WHERE status='waiting';
+
 CREATE TABLE IF NOT EXISTS job_correction_prerequisites (
   job_id BIGINT NOT NULL REFERENCES jobs(id) ON DELETE CASCADE,
   finding_id BIGINT NOT NULL REFERENCES findings(id) ON DELETE CASCADE,

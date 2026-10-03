@@ -1,4 +1,5 @@
 import {deferralEligibility, INDEX_PREREQUISITES_SQL} from './operational-blockers.js';
+import {HANDOFF_ELIGIBILITY_SQL} from './job-handoffs.js';
 import { q, one } from "../db/index.js";
 import { readProjectConfig } from "./projects.js";
 import { matchingTools, type Capabilities } from "./agent-profile.js";
@@ -121,6 +122,7 @@ function eligibility(a: SchedulingAgent, omitCompute = false, sameKindOnly = fal
     ["it requires a trusted session", `(NOT j.requires_trust OR ${p(a.trusted)}::boolean)`],
     ["this department already recorded unchanged assignment-fit blockers; change sources/controls or explicitly direct a revisit", a.jobId || a.directionId ? 'true' : deferralEligibility(sid)],
     ["this generated index awaits its co-origin source corrections", a.jobId || a.directionId ? 'true' : INDEX_PREREQUISITES_SQL],
+    ["it needs its named person or agent; see the job's handoff requirements", a.jobId || a.directionId ? 'true' : HANDOFF_ELIGIBILITY_SQL],
     ["this session released it before", `j.last_released_session IS DISTINCT FROM ${sid}::text`],
     ["this session released or cancelled an attempt on it before", `NOT EXISTS (SELECT 1 FROM assignment_attempts old WHERE old.job_id = j.id AND old.session_id = ${sid} AND old.status IN ('released','cancelled'))`],
     ["it is outside the lane this session was registered for", `(${p(a.lane)}::text IS NULL OR l.slug = $${values.length})`],
