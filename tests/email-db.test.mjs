@@ -182,6 +182,11 @@ test('one-click unsubscribe works with no sign-in; a bounce stops all mail', asy
   const ok = await call(null, 'POST', '/email/postmark-webhook', {RecordType: 'Bounce', Type: 'HardBounce', Email: `${tag}-author@example.org`}, {authorization: `Basic ${Buffer.from('hook:secret').toString('base64')}`});
   assert.equal(ok.status, 200);
   assert.equal((await E.addressOf(p.id)).status, 'bounced');
+  // Postmark's own unsubscribe link (managed handling) turns the person's emails off without marking the address.
+  const auth = {authorization: `Basic ${Buffer.from('hook:secret').toString('base64')}`};
+  await call(null, 'POST', '/email/postmark-webhook', {RecordType: 'SubscriptionChange', Recipient: `${tag}-citer@example.org`, SuppressSending: true, SuppressionReason: 'ManualSuppression'}, auth);
+  assert.deepEqual(await E.prefsOf(people.citer.id), {updates: 'off', newsletter: false, projects: false});
+  assert.equal((await E.addressOf(people.citer.id)).status, null);
   await decide(await mkReturn('author'), 'accepted'); await U.scan();
   assert.equal(Number((await one(`SELECT count(*)::int AS n FROM email_items WHERE user_id = $1 AND email_id IS NULL`, [p.id])).n), 0);
 });

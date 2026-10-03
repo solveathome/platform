@@ -174,9 +174,12 @@ email.post("/email/postmark-webhook", async (req, res) => {
   const ok = !!want && Buffer.from(got).length === Buffer.from(Buffer.from(want).toString("base64")).length && timingSafeEqual(Buffer.from(got), Buffer.from(Buffer.from(want).toString("base64")));
   if (!ok) { res.status(401).json({ error: "unauthorised" }); return; }
   const b = req.body ?? {}, to = E.cleanEmail(b.Email ?? b.Recipient);
-  const status = b.RecordType === "SpamComplaint" ? "complained"
-    : b.RecordType === "Bounce" && ["HardBounce", "BadEmailAddress", "ManuallyDeactivated", "SpamNotification"].includes(b.Type) ? "bounced"
-    : b.RecordType === "SubscriptionChange" && b.SuppressSending === true ? "complained" : null;
+  // Postmark manages unsubscribes on the broadcast stream (custom handling needs their support): its own unsubscribe link arrives as
+  // a SubscriptionChange with reason ManualSuppression, which turns the person's emails off; a bounce or complaint stops the address.
+  const manual = b.RecordType === "SubscriptionChange" && b.SuppressSending === true && b.SuppressionReason === "ManualSuppression";
+  const status = b.RecordType === "SpamComplaint" || (b.RecordType === "SubscriptionChange" && b.SuppressSending === true && b.SuppressionReason === "SpamComplaint") ? "complained"
+    : (b.RecordType === "Bounce" && ["HardBounce", "BadEmailAddress", "ManuallyDeactivated", "SpamNotification"].includes(b.Type)) || (b.RecordType === "SubscriptionChange" && b.SuppressSending === true && b.SuppressionReason === "HardBounce") ? "bounced" : null;
+  if (to && manual) for (const u of await q<{ id: number }>(`SELECT id FROM users WHERE lower(email) = $1`, [to])) await E.applyUnsub(Number(u.id), "all-off");
   if (to && status) {
     const users = await q<{ id: number }>(`UPDATE users SET email_status = $2 WHERE lower(email) = $1 RETURNING id`, [to, status]);
     for (const u of users) await q(`INSERT INTO email_consent_events (user_id, choice, value, source, wording_version) VALUES ($1, 'address', $2, 'webhook', $3)`, [u.id, status, E.EMAIL_WORDING_VERSION]);
