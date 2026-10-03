@@ -308,3 +308,21 @@ test('issue #90: a context variant is recorded beside the model and never folded
   assert.doesNotMatch(messy, /[\s/;]/, 'it is a label: spaces and separators do not survive');
   assert.ok(parseCapabilities(JSON.stringify({model_variant: 'x'.repeat(200)})).model_variant.length <= 60);
 });
+
+
+test('historical comparison notes are quoted without changing their current stage or scientific grade',async()=>{
+  const {stepCheckContext}=await import('../src/lib/research.ts');
+  const note='Step check: return #1\nCompare only the issued candidate; do not run the experiment.\n\n## Earlier headings';
+  const source={...job,research_stage:'pursue',step_check_notes_md:note};
+  const section=stepCheckContext(source);
+  assert.match(section,/This assignment is pursuit/);
+  assert.match(section,/> Compare only/);assert.match(section,/> ## Earlier headings/);
+  const issued={...source,brief_md:source.brief_md+section};
+  const full=renderBrief(issued,'https://x.test/projects/p',session);
+  for(const brief of [full,compactDepartmentBrief(full,issued,session,null)]) {
+    assert.match(brief,/This assignment is pursuit/);assert.match(brief,/> Compare only/);
+  }
+  assert.equal(source.step_check_notes_md,note);
+  for(const research_stage of ['first_look','rescue'])assert.doesNotMatch(stepCheckContext({...source,research_stage}),/This assignment is pursuit/);
+  assert.equal(stepCheckContext({...source,step_check_notes_md:''}),'');
+});

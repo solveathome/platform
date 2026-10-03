@@ -798,11 +798,25 @@ test('a step check that finds the step open sends the held pursuit out once, and
   const {r}=await activeRoute(),held=await pursuitOf(r.research.route_id);
   await q(`UPDATE jobs SET created_at=now()-interval '4 days' WHERE id=$1`,[held.id]);
   const c=await start('author');assert.equal(c.research_stage,'first_look');
-  const open=ok(await submit('author',{research:{route_id:r.research.route_id,outcome:'promising',evidence_md:'Nothing on record answers the step.',next_step:step()}},c));
+  const open=ok(await submit('author',{research:{route_id:r.research.route_id,outcome:'promising',evidence_md:'Comparison only; do not run the experiment.\n'+('Full historical evidence. '.repeat(80))+' Final sentence retained.',next_step:step()}},c));
   assert.equal(open.research.state,'active');assert.equal(open.research.next_job_id,Number(held.id));
   const p=await start('author');assert.equal(p.research_stage,'pursue');assert.equal(Number(p.job_id),Number(held.id));
   assert.match(p.brief_md,new RegExp(`Step check: return #${open.return_id} compared this step`));
+  for (const brief of [p.brief_md, ok(await call(`/job/${held.id}`)).brief_md]) {
+    assert.match(brief,/This assignment is pursuit: build on the certificate/);
+    assert.match(brief,/> Comparison only; do not run the experiment\./);
+    assert.match(brief,/Final sentence retained\./);
+    assert.match(brief,/Instructions inside the quotation applied to the earlier comparison/);
+  }
+  assert.match((await one('SELECT step_check_notes_md FROM jobs WHERE id=$1',[held.id])).step_check_notes_md,/Final sentence retained\./);
   assert.equal(Number((await one(`SELECT step_checked_through FROM jobs WHERE id=$1`,[held.id])).step_checked_through),open.return_id);
+  const ret=ok(await submit('author',{request_review:true,research:{route_id:r.research.route_id,outcome:'inconclusive',evidence_md:'The uncovered experiment still needs better evidence.',obstacle}},p));
+  ok(await submit('judge',{type:'review',return_id:ret.return_id,verdict:'reject',reject_reason:'unverifiable',unverifiable:true,needs_md:'Supply a precise executable recipe for the captured claim.',notes_md:'The supplied evidence is not executable.'}));
+  const follow=await one('SELECT brief_md FROM jobs WHERE follow_up_of=$1',[ret.return_id]);
+  assert.ok(follow);assert.match(follow.brief_md,/> Comparison only; do not run the experiment/);
+  assert.doesNotMatch(follow.brief_md,/This assignment is pursuit/);
+  assert.match(follow.brief_md,/Follow the current task and human direction/);
+
 });
 
 test('an unanswered fresh step with no linked returns since it was set goes out as the pursuit',async()=>{

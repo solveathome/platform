@@ -18,7 +18,7 @@ const runtimeFit = (fit: string) => `jsonb_set(${fit},'{3}',CASE WHEN jsonb_type
 /** Explicit mutable paths plus the complete material route set and its public artifacts.
  * IDs detect versions inserted by an older transaction; absent paths have a visible null baseline.
  * No client-provided hash, prose inference, MAX(return.id) or display LIMIT hides changed evidence. */
-export const taskSourceEpoch = (paths: string, materialCertificate = true) => `jsonb_build_array(
+const routeSourceEpoch = (paths: string, materialCertificate = true) => `jsonb_build_array(
   (SELECT coalesce(jsonb_agg(jsonb_build_array(w.path,
     (SELECT max(p.id) FROM document_publications p WHERE p.problem_id=j.problem_id AND p.path=w.path),
     (SELECT max(v.id) FROM document_versions v WHERE v.problem_id=j.problem_id AND v.path=w.path)) ORDER BY w.path),'[]'::jsonb)
@@ -31,6 +31,28 @@ export const taskSourceEpoch = (paths: string, materialCertificate = true) => `j
       SELECT material.id FROM (${stepEvidenceSQL('j.problem_id','j.research_route_id')}) material
       UNION SELECT j.research_source_return_id UNION SELECT certificate.id FROM returns certificate
         WHERE certificate.id=j.step_checked_through ${materialCertificate ? `AND NOT ${unchangedComparison('certificate')}` : ''})))`;
+
+// Non-route scope was previously refused. Its new branch watches the complete
+// correction obligation and source artifacts; existing route snapshots stay exact.
+const taskFindings = `SELECT f.* FROM findings f WHERE f.problem_id=j.problem_id AND (f.job_id=j.id OR EXISTS (
+  SELECT 1 FROM job_correction_prerequisites p WHERE p.job_id=j.id AND p.finding_id=f.id))`;
+export const taskSourceEpoch = (paths: string, materialCertificate = true) => `CASE WHEN j.research_route_id IS NOT NULL
+  THEN ${routeSourceEpoch(paths, materialCertificate)} ELSE jsonb_build_array(
+    (SELECT coalesce(jsonb_agg(jsonb_build_array(w.path,
+      (SELECT max(p.id) FROM document_publications p WHERE p.problem_id=j.problem_id AND p.path=w.path),
+      (SELECT max(v.id) FROM document_versions v WHERE v.problem_id=j.problem_id AND v.path=w.path)) ORDER BY w.path),'[]'::jsonb)
+      FROM unnest(${paths}::text[]) w(path)),
+    (SELECT coalesce(jsonb_agg(jsonb_build_array(f.id,f.path,f.content_sha,f.return_id,f.review_id,f.note,f.scope,f.status,
+      f.resolved_by_return_id,f.resolved_sha) ORDER BY f.id),'[]'::jsonb) FROM (${taskFindings}) f),
+    (SELECT md5(coalesce(jsonb_agg(jsonb_build_array(r.id,r.status,r.final_rung,r.provisional,r.report_md,r.also_fix,
+      r.revision_sha,r.revision_base_sha,r.verification_fingerprint,
+      (SELECT coalesce(jsonb_agg(x.file_sha ORDER BY x.file_sha),'[]'::jsonb) FROM file_refs x JOIN files blob ON blob.sha256=x.file_sha
+        AND blob.deleted_at IS NULL WHERE x.ref_type='return' AND x.ref_id=r.id)) ORDER BY r.id),'[]'::jsonb)::text)
+      FROM returns r WHERE r.problem_id=j.problem_id AND r.id IN (
+        SELECT f.return_id FROM (${taskFindings}) f
+        UNION SELECT rv.return_id FROM reviews rv JOIN (${taskFindings}) f ON f.review_id=rv.id
+        UNION SELECT j.parent_return_id UNION SELECT j.evidence_return_id UNION SELECT j.research_source_return_id))
+  ) END`;
 
 export function parseDeferral(raw: any) {
   if (raw === undefined) return null;

@@ -150,6 +150,45 @@ test('explicit task-source runtime checkpoints ignore unrelated publications and
   assert.deepEqual((await one('SELECT receipt FROM assignment_attempts WHERE id=$1',[f.a.attempt_id])).receipt,f.receipt);
 });
 
+test('non-route runtime checkpoints watch correction obligations and source files without reopening on unrelated edits',async()=>{
+  await q(`INSERT INTO project_roles(problem_id,user_id,role,note) VALUES ($1,$2,'trusted','Fixture correction eligibility')`,[pid,uid]);
+  const j=await queued({type:'audit',priority:10});
+  const source=await one(`INSERT INTO returns(problem_id,type,user_id,model,provider,report_md,transcript,status) VALUES ($1,'source',$2,'gpt-6-astra','test','Original evidence','t','recorded') RETURNING id`,[pid,other]);
+  const finding=await one(`INSERT INTO findings(problem_id,path,job_id,return_id,note,scope) VALUES ($1,'research/producer.js',$2,$3,'Preserve the canonical live capture','before_circulation') RETURNING id`,[pid,j.id,source.id]);
+  const capabilities={tools:['node'],execution:{cpu_seconds:10,wall_seconds:20}};
+  const a=ok(await call(`/start?share=0&job=${j.id}`,{launch:randomUUID(),capabilities}));
+  const opts={method:'POST',session:a.session,attempt:a.attempt_id,body:{job_id:j.id,deferral:{kind:'execution',fit_scope:'runtime',source_scope:'task',source_paths:['research/producer.js','research/embed.js'],evidence_md:'Fixed sequential sleeps exceed the available runtime.',reopen_when:'Relevant sources, findings or actual controls change.'}}};
+  const receipt=ok(await call('/release',opts)),stored=await one('SELECT * FROM assignment_deferrals WHERE attempt_id=$1',[a.attempt_id]);
+  assert.deepEqual(ok(await call('/release',opts)),receipt);
+  const b=await start({capabilities});assert.notEqual(Number(b.job_id),Number(j.id));ok(await release(b));
+  const agent={problemId:pid,slug,sessionId:b.session,uid,tier:1,model:'claude-fable-5-1',provider:'anthropic',trusted:true,granted:true,lane:null,cpuHours:0,ramGb:0,hasGpu:false,disk:5,maxHours:2,reviewStreak:0,capabilities};
+  await q(`INSERT INTO document_versions(problem_id,path,version,content_sha) VALUES ($1,'research/unrelated.md',1,$2)`,[pid,'a'.repeat(64)]);
+  assert.ok(!await selectJob(agent,false),'unrelated document does not reopen a non-route runtime checkpoint');
+  assert.equal(Number((await selectJob({...agent,jobId:Number(j.id)},false)).id),Number(j.id),'human override remains available');
+  await q(`UPDATE findings SET note='A changed required method' WHERE id=$1`,[finding.id]);
+  assert.equal(Number((await selectJob(agent,false)).id),Number(j.id),'changed obligation reopens');
+  await q(`UPDATE findings SET note='Preserve the canonical live capture' WHERE id=$1`,[finding.id]);
+  assert.ok(!await selectJob(agent,false));
+  await q(`UPDATE findings SET status='resolved' WHERE id=$1`,[finding.id]);
+  assert.equal(Number((await selectJob(agent,false)).id),Number(j.id),'resolved finding changes the remaining obligation');
+  await q(`UPDATE findings SET status='open' WHERE id=$1`,[finding.id]);
+  const prerequisite=await one(`INSERT INTO findings(problem_id,path,return_id,note,scope,status) VALUES ($1,'research/source.md',$2,'New source prerequisite','before_circulation','resolved') RETURNING id`,[pid,source.id]);
+  await q('INSERT INTO job_correction_prerequisites(job_id,finding_id) VALUES ($1,$2)',[j.id,prerequisite.id]);
+  assert.equal(Number((await selectJob(agent,false)).id),Number(j.id),'new explicit prerequisite is material');
+  await q('DELETE FROM job_correction_prerequisites WHERE job_id=$1',[j.id]);
+  assert.ok(!await selectJob(agent,false));
+  const sha=randomUUID().replaceAll('-','').padEnd(64,'0');
+  await q(`INSERT INTO files(sha256,user_id,name,ext,bytes) VALUES ($1,$2,'bounded.js','js',1)`,[sha,other]);
+  await q(`INSERT INTO file_refs(file_sha,ref_type,ref_id) VALUES ($1,'return',$2)`,[sha,source.id]);
+  assert.equal(Number((await selectJob(agent,false)).id),Number(j.id),'source artifact supplement reopens');
+  await q(`DELETE FROM file_refs WHERE file_sha=$1`,[sha]);
+  assert.ok(!await selectJob(agent,false));
+  await q(`INSERT INTO document_versions(problem_id,path,version,content_sha,created_at) VALUES ($1,'research/embed.js',1,$2,'2000-01-01')`,[pid,'b'.repeat(64)]);
+  assert.equal(Number((await selectJob(agent,false)).id),Number(j.id),'a missing watched dependency appearing reopens');
+  assert.deepEqual(await one('SELECT * FROM assignment_deferrals WHERE id=$1',[stored.id]),stored);
+  assert.deepEqual((await one('SELECT receipt FROM assignment_attempts WHERE id=$1',[a.attempt_id])).receipt,receipt);
+});
+
 test('task-source checkpoints reuse unchanged comparisons but detect material route evidence and newly linked old sources',async()=>{
   let foreign;
   const f=await runtimeRouteFixture({prepare:async()=>{
