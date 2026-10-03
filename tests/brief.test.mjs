@@ -62,8 +62,8 @@ test('every first and subsequent job requires working local tools and a framewor
       assert.match(brief,/section=lifecycle/);assert.match(brief,/section=publication/);
       assert.match(brief,/model\/thinking-level lookup/);assert.match(brief,/compatible pinned tools across folders/);
       assert.match(brief,/identity, tooling, execution and publication_safety/);
-      assert.match(brief,/If you cannot read your own session, follow runtime_lifecycle/);
-      assert.match(brief,/Otherwise continue without pausing/);
+      assert.match(brief,/If your own session is inaccessible, checkpoint under runtime_lifecycle and ask the user to resume/);
+      assert.match(brief,/otherwise continue/);
       assert.match(brief,/automated extraction and submission scripts/);
       assert.match(brief,/detect agent\/model\/effort changes and preserve each turn's attribution/);
     }

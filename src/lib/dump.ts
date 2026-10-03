@@ -10,8 +10,9 @@
  * beside it and moved in one by one, so a withheld export never partially replaces a published day. Proofs from an earlier run
  * of the same day (manifest.json.ots, superseded proofs, attestation.json) stay where they are; scripts/attest-dumps.sh re-stamps.
  */
+import { promisify } from "node:util";
 import { StringDecoder } from "node:string_decoder";
-import { createReadStream, fstatSync } from "node:fs";
+import { read, fstatSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { closeSync, existsSync, mkdirSync, openSync, readdirSync, renameSync, rmSync, writeFileSync, writeSync } from "node:fs";
 import { join } from "node:path";
@@ -125,6 +126,7 @@ export function dumpDays(dumpDir: string): string[] {
 // Snapshot writers atomically rename staged files; scan and serve the same open
 // inode so a new snapshot cannot replace the bytes verified for this request.
 const privacyChecks = new Map<string,{stamp:string,proof:Promise<boolean>}>();
+const readChunk=promisify(read);
 let scanning=0;const waiting:Array<()=>void>=[];
 async function scanSlot():Promise<()=>void> {
   if(scanning>=2){if(waiting.length>=16)throw new Error('Snapshot scan capacity');await new Promise<void>(resolve=>waiting.push(resolve));}
@@ -142,8 +144,11 @@ export async function openDumpSnapshot(path:string):Promise<{fd:number,size:numb
       proof=(async()=>{
         const release=await scanSlot();try {
           const decoder=new StringDecoder('utf8');let pending='';
-          for await(const chunk of createReadStream(path,{fd,start:0,autoClose:false})) {
-            pending+=decoder.write(chunk as Buffer);let newline;
+          const chunk=Buffer.allocUnsafe(64*1024);let position=0;
+          for(;;) {
+            const {bytesRead}=await readChunk(fd,chunk,0,chunk.length,position);
+            if(!bytesRead)break;position+=bytesRead;
+            pending+=decoder.write(chunk.subarray(0,bytesRead));let newline;
             while((newline=pending.indexOf('\n'))>=0) {
               const line=pending.slice(0,newline);pending=pending.slice(newline+1);
               if(line.length>8*1024*1024 || findHarnessId(line))return false;
