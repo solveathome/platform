@@ -213,8 +213,42 @@ export function pickLead(items: Item[]): Item | null {
 export type Edition = "daily" | "weekly" | "letter";
 export type Composed = {
   edition: Edition; subject: string; lead: Item | null; asks: Item[]; rest: Item[]; more: number; stats: Stats | null; letters: any[];
-  items: Item[]; quietSince: string | null; offerLetter: boolean; prefs: Prefs;
+  items: Item[]; quietSince: string | null; idleSince: string | null; offerLetter: boolean; prefs: Prefs; project: ProjectUpdate | null;
 };
+
+/**
+ * The bottom of the email: what moved on the project (Chris, 3 Oct 2026: "we want to make sure that the content at the top is 100% related
+ * to the users activities. With bottom being an overall update on the research"). Everything about other people and the project as a
+ * whole lives here, never above it; the person's own returns are left out (they are at the top).
+ */
+export type ProjectUpdate = {
+  days: number; accepted: number; returns: number; reviews: number; agents: number; opened: number; closed: number;
+  highlights: Array<{ return_id: number; type: string; handle: string; display_name: string | null; points: number }>;
+  closedRoutes: Array<{ id: number; title: string; return_id: number }>;
+};
+export async function projectUpdate(problemId: number, days: number, userId: number): Promise<ProjectUpdate> {
+  const P = [problemId, days, userId];
+  const W = `now() - ($2::int * interval '1 day')`;
+  const counts = await one<any>(`SELECT
+      (SELECT count(DISTINCT d.return_id)::int FROM return_decisions d JOIN returns r ON r.id = d.return_id WHERE r.problem_id = $1 AND ${TRUSTED} AND d.status = 'accepted' AND d.decided_at >= ${W}) AS accepted,
+      (SELECT count(*)::int FROM returns WHERE problem_id = $1 AND created_at >= ${W}) AS returns,
+      (SELECT count(*)::int FROM reviews rv JOIN returns r ON r.id = rv.return_id WHERE r.problem_id = $1 AND rv.created_at >= ${W}) AS reviews,
+      (SELECT count(*)::int FROM (SELECT user_id, model FROM returns WHERE problem_id = $1 AND created_at >= ${W}
+         UNION SELECT rv.user_id, rv.model FROM reviews rv JOIN returns r ON r.id = rv.return_id WHERE r.problem_id = $1 AND rv.created_at >= ${W}) a) AS agents,
+      (SELECT count(*)::int FROM research_routes WHERE problem_id = $1 AND created_at >= ${W}) AS opened,
+      (SELECT count(*)::int FROM research_routes WHERE problem_id = $1 AND state IN ('result','known') AND updated_at >= ${W}) AS closed,
+      $3::bigint AS me`, P);
+  const highlights = await q<any>(`SELECT DISTINCT ON (r.id) r.id AS return_id, r.type, u.handle, u.display_name,
+      coalesce((SELECT sum(c.points) FROM credits c WHERE c.user_id = r.user_id AND c.source_type = 'return' AND c.source_id = r.id::text AND c.kind IN ('result','breakthrough')), 0)::float AS points
+    FROM return_decisions d JOIN returns r ON r.id = d.return_id JOIN users u ON u.id = r.user_id
+    WHERE r.problem_id = $1 AND ${TRUSTED} AND d.status = 'accepted' AND d.decided_at >= ${W} AND r.user_id <> $3 ORDER BY r.id`, P);
+  const closedRoutes = await q<any>(`SELECT id, title, origin_return_id AS return_id FROM research_routes WHERE problem_id = $1 AND state IN ('result','known') AND updated_at >= ${W} ORDER BY updated_at DESC LIMIT 2`, [problemId, days]);
+  return {
+    days, accepted: counts?.accepted ?? 0, returns: counts?.returns ?? 0, reviews: counts?.reviews ?? 0, agents: counts?.agents ?? 0, opened: counts?.opened ?? 0, closed: counts?.closed ?? 0,
+    highlights: highlights.sort((a, b) => b.points - a.points).slice(0, 3).map((h) => ({ ...h, return_id: Number(h.return_id), points: Math.round(h.points) })),
+    closedRoutes: closedRoutes.map((r) => ({ id: Number(r.id), title: r.title, return_id: Number(r.return_id) })),
+  };
+}
 
 /**
  * Decide what today's email is, or that there is none. `weekday` is the person's local ISO weekday (1 = Monday).
@@ -321,7 +355,10 @@ export async function compose(userId: number, opts: { weekday: number; day: stri
   const others = d.items.filter((i) => i !== lead && i.kind !== "ask").sort((a, b) => +new Date(b.happened_at) - +new Date(a.happened_at));
   const quiet = s?.agent.last_seen && Date.now() - +new Date(s.agent.last_seen) > 14 * 86400_000 ? s.agent.last_seen : null;
   const offerLetter = !prefs.newsletter && d.items.some((i) => i.kind === "first");
-  return { edition: d.edition, subject: "", lead, asks, rest: others.slice(0, LIST_MAX), more: Math.max(0, others.length - LIST_MAX), stats: d.edition === "letter" ? null : s, letters: d.letters, items: [...d.items, ...d.letters], quietSince: quiet, offerLetter, prefs };
+  // An agent that has not been seen for three days gets one clear next step at the top: start it again.
+  const idle = s?.agent.last_seen && Date.now() - +new Date(s.agent.last_seen) > 3 * 86400_000 ? s.agent.last_seen : null;
+  const project = d.edition !== "letter" && s?.project ? await projectUpdate(s.project.id, d.edition === "weekly" ? 7 : 1, userId) : null;
+  return { edition: d.edition, subject: "", lead, asks, rest: others.slice(0, LIST_MAX), more: Math.max(0, others.length - LIST_MAX), stats: d.edition === "letter" ? null : s, letters: d.letters, items: [...d.items, ...d.letters], quietSince: quiet, idleSince: idle, offerLetter, prefs, project };
 }
 
 /** The small label beside a line in the list, and the eyebrow over the lead. */
@@ -366,9 +403,11 @@ export async function render(c: Composed, userId: number, outboxId: number): Pro
     preheader = why;
     B.push(tpl.hero({ eyebrow: "Your week", head, why, href: x.link(page), cta: "Your page" }));
   }
-  if (c.offerLetter) {
-    B.push(tpl.spacer(20), tpl.paragraph(`Want the monthly letter too? It's one email a month about what the whole project moved. <a href="${esc(x.link("/settings#email"))}" style="color:inherit;text-decoration:underline">Turn it on</a>`));
-    T.push(`Want the monthly letter too? ${x.link("/settings#email")}`, "");
+  // Top: only the reader and their own agents. An agent idle for three days gets one next step: start it again.
+  if (c.idleSince && c.stats?.project) {
+    const text = c.quietSince ? "Give your agent the same instruction as before and it picks up the next assignment." : `Your agent was last seen on ${day(c.idleSince)}. Give it the same instruction as before and it picks up the next assignment.`;
+    B.push(tpl.nextStep({ eyebrow: "Your next step", text, href: x.link(`/projects/${c.stats.project.slug}`), cta: "Start your agent" }));
+    T.push(text, x.link(`/projects/${c.stats.project.slug}`), "");
   }
   if (c.asks.length) {
     T.push("NEEDS YOUR ANSWER", "");
@@ -389,8 +428,7 @@ export async function render(c: Composed, userId: number, outboxId: number): Pro
     const lines: Array<[string, string]> = [];
     lines.push([`Points <b>${n(s.points)}</b> (+${n(s.points_since)} since your last email, +${n(s.points_7d)} this week)`, `Points ${n(s.points)} (+${n(s.points_since)} since your last email, +${n(s.points_7d)} this week)`]);
     if (s.pending) lines.push(["", `Pending: ${s.pending} returns, worth up to ${s.pending_points} if accepted`]);
-    const nb = r.rank ? [r.above ? `@${r.above.handle} ${n(r.above.points)}` : "", `you ${n(r.me)}`, r.below ? `@${r.below.handle} ${n(r.below.points)}` : ""].filter(Boolean).join(" · ") : "";
-    if (r.rank) lines.push(["", `Rank, 30 days: #${r.rank}${s.rank7 ? ` · 7 days: #${s.rank7}` : ""} (${nb})`]);
+    if (r.rank) lines.push(["", `Rank, 30 days: #${r.rank}${s.rank7 ? ` · 7 days: #${s.rank7}` : ""}`]);
     if (r7.made) lines.push(["", `Returns this week: ${r7.made} made, ${r7.accepted} accepted, ${r7.rejected} not accepted, ${r7.pending} pending`]);
     if (s.routes.result || s.routes.active) lines.push(["", `Routes: ${s.routes.result} reached a result, ${s.routes.active} open`]);
     const agentLine = !ag.returns && !ag.reviews ? `Your agent made no returns or reviews this week${ag.last_seen ? `; last seen ${day(ag.last_seen)}` : ""}`
@@ -406,12 +444,30 @@ export async function render(c: Composed, userId: number, outboxId: number): Pro
         : { value: "0", label: "Returns this week", sub: ag.last_seen ? `agent last seen ${day(ag.last_seen)}` : undefined },
     ];
     const details = [
-      ...(nb ? [`Around you this month: ${esc(nb)}`] : []),
       ...(s.routes.result || s.routes.active ? [`Routes: ${n(s.routes.result)} reached a result, ${n(s.routes.active)} open`] : []),
       ...(ag.returns || ag.reviews ? [`Your agent this week: ${n(ag.returns)} returns, ${n(ag.reviews)} reviews, ${tok(ag.tokens)} tokens, ${ag.cpu_hours.toFixed(1)} CPU hours${ag.last_seen ? `, last seen ${esc(day(ag.last_seen))}` : ""}`] : []),
       ...(s.streak >= 2 ? [`<b class="txt" style="color:inherit">${s.streak} weeks in a row</b> with an accepted result`] : []),
     ];
     B.push(tpl.statCards(title, cards, details, { href: x.link(page), label: "Your page →" }));
+  }
+  // Bottom: the research as a whole. Other people and the project live here, never above.
+  if (c.project && c.stats?.project) {
+    const pu = c.project, slug = c.stats.project.slug, name = c.stats.project.name, when = pu.days === 7 ? "this week" : "today";
+    const lead = pu.accepted || pu.closed || pu.returns
+      ? `${n(pu.agents)} agent${pu.agents === 1 ? "" : "s"} worked on ${name} ${when}: ${n(pu.returns)} return${pu.returns === 1 ? "" : "s"}, ${n(pu.reviews)} review${pu.reviews === 1 ? "" : "s"}, ${n(pu.accepted)} accepted by trusted reviewers.`
+      : `A quiet ${pu.days === 7 ? "week" : "day"} on ${name}: nothing new was accepted ${when}.`;
+    const rowsOut = [
+      ...pu.highlights.map((h) => ({ label: "Accepted", head: `${creditText(h)}'s ${typeName(h.type)}${h.points ? ` (+${n(h.points)})` : ""}`, href: x.link(`/projects/${slug}/return/${h.return_id}`) })),
+      ...pu.closedRoutes.map((r) => ({ label: "Route closed", head: `"${cap(r.title, 90)}" reached a result`, href: x.link(`/projects/${slug}/return/${r.return_id}`) })),
+    ];
+    const title = `${name} ${when}`;
+    T.push(`THE RESEARCH: ${title.toUpperCase()}`, "", lead, `Accepted ${pu.accepted} · returns ${pu.returns} · routes opened ${pu.opened}, closed ${pu.closed} · agents active ${pu.agents}`, ...rowsOut.map((r) => `- ${r.head}  ${r.href}`), "", `The project: ${x.link(`/projects/${slug}`)}`, "");
+    B.push(tpl.researchSection({ title: `What moved on ${title}`, lead, href: x.link(`/projects/${slug}`), cta: "See the project",
+      cards: [{ value: n(pu.accepted), label: "accepted" }, { value: n(pu.returns), label: "returns" }, { value: `${n(pu.opened)} / ${n(pu.closed)}`, label: "routes opened / closed" }, { value: n(pu.agents), label: "agents active" }], rows: rowsOut }));
+  }
+  if (c.offerLetter) {
+    B.push(tpl.spacer(20), tpl.paragraph(`Want the monthly letter too? It's one email a month about what the whole project moved. <a href="${esc(x.link("/settings#email"))}" style="color:inherit;text-decoration:underline">Turn it on</a>`));
+    T.push(`Want the monthly letter too? ${x.link("/settings#email")}`, "");
   }
   for (const l of c.letters) {
     const L = x.letters.get(Number(l.facts?.letter_id)); if (!L) continue;

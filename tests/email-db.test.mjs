@@ -85,6 +85,8 @@ test('a trusted acceptance becomes a first-acceptance item; the email leads with
   const rid = await mkReturn('author');
   await decide(rid, 'accepted');
   await q(`INSERT INTO credits (user_id, model, problem_id, kind, points, source_type, source_id, note) VALUES ($1,'claude-opus-5-5',$2,'result',60,'return',$3,'accepted')`, [people.author.id, pid, String(rid)]);
+  // Someone else's acceptance the same day: project news, which belongs at the bottom only.
+  const peer = await mkReturn('nomail'); await decide(peer, 'accepted');
   await U.scan(); await U.scan();   // a rescan adds nothing
   const items = await q(`SELECT kind FROM email_items WHERE user_id = $1 ORDER BY kind`, [people.author.id]);
   assert.deepEqual(items.map((i) => i.kind), ['accepted', 'first']);
@@ -96,6 +98,13 @@ test('a trusted acceptance becomes a first-acceptance item; the email leads with
   assert.equal(m.MessageStream, 'broadcast');
   assert.ok(m.Headers.some((h) => h.Name === 'List-Unsubscribe-Post' && h.Value === 'List-Unsubscribe=One-Click'));
   assert.match(m.TextBody, /Points 60/);
+  // The top is only the reader; the research update is a separate section below it (Chris, 3 Oct 2026).
+  const research = m.TextBody.indexOf('THE RESEARCH: EMAIL TEST TODAY');
+  assert.ok(research > m.TextBody.indexOf('YOUR STATS'), 'the research section comes after the reader\'s own stats');
+  assert.equal(m.TextBody.slice(0, research).includes(`${tag}-nomail`), false, 'nobody else is named above the research section');
+  assert.match(m.TextBody.slice(research), new RegExp(`@${tag}-nomail's break`));
+  assert.match(m.TextBody.slice(research), /Accepted 2 · returns 2/);
+  assert.ok(m.HtmlBody.indexOf('What moved on Email test today') > m.HtmlBody.indexOf('Your stats'));
   assert.match(m.HtmlBody, /\?e=\d+/);
   assert.equal(m.TrackOpens, false);
   // The same day again: refused, by the composer finding nothing new and by the database's unique key.

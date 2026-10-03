@@ -76,6 +76,30 @@ export function statCards(title: string, cards: Array<{ value: string; label: st
   </td></tr>`;
 }
 
+/** One clear next step for the person, e.g. starting an agent that went quiet: a soft card with an outlined button. */
+export function nextStep(o: { eyebrow: string; text: string; href: string; cta: string }): string {
+  return spacer(28) + `<tr><td class="card" style="background:${C.soft};border:1px solid ${C.line};padding:22px 24px 24px;border-radius:2px">
+    <p class="mut" style="${eyebrowStyle(C.mut)}">${esc(o.eyebrow)}</p>
+    <p class="txt" style="font:16px/1.55 ${FONT};color:${C.ink};margin:0 0 16px">${esc(o.text)}</p>${button(o.href, o.cta, "ink")}
+  </td></tr>`;
+}
+
+/**
+ * The bottom of every update: the research as a whole (Chris, 3 Oct 2026). A heavy rule and its own heading set it apart from the top,
+ * which is only about the reader; then project numbers in small cards, notable accepted results and closed routes as rows, and a link.
+ */
+export function researchSection(o: { title: string; lead: string; cards: Array<{ value: string; label: string }>; rows: Array<{ label: string; head: string; href: string }>; href: string; cta: string }): string {
+  const cell = (c: { value: string; label: string } | undefined, i: number) => c ? `<td class="stat" width="25%" valign="top" style="width:25%;padding:${i ? "0 0 0 8px" : "0"}">
+      <p class="txt stat-num" style="font:600 24px/1.1 ${FONT};letter-spacing:-.03em;color:${C.ink};margin:0">${esc(c.value)}</p>
+      <p class="mut" style="font:12px/1.4 ${FONT};color:${C.mut};margin:4px 0 0">${esc(c.label)}</p></td>` : `<td width="25%"></td>`;
+  return spacer(44) + `<tr><td class="research" style="border-top:3px solid ${C.ink};padding-top:22px">
+    <p class="mut" style="${eyebrowStyle(C.mut)}">The research</p>
+    <h2 class="txt" style="font:600 21px/1.3 ${FONT};letter-spacing:-.02em;color:${C.ink};margin:0 0 8px">${esc(o.title)}</h2>
+    <p class="mut" style="font:15px/1.55 ${FONT};color:${C.mut};margin:0 0 20px">${esc(o.lead)}</p>
+    <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" class="research-cards"><tr>${[0, 1, 2, 3].map((i) => cell(o.cards[i], i)).join("")}</tr></table>
+  </td></tr>` + (o.rows.length ? rows("Accepted and closed", o.rows) : "") + spacer(22) + `<tr><td>${button(o.href, o.cta, "outline")}</td></tr>`;
+}
+
 /** The monthly letter or project news inside an email: a quieter, ruled section. */
 export function letterBlock(title: string | null, subject: string, bodyHtml: string): string {
   return spacer(36) + `<tr><td style="border-top:2px solid ${C.ink};padding-top:22px">
@@ -106,6 +130,7 @@ export function shell(o: { title: string; preheader: string; eyebrow: string; bo
     .hero-head{font-size:23px!important}
     .stat-num{font-size:27px!important}
     .row-label{width:84px!important}
+    .research-cards td.stat{display:inline-block!important;width:48%!important;padding:0 0 14px!important}
   }
   @media (prefers-color-scheme:dark){
     .page,.wrap{background:#0f100f!important}
@@ -117,7 +142,8 @@ export function shell(o: { title: string; preheader: string; eyebrow: string; bo
     td.btn-ink{background:#efeee8!important;border-color:#efeee8!important} a.btn-ink{color:${C.ink}!important}
     .logo-ink{display:none!important} .logo-paper{display:block!important;max-height:none!important}
     td,p{border-color:${C.charLine}!important}
-    td.ask{border-color:#efeee8!important}
+    td.ask,td.research{border-color:#efeee8!important}
+    td.btn-outline{border-color:#efeee8!important} a.btn-outline{color:#efeee8!important}
   }
   [data-ogsc] .logo-ink{display:none!important} [data-ogsc] .logo-paper{display:block!important;max-height:none!important}
 </style></head>
