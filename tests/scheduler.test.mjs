@@ -2,7 +2,9 @@ import assert from 'node:assert/strict';
 import {before, beforeEach, after, afterEach, test} from 'node:test';
 import express from 'express';
 import {randomUUID} from 'node:crypto';
-import {mkdtempSync, existsSync, readFileSync, rmSync} from 'node:fs';
+import {mkdtempSync, existsSync, readFileSync, writeFileSync, rmSync} from 'node:fs';
+import {execFile} from 'node:child_process';
+import {promisify} from 'node:util';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 
@@ -36,6 +38,10 @@ beforeEach(async () => {
   base = `http://127.0.0.1:${server.address().port}/projects/${slug}`;
 });
 afterEach(async () => {
+  await q(`DELETE FROM document_versions WHERE problem_id=$1`,[pid]);
+  await q(`DELETE FROM document_publications WHERE problem_id=$1`,[pid]);
+  await q(`DELETE FROM file_refs WHERE file_sha IN (SELECT sha256 FROM files WHERE user_id=ANY($1))`,[[uid,other]]);
+  await q(`DELETE FROM files WHERE user_id=ANY($1)`,[[uid,other]]);
   await q(`DELETE FROM findings WHERE problem_id=$1`,[pid]);
   await q(`DELETE FROM asks WHERE problem_id=$1`,[pid]);
   await q(`DELETE FROM messages WHERE channel_id IN (SELECT id FROM channels WHERE problem_id=$1)`,[pid]);
@@ -97,6 +103,139 @@ const result = (a,body={}) => call('/result',{method:'POST',session:a.session,at
 async function queued({type='source',purpose='work',hours=1,tools=[],sources=[],skills=[],priority=0,age=0}={}) {
   return one(`INSERT INTO jobs (problem_id,type,title,brief_md,git_ref,budget_hours,min_tier,required_tools,required_sources,preferred_skills,priority,purpose,created_at) VALUES ($1,$2,$3,'Find the evidence.','main',$4,99,$5,$6,$7,$8,$9,now()-($10::int*interval '1 day')) RETURNING *`,[pid,type,`Test ${randomUUID()}`,hours,tools,sources,skills,priority,purpose,age]);
 }
+
+async function runtimeRouteFixture({paths=[],prepare}={}) {
+  const step={question:'One bounded question',method:'A frozen producer',success:'Exact certificate',failure:'Counterexample',budget_hours:1};
+  const origin=await one(`INSERT INTO returns(problem_id,type,user_id,model,provider,report_md,transcript,status,research) VALUES ($1,'explore',$2,'gpt-6-astra','test','Source','t','accepted',$3) RETURNING id`,[pid,other,JSON.stringify({outcome:'progress',next_step:step})]);
+  const route=await one(`INSERT INTO research_routes(problem_id,origin_return_id,title,contribution_md,prior_art_md,uncertainty_md,state,next_step) VALUES ($1,$2,'Runtime fixture','c','p','u','active',$3) RETURNING id`,[pid,origin.id,JSON.stringify(step)]);
+  await q('UPDATE returns SET research_route_id=$2 WHERE id=$1',[origin.id,route.id]);
+  const j=await queued({type:'explore',priority:10});await q(`UPDATE jobs SET research_route_id=$2,research_source_return_id=$3,research_stage='first_look' WHERE id=$1`,[j.id,route.id,origin.id]);
+  if(prepare)await prepare({origin,route,j,step});
+  const capabilities={tools:['python3'],execution:{cpu_seconds:10,wall_seconds:20,publication_context_privacy:'export-v1'}};
+  const a=ok(await call(`/start?share=0&job=${j.id}`,{launch:randomUUID(),capabilities}));assert.equal(Number(a.job_id),Number(j.id));
+  const body={job_id:a.job_id,deferral:{kind:'execution',fit_scope:'runtime',source_scope:'task',source_paths:paths,evidence_md:'This frozen producer exceeds the measured controls.',reopen_when:'Actual sources or runtime controls change.'}};
+  const opts={method:'POST',session:a.session,attempt:a.attempt_id,body};const receipt=ok(await call('/release',opts));
+  assert.deepEqual(ok(await call('/release',opts)),receipt);
+  const stored=await one('SELECT * FROM assignment_deferrals WHERE attempt_id=$1',[a.attempt_id]);
+  assert.equal(stored.source_scope,'task');assert.ok(stored.task_source_epoch);
+  const b=await start({capabilities});assert.notEqual(Number(b.job_id),Number(j.id));ok(await release(b));
+  const originalSession=await one('SELECT capabilities,department_id FROM sessions WHERE id=$1',[b.session]);
+  const agent={problemId:pid,slug,sessionId:b.session,uid,tier:1,model:'claude-fable-5-1',provider:'anthropic',trusted:true,granted:true,lane:null,cpuHours:0,ramGb:0,hasGpu:false,disk:5,maxHours:2,reviewStreak:0,capabilities};
+  assert.ok(!await selectJob(agent,false));
+  return {origin,route,j,step,a,b,agent,stored,opts,receipt,originalSession};
+}
+
+test('explicit task-source runtime checkpoints ignore unrelated publications and reopen for watched versions or controls',async()=>{
+  const f=await runtimeRouteFixture({paths:['research/producer.py']});
+  await q(`INSERT INTO document_publications(problem_id,path,sha256) VALUES ($1,'research/unrelated.md',$2)`,[pid,'a'.repeat(64)]);
+  await q(`INSERT INTO document_versions(problem_id,path,version,content_sha) VALUES ($1,'research/unrelated.md',1,$2)`,[pid,'b'.repeat(64)]);
+  assert.ok(!await selectJob(f.agent,false),'unrelated prose no longer reopens a runtime checkpoint');
+  assert.equal(Number((await selectJob({...f.agent,jobId:Number(f.j.id)},false)).id),Number(f.j.id),'human directed job still works');
+  await q(`UPDATE sessions SET capabilities=jsonb_set(capabilities,'{execution,cpu_seconds}','20') WHERE id=$1`,[f.b.session]);
+  assert.equal(Number((await selectJob(f.agent,false)).id),Number(f.j.id),'real runtime change reopens');
+  await q(`UPDATE sessions SET capabilities=$2 WHERE id=$1`,[f.b.session,JSON.stringify(f.originalSession.capabilities)]);
+  const department=randomUUID();
+  await q(`INSERT INTO departments(id,user_id,registration_key) VALUES ($1,$2,$3)`,[department,uid,randomUUID()]);
+  await q(`UPDATE sessions SET department_id=$2 WHERE id=$1`,[f.b.session,department]);
+  assert.equal(Number((await selectJob(f.agent,false)).id),Number(f.j.id),'another department is not blocked');
+  await q(`UPDATE sessions SET department_id=$2 WHERE id=$1`,[f.b.session,f.originalSession.department_id]);
+  await q(`DELETE FROM departments WHERE id=$1`,[department]);
+  assert.ok(!await selectJob(f.agent,false));
+  await q(`INSERT INTO document_versions(problem_id,path,version,content_sha,created_at) VALUES ($1,'research/producer.py',1,$2,'2000-01-01')`,[pid,'c'.repeat(64)]);
+  assert.equal(Number((await selectJob(f.agent,false)).id),Number(f.j.id),'missing watched producer appearing reopens despite older timestamp');
+  assert.deepEqual(await one('SELECT * FROM assignment_deferrals WHERE id=$1',[f.stored.id]),f.stored,'original checkpoint is unchanged');
+  assert.deepEqual((await one('SELECT receipt FROM assignment_attempts WHERE id=$1',[f.a.attempt_id])).receipt,f.receipt);
+});
+
+test('task-source checkpoints reuse unchanged comparisons but detect material route evidence and newly linked old sources',async()=>{
+  let foreign;
+  const f=await runtimeRouteFixture({prepare:async()=>{
+    foreign=await one(`INSERT INTO returns(problem_id,type,user_id,model,provider,report_md,transcript,status,research) VALUES ($1,'explore',$2,'gpt-6-astra','test','Old unlinked source','t','recorded','{"outcome":"progress"}') RETURNING id`,[pid,other]);
+    const rr=await one(`INSERT INTO research_routes(problem_id,origin_return_id,title,contribution_md,prior_art_md,uncertainty_md,state) VALUES ($1,$2,'Other route','c','p','u','active') RETURNING id`,[pid,foreign.id]);
+    await q('UPDATE returns SET research_route_id=$2 WHERE id=$1',[foreign.id,rr.id]);
+  }});
+  const comparison=await queued({type:'explore'});await q(`UPDATE jobs SET status='returned',step_check_of=$2,research_source_return_id=$3 WHERE id=$1`,[comparison.id,f.j.id,f.origin.id]);
+  const ret=await one(`INSERT INTO returns(problem_id,type,user_id,model,provider,job_id,research_route_id,report_md,transcript,status,research) VALUES ($1,'explore',$2,'gpt-6-astra','test',$3,$4,'Same step','t','recorded',$5) RETURNING id`,[pid,other,comparison.id,f.route.id,JSON.stringify({outcome:'promising',next_step:f.step})]);
+  assert.ok(!await selectJob(f.agent,false),'unchanged promising comparison is not new evidence');
+  await q('UPDATE returns SET cites=$2 WHERE id=$1',[foreign.id,JSON.stringify({returns:[Number(f.origin.id)]})]);
+  assert.equal(Number((await selectJob(f.agent,false)).id),Number(f.j.id),'an older newly linked material source is visible');
+  await q(`UPDATE returns SET cites='{}' WHERE id=$1`,[foreign.id]);assert.ok(!await selectJob(f.agent,false));
+  await q('UPDATE returns SET research=$2 WHERE id=$1',[ret.id,JSON.stringify({outcome:'progress',next_step:{...f.step,method:'A bounded replacement'}})]);
+  assert.equal(Number((await selectJob(f.agent,false)).id),Number(f.j.id),'changed method/progress reopens focused work');
+});
+
+test('task-source snapshots include artifacts outside the twelve displayed candidates and supersede only comparable older runtime checkpoints',async()=>{
+  let older;
+  const f=await runtimeRouteFixture({prepare:async({route,j})=>{
+    for(let i=0;i<13;i++){
+      const r=await one(`INSERT INTO returns(problem_id,type,user_id,model,provider,research_route_id,report_md,transcript,status) VALUES ($1,'explore',$2,'gpt-6-astra','test',$3,'Existing evidence','t','recorded') RETURNING id`,[pid,other,route.id]);
+      older??=r;
+    }
+    // An earlier runtime checkpoint may share the current project epoch; it must not veto this explicit successor's new evidence.
+    const a=await start({capabilities:{tools:['python3'],execution:{cpu_seconds:10,wall_seconds:20,publication_context_privacy:'export-v1'}}});
+    ok(await call('/release',{method:'POST',session:a.session,attempt:a.attempt_id,body:{job_id:a.job_id,deferral:{kind:'execution',fit_scope:'runtime',evidence_md:'Earlier project-wide checkpoint.',reopen_when:'A bounded alternative appears.'}}}));
+    // The fixture's explicit directed registration obtains a new original attempt;
+    // the older release and project-wide snapshot stay byte-for-byte unchanged.
+  }});
+  const before=await q('SELECT id,source_epoch,session_fit,source_scope FROM assignment_deferrals WHERE job_id=$1 ORDER BY id',[f.j.id]);assert.equal(before.length,2);
+  const sha=randomUUID().replaceAll('-','').padEnd(64,'0');
+  await q(`INSERT INTO files(sha256,user_id,name,ext,bytes) VALUES ($1,$2,'bounded.py','py',1)`,[sha,other]);
+  await q(`INSERT INTO file_refs(file_sha,ref_type,ref_id) VALUES ($1,'return',$2)`,[sha,older.id]);
+  assert.equal(Number((await selectJob(f.agent,false)).id),Number(f.j.id),'a supplemental bounded producer on an older material return reopens');
+  assert.deepEqual(await q('SELECT id,source_epoch,session_fit,source_scope FROM assignment_deferrals WHERE job_id=$1 ORDER BY id',[f.j.id]),before,'history is not rewritten');
+});
+
+test('task-source opt-in refuses invalid or ambiguous declarations without releasing the original attempt',async()=>{
+  const j=await queued({priority:10});const a=await start();
+  for(const d of [
+    {source_scope:'invalid'},
+    {source_scope:'task'},
+    {source_scope:'task',source_paths:[]},
+    {fit_scope:'runtime',source_scope:'task',source_paths:['../private']},
+    {fit_scope:'runtime',source_scope:'task',source_paths:['research/a\u0000.md']},
+    {fit_scope:'runtime',source_scope:'task',source_paths:[]},
+    {source_paths:[]},
+  ])assert.equal((await call('/release',{method:'POST',session:a.session,attempt:a.attempt_id,body:{job_id:j.id,deferral:{kind:'execution',evidence_md:'A real blocker.',reopen_when:'Changed controls.',...d}}})).status,400);
+  assert.equal((await one('SELECT status FROM assignment_attempts WHERE id=$1',[a.attempt_id])).status,'assigned');
+  assert.equal((await one('SELECT count(*) AS n FROM assignment_deferrals WHERE job_id=$1',[j.id])).n,'0');
+  ok(await release(a));
+});
+
+test('historical checkpoint imports reject scoped batches before writes and report duplicate application accurately',async()=>{
+  const j=await queued({priority:10});const a=await start();assert.equal(Number(a.job_id),Number(j.id));ok(await release(a));
+  const receipt=await one('SELECT status,receipt FROM assignment_attempts WHERE id=$1',[a.attempt_id]);
+  const item={attempt_id:a.attempt_id,job_id:Number(j.id),kind:'execution',evidence_md:'Reviewed historical source checkpoint.',reopen_when:'Changed source or controls.'};
+  const dir=mkdtempSync(join(tmpdir(),'sah-historical-checkpoint-')),file=join(dir,'input.json');
+  const run=async(rows,apply=true)=>{
+    writeFileSync(file,JSON.stringify(rows),{mode:0o600});
+    const {stdout}=await promisify(execFile)(process.execPath,['--import','tsx','scripts/import-terminal-deferrals.ts',file,...(apply?['--apply']:[])],{env:process.env,timeout:15000,maxBuffer:1048576});
+    return JSON.parse(stdout.trim());
+  };
+  try {
+    for (const scoped of [{fit_scope:'runtime'},{fit_scope:'publication'},{fit_scope:'runtime',source_scope:'task',source_paths:[]}]) {
+      await assert.rejects(run([item,{...item,...scoped}]),e=>/Historical imports require legacy fit and project source scope/.test(e.stderr));
+      assert.equal((await one('SELECT count(*) AS n FROM assignment_deferrals WHERE attempt_id=$1',[a.attempt_id])).n,'0','a later invalid scope must not partly import earlier items');
+    }
+    const deferredFailure=`checkpoint_commit_${randomUUID().replaceAll('-','')}`;
+    await q(`CREATE FUNCTION ${deferredFailure}() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'fixture deferred commit failure'; RETURN NEW; END $$`);
+    try {
+      await q(`CREATE CONSTRAINT TRIGGER ${deferredFailure} AFTER INSERT ON assignment_deferrals DEFERRABLE INITIALLY DEFERRED FOR EACH ROW WHEN (NEW.job_id=${Number(j.id)}) EXECUTE FUNCTION ${deferredFailure}()`);
+      await assert.rejects(run([item]),e=>/fixture deferred commit failure/.test(e.stderr) && e.stdout.trim()==='','a failed commit must never emit an applied-success report');
+      assert.equal((await one('SELECT count(*) AS n FROM assignment_deferrals WHERE attempt_id=$1',[a.attempt_id])).n,'0','failed commit leaves no checkpoint');
+    } finally {
+      await q(`DROP TRIGGER IF EXISTS ${deferredFailure} ON assignment_deferrals`);
+      await q(`DROP FUNCTION ${deferredFailure}()`);
+    }
+    const first=await run([item]);assert.equal(first.applied,true);assert.equal(first.already_recorded,false);
+    assert.equal(first.requested_fit_scope,'legacy');assert.equal(first.requested_source_scope,'project');
+    const stored=await one('SELECT * FROM assignment_deferrals WHERE attempt_id=$1',[a.attempt_id]);
+    const duplicate=await run([item]);assert.equal(duplicate.applied,false);assert.equal(duplicate.already_recorded,true);
+    assert.deepEqual(duplicate.checkpoint_scope,{kind:'execution',fit_scope:'legacy',source_scope:'project'});
+    const dry=await run([item],false);assert.equal(dry.applied,false);assert.equal(dry.already_recorded,true);
+    assert.deepEqual(await one('SELECT * FROM assignment_deferrals WHERE attempt_id=$1',[a.attempt_id]),stored,'historical checkpoint and full original fit remain unchanged');
+    assert.deepEqual(await one('SELECT status,receipt FROM assignment_attempts WHERE id=$1',[a.attempt_id]),receipt,'no terminal attempt is released again or reclassified');
+  } finally {rmSync(dir,{recursive:true,force:true});}
+});
 
 test('one pasted URL, concurrent bootstrap retries, one capped assignment and stable settings',async()=>{
   for(let i=0;i<4;i++)await queued();
@@ -252,7 +391,8 @@ test('only declared research agents are contacts; same-owner asks reach exactly 
   assert.equal(JSON.stringify(ok(await call(`/asks/${ask.id}`))).includes(ordinary.session),false);
   ok(await call(`/sessions/${expert.session}/capabilities`,{method:'POST',session:expert.session,body:{capabilities:{skills:['python']}}}));
   assert.equal(ok(await call('/who')).contacts.length,0);
-  assert.equal((await call('/asks',{method:'POST',session:ordinary.session,body:{to_contact:expert.contact_id,body_md:'More?'}})).status,409);
+  const unavailable=await call('/asks',{method:'POST',session:ordinary.session,body:{to_contact:expert.contact_id,body_md:'More?'}});
+  assert.equal(unavailable.status,409,JSON.stringify(unavailable.body));
 });
 
 test('research availability expires with silence, donor deadline, cap or explicit end',async()=>{

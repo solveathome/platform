@@ -117,20 +117,24 @@ const MATERIAL_RETURN = `NOT ${unchangedComparison('r')}`;
 const RETURN_EDGES = `SELECT d.return_id AS src,d.depends_on_id AS dst FROM return_dependencies d JOIN returns r ON r.id=d.return_id WHERE r.problem_id=$1 AND ${MATERIAL_RETURN}
   UNION SELECT r.id,x.v::bigint FROM returns r CROSS JOIN LATERAL jsonb_array_elements_text(CASE WHEN jsonb_typeof(r.cites->'returns')='array' THEN r.cites->'returns' ELSE '[]'::jsonb END) x(v)
     WHERE r.problem_id=$1 AND ${MATERIAL_RETURN} AND x.v ~ '^[0-9]{1,15}$'`;
-/** Research returns recorded after `through` on this route or a linked one: what a step check compares the step against. */
-export async function stepCandidates(problemId: number, routeId: number, through: number): Promise<any[]> {
-  return q(`WITH edges AS (${RETURN_EDGES}),
-      mine AS (SELECT id FROM returns WHERE problem_id=$1 AND research_route_id=$2),
+/** Shared material evidence set, before presentation limits. Expressions are internal SQL, never request text. */
+export function stepEvidenceSQL(problem = '$1', route = '$2'): string {
+  return `WITH edges AS (${RETURN_EDGES.replaceAll('$1', problem)}),
+      mine AS (SELECT id FROM returns WHERE problem_id=${problem} AND research_route_id=${route}),
       premises AS (SELECT dst FROM edges WHERE src IN (SELECT id FROM mine)),
       linked AS (
         SELECT c.research_route_id AS id FROM returns c JOIN edges e ON e.src=c.id
-          WHERE c.problem_id=$1 AND c.research_route_id IS NOT NULL AND (e.dst IN (SELECT id FROM mine) OR e.dst IN (SELECT dst FROM premises))
+          WHERE c.problem_id=${problem} AND c.research_route_id IS NOT NULL AND (e.dst IN (SELECT id FROM mine) OR e.dst IN (SELECT dst FROM premises))
         UNION SELECT r.research_route_id FROM edges e JOIN returns r ON r.id=e.dst WHERE e.src IN (SELECT id FROM mine) AND r.research_route_id IS NOT NULL
-        UNION SELECT id FROM research_routes WHERE problem_id=$1 AND (parent_route_id=$2 OR id=(SELECT parent_route_id FROM research_routes WHERE id=$2))
-        UNION SELECT $2::bigint)
-    SELECT c.id,c.research_route_id AS route_id,c.status,c.final_rung,c.research->>'outcome' AS outcome,left(coalesce(c.research->>'evidence_md',''),400) AS evidence
-    FROM returns c WHERE c.problem_id=$1 AND c.research_route_id IN (SELECT id FROM linked) AND c.id>$3 AND c.status<>'rejected' AND c.duplicate_of IS NULL
-      AND NOT ${unchangedComparison('c')}
+        UNION SELECT id FROM research_routes WHERE problem_id=${problem} AND (parent_route_id=${route} OR id=(SELECT parent_route_id FROM research_routes WHERE id=${route}))
+        UNION SELECT ${route}::bigint)
+    SELECT c.* FROM returns c WHERE c.problem_id=${problem} AND c.research_route_id IN (SELECT id FROM linked) AND c.status<>'rejected' AND c.duplicate_of IS NULL
+      AND NOT ${unchangedComparison('c')}`;
+}
+/** Research returns recorded after `through` on this route or a linked one: what a step check compares the step against. */
+export async function stepCandidates(problemId: number, routeId: number, through: number): Promise<any[]> {
+  return q(`SELECT c.id,c.research_route_id AS route_id,c.status,c.final_rung,c.research->>'outcome' AS outcome,left(coalesce(c.research->>'evidence_md',''),400) AS evidence
+    FROM (${stepEvidenceSQL()}) c WHERE c.id>$3
     ORDER BY c.research_route_id=$2 DESC,c.id DESC LIMIT 12`, [problemId, routeId, through]);
 }
 /** Retire only queued repeat comparisons with a still-valid earlier certificate.

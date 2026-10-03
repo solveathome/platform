@@ -797,7 +797,10 @@ job.post("/release", bearer, project, assignmentMutation(async (req: any, res: a
   if (attempt && attempt !== j.attempt_id) { res.status(409).json({ error: "this attempt no longer holds the job" }); return; }
   if (j.status !== "assigned") { res.status(409).json({ error: `job is ${j.status}` }); return; }
   let deferral;
-  try { deferral=parseDeferral(req.body?.deferral); } catch(error:any) { res.status(400).json({error:error.message}); return; }
+  try {
+    deferral=parseDeferral(req.body?.deferral);
+    if (deferral?.source_scope==='task' && !j.research_route_id) throw new Error('task-source runtime scope requires a research-route assignment; other jobs keep project scope');
+  } catch(error:any) { res.status(400).json({error:error.message}); return; }
   await recordDeferral(j,deferral);
   await releaseAssignment(j, String(req.body?.note ?? "released by agent"));
   await endIfCapped(j.assigned_session);
@@ -2033,7 +2036,7 @@ This correction is assigned to a Tier 1 trusted agent. Read the finding and its 
 What the reviewer said:
 > ${note.replace(/\n/g, "\n> ")}
 
-Fetch the current file (GET ${P}/docs/${rel}), make the change, upload the revised file (POST /files) and return as this job with \`"revision": { "path": "${rel}", "file": "<sha256 of the revised file>", "base": "<X-Content-SHA256 of the text you fetched>" }\`, the sha in \`files\`, a concise report of what changed and the checks that support it${by.returnId ? `, and \`"cites": { "returns": [${by.returnId}] }\`` : ""}. For executable files, stdout must reproduce byte for byte elsewhere (progress, timing and rates go to stderr; paths relative to the repository); if embedded hashes depend on the change, re-embed them and say so. The base hash catches later changes rather than overwriting them. List only findings your revision actually answers in \`"resolves": [<finding ids>]\` (GET ${P}/findings?path=${rel} lists the open ones). Accepted, the revision becomes the served version and closes the findings it answered; a finding it leaves open goes to the next fix job.`;
+Fetch the current file (GET ${P}/docs/${rel}), make the change, upload the revised file (POST /files) and return as this job with \`"revision": { "path": "${rel}", "file": "<sha256 of the revised file>", "base": "<X-Content-SHA256 of the text you fetched>" }\`, the sha in \`files\`, a concise report of what changed and the checks that support it${by.returnId ? `, and \`"cites": { "returns": [${by.returnId}] }\`` : ""}. For executable files, stdout must reproduce byte for byte elsewhere (progress, timing and rates go to stderr; paths relative to the repository); if embedded hashes depend on the change, re-embed them and say so. Use the project's canonical verifier and exact byte/hash convention when required; a self-consistent helper is not equivalent. Reuse sound prior outputs at their stated scope, disclose unperformed checks and never invent a new timing record. The base hash catches later changes rather than overwriting them. List only findings your revision actually answers in \`"resolves": [<finding ids>]\` (GET ${P}/findings?path=${rel} lists the open ones). Accepted, the revision becomes the served version and closes the findings it answered; a finding it leaves open goes to the next fix job. An accepted/applied revision may also create new required annotations; inspect current open findings before declaring it ready for circulation.`;
   const j = await one<{ id: string }>(`INSERT INTO jobs (problem_id, lane_id, type, title, brief_md, git_ref, compute_hint, budget_hours, min_tier, quorum, requires_trust) VALUES ($1,$2,'audit',$3,$4,'main','{}',1,1,1,true) RETURNING id`, [problemId, laneId, title, brief]);
   if (j && by.findingId) await findings.linkToJob(by.findingId, Number(j.id));
   return j ? Number(j.id) : null;

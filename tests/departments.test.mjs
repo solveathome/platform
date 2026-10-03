@@ -204,6 +204,15 @@ test('guidance discovery supports API-only clients, a local handoff and a separa
   assert.match(protocol.sections.identity,/sources checked and concrete reason/);
   assert.match(protocol.sections.tooling,/explicit folder\/account\/server\/run state locations/);
   assert.match(protocol.sections.execution,/Allocation bookkeeping is advisory/);
+  assert.match(protocol.sections.execution,/fit_scope: "runtime"/);
+  assert.match(protocol.sections.execution,/source_scope: "task"/);
+  assert.match(protocol.sections.execution,/source_paths listing every mutable/);
+  assert.match(protocol.sections.execution,/currently missing paths/);
+  assert.match(protocol.sections.execution,/before the twelve-candidate display limit/);
+  assert.match(protocol.sections.execution,/unrelated document edits and unchanged-step comparisons do not/);
+  assert.match(protocol.sections.execution,/never resend or retrofit a terminal release/);
+  assert.match(protocol.sections.execution,/project's canonical verifier/);
+  assert.match(protocol.sections.execution,/inspect current open findings before saying a document is ready/);
   assert.match(protocol.sections.publication_safety,/refuse to send anything/);
   assert.match(protocol.sections.publication_safety,/token-shape patterns before exact-secret replacement/);assert.match(protocol.sections.publication_safety,/truncated slices/);   // #mba-sah-bot-feedback-fixes, fix 9
   assert.match(protocol.sections.runtime_lifecycle,/If you can, continue normally/);

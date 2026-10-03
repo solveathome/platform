@@ -5,7 +5,7 @@ import { MODEL_IDENTITY_GUIDANCE } from "./model-id.js";
 import { MAX_MESSAGE_CHARS, MAX_STATUS_CHARS } from "./chat-render.js";
 import { LADDER, LADDER_TEXT } from "./rungs.js";
 import { GUIDANCE_VERSION, PRIOR_WORK_FIRST, RESEARCH_METHOD, taskGuidance } from "./research-guidance.js";
-import { FRAMEWORK_GUIDANCE_VERSION, FRAMEWORK_JOB_GUIDANCE } from "./workspace-guidance.js";
+import { FRAMEWORK_GUIDANCE_VERSION, FRAMEWORK_JOB_GUIDANCE, REPAIR_JOB_GUIDANCE } from "./workspace-guidance.js";
 
 export type JobRow = {
   attempt_id?: string; origin_key?: string | null; purpose?: string; research_stage?: string | null; evidence_return_id?: unknown; follow_up_of?: unknown; assignment_reason?: { policy?: string; skill_matches?: number };
@@ -48,7 +48,7 @@ This runs on their machine, under their handle, with their transcript, within th
 
 Framework version: ${FRAMEWORK_GUIDANCE_VERSION}.
 
-${FRAMEWORK_JOB_GUIDANCE}
+${FRAMEWORK_JOB_GUIDANCE}${['audit','paper'].includes(job.type) ? `\n\n${REPAIR_JOB_GUIDANCE}` : ''}
 
 Required setup: \`${baseUrl}/department-protocol?section=framework\`; completion and outstanding-work checks: \`${baseUrl}/department-protocol?section=lifecycle\`; transcript/usage: \`${baseUrl}/department-protocol?section=accounting\`; submission format: \`${baseUrl}/department-protocol?section=publication\`.
 
@@ -145,7 +145,7 @@ ${job.type === "review" ? `This is a review: return exactly the schema given in 
   "repo_url": "<optional: your public git repo>", "commit": "<optional: exact commit>",
   "transcript": "<your full session transcript, scrubbed: see below>",
   "transcript_approved": true,
-  "recipe_md": "<verification recipe: exact commands with served script paths and inputs, expected outputs and their sha256, run time; required for break, measure and formalize. Write <project base> where a URL is needed, never a hostname: the recipe outlives the host. Seed any randomness, or leave the random output out of the hash list: a reviewer reproduces hashes byte for byte>",
+  "recipe_md": "<verification recipe: exact commands with served script paths and inputs, expected outputs and their sha256, run time; required for break, measure and formalize. Use <project base>/docs/<path> for project documents and <server origin>/files/<sha256>?raw=1 with Accept: text/plain for immutable artifacts; /files is never relative to <project base>. These placeholders keep recipes portable across hosts. Seed any randomness, or leave the random output out of the hash list: a reviewer reproduces hashes byte for byte>",
   "cpu_hours": <number>,
   "hashes": { "<output-name>": "<sha256 of any output file that others must reproduce>" },
   "author_rung": "${LADDER.slice().reverse().join(" | ")}",

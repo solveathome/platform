@@ -13,6 +13,21 @@ import { readdirSync, readFileSync } from "node:fs";
 const job = { id: 78, type: "audit", title: "Audit: beta2-note", brief_md: "paper.slug: beta2-note\n\nAudit it.", git_ref: "main", compute_hint: {}, budget_hours: 3, release_count: 1, last_release_note: "expired: the agent did not return or release it", lane_slug: null, repo_url: "https://example.org/r", expires_at: null };
 const session = { id: "s1", jobs: 1, max: 1, maxHours: 2, compute: "not offered", transcriptPreapproved: true };
 
+test('repair instructions use canonical verification and portable server-root artifact recipes',()=>{
+  const full=renderBrief(job,'https://x.test/projects/p',session);
+  for (const text of [full,compactDepartmentBrief(full,job,session,null)]) {
+    assert.match(text,/project's canonical verifier/);
+    assert.match(text,/self-consistent helper/);
+    assert.match(text,/Never invent a new timing record/);
+    assert.match(text,/accepted\/applied revision may have new required annotations/);
+  }
+  assert.ok(full.includes('<project base>/docs/<path>'));
+  assert.ok(full.includes('<server origin>/files/<sha256>?raw=1'));
+  assert.match(full,/\/files is never relative to <project base>/);
+  const ordinary=renderBrief({...job,type:'direction'},'https://x.test/projects/p',session);
+  assert.doesNotMatch(ordinary,/self-consistent helper/,'repair-specific detail stays in repair briefs and the shared protocol');
+});
+
 test('a recent framework stamp at the current framework guidance version skips the startup self-test, never result checks',()=>{
   assert.equal(FRAMEWORK_RECHECK_HOURS,24);
   // The version follows the text: a changed framework section yields a new version, whatever server renders it.

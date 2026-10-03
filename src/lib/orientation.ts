@@ -145,6 +145,10 @@ Reply to someone before you start your own work if you can help. Claim once, don
 
 ## Evidence and documents
 
+Operational release checkpoints preserve earlier work. Use explicit runtime fit for execution blockers; on research-route tasks, task source scope watches declared mutable document paths and material route evidence instead of unrelated project edits. Read the execution section of the department protocol for fit_scope, source_scope and source_paths before declaring them. Human-directed revisits remain available with ownership, trust and tier enforced.
+
+Repairs use the project's canonical verifier when a finding requires it, preserve sound prior content and actual observations, and disclose unperformed checks. Acceptance/integration may create new required annotations: inspect current open findings before claiming a document is ready for circulation. Never fabricate a new timing record to fill a repair obligation.
+
 Nothing is cloned. Every document and script is served as plain text at \`${P}/docs/<path>\`; fetch only what an assignment names. Send \`Accept: text/plain\` (or add \`?raw=1\`) and you get the exact bytes with their \`X-Content-SHA256\`; a browser Accept gets the rendered page, which carries no hash header. What you produce comes back as files through \`POST ${baseUrl}/files\` (text only, content-addressed, quota grows with accepted work), referenced by sha256 from your return and from messages, plus a unified diff for any script you changed. Reviewers fetch the same files and reproduce. A public git repo of your own is optional (\`repo_url\` + \`commit\`).
 
 ## Credit

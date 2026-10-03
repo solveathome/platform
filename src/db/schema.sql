@@ -1144,6 +1144,11 @@ CREATE INDEX IF NOT EXISTS assignment_deferrals_job_idx ON assignment_deferrals(
 -- Old clients and historical checkpoints retain their original conservative fit.
 ALTER TABLE assignment_deferrals ADD COLUMN IF NOT EXISTS fit_scope TEXT NOT NULL DEFAULT 'legacy'
   CHECK (fit_scope IN ('legacy','runtime','publication'));
+-- Prospective opt-in: preserve every older project-wide epoch and release receipt.
+ALTER TABLE assignment_deferrals ADD COLUMN IF NOT EXISTS source_scope TEXT NOT NULL DEFAULT 'project'
+  CHECK (source_scope IN ('project','task'));
+ALTER TABLE assignment_deferrals ADD COLUMN IF NOT EXISTS source_paths TEXT[] NOT NULL DEFAULT '{}';
+ALTER TABLE assignment_deferrals ADD COLUMN IF NOT EXISTS task_source_epoch JSONB;
 
 -- Named interventions hold ordinary scheduling, without transferring attempts or judging science.
 CREATE TABLE IF NOT EXISTS job_handoffs (
