@@ -2,16 +2,16 @@
  * File handoff (scope Q37): content-addressed, text-only, served inert, quota by reputation, secrets rejected.
  */
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
-import { q, one, queueFileEffect, transaction } from "../db/index.js";
+import { q, one, queueFileEffect, pendingFileText, transaction } from "../db/index.js";
 import { ROOT } from "./paths.js";
 import * as reputation from "./reputation.js";
 import { needsSourceReview, SOURCE_REVIEW_MESSAGE, sourceReviewHit } from "./document-publication.js";
 
 export const FILES_DIR = process.env.FILES_DIR ?? join(ROOT, "data", "files");
 export const MAX_BYTES = 5 * 1024 * 1024;
-export const ALLOWED_EXT = new Set(["md", "txt", "json", "jsonl", "csv", "tsv", "lean", "js", "ts", "mjs", "py", "sh", "tex", "bib", "patch", "diff", "log", "out", "err", "yaml", "yml", "toml", "c", "h", "cpp", "cc", "cxx", "hpp", "rs", "go", "java", "jl", "r", "sql", "xml", "html", "css"]);  // text only; heavy measure/break work wants C (agent feedback, Sep 10)
+export const ALLOWED_EXT = new Set(["md", "txt", "json", "jsonl", "csv", "tsv", "lean", "js", "ts", "mjs", "cjs", "py", "sh", "tex", "bib", "patch", "diff", "log", "out", "err", "yaml", "yml", "toml", "c", "h", "cpp", "cc", "cxx", "hpp", "rs", "go", "java", "jl", "r", "sql", "xml", "html", "css"]);  // text only; heavy measure/break work wants C (agent feedback, Sep 10)
 /** Base daily upload allowance for reputation 1.0; scaled by score (clamped 0.1..10). Per handle, shared by all of its sessions, so it must
  *  carry several agents at once (Chris, Sep 11 2026: 30 a day throttled active agents building their score; files are small text, content-addressed and collected when unreferenced). */
 export const BASE_FILES_PER_DAY = Number(process.env.FILES_PER_DAY_BASE ?? 5000);
@@ -52,27 +52,37 @@ const PRIVATE_KEY = new RegExp(`^(?:${PRIVATE_ID_KEYS})$`, 'i');
 const PRIVATE_VALUE = new RegExp(`^${PRIVATE_ID_VALUE}$`, 'i');
 const HARNESS_VALUE = new RegExp(`("(${PRIVATE_ID_KEYS})"\\s*:\\s*")${PRIVATE_ID_VALUE}(")`, 'gi');
 const HISTORICAL_ATTEMPT = /(\battempt\s*(?:[:=]\s*)?[`"']?)([0-9a-f]{32})(?![0-9a-f])/gi;
+// Node22 supplies the original primitive token to a JSON reviver. A scientific
+// anchor can exceed Number's precision; privacy edits must not round its digits.
+const losslessJSON = JSON as typeof JSON & {rawJSON(source: string): object; isRawJSON(value: unknown): boolean};
+if (typeof losslessJSON.rawJSON!=='function' || typeof losslessJSON.isRawJSON!=='function'
+  || JSON.parse('1', (_key, _value, context?: {source?: string}) => context?.source)!=='1')
+  throw new Error('Lossless scientific JSON redaction requires a Node22 runtime with rawJSON and reviver source support');
 /** Decode nested tool output, preserving original bytes when nothing changes. */
 function scrubIdentifiers(text: string): { text: string; n: number; first: string | null } {
   let n = 0, first: string | null = null;
-  function strings(s: string, depth = 0): string {
+  function strings(s: string, depth = 0, parent?: string): string {
     if (depth < 20) {
       try {
-        const decoded = JSON.parse(s), before = n, changed = walk(decoded, depth + 1);
+        const decoded = JSON.parse(s, (_key, value, context?: {source?: string}) =>
+          typeof value==='number' && context?.source ? losslessJSON.rawJSON(context.source) : value);
+        const before = n, changed = walk(decoded, depth + 1, parent);
         return n === before ? s : JSON.stringify(changed);
       } catch { /* prose or a JSONL block: redact labelled values */ }
     }
     return s.replace(HARNESS_VALUE, (_m, prefix, key, end) => { n++; first ??= key; return `${prefix}[REDACTED]${end}`; })
       .replace(HISTORICAL_ATTEMPT, (_m, prefix) => { n++; first ??= 'attempt'; return `${prefix}[REDACTED]`; });
   }
-  function walk(v: any, depth: number): any {
-    if (typeof v === 'string') return strings(v, depth);
-    if (Array.isArray(v)) return v.map(x => walk(x, depth));
+  function walk(v: any, depth: number, parent?: string): any {
+    if (typeof v === 'string') return strings(v, depth, parent);
+    if (losslessJSON.isRawJSON(v)) return v;
+    if (Array.isArray(v)) return v.map(x => walk(x, depth, parent));
     if (v && typeof v === 'object') return Object.fromEntries(Object.entries(v).map(([k, value]) => {
-      if (PRIVATE_KEY.test(k) && typeof value === 'string' && PRIVATE_VALUE.test(value)) {
-        n++; first ??= k; return [k, '[REDACTED]'];
+      const contextAttempt = k === 'id' && (parent === 'attempt' || parent === 'assignment_attempt');
+      if ((PRIVATE_KEY.test(k) || contextAttempt) && typeof value === 'string' && PRIVATE_VALUE.test(value)) {
+        n++; first ??= contextAttempt ? `${parent}.id` : k; return [k, '[REDACTED]'];
       }
-      return [k, walk(value, depth)];
+      return [k, walk(value, depth, k)];
     }));
     return v;
   }
@@ -129,21 +139,30 @@ export async function quota(userId: number): Promise<{ files_left: number; bytes
 
 /** Store (or re-reference) a file. Returns the sha and whether it already existed. */
 export async function store(userId: number, model: string | undefined, name: string, ext: string, content: string): Promise<{ sha: string; existed: boolean }> {
-  const sha = sha256(content);
-  const existing = await one(`SELECT sha256, deleted_at FROM files WHERE sha256 = $1`, [sha]);
-  if (existing) {
-    if (existing.deleted_at) throw Object.assign(new Error("this content was removed by the project owner"), { status: 410 });
-    return { sha, existed: true };
-  }
-  mkdirSync(join(FILES_DIR, sha.slice(0, 2)), { recursive: true });
-  writeFileSync(blobPath(sha), content);
-  await q(`INSERT INTO files (sha256, user_id, model, name, ext, bytes) VALUES ($1,$2,$3,$4,$5,$6) ON CONFLICT DO NOTHING`, [sha, userId, model ?? null, name, ext, Buffer.byteLength(content)]);
-  return { sha, existed: false };
+  return transaction(async () => {
+    const sha = sha256(content);
+    const existing = await one(`SELECT sha256, deleted_at FROM files WHERE sha256 = $1`, [sha]);
+    if (existing) {
+      if (existing.deleted_at) throw Object.assign(new Error("this content was removed by the project owner"), { status: 410 });
+      return { sha, existed: true };
+    }
+    await q(`INSERT INTO files (sha256, user_id, model, name, ext, bytes) VALUES ($1,$2,$3,$4,$5,$6) ON CONFLICT DO NOTHING`, [sha, userId, model ?? null, name, ext, Buffer.byteLength(content)]);
+    // Blob publication follows the same commit as its reference and quota row.
+    // A refused mixed attachment must leave neither a row nor an orphan blob.
+    await queueFileEffect(blobPath(sha), content);
+    return { sha, existed: false };
+  });
 }
 
 export function read(sha: string): string | null {
   const p = blobPath(sha);
   return existsSync(p) ? readFileSync(p, "utf8") : null;
+}
+
+/** Intake checks see staged bytes inside the transaction; public reads wait for commit. */
+export async function readForValidation(sha: string): Promise<string | null> {
+  const pending = await pendingFileText(blobPath(sha));
+  return pending ? pending.content : read(sha);
 }
 
 /** Attach files to a message / return / job. Unknown or deleted shas are rejected. */

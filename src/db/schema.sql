@@ -1086,6 +1086,9 @@ UPDATE jobs                SET avoid_model = canon_model(avoid_model) WHERE avoi
 -- latest return a check has compared the step against, so the same candidates never trigger a second check.
 ALTER TABLE jobs ADD COLUMN IF NOT EXISTS step_check_of BIGINT REFERENCES jobs(id);
 ALTER TABLE jobs ADD COLUMN IF NOT EXISTS step_checked_through BIGINT;
+-- Server comparison notes are evidence to read, not changes to the experiment.
+-- Existing appended briefs remain intact; only future comparison notes use this field.
+ALTER TABLE jobs ADD COLUMN IF NOT EXISTS step_check_notes_md TEXT NOT NULL DEFAULT '';
 -- The agent's own session window, declared with X-Session-Ends (#mba-sah-held-feedback-items, item 10): jobs are fitted to the time
 -- left (with ends_at, the person's time=); it never ends the session or limits a job.
 ALTER TABLE sessions ADD COLUMN IF NOT EXISTS declared_end TIMESTAMPTZ;
@@ -1123,6 +1126,59 @@ UPDATE jobs SET min_tier=1, requires_trust=true
   WHERE status='queued' AND type='audit' AND (title LIKE 'Fix %' OR title LIKE 'Rebase return #%'
     OR EXISTS (SELECT 1 FROM findings f WHERE f.job_id=jobs.id AND f.status='open' AND f.scope<>'advisory'))
     AND (min_tier<>1 OR NOT requires_trust);
+
+-- Durable folder-local assignment-fit checkpoints; never research verdicts or global bans.
+CREATE TABLE IF NOT EXISTS assignment_deferrals (
+  id BIGSERIAL PRIMARY KEY,
+  job_id BIGINT NOT NULL REFERENCES jobs(id) ON DELETE CASCADE,
+  attempt_id TEXT NOT NULL UNIQUE REFERENCES assignment_attempts(id) ON DELETE CASCADE,
+  user_id BIGINT NOT NULL REFERENCES users(id),
+  department_id TEXT,
+  model TEXT,
+  kind TEXT NOT NULL CHECK (kind IN ('execution','source')),
+  job_fingerprint TEXT NOT NULL,
+  session_fit JSONB NOT NULL,
+  source_epoch JSONB NOT NULL,
+  evidence_md TEXT NOT NULL,
+  reopen_when TEXT NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp()
+);
+CREATE INDEX IF NOT EXISTS assignment_deferrals_job_idx ON assignment_deferrals(job_id,user_id);
+-- Old clients and historical checkpoints retain their original conservative fit.
+ALTER TABLE assignment_deferrals ADD COLUMN IF NOT EXISTS fit_scope TEXT NOT NULL DEFAULT 'legacy'
+  CHECK (fit_scope IN ('legacy','runtime','publication'));
+-- Prospective opt-in: preserve every older project-wide epoch and release receipt.
+ALTER TABLE assignment_deferrals ADD COLUMN IF NOT EXISTS source_scope TEXT NOT NULL DEFAULT 'project'
+  CHECK (source_scope IN ('project','task'));
+ALTER TABLE assignment_deferrals ADD COLUMN IF NOT EXISTS source_paths TEXT[] NOT NULL DEFAULT '{}';
+ALTER TABLE assignment_deferrals ADD COLUMN IF NOT EXISTS task_source_epoch JSONB;
+-- Prospective stable task identity; null retains an older checkpoint's exact semantics.
+ALTER TABLE assignment_deferrals ADD COLUMN IF NOT EXISTS task_job_fingerprint TEXT;
+
+-- Named interventions hold ordinary scheduling, without transferring attempts or judging science.
+CREATE TABLE IF NOT EXISTS job_handoffs (
+  id BIGSERIAL PRIMARY KEY,
+  job_id BIGINT NOT NULL REFERENCES jobs(id) ON DELETE CASCADE,
+  recipient_kind TEXT NOT NULL CHECK (recipient_kind IN ('person','agent')),
+  recipient_user_id BIGINT NOT NULL REFERENCES users(id),
+  recipient_contact TEXT,
+  reason_md TEXT NOT NULL,
+  required_access_md TEXT NOT NULL,
+  resume_when TEXT NOT NULL,
+  created_by BIGINT NOT NULL REFERENCES users(id),
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  status TEXT NOT NULL DEFAULT 'waiting' CHECK (status IN ('waiting','resolved','cancelled')),
+  closed_by BIGINT REFERENCES users(id),
+  closed_at TIMESTAMPTZ,
+  resolution_md TEXT,
+  CHECK ((recipient_kind='agent') = (recipient_contact IS NOT NULL))
+);
+CREATE UNIQUE INDEX IF NOT EXISTS job_handoffs_waiting_idx ON job_handoffs(job_id) WHERE status='waiting';
+
+CREATE TABLE IF NOT EXISTS job_correction_prerequisites (
+  job_id BIGINT NOT NULL REFERENCES jobs(id) ON DELETE CASCADE,
+  finding_id BIGINT NOT NULL REFERENCES findings(id) ON DELETE CASCADE,
+  PRIMARY KEY(job_id,finding_id)
 
 -- Progress emails (#sah-progress-emails, approved 3 Oct 2026): at most one email per person per day, news only, opt-out per choice.
 -- The address is personal data: never in DUMP_TABLES, never served to an agent route, set and read only by the person on the site.

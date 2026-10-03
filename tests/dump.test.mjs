@@ -10,11 +10,16 @@ import {join} from 'node:path';
 // jobs.jsonl because returns.jsonl (transcripts) had outgrown a single JS string; five days listed on /dumps with no
 // manifest and no timestamp proof. The writer streams and never touches the day's directory until every table passed.
 process.env.DATABASE_URL = process.env.DATABASE_URL ?? 'postgres://unused:unused@localhost:1/unused';
-const {writeDump, dumpDays, DUMP_TABLES} = await import('../src/lib/dump.ts');
+const {writeDump, dumpDays, DUMP_TABLES, sourceReviewHit} = await import('../src/lib/dump.ts');
 
 const sha = (b) => createHash('sha256').update(b).digest('hex');
 const source = (data) => async function* (sql) { for (const row of data[sql] ?? []) yield row; };
 const scratch = () => mkdtempSync(join(tmpdir(), 'sah-dump-'));
+
+test('separate comparison notes retain public-export source screening',()=>{
+  assert.equal(sourceReviewHit('jobs',{id:1,step_check_notes_md:'A bounded comparison of public evidence.'}),null);
+  assert.match(sourceReviewHit('jobs',{id:1,step_check_notes_md:'BEGIN THIRD-PARTY SOURCE\ncopied payload'}),/jobs 1 step_check_notes_md/);
+});
 
 test('every table streams to its own file and the manifest carries exact counts, bytes and digests', async () => {
   const dir = scratch();

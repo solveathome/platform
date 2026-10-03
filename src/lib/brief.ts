@@ -5,10 +5,10 @@ import { MODEL_IDENTITY_GUIDANCE } from "./model-id.js";
 import { MAX_MESSAGE_CHARS, MAX_STATUS_CHARS } from "./chat-render.js";
 import { LADDER, LADDER_TEXT } from "./rungs.js";
 import { GUIDANCE_VERSION, PRIOR_WORK_FIRST, RESEARCH_METHOD, taskGuidance } from "./research-guidance.js";
-import { FRAMEWORK_GUIDANCE_VERSION, FRAMEWORK_JOB_GUIDANCE } from "./workspace-guidance.js";
+import { FRAMEWORK_GUIDANCE_VERSION, FRAMEWORK_JOB_GUIDANCE, REPAIR_JOB_GUIDANCE } from "./workspace-guidance.js";
 
 export type JobRow = {
-  attempt_id?: string; purpose?: string; research_stage?: string | null; evidence_return_id?: unknown; follow_up_of?: unknown; assignment_reason?: { policy?: string; skill_matches?: number };
+  attempt_id?: string; origin_key?: string | null; purpose?: string; research_stage?: string | null; evidence_return_id?: unknown; follow_up_of?: unknown; assignment_reason?: { policy?: string; skill_matches?: number };
   id: number; type: string; title: string; brief_md: string; git_ref: string;
   compute_hint: Record<string, unknown>; budget_hours: string | number; release_count?: number; last_release_note?: string | null; lane_slug?: string | null; repo_url: string; expires_at?: string | null;
   prior_claims?: Array<{ id: number; handle: string; model: string | null; created_at: string }>;   // claims posted for this job by earlier holders (issue #5)
@@ -16,10 +16,21 @@ export type JobRow = {
 
 export type SessionInfo = { id: string; jobs: number; max: number | null; length?: string; disk?: number; abandonAfterMin?: number; maxHours: number; compute: string; transcriptPreapproved: boolean; subagents?: string; files?: { left: number; bytes_left: number; per_day: number } };
 
+/** Stored discovery tasks may be reissued under different donor limits. Keep their footer conditional. */
+export function exploreContinuation(base: string): string {
+  return `After a verified result or release, stop if your person's assignment cap or session length is reached. Otherwise call \`GET ${base}/start\` once with this run's saved headers for the next authorized assignment. Do not poll.`;
+}
+
 export function renderBrief(job: JobRow, baseUrl: string, session?: SessionInfo): string {
   // The project-wide channel has an empty lane: one slash, so the literal text in the brief is the URL that works (reviewer agent, Sep 10).
   const chatUrl = job.lane_slug ? `${baseUrl}/chat/${job.lane_slug}` : `${baseUrl}/chat`;
   const lastOfSession = !!session && session.max !== null && Number(session.jobs) >= session.max;   // #mba-sah-bot-feedback-fixes, fix 8
+  let taskBrief=job.brief_md;
+  if (lastOfSession && job.type==='explore' && /^(lead:|question:)/.test(job.origin_key??'')) {
+    const stop='After the verified result or owned release, stop: this was the last assignment your person allowed. Do not request another assignment.';
+    // Repair only the platform-generated footer, including older queued tasks; preserve scientific text and issued receipts.
+    taskBrief=taskBrief.replace(`Then call \`GET ${baseUrl}/start\` once. Do not poll.`,stop).replace(exploreContinuation(baseUrl),stop);
+  }
   return `# solveathome job #${job.id}: ${job.title}
 
 Kind: ${jobLabel(job)} (type \`${job.type}\`${job.research_stage ? `, research stage \`${stageOf(job)}\`` : ""}).
@@ -37,7 +48,7 @@ This runs on their machine, under their handle, with their transcript, within th
 
 Framework version: ${FRAMEWORK_GUIDANCE_VERSION}.
 
-${FRAMEWORK_JOB_GUIDANCE}
+${FRAMEWORK_JOB_GUIDANCE}${['audit','paper'].includes(job.type) ? `\n\n${REPAIR_JOB_GUIDANCE}` : ''}
 
 Required setup: \`${baseUrl}/department-protocol?section=framework\`; completion and outstanding-work checks: \`${baseUrl}/department-protocol?section=lifecycle\`; transcript/usage: \`${baseUrl}/department-protocol?section=accounting\`; submission format: \`${baseUrl}/department-protocol?section=publication\`.
 
@@ -64,7 +75,7 @@ ${PRIOR_WORK_FIRST}
 
 ## The task
 
-${job.brief_md}
+${taskBrief}
 
 ${taskGuidance(job)}
 
@@ -134,7 +145,7 @@ ${job.type === "review" ? `This is a review: return exactly the schema given in 
   "repo_url": "<optional: your public git repo>", "commit": "<optional: exact commit>",
   "transcript": "<your full session transcript, scrubbed: see below>",
   "transcript_approved": true,
-  "recipe_md": "<verification recipe: exact commands with served script paths and inputs, expected outputs and their sha256, run time; required for break, measure and formalize. Write <project base> where a URL is needed, never a hostname: the recipe outlives the host. Seed any randomness, or leave the random output out of the hash list: a reviewer reproduces hashes byte for byte>",
+  "recipe_md": "<verification recipe: exact commands with served script paths and inputs, expected outputs and their sha256, run time; required for break, measure and formalize. Use <project base>/docs/<path> for project documents and <server origin>/files/<sha256>?raw=1 with Accept: text/plain for immutable artifacts; /files is never relative to <project base>. These placeholders keep recipes portable across hosts. Seed any randomness, or leave the random output out of the hash list: a reviewer reproduces hashes byte for byte>",
   "cpu_hours": <number>,
   "hashes": { "<output-name>": "<sha256 of any output file that others must reproduce>" },
   "author_rung": "${LADDER.slice().reverse().join(" | ")}",

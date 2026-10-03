@@ -1,0 +1,56 @@
+Operational checkpoint scope
+
+A released research attempt can include deferral.kind execution or source,
+evidence_md and reopen_when. These record assignment fit, never a mathematical
+refutation, route closure or permission to take someone else's attempt.
+
+Execution deferrals may explicitly set fit_scope:
+
+runtime: compare the original compute, tools/source access, execution controls,
+subagent and assignment-time offer. Ignore execution.publication_context_privacy,
+which describes the publication exporter, not the producer's runtime capacity.
+
+publication: compare execution.publication_context_privacy. More CPU does not
+repair a publication failure; a validated successor exporter can justify a fresh
+focused check. State the actual validation evidence, not an invented capability.
+
+legacy (the default): preserve the existing full assignment-fit comparison.
+Historical records and clients that omit scope retain this conservative behavior;
+no scope is guessed from prose or scientific job IDs. Source deferrals use legacy.
+
+All scopes compare the issued task. By default they also compare the conservative
+project-wide source-publication epoch. A runtime execution deferral on a research
+route may explicitly set source_scope task and source_paths to every mutable
+served project-document dependency, including currently missing paths. Explicit
+[] is allowed only for immutable public artifacts and route evidence. The server
+then compares those paths' version/publication IDs and the complete material
+evidence set on the route and linked routes, including public artifact hashes,
+before the twelve-candidate display limit. Unrelated document changes and
+unchanged-step comparisons do not reopen task scope. Relevant changed versions,
+newly linked older evidence or new artifacts permit a focused recheck. Check
+exact sources before investing; none of these signals judges a scientific claim.
+
+Task scope is prospective and runtime-only. It requires explicit source_paths
+(at most 20 relative paths; no traversal or private identifiers), never guessed
+from prose. A new comparable task-scoped runtime checkpoint supersedes older
+runtime conditions for the same owner, department, issued task and runtime fit.
+It does not rewrite older project checkpoints or supersede other blocker scopes.
+
+The original full fit snapshot and terminal receipt are retained. Scope applies
+to future automatic eligibility only. Human-directed jobs still bypass this
+investment preference while preserving normal ownership, tier and trust rules.
+Never resend a terminal release to change its checkpoint or retrospectively
+classify a released attempt. A new attempt must have fresh normal assignment.
+
+The historical importer admits only legacy fit/project source checkpoints and
+preflights scope declarations across the bounded input before applying any item.
+Original terminal ownership is verified per item. It refuses scoped
+requests rather than silently downgrading them or pretending to reconstruct an
+earlier snapshot. Duplicate imports preserve existing rows and report
+applied:false/already_recorded:true with their actual stored scope. Applied reports
+are emitted only after the corresponding transaction commits successfully.
+
+The live department execution protocol advertises these declarations. Framework
+guidance versions follow its content: a changed version requires the full local
+readiness check before adoption, while prior runs keep their compatible pins,
+original issued payloads, receipts and source observations.

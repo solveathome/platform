@@ -13,6 +13,8 @@ export function timeHtml(value: unknown): string {
 export type SourceDates = {
   created_at: string | null;
   modified_at: string | null;
+  author_created_at?: string | null;
+  author_modified_at?: string | null;
   first_commit: string | null;
   last_commit: string | null;
   state: "committed" | "uncommitted" | "unavailable" | "generated";

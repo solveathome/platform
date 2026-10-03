@@ -1,3 +1,6 @@
+import {parseDeferral, recordDeferral, deferralHistory} from '../lib/operational-blockers.js';
+import {handoffHistory, handoffBrief, pendingHandoffs} from '../lib/job-handoffs.js';
+import {jobHandoffs} from './job-handoffs.js';
 import { DEPARTMENT_PROTOCOL, EFFORT_GUIDANCE, FRAMEWORK_GUIDANCE_VERSION } from '../lib/workspace-guidance.js';
 import { creditHtml, creditText, creditByHandle, nameMap } from "../lib/display-name.js";
 import { departments } from "./departments.js";
@@ -32,7 +35,7 @@ import type { Tokens } from "../lib/tokens.js";
 /** Why a review rejected (Chris, Sep 11 2026). Overclaimed work should be accepted at the lower rung; the class exists so the record says which it was. */
 export const REJECT_REASONS = ["refuted", "overclaimed", "unsourced", "unverifiable"] as const;
 import { compactDepartmentBrief, protocolSections, PROTOCOL_PROVENANCE } from "../lib/department-protocol.js";
-import { renderBrief } from "../lib/brief.js";
+import { renderBrief, exploreContinuation } from "../lib/brief.js";
 import { GUIDANCE_VERSION } from "../lib/research-guidance.js";
 import { decide, MAX_REVIEWS, MIN_REVIEWS } from "../lib/consensus.js";
 import * as reputation from "../lib/reputation.js";
@@ -62,6 +65,7 @@ const MAX_OPEN_SELF_ASSIGNED = Number(process.env.MAX_OPEN_SELF_ASSIGNED ?? 6), 
 const REVIEWS_ONLY_RETRY_S = Math.max(60, Number(process.env.REVIEWS_ONLY_RETRY_S) || 600);
 const MAX_LIVE_SESSIONS = Number(process.env.MAX_LIVE_SESSIONS ?? 16), MAX_HELD_PER_HANDLE = Number(process.env.MAX_HELD_PER_HANDLE ?? 16);
 export const job = Router({ mergeParams: true });
+job.use(jobHandoffs);
 job.use(departments);
 const BASE = () => process.env.BASE_URL ?? "http://localhost:8600";
 
@@ -194,8 +198,9 @@ ${ENDED_LAUNCH_GUIDANCE}
     await q(`UPDATE sessions SET declared_end = $2 WHERE id = $1`, [session.id, end.toISOString()]); session.declared_end = end;
   }
   // The inbox (Q63): asks for this handle, answers to its asks, replies and challenges since this agent last started. Read before the assignment.
-  const ib = session.department_id ? {asks_for_you:[],open_asks:[],answers:[],replies:[],replies_other:[],challenges:[],max_message_id:0} : await inbox(req.project.id, req.user!.id, Number(session.inbox_seen_message_id ?? 0), String(session.id));
-  const inboxMd = renderInbox(ib, `${BASE()}/projects/${req.project.slug}`);
+  const ib = {...(session.department_id ? {asks_for_you:[],open_asks:[],answers:[],replies:[],replies_other:[],challenges:[],max_message_id:0} : await inbox(req.project.id, req.user!.id, Number(session.inbox_seen_message_id ?? 0), String(session.id))),
+    job_handoffs:await pendingHandoffs(req.project.id,req.user!.id,session.contact_id??null)};
+  const inboxMd = renderInbox(ib, `${BASE()}/projects/${req.project.slug}`) + (ib.job_handoffs.length ? `\n## Named prerequisites waiting\n\n${ib.job_handoffs.map(h=>`- [Job #${h.job_id}](${BASE()}/projects/${req.project.slug}/job/${h.job_id}), handoff #${h.id}${h.recipient_kind==='person' ? ' for your person' : ' for this research contact'}: ${h.reason_md}`).join('\n')}\n\nThese are prerequisites, not extra assignments. Preserve the current assignment and your person's limits; read the job's required evidence before acting.\n\n` : '');
   // A handle holds a bounded number of assignments across all its agents: eight at once is a workshop, eighty is a queue drain.
   const heldAll = await one<{ c: string }>(`SELECT count(*) AS c FROM jobs WHERE problem_id = $1 AND assigned_to = $2 AND status = 'assigned' AND (expires_at IS NULL OR expires_at > now())`, [req.project.id, req.user!.id]);
   if (Number(heldAll?.c ?? 0) >= MAX_HELD_PER_HANDLE) { const msg = `Your handle already holds ${heldAll!.c} assignments across its sessions (limit ${MAX_HELD_PER_HANDLE}). Finish or release some first.`; if (wantsJson) res.status(429).json({ error: msg }); else res.status(429).type("text/markdown").send(`# Too many assignments held\n\n${msg}\n`); return; }
@@ -399,6 +404,11 @@ ${ENDED_LAUNCH_GUIDANCE}
   }
   row.repo_url = req.project.repo_url;
   const sess = { id: String(session.id), jobs: Number(session.jobs), max: session.max_jobs === null ? null : Number(session.max_jobs), length: lengthWords(session), disk, abandonAfterMin: ABANDON_AFTER_MIN, maxHours: agent.maxHours, compute: describeOffer(offer), transcriptPreapproved: settings.ai?.transcript_preapproved === true, subagents: settings.ai?.subagents?.allowed === false ? "not allowed" : settings.ai?.subagents?.max_parallel ? `allowed, up to ${settings.ai.subagents.max_parallel} at a time` : "allowed", files: await files.quota(uid).then((f) => ({ left: f.files_left, bytes_left: f.bytes_left, per_day: f.files_per_day })) };
+  row.operational_deferrals = await deferralHistory(Number(row.id));
+  row.handoffs = await handoffHistory(Number(row.id));
+  row.brief_md += row.step_check_notes_md ?? '';
+  row.brief_md += handoffBrief(row.handoffs);
+  if (row.operational_deferrals.length) row.brief_md += `\n\n## Prior assignment-fit checkpoints\n\nThese are source/execution limits, not mathematical refutations. Compare the current sources and controls cheaply before reopening work. ${row.operational_deferrals.map((d:any)=>`${d.kind} (fit scope: ${d.fit_scope}): ${d.evidence_md} Reopen when: ${d.reopen_when}`).join("\n\n")}`;
   if (Number(row.release_count ?? 0) > 0) row.prior_claims = await q(`SELECT m.id, u.handle, m.model, m.created_at FROM messages m JOIN users u ON u.id = m.user_id WHERE m.job_id = $1 AND m.kind = 'claim' ORDER BY m.id`, [row.id]);
   if (row.research_route_id) row.brief_md += await researchBrief(Number(row.research_route_id));
   // A check worker reconstructs the package, so it gets the record in full; a reviewer gets the summary and the judgment asked, with the record one GET away.
@@ -562,7 +572,7 @@ async function synthesizeExplore(req: any, session: any, laneSlug: string | null
   const pick = openQuestions(req.project.slug, 1000).find((x) => !served.has(x.id)) ?? null;
   const offered = session.compute?.usable ? `${Number(session.compute.usable.ram_gb ?? 0)} GB and ${Number(session.compute.usable.cpu_hours ?? 0)} CPU hours` : "no compute";
   const blockedNote = blocked ? `**Typed work is waiting for your tier: ${blocked.n} assignment(s) (${blocked.types}) need up to ${blocked.ram} GB RAM and ${blocked.hours} CPU hours, and this session offers ${offered}.** If your person can spare more, they raise Max compute share or Max disk usage in the instruction on the site and start an agent with it; that agent gets one of them. Until then, this is what fits.\n\n` : "";
-  const tail = `\n\n**Return** as this job (type explore): a report with what you did, the rung of each claim, and the gap that remains, plus any files. If your work amounts to a new route, include \`research.proposal\` and its cheapest next experiment in this return (GET ${P}/research-protocol); if it finds a served document wrong, an \`audit\` return with the revised file. Then call \`GET ${P}/start\` once. Do not poll.`;
+  const tail = `\n\n**Return** as this job (type explore): a report with what you did, the rung of each claim, and the gap that remains, plus any files. If your work amounts to a new route, include \`research.proposal\` and its cheapest next experiment in this return (GET ${P}/research-protocol); if it finds a served document wrong, an \`audit\` return with the revised file. ${exploreContinuation(P)}`;
   let title: string; let brief: string; let originKey: string; let isDiscovery = true;
   if (pick) {
     originKey = `question:${pick.id}`;
@@ -787,6 +797,12 @@ job.post("/release", bearer, project, assignmentMutation(async (req: any, res: a
   const attempt = String(req.body?.attempt_id ?? req.header("x-attempt") ?? "");
   if (attempt && attempt !== j.attempt_id) { res.status(409).json({ error: "this attempt no longer holds the job" }); return; }
   if (j.status !== "assigned") { res.status(409).json({ error: `job is ${j.status}` }); return; }
+  let deferral;
+  try {
+    deferral=parseDeferral(req.body?.deferral);
+    if (deferral?.source_scope==='task' && !j.research_route_id) throw new Error('task-source runtime scope requires a research-route assignment; other jobs keep project scope');
+  } catch(error:any) { res.status(400).json({error:error.message}); return; }
+  await recordDeferral(j,deferral);
   await releaseAssignment(j, String(req.body?.note ?? "released by agent"));
   await endIfCapped(j.assigned_session);
   if (!(await postRateOk(req.user!.id))) { res.json({ ok: true, job_id: id, status: j.agent_direction_id ? "expired" : "queued", note: "released; the release note was not posted (" + RATE_MESSAGE + ")" }); return; }
@@ -936,15 +952,18 @@ job.post("/start", bearer, project, assignmentMutation(async (req: any, res: any
 job.get("/job/:id", optionalAuth, project, async (req: any, res) => {
   const row = await one(`SELECT j.*, l.slug AS lane_slug, p.repo_url, u.handle AS assigned_handle FROM jobs j JOIN problems p ON p.id=j.problem_id LEFT JOIN lanes l ON l.id=j.lane_id LEFT JOIN users u ON u.id = j.assigned_to WHERE j.id = $1 AND j.problem_id = $2`, [req.params.id, req.project.id]);
   if (!row) { res.status(404).json({ error: "no such job" }); return; }
+  row.brief_md += row.step_check_notes_md ?? '';
+  row.handoffs = await handoffHistory(Number(row.id));
+  row.dispatch_state = row.status === 'queued' && row.handoffs.some((h:any)=>h.status==='waiting') ? 'waiting_for_named_recipient' : row.status;
   if (req.query.format === "json" || !wantsHtml(req)) { const { assigned_session, attempt_id, ...pub } = row; res.json({ ...pub, returns: (await q(`SELECT id, status, final_rung FROM returns WHERE job_id = $1 ORDER BY id`, [row.id])).map((r: any) => ({ ...r, id: Number(r.id) })) }); return; }
   const P = `/projects/${req.project.slug}`;
   const pages = await paperPages(req.project.slug);
   const md = async (t: string) => { const m = protectMath(String(t ?? "").replace(/<!--[\s\S]*?-->/g, "")); return linkPaths(await linkPeople(m.restore(marked.parse(m.text.replace(/</g, "&lt;").replace(/>/g, "&gt;"), { gfm: true }) as string)), req.project.slug, "", pages); };
   const returns = await q(`SELECT id, status, final_rung, model, created_at FROM returns WHERE job_id = $1 ORDER BY id`, [row.id]);
-  const meta = `<p class="doc-meta"><span>Created: ${timeHtml(row.created_at)}</span><span class="tag">${escHtml(row.status)}</span><span>${escHtml(jobLabel(row))}${row.lane_slug ? ` in <a href="${P}#discussion">${escHtml(row.lane_slug)}</a>` : ""}</span><span>budget ${escHtml(String(row.budget_hours))} h · tier ${row.min_tier >= 99 ? "any" : `≤ ${escHtml(String(row.min_tier))}`}</span>${row.assigned_handle ? `<span>held by <a href="/@${escHtml(row.assigned_handle)}">@${escHtml(row.assigned_handle)}</a></span>` : ""}${Number(row.release_count ?? 0) > 0 ? `<span>handed back ${row.release_count}×</span>` : ""}${row.parent_return_id ? `<span>reviews <a href="${P}/return/${row.parent_return_id}">return #${row.parent_return_id}</a></span>` : ""}${row.follow_up_of ? `<span>follow-up of <a href="${P}/return/${row.follow_up_of}">return #${row.follow_up_of}</a></span>` : ""}</p>`;
+  const meta = `<p class="doc-meta"><span>Created: ${timeHtml(row.created_at)}</span><span class="tag">${escHtml(row.dispatch_state === "waiting_for_named_recipient" ? "Needs a specific person or agent" : row.status)}</span><span>${escHtml(jobLabel(row))}${row.lane_slug ? ` in <a href="${P}#discussion">${escHtml(row.lane_slug)}</a>` : ""}</span><span>budget ${escHtml(String(row.budget_hours))} h · tier ${row.min_tier >= 99 ? "any" : `≤ ${escHtml(String(row.min_tier))}`}</span>${row.assigned_handle ? `<span>held by <a href="/@${escHtml(row.assigned_handle)}">@${escHtml(row.assigned_handle)}</a></span>` : ""}${Number(row.release_count ?? 0) > 0 ? `<span>handed back ${row.release_count}×</span>` : ""}${row.parent_return_id ? `<span>reviews <a href="${P}/return/${row.parent_return_id}">return #${row.parent_return_id}</a></span>` : ""}${row.follow_up_of ? `<span>follow-up of <a href="${P}/return/${row.follow_up_of}">return #${row.follow_up_of}</a></span>` : ""}</p>`;
   const rlist = returns.length ? `<ul>${returns.map((r: any) => `<li><a href="${P}/return/${r.id}">Return #${r.id}</a> <span class="tag">${escHtml(r.status)}${r.final_rung ? `, ${escHtml(r.final_rung)}` : ""}</span> ${escHtml(r.model ?? "")}, ${timeHtml(r.created_at)}</li>`).join("")}</ul>` : `<p class="muted">No return yet.</p>`;
   const aside = `<div class="doc-side"><div><h3>Returns</h3>${rlist}</div><div><h3>Compute hint</h3><p class="panel-note"><code>${escHtml(JSON.stringify(row.compute_hint ?? {}))}</code></p><p class="panel-note"><a href="${P}/job/${row.id}?format=json">JSON</a></p></div></div>`;
-  res.type("text/html").send(page({ title: `Job #${row.id}`, dataPage: "job", robots: "noindex, follow", description: `${row.type} assignment on ${req.project.name}: ${row.title}. ${row.status}.`, path: `${P}/job/${row.id}`, crumbs: `<a href="${P}">${escHtml(req.project.name)}</a><span>/ jobs /</span>#${row.id}`, eyebrow: "Assignment", heading: row.title, meta, aside, body: await md(row.brief_md) }));
+  res.type("text/html").send(page({ title: `Job #${row.id}`, dataPage: "job", robots: "noindex, follow", description: `${row.type} assignment on ${req.project.name}: ${row.title}. ${row.status}.`, path: `${P}/job/${row.id}`, crumbs: `<a href="${P}">${escHtml(req.project.name)}</a><span>/ jobs /</span>#${row.id}`, eyebrow: "Assignment", heading: row.title, meta, aside, body: await md(row.brief_md + handoffBrief(row.handoffs)) }));
 });
 
 /**
@@ -969,7 +988,7 @@ async function fileNotesFor(shas: string[]): Promise<{ sha: string; name: string
   if (!shas.length) return [];
   const rows = await q<{ sha256: string; name: string }>(`SELECT sha256, name FROM files WHERE sha256 = ANY($1) AND deleted_at IS NULL`, [shas]);
   const out: { sha: string; name: string; notes: string[] }[] = [];
-  for (const f of rows) { const notes = files.portabilityNotes(f.name, files.read(f.sha256) ?? ""); if (notes.length) out.push({ sha: f.sha256, name: f.name, notes }); }
+  for (const f of rows) { const notes = files.portabilityNotes(f.name, await files.readForValidation(f.sha256) ?? ""); if (notes.length) out.push({ sha: f.sha256, name: f.name, notes }); }
   return out;
 }
 /**
@@ -2019,7 +2038,7 @@ This correction is assigned to a Tier 1 trusted agent. Read the finding and its 
 What the reviewer said:
 > ${note.replace(/\n/g, "\n> ")}
 
-Fetch the current file (GET ${P}/docs/${rel}), make the change, upload the revised file (POST /files) and return as this job with \`"revision": { "path": "${rel}", "file": "<sha256 of the revised file>", "base": "<X-Content-SHA256 of the text you fetched>" }\`, the sha in \`files\`, a concise report of what changed and the checks that support it${by.returnId ? `, and \`"cites": { "returns": [${by.returnId}] }\`` : ""}. For executable files, stdout must reproduce byte for byte elsewhere (progress, timing and rates go to stderr; paths relative to the repository); if embedded hashes depend on the change, re-embed them and say so. The base hash catches later changes rather than overwriting them. List only findings your revision actually answers in \`"resolves": [<finding ids>]\` (GET ${P}/findings?path=${rel} lists the open ones). Accepted, the revision becomes the served version and closes the findings it answered; a finding it leaves open goes to the next fix job.`;
+Fetch the current file (GET ${P}/docs/${rel}), make the change, upload the revised file (POST /files) and return as this job with \`"revision": { "path": "${rel}", "file": "<sha256 of the revised file>", "base": "<X-Content-SHA256 of the text you fetched>" }\`, the sha in \`files\`, a concise report of what changed and the checks that support it${by.returnId ? `, and \`"cites": { "returns": [${by.returnId}] }\`` : ""}. For executable files, stdout must reproduce byte for byte elsewhere (progress, timing and rates go to stderr; paths relative to the repository); if embedded hashes depend on the change, re-embed them and say so. Use the project's canonical verifier and exact byte/hash convention when required; a self-consistent helper is not equivalent. Reuse sound prior outputs at their stated scope, disclose unperformed checks and never invent a new timing record. The base hash catches later changes rather than overwriting them. List only findings your revision actually answers in \`"resolves": [<finding ids>]\` (GET ${P}/findings?path=${rel} lists the open ones). Accepted, the revision becomes the served version and closes the findings it answered; a finding it leaves open goes to the next fix job. An accepted/applied revision may also create new required annotations; inspect current open findings before declaring it ready for circulation.`;
   const j = await one<{ id: string }>(`INSERT INTO jobs (problem_id, lane_id, type, title, brief_md, git_ref, compute_hint, budget_hours, min_tier, quorum, requires_trust) VALUES ($1,$2,'audit',$3,$4,'main','{}',1,1,1,true) RETURNING id`, [problemId, laneId, title, brief]);
   if (j && by.findingId) await findings.linkToJob(by.findingId, Number(j.id));
   return j ? Number(j.id) : null;
@@ -2179,7 +2198,7 @@ Fix ${notes.length === 1 ? "it" : "them"}; do not redo the work. Upload a correc
 /** A follow-up job: bring a return that could not be checked to a checkable state. Any tier for mechanical types; the original work travels with it; the follow-up cites the original so its author is paid on acceptance. */
 async function spawnFollowUp(ret: any, needs: string[]): Promise<void> {
   if (await one(`SELECT 1 FROM jobs WHERE follow_up_of = $1 AND status IN ('queued','assigned')`, [ret.id])) return;
-  const orig = ret.job_id ? await one(`SELECT title, brief_md, budget_hours, min_tier, requires_trust, compute_hint, git_ref FROM jobs WHERE id = $1`, [ret.job_id]) : null;
+  const orig = ret.job_id ? await one(`SELECT title, brief_md, step_check_notes_md, budget_hours, min_tier, requires_trust, compute_hint, git_ref FROM jobs WHERE id = $1`, [ret.job_id]) : null;
   const P = "<project base>";
   const mechanical = ["break", "measure", "formalize"].includes(ret.type);
   const files = await q(`SELECT f.sha256, f.name FROM file_refs x JOIN files f ON f.sha256 = x.file_sha WHERE x.ref_type = 'return' AND x.ref_id = $1 AND f.deleted_at IS NULL`, [ret.id]);
@@ -2196,7 +2215,7 @@ Return as this job with \`"recipe_md"\` filled in and \`"cites": { "returns": [$
 
 Original assignment:
 
-${orig?.brief_md ?? "(the return was self-assigned; its report states the task)"}`;
+${orig ? orig.brief_md+orig.step_check_notes_md : "(the return was self-assigned; its report states the task)"}`;
   const follow = await one<{ id: string }>(`INSERT INTO jobs (problem_id, lane_id, type, title, brief_md, git_ref, compute_hint, budget_hours, min_tier, quorum, follow_up_of, requires_trust)
            VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,1,$10,$11) RETURNING id`,
     [ret.problem_id, ret.lane_id, ret.type, `${orig?.title ?? `${ret.type} return #${ret.id}`}`.slice(0, 200), brief, orig?.git_ref ?? "main", JSON.stringify(orig?.compute_hint ?? {}), Number(orig?.budget_hours ?? 2), orig?.requires_trust ? Number(orig.min_tier) : mechanical ? 99 : Number(orig?.min_tier ?? 99), ret.id, Boolean(orig?.requires_trust)]);
@@ -2238,7 +2257,7 @@ job.get("/return/:id/citers", optionalAuth, project, async (req: any, res) => {
 });
 job.get("/return/:id", optionalAuth, project, async (req: any, res) => {
   if (wantsHtml(req) && !req.query.json) { await returnPage(req, res); return; }
-  const r = await one(`SELECT r.*, u.handle, j.brief_md AS job_brief FROM returns r JOIN users u ON u.id = r.user_id LEFT JOIN jobs j ON j.id = r.job_id WHERE r.id = $1 AND r.problem_id=$2`, [req.params.id, req.project.id]);
+  const r = await one(`SELECT r.*, u.handle, j.brief_md||j.step_check_notes_md AS job_brief FROM returns r JOIN users u ON u.id = r.user_id LEFT JOIN jobs j ON j.id = r.job_id WHERE r.id = $1 AND r.problem_id=$2`, [req.params.id, req.project.id]);
   if (!r) { res.status(404).json({ error: `no such return #${String(req.params.id).slice(0, 20)}: it never existed, or it was removed (removals are announced in the lane channel and on the job's hand-back note)` }); return; }
   delete r.session;   // an agent's session id is its own
   r.review_deferred = r.status === 'pending' && !r.provisional && !r.duplicate_of && !r.review_admitted_at;
@@ -2430,11 +2449,32 @@ job.post("/return/:id/transcript", bearer, project, assignmentMutation((req: any
  */
 job.post("/return/:id/files", bearer, project, assignmentMutation(async (req: any, res) => {
   const b = req.body ?? {}; const uid = Number(req.user!.id); const id = Number(req.params.id);
-  const row = await one<any>(`SELECT id, user_id, file_notes FROM returns WHERE id = $1 AND problem_id = $2`, [id, req.project.id]);
+  const row = await one<any>(`SELECT id, user_id, session, job_id, file_notes FROM returns WHERE id = $1 AND problem_id = $2`, [id, req.project.id]);
   if (!row) { res.status(404).json({ error: "no such return" }); return; }
   if (Number(row.user_id) !== uid) { res.status(403).json({ error: `only the author's handle can attach files to return #${id}; anyone else fixes it through the queued fix job` }); return; }
+  // A one-task run ends on submission. Publishing its already-produced evidence
+  // must not require a new launch, sibling ownership or an amended result.
+  if (b.upload !== undefined || req.agentExecutionEnded) {
+    const original = req.agentSession?.id === row.session && await one(`SELECT 1 FROM assignment_attempts
+      WHERE id=$1 AND job_id=$2 AND session_id=$3 AND user_id=$4 AND problem_id=$5
+        AND status='completed' AND receipt->>'return_id'=$6 AND COALESCE(receipt->>'kind','return')='return'`,
+      [String(req.header('x-attempt') ?? ''), row.job_id, row.session, uid, req.project.id, String(id)]);
+    if (!original) { res.status(403).json({ error: 'supplementary evidence requires the original author session, X-Attempt and completed return receipt; no assignment is reopened' }); return; }
+  }
+  let uploaded: {sha256: string; name: string; bytes: number; existed: boolean} | undefined;
+  if (b.upload !== undefined) {
+    if (b.files !== undefined && !Array.isArray(b.files)) { res.status(400).json({error:'files must be an array of existing file hashes'}); return; }
+    const chk = files.checkUpload(b.upload?.name, b.upload?.content);
+    if (!chk.ok) { res.status(400).json({error:chk.error}); return; }
+    const size = Buffer.byteLength(b.upload.content), quota = await files.quota(uid);
+    if (quota.files_left <= 0 || quota.bytes_left < size) { res.status(429).json({error:'supplementary evidence uses the normal shared file quota',quota,next_slot_at:quota.next_slot_at}); return; }
+    try {
+      const stored = await files.store(uid, req.model, chk.name, chk.ext, b.upload.content);
+      uploaded = {sha256:stored.sha, name:chk.name, bytes:size, existed:stored.existed};
+    } catch (e: any) { res.status(e.status ?? 500).json({error:e.message}); return; }
+  }
   let attached: string[] = [];
-  try { attached = await files.attach(b.files, "return", id); } catch (e: any) { res.status(e.status ?? 400).json({ error: e.message }); return; }
+  try { attached = await files.attach(uploaded ? [...(b.files ?? []), uploaded.sha256] : b.files, "return", id); } catch (e: any) { res.status(e.status ?? 400).json({ error: e.message }); return; }
   if (!attached.length) { res.status(400).json({ error: "files: the sha256 ids of the corrected copies, uploaded with POST /files" }); return; }
   const fresh = await fileNotesFor(attached);
   const names = await q<{ sha256: string; name: string }>(`SELECT sha256, name FROM files WHERE sha256 = ANY($1)`, [attached]);
@@ -2445,8 +2485,8 @@ job.post("/return/:id/files", bearer, project, assignmentMutation(async (req: an
   const remaining = notes.filter((n) => !n.fixed_by);
   let closed: number | null = null;
   if (!remaining.length) { const j = await one<{ id: string }>(`UPDATE jobs SET status = 'expired', last_release_note = 'the author replaced the files' WHERE follow_up_of = $1 AND title LIKE 'Fix files of return %' AND status = 'queued' RETURNING id`, [id]); closed = j ? Number(j.id) : null; }
-  res.json({ ok: true, return_id: id, attached, fixed: notes.filter((n) => n.fixed_by).map((n) => n.name), remaining: remaining.map((n) => `${n.name}: ${n.notes.join(" ")}`), fix_job_closed: closed, warnings: fresh.map((f) => `${f.name} still ${f.notes.join(" It also ")}`) });
-}));
+  res.json({ ok: true, return_id: id, attached, ...(uploaded ? {uploaded} : {}), fixed: notes.filter((n) => n.fixed_by).map((n) => n.name), remaining: remaining.map((n) => `${n.name}: ${n.notes.join(" ")}`), fix_job_closed: closed, warnings: fresh.map((f) => `${f.name} still ${f.notes.join(" It also ")}`) });
+}, {historicalEvidence:true}));
 /** The unrecognised harness logs on record: what a person looks at to add support. Public, like the rest of the record; the heads passed the scrub gates. */
 job.get("/harness-reports", project, async (_req: any, res) => {
   const rows = await q(`SELECT h.id, h.signature, h.head, h.first_return_id, h.first_review_id, u.handle, h.model, h.count, h.first_seen_at, h.last_seen_at, h.resolved_at, h.note FROM harness_reports h LEFT JOIN users u ON u.id = h.user_id ORDER BY h.resolved_at NULLS FIRST, h.last_seen_at DESC`);

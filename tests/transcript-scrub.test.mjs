@@ -42,6 +42,28 @@ test('the rest of a transcript is not mistaken for an identifier', () => {
   assert.equal(findHomePath('{"cwd": "~/work"}'), null);
 });
 
+test('nested run-context attempt IDs are refused while public IDs, evidence and usage survive redaction', () => {
+  const context = {attempt:{id:'0123456789abcdef0123456789abcdef',status:'assigned',job_id:42},job_id:42,return_id:42,finding_id:42,id:42,artifact_hash:'a'.repeat(64),usage:{input_tokens:42,output_tokens:7},evidence:'The finite witness is 17.'};
+  for (const output of [context, JSON.stringify(context), JSON.stringify(JSON.stringify(context)), {content:[{type:'text',text:JSON.stringify(context)}]}]) {
+    const line=JSON.stringify({type:'response_item',payload:{type:'custom_tool_call_output',output}});
+    assert.equal(findHarnessId(line),'attempt.id (line 1)');
+    assert.equal(checkUpload('native.jsonl',line).ok,false);
+    const repaired=redactHarnessIds(line);assert.equal(repaired.n,1);
+    assert.equal(findHarnessId(repaired.text),null);assert.equal(checkUpload('native.jsonl',repaired.text).ok,true);
+    assert.match(repaired.text,/The finite witness is 17/);
+    assert.match(repaired.text,/a{64}/);
+    assert.equal(redactHarnessIds(repaired.text).n,0);
+  }
+  const repaired=JSON.parse(redactHarnessIds(JSON.stringify(context)).text);
+  assert.deepEqual(repaired,{...context,attempt:{...context.attempt,id:'[REDACTED]'}});
+  for (const attempt of [JSON.stringify(context.attempt), [context.attempt], [JSON.stringify(context.attempt)]]) {
+    const line=JSON.stringify({attempt});
+    assert.equal(findHarnessId(line),'attempt.id (line 1)');
+    const repaired=redactHarnessIds(line);assert.equal(repaired.n,1);assert.equal(findHarnessId(repaired.text),null);
+  }
+  assert.equal(findHarnessId(JSON.stringify({id:uuid,artifact_hash:'a'.repeat(32),run_id:uuid,attempt:{id:42}})),null,'generic IDs, public runs and scientific numbers remain public');
+});
+
 test('redactHarnessIds replaces the values in place and leaves the line valid JSON', () => {
   const line = `{"type": "atis-latch", "atis": "${atis}", "ownerAccountUuid": "${uuid}", "sessionId": "[REDACTED]"}`;
   const r = redactHarnessIds(line);
@@ -57,4 +79,21 @@ test('multiline historical attempt headers redact without dropping the following
   const redacted=redactHarnessIds(text);
   assert.equal(redacted.n,1);assert.equal(findHarnessId(redacted.text),null);
   assert.match(redacted.text,/The measured witness is 17/);
+});
+
+test('privacy redaction preserves exact scientific numeric tokens through nested and encoded JSON', () => {
+  const anchor='75053614359224265389282351';
+  const scientific=`{"attempt":{"id":"0123456789abcdef0123456789abcdef"},"anchor":${anchor},"negative_zero":-0,"decimal":1.2300,"large_exponent":1e400,"small_exponent":1e-400,"usage":{"input_tokens":42,"output_tokens":7},"return_id":42}`;
+  for(const input of [scientific,JSON.stringify({output:scientific}),JSON.stringify({output:JSON.stringify(scientific)}),`{"type":"header"}\n${scientific}\n`]) {
+    const result=redactHarnessIds(input);assert.equal(result.n,1);
+    assert.equal(findHarnessId(result.text),null);assert.equal(checkUpload('native.jsonl',result.text).ok,true);
+    for(const token of [anchor,'-0','1.2300','1e400','1e-400'])assert.ok(result.text.includes(token),`preserve original numeric token ${token}`);
+    assert.equal(redactHarnessIds(result.text).n,0);
+  }
+  const flat=redactHarnessIds(scientific).text;
+  assert.match(flat,new RegExp(`"anchor":${anchor}(?:,|})`),'keep a JSON number, not a quoted string or wrapper');
+  const parsed=JSON.parse(flat);assert.deepEqual(parsed.usage,{input_tokens:42,output_tokens:7});assert.equal(parsed.return_id,42);
+  const encoded=JSON.parse(redactHarnessIds(JSON.stringify({output:scientific})).text);
+  assert.equal(typeof encoded.output,'string');assert.match(encoded.output,new RegExp(`"anchor":${anchor}(?:,|})`));
+  assert.equal(redactHarnessIds(scientific.replace('0123456789abcdef0123456789abcdef','[REDACTED]')).text,scientific.replace('0123456789abcdef0123456789abcdef','[REDACTED]'),'already safe evidence keeps exact bytes');
 });

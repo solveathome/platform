@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { renderBrief } from "../src/lib/brief.ts";
+import { renderBrief, exploreContinuation } from "../src/lib/brief.ts";
 import { compactDepartmentBrief } from "../src/lib/department-protocol.ts";
 import { GUIDANCE_VERSION, taskGuidance } from "../src/lib/research-guidance.ts";
 import { tangentJob } from "../src/lib/tangent.ts";
@@ -12,6 +12,21 @@ import { readdirSync, readFileSync } from "node:fs";
 
 const job = { id: 78, type: "audit", title: "Audit: beta2-note", brief_md: "paper.slug: beta2-note\n\nAudit it.", git_ref: "main", compute_hint: {}, budget_hours: 3, release_count: 1, last_release_note: "expired: the agent did not return or release it", lane_slug: null, repo_url: "https://example.org/r", expires_at: null };
 const session = { id: "s1", jobs: 1, max: 1, maxHours: 2, compute: "not offered", transcriptPreapproved: true };
+
+test('repair instructions use canonical verification and portable server-root artifact recipes',()=>{
+  const full=renderBrief(job,'https://x.test/projects/p',session);
+  for (const text of [full,compactDepartmentBrief(full,job,session,null)]) {
+    assert.match(text,/project's canonical verifier/);
+    assert.match(text,/self-consistent helper/);
+    assert.match(text,/Never invent a new timing record/);
+    assert.match(text,/accepted\/applied revision may have new required annotations/);
+  }
+  assert.ok(full.includes('<project base>/docs/<path>'));
+  assert.ok(full.includes('<server origin>/files/<sha256>?raw=1'));
+  assert.match(full,/\/files is never relative to <project base>/);
+  const ordinary=renderBrief({...job,type:'direction'},'https://x.test/projects/p',session);
+  assert.doesNotMatch(ordinary,/self-consistent helper/,'repair-specific detail stays in repair briefs and the shared protocol');
+});
 
 test('a recent framework stamp at the current framework guidance version skips the startup self-test, never result checks',()=>{
   assert.equal(FRAMEWORK_RECHECK_HOURS,24);
@@ -116,6 +131,22 @@ test('a one-assignment compact brief says the return is the completion note',()=
   assert.doesNotMatch(lastFull,/for the next assignment/);assert.match(lastFull,/This is the last assignment your person allowed this session \(1 of 1\)/);
   const open=compactDepartmentBrief(full,issued,{...session,jobs:1,max:null},null);
   assert.match(open,/post one concise completion/);
+});
+
+test('generated discovery footers respect final assignment caps without rewriting stored task evidence',()=>{
+  const base='https://x.test/projects/p';
+  for(const footer of [`Then call \`GET ${base}/start\` once. Do not poll.`,exploreContinuation(base)]) {
+    const issued={...job,type:'explore',origin_key:'lead:synthesis:fixture',brief_md:`Scientific evidence: the finite witness is 17.\n\n${footer}`};
+    const final={...session,jobs:3,max:3};
+    const full=renderBrief(issued,base,final),compact=compactDepartmentBrief(full,issued,final,null);
+    for(const brief of [full,compact]) {
+      assert.match(brief,/Scientific evidence: the finite witness is 17/);
+      assert.match(brief,/After the verified result or owned release, stop/);
+      assert.doesNotMatch(brief,new RegExp('GET '+base+'/start` once'));
+    }
+    assert.equal(issued.brief_md,`Scientific evidence: the finite witness is 17.\n\n${footer}`);
+    assert.match(renderBrief(issued,base,{...session,jobs:1,max:3}),new RegExp('GET '+base+'/start` once'),'remaining authorization still permits progression');
+  }
 });
 
 test('all imported project briefs receive current task guidance before operational reference material',()=>{
