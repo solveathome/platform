@@ -113,6 +113,21 @@ test('one pasted URL, concurrent bootstrap retries, one capped assignment and st
   assert.equal((await call('/start',{session:a.session})).status,409);
 });
 
+test('a capped issued discovery repairs an older generated continuation footer and preserves its task record',async()=>{
+  const j=await queued({type:'explore'});
+  const text=`Compare the accepted finite certificates. Then call \`GET ${process.env.BASE_URL}/projects/${slug}/start\` once. Do not poll.`;
+  await q("UPDATE jobs SET origin_key='lead:synthesis:old-footer',brief_md=$2 WHERE id=$1",[j.id,text]);
+  const a=await start({});
+  // This first session is uncapped: the reusable queued task's donor-independent text stays stored.
+  assert.equal(Number(a.job_id),Number(j.id));ok(await release(a));
+  const capped=ok(await call('/start?time=1task&share=0',{launch:randomUUID()}));
+  assert.equal(Number(capped.job_id),Number(j.id));
+  assert.match(capped.brief_md,/After the verified result or owned release, stop/);
+  assert.doesNotMatch(capped.brief_md,/Then call `GET .*\/start` once/);
+  assert.equal((await one('SELECT brief_md FROM jobs WHERE id=$1',[j.id])).brief_md,text);
+  assert.deepEqual(ok(await call('/start',{session:capped.session})),capped,'issued receipt remains unchanged');
+});
+
 test('concurrent results replay once; changed or missing attempt and wrong-session requests cannot mutate work',async()=>{
   await queued();const a=await start();
   assert.equal((await call('/result',{method:'POST',session:a.session,body:{job_id:a.job_id,report_md:'x',transcript:'t'}})).status,400);

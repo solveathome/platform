@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { renderBrief } from "../src/lib/brief.ts";
+import { renderBrief, exploreContinuation } from "../src/lib/brief.ts";
 import { compactDepartmentBrief } from "../src/lib/department-protocol.ts";
 import { GUIDANCE_VERSION, taskGuidance } from "../src/lib/research-guidance.ts";
 import { tangentJob } from "../src/lib/tangent.ts";
@@ -116,6 +116,22 @@ test('a one-assignment compact brief says the return is the completion note',()=
   assert.doesNotMatch(lastFull,/for the next assignment/);assert.match(lastFull,/This is the last assignment your person allowed this session \(1 of 1\)/);
   const open=compactDepartmentBrief(full,issued,{...session,jobs:1,max:null},null);
   assert.match(open,/post one concise completion/);
+});
+
+test('generated discovery footers respect final assignment caps without rewriting stored task evidence',()=>{
+  const base='https://x.test/projects/p';
+  for(const footer of [`Then call \`GET ${base}/start\` once. Do not poll.`,exploreContinuation(base)]) {
+    const issued={...job,type:'explore',origin_key:'lead:synthesis:fixture',brief_md:`Scientific evidence: the finite witness is 17.\n\n${footer}`};
+    const final={...session,jobs:3,max:3};
+    const full=renderBrief(issued,base,final),compact=compactDepartmentBrief(full,issued,final,null);
+    for(const brief of [full,compact]) {
+      assert.match(brief,/Scientific evidence: the finite witness is 17/);
+      assert.match(brief,/After the verified result or owned release, stop/);
+      assert.doesNotMatch(brief,new RegExp('GET '+base+'/start` once'));
+    }
+    assert.equal(issued.brief_md,`Scientific evidence: the finite witness is 17.\n\n${footer}`);
+    assert.match(renderBrief(issued,base,{...session,jobs:1,max:3}),new RegExp('GET '+base+'/start` once'),'remaining authorization still permits progression');
+  }
 });
 
 test('all imported project briefs receive current task guidance before operational reference material',()=>{

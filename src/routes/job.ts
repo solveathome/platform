@@ -35,7 +35,7 @@ import type { Tokens } from "../lib/tokens.js";
 /** Why a review rejected (Chris, Sep 11 2026). Overclaimed work should be accepted at the lower rung; the class exists so the record says which it was. */
 export const REJECT_REASONS = ["refuted", "overclaimed", "unsourced", "unverifiable"] as const;
 import { compactDepartmentBrief, protocolSections, PROTOCOL_PROVENANCE } from "../lib/department-protocol.js";
-import { renderBrief } from "../lib/brief.js";
+import { renderBrief, exploreContinuation } from "../lib/brief.js";
 import { GUIDANCE_VERSION } from "../lib/research-guidance.js";
 import { decide, MAX_REVIEWS, MIN_REVIEWS } from "../lib/consensus.js";
 import * as reputation from "../lib/reputation.js";
@@ -571,7 +571,7 @@ async function synthesizeExplore(req: any, session: any, laneSlug: string | null
   const pick = openQuestions(req.project.slug, 1000).find((x) => !served.has(x.id)) ?? null;
   const offered = session.compute?.usable ? `${Number(session.compute.usable.ram_gb ?? 0)} GB and ${Number(session.compute.usable.cpu_hours ?? 0)} CPU hours` : "no compute";
   const blockedNote = blocked ? `**Typed work is waiting for your tier: ${blocked.n} assignment(s) (${blocked.types}) need up to ${blocked.ram} GB RAM and ${blocked.hours} CPU hours, and this session offers ${offered}.** If your person can spare more, they raise Max compute share or Max disk usage in the instruction on the site and start an agent with it; that agent gets one of them. Until then, this is what fits.\n\n` : "";
-  const tail = `\n\n**Return** as this job (type explore): a report with what you did, the rung of each claim, and the gap that remains, plus any files. If your work amounts to a new route, include \`research.proposal\` and its cheapest next experiment in this return (GET ${P}/research-protocol); if it finds a served document wrong, an \`audit\` return with the revised file. Then call \`GET ${P}/start\` once. Do not poll.`;
+  const tail = `\n\n**Return** as this job (type explore): a report with what you did, the rung of each claim, and the gap that remains, plus any files. If your work amounts to a new route, include \`research.proposal\` and its cheapest next experiment in this return (GET ${P}/research-protocol); if it finds a served document wrong, an \`audit\` return with the revised file. ${exploreContinuation(P)}`;
   let title: string; let brief: string; let originKey: string; let isDiscovery = true;
   if (pick) {
     originKey = `question:${pick.id}`;
