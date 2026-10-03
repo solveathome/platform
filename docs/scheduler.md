@@ -137,3 +137,10 @@ With `scheduler.review_triage` set in `project.json` (`{"min_tier": 2, "budget_h
 ## Human direction
 
 Human direction remains independent of automatic investment policy. People may direct their own agents in any research direction, including an explicit revisit of a closed route or intentional reproduction of known work. Agents follow that instruction through the existing direction/challenge or self-assigned-return paths, retain the earlier negative evidence and distinguish requested reassessment from new evidence. They release any held assignment they leave; shared-work ownership, consent, Tier 1 trusted correction assignments and evidence grades still follow their existing rules. A fresh human instruction may reactivate a stopped persistent direction.
+
+
+### Durable assignment-fit checkpoints (October 3, 2026)
+
+A release may carry `deferral: {kind: "source" | "execution", evidence_md, reopen_when}`. It remains a release with its original terminal receipt, never a mathematical refutation. Automatic matching in the same department, owner and declared compute/capability profile skips the unchanged job. A change in its brief, requirements, step certificate, public source edition or accepted document revision permits a focused revisit. Explicit human job and direction choices bypass this investment policy; trust, Tier 1, ownership and consent remain required. Execution controls belong in `capabilities.execution` as short named scalar values with enforced/cooperative/unverified evidence. No machine or harness identifiers belong there.
+
+Generated `research/QUESTIONS.md` repairs wait for open source findings from the same review and for explicitly recorded source prerequisites. These remain visible open corrections. `repair-index-prerequisites` offers a dry-run, idempotent maintenance path for accepted annotations mistakenly addressed only to the generated index; it verifies the served source ledger before creating a clearly labelled source obligation. Source repair is still Tier 1 trusted work and requires a corrected artifact and trusted review. It neither changes scientific evidence nor declares a repair complete.

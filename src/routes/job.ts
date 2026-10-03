@@ -1,3 +1,4 @@
+import {parseDeferral, recordDeferral, deferralHistory} from '../lib/operational-blockers.js';
 import { DEPARTMENT_PROTOCOL, EFFORT_GUIDANCE, FRAMEWORK_GUIDANCE_VERSION } from '../lib/workspace-guidance.js';
 import { creditHtml, creditText, creditByHandle, nameMap } from "../lib/display-name.js";
 import { departments } from "./departments.js";
@@ -399,6 +400,8 @@ ${ENDED_LAUNCH_GUIDANCE}
   }
   row.repo_url = req.project.repo_url;
   const sess = { id: String(session.id), jobs: Number(session.jobs), max: session.max_jobs === null ? null : Number(session.max_jobs), length: lengthWords(session), disk, abandonAfterMin: ABANDON_AFTER_MIN, maxHours: agent.maxHours, compute: describeOffer(offer), transcriptPreapproved: settings.ai?.transcript_preapproved === true, subagents: settings.ai?.subagents?.allowed === false ? "not allowed" : settings.ai?.subagents?.max_parallel ? `allowed, up to ${settings.ai.subagents.max_parallel} at a time` : "allowed", files: await files.quota(uid).then((f) => ({ left: f.files_left, bytes_left: f.bytes_left, per_day: f.files_per_day })) };
+  row.operational_deferrals = await deferralHistory(Number(row.id));
+  if (row.operational_deferrals.length) row.brief_md += `\n\n## Prior assignment-fit checkpoints\n\nThese are source/execution limits, not mathematical refutations. Compare the current sources and controls cheaply before reopening work. ${row.operational_deferrals.map((d:any)=>`${d.kind}: ${d.evidence_md} Reopen when: ${d.reopen_when}`).join("\n\n")}`;
   if (Number(row.release_count ?? 0) > 0) row.prior_claims = await q(`SELECT m.id, u.handle, m.model, m.created_at FROM messages m JOIN users u ON u.id = m.user_id WHERE m.job_id = $1 AND m.kind = 'claim' ORDER BY m.id`, [row.id]);
   if (row.research_route_id) row.brief_md += await researchBrief(Number(row.research_route_id));
   // A check worker reconstructs the package, so it gets the record in full; a reviewer gets the summary and the judgment asked, with the record one GET away.
@@ -787,6 +790,9 @@ job.post("/release", bearer, project, assignmentMutation(async (req: any, res: a
   const attempt = String(req.body?.attempt_id ?? req.header("x-attempt") ?? "");
   if (attempt && attempt !== j.attempt_id) { res.status(409).json({ error: "this attempt no longer holds the job" }); return; }
   if (j.status !== "assigned") { res.status(409).json({ error: `job is ${j.status}` }); return; }
+  let deferral;
+  try { deferral=parseDeferral(req.body?.deferral); } catch(error:any) { res.status(400).json({error:error.message}); return; }
+  await recordDeferral(j,deferral);
   await releaseAssignment(j, String(req.body?.note ?? "released by agent"));
   await endIfCapped(j.assigned_session);
   if (!(await postRateOk(req.user!.id))) { res.json({ ok: true, job_id: id, status: j.agent_direction_id ? "expired" : "queued", note: "released; the release note was not posted (" + RATE_MESSAGE + ")" }); return; }

@@ -1123,3 +1123,27 @@ UPDATE jobs SET min_tier=1, requires_trust=true
   WHERE status='queued' AND type='audit' AND (title LIKE 'Fix %' OR title LIKE 'Rebase return #%'
     OR EXISTS (SELECT 1 FROM findings f WHERE f.job_id=jobs.id AND f.status='open' AND f.scope<>'advisory'))
     AND (min_tier<>1 OR NOT requires_trust);
+
+-- Durable folder-local assignment-fit checkpoints; never research verdicts or global bans.
+CREATE TABLE IF NOT EXISTS assignment_deferrals (
+  id BIGSERIAL PRIMARY KEY,
+  job_id BIGINT NOT NULL REFERENCES jobs(id) ON DELETE CASCADE,
+  attempt_id TEXT NOT NULL UNIQUE REFERENCES assignment_attempts(id) ON DELETE CASCADE,
+  user_id BIGINT NOT NULL REFERENCES users(id),
+  department_id TEXT,
+  model TEXT,
+  kind TEXT NOT NULL CHECK (kind IN ('execution','source')),
+  job_fingerprint TEXT NOT NULL,
+  session_fit JSONB NOT NULL,
+  source_epoch JSONB NOT NULL,
+  evidence_md TEXT NOT NULL,
+  reopen_when TEXT NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp()
+);
+CREATE INDEX IF NOT EXISTS assignment_deferrals_job_idx ON assignment_deferrals(job_id,user_id);
+
+CREATE TABLE IF NOT EXISTS job_correction_prerequisites (
+  job_id BIGINT NOT NULL REFERENCES jobs(id) ON DELETE CASCADE,
+  finding_id BIGINT NOT NULL REFERENCES findings(id) ON DELETE CASCADE,
+  PRIMARY KEY(job_id,finding_id)
+);

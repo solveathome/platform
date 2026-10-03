@@ -22,7 +22,7 @@ await recordPublication(slug, Number(p.id));
 let matched = 0, unmatched = 0;
 for (const [path, entry] of Object.entries(publication.files)) {
   const source = evidence.files[path];
-  if (entry.source?.created_at) continue;
+  if (entry.source?.created_at && entry.source?.author_created_at && entry.source?.author_modified_at) continue;
   if (!source?.source?.created_at || source.sha256 !== entry.sha256 || !publishedDocument(root, path, publication)) { unmatched++; continue; }
   entry.source = source.source;
   matched++;

@@ -1,7 +1,7 @@
 import { LAUNCH_GUIDANCE } from "./launch.js";
 import { findSecret, findHarnessId } from "./files.js";
 
-export type Capabilities = { name: string; skills: string[]; tools: string[]; sources: string[]; research: string; model_variant?: string };
+export type Capabilities = { name: string; skills: string[]; tools: string[]; sources: string[]; research: string; model_variant?: string; execution?: Record<string, string | number | boolean> };
 /** Runtime spellings used by our briefs and existing declarations. Keep versions
  * and source access exact; a skill or a shell never implies an installed tool. */
 export function matchingTools(declared: string[] = []): string[] {
@@ -30,7 +30,12 @@ export function parseCapabilities(raw: unknown): Capabilities {
   // the rule that a model does not review its own kind, and a 1M-context run of a model is the same kind. Recording it keeps
   // a fact the harness stated from being dropped, and lets an agent answer what configuration it was.
   const variant = String(p.model_variant ?? "").trim().replace(/[^A-Za-z0-9._:+\[\]-]+/g, "").slice(0, 60);
-  const result = { name, skills: tags(p.skills), tools: tags(p.tools), sources: tags(p.sources), research, ...(variant ? { model_variant: variant } : {}) };
+  const execution = p.execution;
+  if (execution !== undefined && (!execution || typeof execution !== 'object' || Array.isArray(execution)
+    || Object.keys(execution).length > 20 || Object.entries(execution).some(([key,value]) => !/^[a-z_]{1,40}$/.test(key)
+      || !['string','number','boolean'].includes(typeof value) || (typeof value==='number' && !Number.isFinite(value))
+      || (typeof value==='string' && value.length > 180)))) throw new Error('execution must be up to 20 short named scalar controls');
+  const result = { ...(execution === undefined ? {} : {execution}), name, skills: tags(p.skills), tools: tags(p.tools), sources: tags(p.sources), research, ...(variant ? { model_variant: variant } : {}) };
   if (JSON.stringify(result).length > 4096) throw new Error("capability profile is too long (4096 characters)");
   const leak = findSecret(JSON.stringify(result)) || findHarnessId(JSON.stringify(result));
   if (leak) throw new Error("capabilities must describe access, never include credentials or harness identifiers");

@@ -38,3 +38,22 @@ test('source dates follow renames, detect uncommitted bytes, and do not use file
     assert.equal(sourceDates(root, 'new.md', '# New\n').created_at, null);
   } finally { rmSync(root, {recursive: true, force: true}); }
 });
+
+
+test('publication preserves original author dates separately from commit dates',()=>{
+  const root=mkdtempSync(join(tmpdir(),'sah-author-dates-'));
+  const env=Object.fromEntries(Object.entries(process.env).filter(([k])=>!k.startsWith('GIT_')));
+  const git=(...args)=>execFileSync('git',['-C',root,...args],{env,stdio:'pipe'});
+  try {
+    git('init','-q');git('config','user.name','Fixture');git('config','user.email','fixture@example.test');
+    writeFileSync(join(root,'note.md'),'Evidence\n');git('add','.');
+    execFileSync('git',['-C',root,'commit','-qm','fixture'],{env:{...env,GIT_AUTHOR_DATE:'2026-01-02T03:04:05Z',GIT_COMMITTER_DATE:'2026-02-03T04:05:06Z'}});
+    const d=sourceDates(root,'note.md','Evidence\n');
+    assert.equal(d.created_at,'2026-02-03T04:05:06.000Z');
+    assert.equal(d.author_created_at,'2026-01-02T03:04:05.000Z');
+    assert.equal(d.author_modified_at,d.author_created_at);
+    writeFileSync(join(root,'note.md'),'Uncommitted\n');
+    assert.equal(sourceDates(root,'note.md','Uncommitted\n').author_modified_at,null);
+    git('rev-parse','HEAD');
+  } finally {rmSync(root,{recursive:true,force:true});}
+});

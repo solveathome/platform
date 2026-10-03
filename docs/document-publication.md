@@ -39,3 +39,6 @@ For existing portfolios, run `backfill-document-dates <dated-PUBLICATION.json> <
 ## Validation
 
 Run `npm run check` and `node --import tsx --test tests/document-publication.test.mjs`. Tests cover preparation, nested source text, rejected uploads, exact content hashes, unknown files, symlinks, absent manifests and publisher redirects for the former book scans.
+
+
+Author dates are preserved separately as `source.author_created_at` and `source.author_modified_at`, with the same original commit IDs and content-hash binding. Commit dates cannot substitute for author dates when a regenerator uses author chronology. Unknown or uncommitted author modification dates remain null. Backfill can enrich an already dated manifest only from matching historical source bytes; the existing edition preparation time and document bytes stay unchanged.

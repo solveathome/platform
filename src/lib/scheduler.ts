@@ -1,3 +1,4 @@
+import {deferralEligibility, INDEX_PREREQUISITES_SQL} from './operational-blockers.js';
 import { q, one } from "../db/index.js";
 import { readProjectConfig } from "./projects.js";
 import { matchingTools, type Capabilities } from "./agent-profile.js";
@@ -110,7 +111,7 @@ export function unmetRequirements(row: { required_tools?: string[] | null; requi
 /** The tier a review of return `pr` asks for: composeReviewBrief's reviewTier (job.ts), for a triage that would become that review. */
 const REVIEW_TIER_SQL = `(CASE WHEN pr.verification_plan IS NOT NULL THEN 1 WHEN pr.type IN ('break','measure','formalize') THEN 99 WHEN pr.type = 'source' THEN 2 ELSE 1 END)`;
 /** Shared predicates: the backlog and selection must count exactly the same eligible work. */
-function eligibility(a: SchedulingAgent, omitCompute = false, sameKindOnly = false) {
+function eligibility(a: SchedulingAgent, omitCompute = false, sameKindOnly = false, filterJob = true) {
   const values: any[] = [];
   const p = (v: any) => { values.push(v); return `$${values.length}`; };
   const pid = p(a.problemId), tier = p(a.tier), sid = p(a.sessionId), uid = p(a.uid), model = p(a.model), fallback = p(a.triageFallback === true && a.trusted);
@@ -118,6 +119,8 @@ function eligibility(a: SchedulingAgent, omitCompute = false, sameKindOnly = fal
   const labeled: Array<[string, string]> = [
     [`it asks for tier ${"${j.min_tier}"} or better and this session is tier ${a.tier}`, `j.problem_id = ${pid} AND j.status = 'queued' AND j.min_tier >= ${tier}`],
     ["it requires a trusted session", `(NOT j.requires_trust OR ${p(a.trusted)}::boolean)`],
+    ["this department already recorded unchanged assignment-fit blockers; change sources/controls or explicitly direct a revisit", a.jobId || a.directionId ? 'true' : deferralEligibility(sid)],
+    ["this generated index awaits its co-origin source corrections", a.jobId || a.directionId ? 'true' : INDEX_PREREQUISITES_SQL],
     ["this session released it before", `j.last_released_session IS DISTINCT FROM ${sid}::text`],
     ["this session released or cancelled an attempt on it before", `NOT EXISTS (SELECT 1 FROM assignment_attempts old WHERE old.job_id = j.id AND old.session_id = ${sid} AND old.status IN ('released','cancelled'))`],
     ["it is outside the lane this session was registered for", `(${p(a.lane)}::text IS NULL OR l.slug = $${values.length})`],
@@ -149,7 +152,7 @@ function eligibility(a: SchedulingAgent, omitCompute = false, sameKindOnly = fal
     ? ["it is outside this session's direction", `((j.agent_direction_id=${p(a.directionId)} AND j.agent_direction_revision=${p(a.directionRevision)}) OR (j.agent_direction_id IS NULL AND EXISTS(SELECT 1 FROM agent_direction_links dl WHERE dl.job_id=j.id AND dl.direction_id=${p(a.directionId)} AND dl.revision=${p(a.directionRevision)})))`]
     : ["it belongs to another agent's direction", `j.agent_direction_id IS NULL`]);
   const clauses = labeled.map(([, sql]) => sql);
-  if(a.jobId) clauses.push(`j.id=${p(a.jobId)}`);
+  if(a.jobId && filterJob) clauses.push(`j.id=${p(a.jobId)}`);
   if (!omitCompute) { const compute: [string, string] = ["it needs more compute than this session offers (cpu, ram, gpu or disk)", [
     `coalesce((j.compute_hint->>'cpu_hours')::numeric,0) <= ${p(a.cpuHours)}`,
     `coalesce((j.compute_hint->>'ram_gb')::numeric,0) <= ${p(a.ramGb > 0 ? a.ramGb : 8)}`,
@@ -165,7 +168,7 @@ function eligibility(a: SchedulingAgent, omitCompute = false, sameKindOnly = fal
  * fails, in words. Empty when it is eligible. Status (queued, taken, done) is answered before this by the caller.
  */
 export async function whyNotEligible(a: SchedulingAgent, jobId: number): Promise<string[]> {
-  const e = eligibility({ ...a, jobId: undefined });
+  const e = eligibility({ ...a, jobId: a.jobId ? jobId : undefined }, false, false, false);
   const idx = e.p(jobId);
   const row = await one<Record<string, any>>(`SELECT j.min_tier, j.budget_hours, ${e.labeled.map(([, sql], i) => `coalesce((${sql}), false) AS c${i}`).join(", ")} ${e.joins} WHERE j.id = ${idx}`, e.values);
   if (!row) return ["no such job in this project"];

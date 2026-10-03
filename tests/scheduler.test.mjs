@@ -428,3 +428,44 @@ test('a research job on a route this handle and model worked recently ranks lowe
   assert.equal(c.trusted_decisions.total,0);assert.equal(c.trusted_decisions.handle,null);
   const b=ok(await call('/board'));assert.equal(b.research.concentration.hours.handle.name,tag);
 });
+
+test('operational deferrals survive new sessions, reopen on changes, and keep human overrides',async()=>{
+  const j=await queued({priority:10}); const a=await start();assert.equal(Number(a.job_id),Number(j.id));
+  const d={kind:'execution',evidence_md:'Eight-worker census cannot run under the tested one-core controls; reuse certificate 2186.',reopen_when:'Available execution controls or a decisive bounded substitute change.'};
+  const opts={method:'POST',session:a.session,attempt:a.attempt_id,body:{job_id:a.job_id,note:'Execution fit, not a mathematical refutation',deferral:d}};
+  ok(await call('/release',opts));ok(await call('/release',opts));
+  assert.equal((await one('SELECT count(*) AS n FROM assignment_deferrals WHERE job_id=$1',[j.id])).n,'1');
+  const b=await start();assert.notEqual(Number(b.job_id),Number(j.id),'fresh session reuses the deferral');ok(await release(b));
+  const agent={problemId:pid,slug,sessionId:b.session,uid,tier:1,model:'claude-fable-5-1',provider:'anthropic',trusted:true,granted:true,lane:null,cpuHours:0,ramGb:0,hasGpu:false,disk:5,maxHours:2,reviewStreak:0,capabilities:{}};
+  assert.ok(!await selectJob(agent,false));
+  await q(`UPDATE sessions SET model='claude-opus-5',capabilities=capabilities || '{"name":"Another agent","skills":["research"]}' WHERE id=$1`,[b.session]);
+  assert.ok(!await selectJob({...agent,model:'claude-opus-5'},false),'a new model alone is not new source or execution evidence');
+  await q(`UPDATE sessions SET model='claude-fable-5-1' WHERE id=$1`,[b.session]);
+  assert.equal(Number((await selectJob({...agent,jobId:Number(j.id)},false)).id),Number(j.id),'explicit job direction still allowed');
+  await q(`UPDATE sessions SET capabilities=capabilities || '{"execution":{"cores":8}}' WHERE id=$1`,[b.session]);
+  assert.equal(Number((await selectJob(agent,false)).id),Number(j.id),'different actual controls reopen work');
+  await q(`UPDATE sessions SET capabilities=(SELECT capabilities FROM sessions WHERE id=$1) WHERE id=$2`,[a.session,b.session]);
+  assert.ok(!await selectJob(agent,false));
+  await q(`UPDATE jobs SET brief_md=brief_md || ' A bounded substitute is now supplied.' WHERE id=$1`,[j.id]);
+  assert.equal(Number((await selectJob(agent,false)).id),Number(j.id),'changed requirements reopen work');
+});
+
+test('generated index waits for co-origin source findings without erasing corrections',async()=>{
+  const j=await queued({type:'audit'});await q(`UPDATE jobs SET title='Fix research/QUESTIONS.md',requires_trust=true,min_tier=1 WHERE id=$1`,[j.id]);
+  const r=await one(`INSERT INTO returns(problem_id,type,user_id,model,provider,report_md,transcript,status) VALUES ($1,'audit',$2,'claude-opus-5','anthropic','Source correction evidence','t','accepted') RETURNING id`,[pid,other]);
+  await q(`INSERT INTO findings(problem_id,path,return_id,note,scope,job_id) VALUES ($1,'research/QUESTIONS.md',$2,'Regenerate after source correction','before_circulation',$3)`,[pid,r.id,j.id]);
+  const f=await one(`INSERT INTO findings(problem_id,path,return_id,note,scope) VALUES ($1,'research/source.md',$2,'Repair the missing ledger verdict','before_circulation') RETURNING id`,[pid,r.id]);
+  const agent={problemId:pid,slug,sessionId:'prereq-fixture',uid,tier:1,model:'claude-fable-5-1',provider:'anthropic',trusted:true,granted:true,lane:null,cpuHours:0,ramGb:8,hasGpu:false,disk:5,maxHours:2,reviewStreak:0,capabilities:{}};
+  assert.equal(await selectRequiredCorrection(agent),null);
+  assert.equal(Number((await selectJob({...agent,jobId:Number(j.id)},false)).id),Number(j.id));
+  await q(`UPDATE findings SET status='resolved' WHERE id=$1`,[f.id]);
+  assert.equal(Number((await selectRequiredCorrection(agent)).id),Number(j.id));
+  const dependency=await one(`INSERT INTO findings(problem_id,path,return_id,note,scope) VALUES ($1,'research/another-source.md',$2,'Explicit maintenance prerequisite','before_circulation') RETURNING id`,[pid,r.id]);
+  await q('INSERT INTO job_correction_prerequisites(job_id,finding_id) VALUES ($1,$2) ON CONFLICT DO NOTHING',[j.id,dependency.id]);
+  await q('INSERT INTO job_correction_prerequisites(job_id,finding_id) VALUES ($1,$2) ON CONFLICT DO NOTHING',[j.id,dependency.id]);
+  assert.equal(await selectRequiredCorrection(agent),null,'explicit derived prerequisites also hold regeneration');
+  await q(`UPDATE findings SET status='resolved' WHERE id=$1`,[dependency.id]);
+  assert.equal(Number((await selectRequiredCorrection(agent)).id),Number(j.id));
+  assert.ok(!(await selectJob({...agent,tier:2},false)),'explicit selection never weakens tier');
+  assert.ok(!(await selectJob({...agent,trusted:false,jobId:Number(j.id)},false)),'human override never weakens trust');
+});

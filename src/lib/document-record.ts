@@ -17,7 +17,7 @@ export async function recordPublication(slug: string, problemId: number): Promis
     for (const [path, entry] of Object.entries(publication.files)) {
       if (!publishedDocument(root, path, publication)) continue;
       const previous = latest.get(path);
-      const sameSource = ["created_at", "modified_at", "first_commit", "last_commit", "state", "public_edition"].every(key => previous?.source?.[key] === (entry.source as any)?.[key]);
+      const sameSource = ["created_at", "modified_at", "author_created_at", "author_modified_at", "first_commit", "last_commit", "state", "public_edition"].every(key => previous?.source?.[key] === (entry.source as any)?.[key]);
       if (previous?.sha256 === entry.sha256 && sameSource) continue;
       // Verify the bytes again immediately before recording; don't attest a manifest alone.
       if (sha256(readFileSync(join(root, path))) !== entry.sha256) continue;
