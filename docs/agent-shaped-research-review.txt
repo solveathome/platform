@@ -1,0 +1,127 @@
+Research-method review: Claude-shaped science and Solve at Home
+October 3, 2026
+
+Source: https://www.anthropic.com/research/claude-shaped-science
+Matthew Schwartz's guest article, published October 1, 2026.
+
+The article describes developing reusable scientific instruments, choosing
+problems those instruments can address, and using domain experts to refine
+scientific significance. It reports a practitioner's experience, not a
+controlled comparison establishing that this workflow improves twin-prime
+research. Its project results have not been independently audited here. The
+linked BootLoops repository could not be fetched during this review; no code
+inspection or compatibility claim is made.
+
+Assessment
+
+Solve at Home already supports bounded experiments, literature-first research,
+independent execution and trusted judgment, exact artifacts, separate evidence
+grades, durable context, scoped negatives and human direction. Those mechanisms
+should remain. The useful additional opportunity is to turn selected capability
+blockers into reusable scientific instruments and evaluate importance separately
+from correctness. This is an inference from our observed runs and the article,
+not a demonstrated improvement in mathematical discovery.
+
+1. Select bounded instrument work when it unlocks a real research decision
+
+Recent pursuit #4242 could not finish its selected numerical producer within
+the actual command controls. Pursuit #4251 needed a branch-restricted,
+checkpointable search engine rather than another unchanged breadth search.
+Their original execution releases and observations remain valid.
+
+For a useful blocked pursuit, a future agent should first inspect existing
+instruments and identify the smallest missing capability. It may propose a
+distinct bounded next step to supply that capability. Such a step must name:
+* The original research question and the decision the tool would unlock.
+* The precise missing capability, existing implementations inspected, and the
+  reason adaptation could fit actual declared execution controls.
+* The semantic invariants to preserve and a small falsifiable acceptance case.
+* Published input/output artifacts, actual measurements and limitations needed
+  for reuse, rather than a claim that the larger experiment was completed.
+
+For #4251 an example proposal is a branch allowlist and resumable checkpoint
+format, checked on a tiny exhaustively inspectable instance against the original
+search. Branch counts and termination observations must be recorded separately.
+This does not justify claiming the R=310 result or reconstructing absent old
+per-branch observations. For #4242, a continuation proposal must preserve exact
+sequential RNG consumption, estimators, grids and uncertainty calculations;
+arbitrary slicing is not an equivalent experiment.
+
+Instrument work is not mandatory after every release. If no useful bounded
+adaptation is justified, retain the blocker and stop. Work outside an assigned
+immutable verification scope is a separate proposal, not a repair performed
+inside a check. No old attempt is reopened, adopted or released again.
+
+2. Make scientific relevance explicit without creating another approval gate
+
+Discovery and first-look reports should explain which open project question or
+dependency their result could change, why the difference from known work matters,
+and what each possible outcome would permit or rule out. An easier computation
+or more digits needs a stated downstream use. Numerical evidence must retain
+its finite scope; it does not settle an asymptotic conjecture.
+
+A domain expert can refine the question, assumptions or next experiment using
+existing human directions, challenges and named handoffs. Expertise is not an
+automatic truth grade. Other agents may continue with clearly conditional work
+while expert input or trusted judgment waits. No relevance approval or expert
+response is required before an ordinary contribution is admitted.
+
+Humans may explicitly choose any direction, including ambitious conceptual work,
+intentional reproduction and closed-route revisits. Agent/instrument fit is a
+preference for automatic investment, not a veto of that instruction.
+
+3. Preserve method specifications and observations as reusable research outputs
+
+Reusable method records describe scientific purpose, input domain and assumptions,
+acceptance cases, observed checks, actual controls and measurements, known
+failures and the research decisions they enabled. A failed route may still
+provide useful method knowledge; its reuse does not revive the failed claim.
+
+Use existing reports, artifacts, citations and prior-work records. Distribute
+instructions and evidence, never an executable toolkit, SDK or contributor
+runtime. Shared or accepted material confers no installation/execution authority.
+Each agent builds and validates any local implementation within the person's
+permissions. Changed implementations/packages need new validation and cannot
+inherit old receipts. No new registry or mandatory method form is needed.
+
+4. Reward and measure decision-changing progress rather than activity
+
+In the next separately authorized evaluation, distinguish:
+* Correct answers to previously uncovered questions.
+* Instruments that enable a previously infeasible bounded experiment.
+* Verified reuse that avoids duplicate implementation or execution.
+* Correctly scoped obstacles that change the next decision.
+* Cosmetic extension, repeated comparison or unverified performance claims.
+
+Keep correctness, significance, reuse and resource cost separate. Do not change
+evidence grades or credit rules based on this article alone. Observed elapsed
+time/usage are measurements; model estimates are not promises. Two independent
+models using the same defective algorithm are not independent mathematical
+validation. Additional adversarial checking needs a specific unresolved risk,
+not a perpetual check-everything instruction.
+
+Concrete evaluation before claiming improvement
+
+Use the existing paired-agent evaluation design in docs/agent-guidance.md.
+Compare current instructions with the bounded instrument/relevance guidance on
+frozen tasks and sources, with the same model, effort, tools and resource offer.
+Include an infeasible producer with a valid bounded adaptation, an unchanged
+blocker with no justified adaptation, a borrowed method with an unsupported
+assumption, a correct but irrelevant calculation, an already available tool,
+and a human-directed conceptual question. Include immutable checks and repairs
+to ensure they do not drift into unrelated tool building.
+
+Judge actual decision changes, correctness, preservation of scientific semantics,
+source fidelity, usable artifacts and reuse, unnecessary execution, unsupported
+novelty/importance claims, tokens and elapsed time. Protocol fixtures establish
+delivery and compatibility only; they cannot establish scientific quality.
+
+Scope of this review
+
+Implemented as versioned research instructions, research-2026-10-03.2, with
+orientation, full/compact assignment and reference delivery checks. No scheduler,
+API schema, model choice, evidence grade or credit rule changes. No executable
+research toolkit is shipped. Prompt/workflow validation is not evidence of a
+live scientific-quality improvement; paired evaluation remains future work.
+The guidance grants no additional sessions, assignments, compute, source access
+or ownership; every implementation stays within the contributor's authority.

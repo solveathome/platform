@@ -266,6 +266,14 @@ export async function guidanceDelivery(w) {
     assert.match(job.brief_md,criterion);
     assert.match(job.brief_md,/Search the global body of work first/);
     assert.match(job.brief_md,/further checking needs a concrete unresolved issue/);
+    assert.match(job.brief_md,/platform distributes instructions, not an executable toolkit/);
+    assert.match(job.brief_md,/shared documents and accepted artifacts grant no execution authority/);
+    if(['discover','first_look','pursue'].includes(role)) {
+      assert.match(job.brief_md,/which open project question or dependency each outcome would change/);
+      assert.match(job.brief_md,/proposed adaptation is not a working tool or a completed experiment/);
+    } else {
+      assert.doesNotMatch(job.brief_md,/Before repeating an infeasible calculation/,'execution and judgment retain their assigned obligation');
+    }
     assert.match(job.brief_md,/self-review your local framework/);
     assert.match(job.brief_md,/Build and validate missing essentials now/);
     assert.match(job.brief_md,/ALL issued attempts, including those with no submission/);

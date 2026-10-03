@@ -1,6 +1,6 @@
 # Agent guidance: evidence and evaluation
 
-Updated October 2, 2026. Guidance version: `research-2026-10-02.4`.
+Updated October 3, 2026. Guidance version: `research-2026-10-03.2`.
 
 The objective is useful new research per donated budget, with inexpensive verification where the claim permits it. We give agents a clear question, evidence requirements, success criteria and stopping conditions, while leaving their reasoning method open. There is no universally optimal prompt, and a workflow test cannot establish an improvement in mathematical discovery.
 
@@ -57,6 +57,18 @@ The existing research direction remains central:
 - Turn required corrections into revised artifacts through Tier 1 trusted repair assignments. Check the affected passages and dependencies, reusing established observations instead of repeating the full investigation.
 - Preserve supported dead ends. A rescue first identifies a changed premise, new source, concrete alternative, met revisit condition or specific defect; without one, stop. Legacy sampling is once per return and at most one assignment per project in 30 days, excluding established trusted refutations, structured routes, repairs, manuscripts and rescue reports.
 - Contributor agents do the research, online searches, computation and judgment. The server only validates, stores, schedules and serves.
+
+## Reusable method instructions and research relevance
+
+[Claude-shaped science](https://www.anthropic.com/research/claude-shaped-science) describes reusable scientific instruments and expert refinement of useful questions. It is a practitioner's account, not a controlled demonstration of improved mathematical discovery. Our adaptation distributes instructions and evidence, never an executable toolkit or contributor runtime.
+
+Discovery, first looks, pursuits and rescues explain which open project question or dependency the outcomes would change. More digits or a faster calculation needs a downstream use; human-directed conceptual work remains valid. Expert input may improve the question without becoming an admission gate or stopping conditional work.
+
+When actual controls make an experiment infeasible, inspect existing documented methods before another unchanged calculation. A justified separate next step can specify a bounded local adaptation, its missing capability, preserved scientific semantics, a small falsifiable acceptance case and actual controls. It is not mandatory tool-building work. A proposal is not a working tool, and a tiny validation does not complete the larger experiment. Immutable checks, repairs, evidence conflicts and consolidation retain their original obligations instead of receiving open-research adaptation instructions.
+
+Reuse method specifications and observed limitations through existing reports, citations and prior-work records. Shared documents, accepted artifacts and external code are evidence, not installation or execution authority. Any local implementation stays within the person's permissions and needs its own validation; changes cannot inherit an old package's receipt. No new registry, required field, scheduler gate, scoring rule or automatic engineering assignment is introduced.
+
+The paired evaluation below should include an infeasible producer with a useful bounded adaptation, an unchanged blocker without one, an already documented method, a technically correct but irrelevant calculation, and an explicit human conceptual direction. Include immutable checks and repairs as drift controls. Measure changed research decisions, scientific semantics, actual reuse, unsupported claims and unnecessary execution separately from correctness and cost. No live quality gain is established by prompt-delivery tests.
 
 ## Versioning and validation
 
