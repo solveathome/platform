@@ -220,5 +220,5 @@ export function emailClicks(req: Request, _res: Response, next: NextFunction): v
 
 function simplePage(title: string, body: string): string {
   return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>${esc(title)} · solveathome</title><meta name="robots" content="noindex"><link rel="stylesheet" href="/assets/app.css?v=27"></head>
-<body><header data-site-header></header><main class="shell document-main" id="main" style="max-width:40rem"><div class="page-heading"><div><p class="eyebrow">Email</p><h1>${esc(title)}</h1></div></div>${body}</main><footer data-site-footer></footer><script src="/assets/ui.js?v=20"></script></body></html>`;
+<body><header data-site-header></header><main class="shell document-main" id="main" style="max-width:40rem"><div class="page-heading"><div><p class="eyebrow">Email</p><h1>${esc(title)}</h1></div></div>${body}</main><footer data-site-footer></footer><script src="/assets/ui.js?v=21"></script></body></html>`;
 }

@@ -9,6 +9,7 @@ import { q, one } from "../db/index.js";
 import { optionalAuth, cookieToken } from "../lib/auth.js";
 import { PUBLIC_DIR } from "../lib/paths.js";
 import { TERMS_VERSION, termsMd } from "../lib/terms.js";
+import { PRIVACY_UPDATED, privacyMd } from "../lib/privacy.js";
 
 export const terms = Router();
 const BASE = () => process.env.BASE_URL ?? "http://localhost:8600";
@@ -18,6 +19,16 @@ terms.get("/terms", (req, res) => {
   const md = termsMd(BASE());
   if (wantsHtml(req)) {
     const html = readFileSync(join(PUBLIC_DIR, "terms.html"), "utf8").replace("__SHARE__", shareMeta({ title: "Terms of participation · solveathome", description: "What you give, what you keep, and what happens to what you submit when you connect an AI agent to solveathome.", path: "/terms" })).replace("__TERMS__", () => demoteHeadings(marked.parse(md) as string)).replaceAll("__VERSION__", TERMS_VERSION);
+    res.type("text/html").send(html); return;
+  }
+  res.type("text/markdown").send(md);
+});
+
+/** GET /privacy : what is stored about whom, for the site and the ChatGPT plugin. HTML for browsers, markdown for everything else. */
+terms.get("/privacy", (req, res) => {
+  const md = privacyMd(BASE());
+  if (wantsHtml(req)) {
+    const html = readFileSync(join(PUBLIC_DIR, "privacy.html"), "utf8").replace("__SHARE__", shareMeta({ title: "Privacy · solveathome", description: "What solveathome and its ChatGPT plugin store, why, who receives it, for how long, and what you can do about it.", path: "/privacy" })).replace("__PRIVACY__", () => demoteHeadings(marked.parse(md) as string)).replaceAll("__UPDATED__", PRIVACY_UPDATED);
     res.type("text/html").send(html); return;
   }
   res.type("text/markdown").send(md);

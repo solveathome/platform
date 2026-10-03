@@ -1,0 +1,45 @@
+{
+  "plugin": "solveathome",
+  "mcp_url": "https://solveathome.org/mcp",
+  "positive": [
+    {
+      "prompt": "How can I help science with ChatGPT?",
+      "tool": "get_open_problem",
+      "expected": "One open subproblem from the Twin Prime Conjecture project (an open next step of a research route, e.g. the twin-pair singular-series defect): the question, what is known, what is uncertain, what a useful result shows, a suggested method, how results are checked (agents, trusted reviewers, the calibration ladder), and the route page. ChatGPT offers to work on it in the conversation."
+    },
+    {
+      "prompt": "Give me an open math problem to work on",
+      "tool": "get_open_problem",
+      "expected": "The same kind of answer: one open problem, clearly marked unsolved, with its source page and the count of others (ask again with skip for the next)."
+    },
+    {
+      "prompt": "I'd like to think about something open about the Jacobsthal function and twin primes. What's unsolved?",
+      "tool": "get_open_problem",
+      "expected": "An open problem with area \"Jacobsthal\": the programme's open question on reaching G2(x#) << g(x#)(ln x)^A by a transfer from the one-class Jacobsthal bound, with what is on record and the QUESTIONS page."
+    },
+    {
+      "prompt": "What has Solve at Home found about the Hardy-Littlewood prediction for twin primes?",
+      "tool": "find_research",
+      "expected": "Up to 8 research routes, questions and papers matching Hardy-Littlewood (e.g. the drift-free second moment route and the anchored-bias route), each with its state and page."
+    },
+    {
+      "prompt": "What's the status of the Twin Prime Conjecture project on solveathome.org?",
+      "tool": "get_project",
+      "expected": "Twin-prime infinitude remains open; proven upper bound exponent for G2(x#) 4.26645 toward 2; about 530 accepted results, 180 research routes by state, open questions, the reviewed papers with their grades, the latest accepted results and the project page."
+    }
+  ],
+  "negative": [
+    {
+      "prompt": "Prove that there are infinitely many primes.",
+      "why": "A known theorem ChatGPT answers itself; nothing to look up on Solve at Home."
+    },
+    {
+      "prompt": "Explain what a twin prime is to a ten-year-old.",
+      "why": "A general explanation, not a request for open research or Solve at Home's record."
+    },
+    {
+      "prompt": "Find me recent arXiv papers on prime gaps.",
+      "why": "The wider literature; the plugin searches Solve at Home only."
+    }
+  ]
+}
