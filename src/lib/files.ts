@@ -52,13 +52,21 @@ const PRIVATE_KEY = new RegExp(`^(?:${PRIVATE_ID_KEYS})$`, 'i');
 const PRIVATE_VALUE = new RegExp(`^${PRIVATE_ID_VALUE}$`, 'i');
 const HARNESS_VALUE = new RegExp(`("(${PRIVATE_ID_KEYS})"\\s*:\\s*")${PRIVATE_ID_VALUE}(")`, 'gi');
 const HISTORICAL_ATTEMPT = /(\battempt\s*(?:[:=]\s*)?[`"']?)([0-9a-f]{32})(?![0-9a-f])/gi;
+// Node22 supplies the original primitive token to a JSON reviver. A scientific
+// anchor can exceed Number's precision; privacy edits must not round its digits.
+const losslessJSON = JSON as typeof JSON & {rawJSON(source: string): object; isRawJSON(value: unknown): boolean};
+if (typeof losslessJSON.rawJSON!=='function' || typeof losslessJSON.isRawJSON!=='function'
+  || JSON.parse('1', (_key, _value, context?: {source?: string}) => context?.source)!=='1')
+  throw new Error('Lossless scientific JSON redaction requires a Node22 runtime with rawJSON and reviver source support');
 /** Decode nested tool output, preserving original bytes when nothing changes. */
 function scrubIdentifiers(text: string): { text: string; n: number; first: string | null } {
   let n = 0, first: string | null = null;
   function strings(s: string, depth = 0, parent?: string): string {
     if (depth < 20) {
       try {
-        const decoded = JSON.parse(s), before = n, changed = walk(decoded, depth + 1, parent);
+        const decoded = JSON.parse(s, (_key, value, context?: {source?: string}) =>
+          typeof value==='number' && context?.source ? losslessJSON.rawJSON(context.source) : value);
+        const before = n, changed = walk(decoded, depth + 1, parent);
         return n === before ? s : JSON.stringify(changed);
       } catch { /* prose or a JSONL block: redact labelled values */ }
     }
@@ -67,6 +75,7 @@ function scrubIdentifiers(text: string): { text: string; n: number; first: strin
   }
   function walk(v: any, depth: number, parent?: string): any {
     if (typeof v === 'string') return strings(v, depth, parent);
+    if (losslessJSON.isRawJSON(v)) return v;
     if (Array.isArray(v)) return v.map(x => walk(x, depth, parent));
     if (v && typeof v === 'object') return Object.fromEntries(Object.entries(v).map(([k, value]) => {
       const contextAttempt = k === 'id' && (parent === 'attempt' || parent === 'assignment_attempt');

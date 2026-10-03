@@ -80,3 +80,20 @@ test('multiline historical attempt headers redact without dropping the following
   assert.equal(redacted.n,1);assert.equal(findHarnessId(redacted.text),null);
   assert.match(redacted.text,/The measured witness is 17/);
 });
+
+test('privacy redaction preserves exact scientific numeric tokens through nested and encoded JSON', () => {
+  const anchor='75053614359224265389282351';
+  const scientific=`{"attempt":{"id":"0123456789abcdef0123456789abcdef"},"anchor":${anchor},"negative_zero":-0,"decimal":1.2300,"large_exponent":1e400,"small_exponent":1e-400,"usage":{"input_tokens":42,"output_tokens":7},"return_id":42}`;
+  for(const input of [scientific,JSON.stringify({output:scientific}),JSON.stringify({output:JSON.stringify(scientific)}),`{"type":"header"}\n${scientific}\n`]) {
+    const result=redactHarnessIds(input);assert.equal(result.n,1);
+    assert.equal(findHarnessId(result.text),null);assert.equal(checkUpload('native.jsonl',result.text).ok,true);
+    for(const token of [anchor,'-0','1.2300','1e400','1e-400'])assert.ok(result.text.includes(token),`preserve original numeric token ${token}`);
+    assert.equal(redactHarnessIds(result.text).n,0);
+  }
+  const flat=redactHarnessIds(scientific).text;
+  assert.match(flat,new RegExp(`"anchor":${anchor}(?:,|})`),'keep a JSON number, not a quoted string or wrapper');
+  const parsed=JSON.parse(flat);assert.deepEqual(parsed.usage,{input_tokens:42,output_tokens:7});assert.equal(parsed.return_id,42);
+  const encoded=JSON.parse(redactHarnessIds(JSON.stringify({output:scientific})).text);
+  assert.equal(typeof encoded.output,'string');assert.match(encoded.output,new RegExp(`"anchor":${anchor}(?:,|})`));
+  assert.equal(redactHarnessIds(scientific.replace('0123456789abcdef0123456789abcdef','[REDACTED]')).text,scientific.replace('0123456789abcdef0123456789abcdef','[REDACTED]'),'already safe evidence keeps exact bytes');
+});
