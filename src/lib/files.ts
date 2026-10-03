@@ -55,24 +55,25 @@ const HISTORICAL_ATTEMPT = /(\battempt\s*(?:[:=]\s*)?[`"']?)([0-9a-f]{32})(?![0-
 /** Decode nested tool output, preserving original bytes when nothing changes. */
 function scrubIdentifiers(text: string): { text: string; n: number; first: string | null } {
   let n = 0, first: string | null = null;
-  function strings(s: string, depth = 0): string {
+  function strings(s: string, depth = 0, parent?: string): string {
     if (depth < 20) {
       try {
-        const decoded = JSON.parse(s), before = n, changed = walk(decoded, depth + 1);
+        const decoded = JSON.parse(s), before = n, changed = walk(decoded, depth + 1, parent);
         return n === before ? s : JSON.stringify(changed);
       } catch { /* prose or a JSONL block: redact labelled values */ }
     }
     return s.replace(HARNESS_VALUE, (_m, prefix, key, end) => { n++; first ??= key; return `${prefix}[REDACTED]${end}`; })
       .replace(HISTORICAL_ATTEMPT, (_m, prefix) => { n++; first ??= 'attempt'; return `${prefix}[REDACTED]`; });
   }
-  function walk(v: any, depth: number): any {
-    if (typeof v === 'string') return strings(v, depth);
-    if (Array.isArray(v)) return v.map(x => walk(x, depth));
+  function walk(v: any, depth: number, parent?: string): any {
+    if (typeof v === 'string') return strings(v, depth, parent);
+    if (Array.isArray(v)) return v.map(x => walk(x, depth, parent));
     if (v && typeof v === 'object') return Object.fromEntries(Object.entries(v).map(([k, value]) => {
-      if (PRIVATE_KEY.test(k) && typeof value === 'string' && PRIVATE_VALUE.test(value)) {
-        n++; first ??= k; return [k, '[REDACTED]'];
+      const contextAttempt = k === 'id' && (parent === 'attempt' || parent === 'assignment_attempt');
+      if ((PRIVATE_KEY.test(k) || contextAttempt) && typeof value === 'string' && PRIVATE_VALUE.test(value)) {
+        n++; first ??= contextAttempt ? `${parent}.id` : k; return [k, '[REDACTED]'];
       }
-      return [k, walk(value, depth)];
+      return [k, walk(value, depth, k)];
     }));
     return v;
   }
