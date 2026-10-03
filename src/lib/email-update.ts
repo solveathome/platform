@@ -299,8 +299,8 @@ export function subjectOf(c: Pick<Composed, "edition" | "lead" | "rest" | "asks"
   if (c.lead?.kind === "ask") head = `A question for you from ${describe(c.lead, x).head.split(" asks:")[0]}`;
   if (!head && c.stats) head = `Your agent made ${n(c.stats.returns7.made)} return${c.stats.returns7.made === 1 ? "" : "s"} this week${c.stats.pending ? `; ${n(c.stats.pending)} waiting on review` : ""}`;
   const more = others > 0 ? `, and ${others} more` : "";
-  const pre = c.edition === "weekly" ? "Your week: " : "";
-  return cap(`${pre}${head}${more}`, 120);
+  if (c.edition === "weekly") head = `Your week: ${/^(Your|You're|You|Accepted|Contested|Not|Up) /.test(head) ? head[0].toLowerCase() + head.slice(1) : head}`;
+  return cap(`${head}${more}`, 120);
 }
 
 export async function compose(userId: number, opts: { weekday: number; day: string; dry?: boolean } ): Promise<Composed | null> {
@@ -365,10 +365,11 @@ export async function render(c: Composed, userId: number, outboxId: number): Pro
       lines.push([`Rank, 30 days: <b>#${r.rank}</b>${s.rank7 ? ` · 7 days: #${s.rank7}` : ""} <span style="color:#666">(${esc(nb)})</span>`, `Rank, 30 days: #${r.rank}${s.rank7 ? ` · 7 days: #${s.rank7}` : ""} (${nb})`]);
     }
     const r7 = s.returns7;
-    lines.push([`Returns this week: ${n(r7.made)} made, ${n(r7.accepted)} accepted, ${n(r7.rejected)} not accepted, ${n(r7.pending)} pending`, `Returns this week: ${r7.made} made, ${r7.accepted} accepted, ${r7.rejected} not accepted, ${r7.pending} pending`]);
+    if (r7.made) lines.push([`Returns this week: ${n(r7.made)} made, ${n(r7.accepted)} accepted, ${n(r7.rejected)} not accepted, ${n(r7.pending)} pending`, `Returns this week: ${r7.made} made, ${r7.accepted} accepted, ${r7.rejected} not accepted, ${r7.pending} pending`]);
     if (s.routes.result || s.routes.active) lines.push([`Routes: ${n(s.routes.result)} reached a result, ${n(s.routes.active)} open`, `Routes: ${s.routes.result} reached a result, ${s.routes.active} open`]);
     const ag = s.agent;
-    lines.push([`Your agent this week: ${n(ag.returns)} returns, ${n(ag.reviews)} reviews, ${tok(ag.tokens)} tokens, ${ag.cpu_hours.toFixed(1)} CPU hours${ag.last_seen ? `, last seen ${esc(day(ag.last_seen))}` : ""}`, `Your agent this week: ${ag.returns} returns, ${ag.reviews} reviews, ${tok(ag.tokens)} tokens, ${ag.cpu_hours.toFixed(1)} CPU hours${ag.last_seen ? `, last seen ${day(ag.last_seen)}` : ""}`]);
+    if (!ag.returns && !ag.reviews) lines.push([`Your agent made no returns or reviews this week${ag.last_seen ? `; last seen ${esc(day(ag.last_seen))}` : ""}`, `Your agent made no returns or reviews this week${ag.last_seen ? `; last seen ${day(ag.last_seen)}` : ""}`]);
+    else lines.push([`Your agent this week: ${n(ag.returns)} returns, ${n(ag.reviews)} reviews, ${tok(ag.tokens)} tokens, ${ag.cpu_hours.toFixed(1)} CPU hours${ag.last_seen ? `, last seen ${esc(day(ag.last_seen))}` : ""}`, `Your agent this week: ${ag.returns} returns, ${ag.reviews} reviews, ${tok(ag.tokens)} tokens, ${ag.cpu_hours.toFixed(1)} CPU hours${ag.last_seen ? `, last seen ${day(ag.last_seen)}` : ""}`]);
     if (s.streak >= 2) lines.push([`${s.streak} weeks in a row with an accepted result`, `${s.streak} weeks in a row with an accepted result`]);
     H.push(`<p style="margin:0 0 14px;line-height:1.7">${lines.map((l) => l[0]).join("<br>")}</p>`); T.push(...lines.map((l) => l[1]), "");
     const me = await one<any>(`SELECT handle FROM users WHERE id = $1`, [userId]);
