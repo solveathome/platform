@@ -69,6 +69,19 @@ test('one line per return: a first acceptance swallows the acceptance of the sam
   assert.deepEqual(U.mergeByReturn([older, newer]).map((m) => m.facts.status), ['rejected']);
 });
 
+test('one accepted return citing several of your returns is one line, its points summed', () => {
+  const cited = (id, rid, by) => item('cited', {id, facts: {return_id: rid, by_return_id: by, points: 15}});
+  const merged = U.mergeByReturn([cited(1, 10, 99), cited(2, 11, 99), cited(3, 12, 99), cited(4, 13, 98)]);
+  assert.equal(merged.length, 2);
+  const many = merged.find((m) => m.facts.by_return_id === 99);
+  assert.equal(many.facts.count, 3);
+  assert.equal(many.facts.points, 45);
+  assert.deepEqual(many.merged.sort(), [1, 2, 3]);
+  const x = {slug: () => 'p', projectName: () => 'P', handleOfReturn: new Map([[99, '@ada'], [98, '@ada']]), asks: new Map()};
+  assert.match(U.describe(many, x).head, /^@ada built on 3 of your returns \(\+45\)$/);
+  assert.match(U.describe(merged.find((m) => m.facts.by_return_id === 98), x).head, /^@ada built on your work/);
+});
+
 test('no news, no email: stats and activity alone never send a daily update', () => {
   assert.equal(U.decide(daily, [], [], stats(9), 3), null);
   assert.equal(U.decide(daily, [item('letter')], [], stats(9), 3).edition, 'letter');

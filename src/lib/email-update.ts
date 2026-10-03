@@ -200,7 +200,16 @@ export function mergeByReturn(items: Item[]): Item[] {
     else out.push(it);
   }
   for (const v of verdicts.values()) if (!out.some((o) => String(o.facts?.return_id) === String(v.facts?.return_id))) out.push(v);
-  return out;
+  // One accepted return that cites several of the person's returns is one line, not one per cited return (live check, 3 Oct 2026: eight identical "built on your work" lines).
+  const citers = new Map<string, Item[]>();
+  for (const it of out) if (it.kind === "cited" && it.facts?.by_return_id != null) { const k = String(it.facts.by_return_id); citers.set(k, [...(citers.get(k) ?? []), it]); }
+  return out.flatMap((it) => {
+    const group = it.kind === "cited" && it.facts?.by_return_id != null ? citers.get(String(it.facts.by_return_id))! : null;
+    if (!group || group.length < 2) return [it];
+    if (group[0] !== it) return [];
+    const points = group.reduce((t, g) => t + Number(g.facts?.points ?? 0), 0);
+    return [{ ...it, facts: { ...it.facts, points, count: group.length }, merged: group.flatMap((g: any) => [g.id, ...(g.merged ?? [])]).filter(Boolean) } as any];
+  });
 }
 
 /** The lead: highest score, then more points, then newest. An ask leads only when it is the only news. */
@@ -214,6 +223,8 @@ export type Edition = "daily" | "weekly" | "letter";
 export type Composed = {
   edition: Edition; subject: string; lead: Item | null; asks: Item[]; rest: Item[]; more: number; stats: Stats | null; letters: any[];
   items: Item[]; quietSince: string | null; idleSince: string | null; offerLetter: boolean; prefs: Prefs; project: ProjectUpdate | null;
+  /** No email went out before: the points delta covers the last day, so nothing may say "since your last email". */
+  first: boolean;
 };
 
 /**
@@ -245,7 +256,8 @@ export async function projectUpdate(problemId: number, days: number, userId: num
   const closedRoutes = await q<any>(`SELECT id, title, origin_return_id AS return_id FROM research_routes WHERE problem_id = $1 AND state IN ('result','known') AND updated_at >= ${W} ORDER BY updated_at DESC LIMIT 2`, [problemId, days]);
   return {
     days, accepted: counts?.accepted ?? 0, returns: counts?.returns ?? 0, reviews: counts?.reviews ?? 0, agents: counts?.agents ?? 0, opened: counts?.opened ?? 0, closed: counts?.closed ?? 0,
-    highlights: highlights.sort((a, b) => b.points - a.points).slice(0, 3).map((h) => ({ ...h, return_id: Number(h.return_id), points: Math.round(h.points) })),
+    // One highlight per person: the bottom shows who moved the project, not one person three times (live check, 3 Oct 2026).
+    highlights: highlights.sort((a, b) => b.points - a.points).filter((h, i, all) => all.findIndex((o) => o.handle === h.handle) === i).slice(0, 3).map((h) => ({ ...h, return_id: Number(h.return_id), points: Math.round(h.points) })),
     closedRoutes: closedRoutes.map((r) => ({ id: Number(r.id), title: r.title, return_id: Number(r.return_id) })),
   };
 }
@@ -267,7 +279,7 @@ export function decide(prefs: Prefs, waiting: Item[], computed: Item[], s: Stats
 }
 
 const n = (x: number) => x.toLocaleString("en-US");
-const tok = (x: number) => x >= 1e6 ? `${(x / 1e6).toFixed(1)}M` : x >= 1e3 ? `${Math.round(x / 1e3)}k` : String(Math.round(x));
+const tok = (x: number) => x >= 1e9 ? `${(x / 1e9).toFixed(1)}B` : x >= 1e6 ? `${(x / 1e6).toFixed(1)}M` : x >= 1e3 ? `${Math.round(x / 1e3)}k` : String(Math.round(x));
 const esc = (s: unknown) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]!));
 const cap = (s: unknown, len: number) => { const t = String(s ?? "").replace(/\s+/g, " ").trim(); return t.length > len ? t.slice(0, len - 1) + "…" : t; };
 const day = (d: string | Date) => new Date(d).toLocaleDateString("en-GB", { day: "numeric", month: "short", timeZone: "UTC" });
@@ -308,7 +320,7 @@ export function describe(it: Item, x: Pick<Ctx, "slug" | "projectName" | "handle
     case "first": return { head: `Your first accepted result on ${x.projectName(it.problem_id)}${plus}`, why: `Trusted reviewers accepted your agent's ${typeName(f.type)}. It is now part of the project's record.`, path: ret(f.return_id) };
     case "breakthrough": return { head: `Your agent's ${typeName(f.type)} held${plus}`, why: `Trusted reviewers accepted it as a breakthrough: the objection or counterexample stands.`, path: ret(f.return_id) };
     case "accepted": return { head: `Accepted: your agent's ${typeName(f.type)}${plus}`, why: `Trusted reviewers accepted return #${f.return_id}${f.final_rung ? ` as ${f.final_rung}` : ""}. It is now part of the project's record.`, path: ret(f.return_id) };
-    case "cited": { const who = x.handleOfReturn.get(Number(f.by_return_id)) ?? "Another contributor"; return { head: `${who} built on your work${plus}`, why: `Their accepted return #${f.by_return_id} cites your return #${f.return_id}.`, path: ret(f.by_return_id ?? f.return_id) }; }
+    case "cited": { const who = x.handleOfReturn.get(Number(f.by_return_id)) ?? "Another contributor"; return { head: f.count > 1 ? `${who} built on ${f.count} of your returns${plus}` : `${who} built on your work${plus}`, why: f.count > 1 ? `Their accepted return #${f.by_return_id} cites ${f.count} of your returns.` : `Their accepted return #${f.by_return_id} cites your return #${f.return_id}.`, path: ret(f.by_return_id ?? f.return_id) }; }
     case "milestone":
       if (f.what === "top10") return { head: `You're in this month's top 10 on ${x.projectName(it.problem_id)}${f.to ? `: #${f.to}, up from #${f.from}` : ""}`, why: `Ranked by points over the last 30 days.`, path: `/projects/${slug}#contributors` };
       if (f.what === "first_place") return { head: `You're #1 this month on ${x.projectName(it.problem_id)}${f.from ? `, up from #${f.from}` : ""}`, why: `Ranked by points over the last 30 days.`, path: `/projects/${slug}#contributors` };
@@ -358,7 +370,7 @@ export async function compose(userId: number, opts: { weekday: number; day: stri
   // An agent that has not been seen for three days gets one clear next step at the top: start it again.
   const idle = s?.agent.last_seen && Date.now() - +new Date(s.agent.last_seen) > 3 * 86400_000 ? s.agent.last_seen : null;
   const project = d.edition !== "letter" && s?.project ? await projectUpdate(s.project.id, d.edition === "weekly" ? 7 : 1, userId) : null;
-  return { edition: d.edition, subject: "", lead, asks, rest: others.slice(0, LIST_MAX), more: Math.max(0, others.length - LIST_MAX), stats: d.edition === "letter" ? null : s, letters: d.letters, items: [...d.items, ...d.letters], quietSince: quiet, idleSince: idle, offerLetter, prefs, project };
+  return { edition: d.edition, subject: "", lead, asks, rest: others.slice(0, LIST_MAX), more: Math.max(0, others.length - LIST_MAX), stats: d.edition === "letter" ? null : s, letters: d.letters, items: [...d.items, ...d.letters], quietSince: quiet, idleSince: idle, offerLetter, prefs, project, first: !last };
 }
 
 /** The small label beside a line in the list, and the eyebrow over the lead. */
@@ -415,7 +427,7 @@ export async function render(c: Composed, userId: number, outboxId: number): Pro
     B.push(tpl.askBlock(asks));
   }
   if (c.rest.length) {
-    const title = c.edition === "weekly" ? "Also this week" : "Also since your last email";
+    const title = c.edition === "weekly" ? "Also this week" : c.first ? "Also recently" : "Also since your last email";
     T.push(title.toUpperCase(), "");
     const lines = c.rest.map((it) => { const d = describe(it, x); T.push(`- ${d.head}  ${x.link(d.path)}`); return { label: labelOf(it), head: d.head, href: x.link(d.path) }; });
     if (c.more) T.push(`- and ${c.more} more on your page`);
@@ -424,9 +436,9 @@ export async function render(c: Composed, userId: number, outboxId: number): Pro
   }
   if (c.stats?.project) {
     const s = c.stats, r = s.rank30, r7 = s.returns7, ag = s.agent;
-    const title = c.edition === "weekly" ? "Your week in numbers" : "Your stats";
+    const title = c.edition === "weekly" ? "Your week in numbers" : "Your stats", since = c.first ? "in the last day" : "since your last email";
     const lines: Array<[string, string]> = [];
-    lines.push([`Points <b>${n(s.points)}</b> (+${n(s.points_since)} since your last email, +${n(s.points_7d)} this week)`, `Points ${n(s.points)} (+${n(s.points_since)} since your last email, +${n(s.points_7d)} this week)`]);
+    lines.push([`Points <b>${n(s.points)}</b> (+${n(s.points_since)} ${since}, +${n(s.points_7d)} this week)`, `Points ${n(s.points)} (+${n(s.points_since)} ${since}, +${n(s.points_7d)} this week)`]);
     if (s.pending) lines.push(["", `Pending: ${s.pending} returns, worth up to ${s.pending_points} if accepted`]);
     if (r.rank) lines.push(["", `Rank, 30 days: #${r.rank}${s.rank7 ? ` · 7 days: #${s.rank7}` : ""}`]);
     if (r7.made) lines.push(["", `Returns this week: ${r7.made} made, ${r7.accepted} accepted, ${r7.rejected} not accepted, ${r7.pending} pending`]);
@@ -437,7 +449,7 @@ export async function render(c: Composed, userId: number, outboxId: number): Pro
     if (s.streak >= 2) lines.push(["", `${s.streak} weeks in a row with an accepted result`]);
     T.push(title.toUpperCase(), "", ...lines.map((l) => l[1]), "", `Your page: ${x.link(page)}`, "");
     const cards: Array<{ value: string; label: string; sub?: string }> = [
-      { value: n(s.points), label: "Points", sub: `+${n(s.points_since)} since your last email` },
+      { value: n(s.points), label: "Points", sub: `+${n(s.points_since)} ${since}` },
       ...(r.rank ? [{ value: `#${r.rank}`, label: "Rank, 30 days", sub: s.rank7 ? `#${s.rank7} over 7 days` : undefined }] : []),
       ...(s.pending ? [{ value: n(s.pending), label: "Waiting on review", sub: `worth up to ${n(s.pending_points)} if accepted` }] : []),
       r7.made ? { value: n(r7.made), label: "Returns this week", sub: `${n(r7.accepted)} accepted · ${n(r7.rejected)} not · ${n(r7.pending)} pending` }
