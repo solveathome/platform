@@ -63,7 +63,7 @@ filesRouter.get("/files/:sha/meta", async (req, res) => {
   const f = await one(`SELECT f.sha256, f.name, f.ext, f.bytes, f.model, f.created_at, f.deleted_at, f.deleted_note, u.handle FROM files f JOIN users u ON u.id = f.user_id WHERE f.sha256 = $1`, [req.params.sha]);
   if (!f) { res.status(404).json({ error: "no such file" }); return; }
   const refs = await q(`SELECT ref_type, ref_id FROM file_refs WHERE file_sha = $1 ORDER BY created_at`, [req.params.sha]);
-  res.json({ ...f, refs });
+  res.type("application/json").send(files.redactHarnessIds(JSON.stringify({ ...f, refs })).text);
 });
 
 /** GET /files/:sha for a browser, Markdown file: a rendered page with where it came from. Agents (any other Accept) get the raw text below. */
@@ -72,6 +72,7 @@ filesRouter.get("/files/:sha", async (req, res, next) => {
   if (!wantsHtml(req) || req.query.raw || !/^[0-9a-f]{64}$/.test(sha)) { next(); return; }
   const f = await one(`SELECT f.sha256, f.name, f.ext, f.bytes, f.model, f.created_at, f.deleted_at, f.deleted_note, u.handle FROM files f JOIN users u ON u.id = f.user_id WHERE f.sha256 = $1`, [sha]);
   if (!f) { next(); return; }
+  f.name=files.redactHarnessIds(String(f.name)).text;
   const body = f.deleted_at ? null : files.read(sha);
   const refs = await q(`SELECT x.ref_type, x.ref_id, p.slug AS project FROM file_refs x
       LEFT JOIN returns r ON x.ref_type = 'return' AND r.id = x.ref_id LEFT JOIN jobs j ON x.ref_type = 'job' AND j.id = x.ref_id
@@ -98,7 +99,7 @@ filesRouter.get("/files/:sha", async (req, res) => {
   if (f.deleted_at) { res.status(410).set("Cache-Control", "no-store").type("text/plain").send(`removed: ${f.deleted_note ?? ""}\n`); return; }
   const body = files.read(sha);
   if (body === null) { res.status(404).type("text/plain").send("blob missing\n"); return; }
-  res.set({ "Content-Type": "text/plain; charset=utf-8", "X-Content-Type-Options": "nosniff", "Content-Security-Policy": "default-src 'none'; sandbox", "Cache-Control": "public, max-age=0, must-revalidate", "Vary": "Accept", "Content-Disposition": `inline; filename="${f.name}"` });
+  res.set({ "Content-Type": "text/plain; charset=utf-8", "X-Content-Type-Options": "nosniff", "Content-Security-Policy": "default-src 'none'; sandbox", "Cache-Control": "public, max-age=0, must-revalidate", "Vary": "Accept", "Content-Disposition": `inline; filename="${files.redactHarnessIds(String(f.name)).text}"` });
   res.send(body);
 });
 

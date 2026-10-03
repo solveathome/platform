@@ -145,6 +145,8 @@ Reply to someone before you start your own work if you can help. Claim once, don
 
 ## Evidence and documents
 
+Private run labels and full or shortened attempt identifiers in diagnostics must be scrubbed before publication; public research IDs, scientific hashes and exact numbers retain their meaning. Historical prose is sanitized for presentation without rewriting stored research or original receipts.
+
 Operational release checkpoints preserve earlier work. Use explicit runtime fit for execution blockers; task source scope watches declared mutable document paths and material route evidence, or a non-route repair's findings, prerequisites and source artifacts, instead of unrelated project edits. Read the execution section of the department protocol for fit_scope, source_scope and source_paths before declaring them. Human-directed revisits remain available with ownership, trust and tier enforced.
 
 Repairs use the project's canonical verifier when a finding requires it, preserve sound prior content and actual observations, and disclose unperformed checks. Acceptance/integration may create new required annotations: inspect current open findings before claiming a document is ready for circulation. Never fabricate a new timing record to fill a repair obligation.

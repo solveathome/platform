@@ -41,7 +41,7 @@ import { GUIDANCE_VERSION } from "../lib/research-guidance.js";
 import { decide, MAX_REVIEWS, MIN_REVIEWS } from "../lib/consensus.js";
 import * as reputation from "../lib/reputation.js";
 import * as files from "../lib/files.js";
-import { recipeGaps, recipeGapsFound, recipeGapWarnings, recipeGapNote } from "../lib/files.js";   // named: `files` is shadowed by a local in returnPage
+import { redactHarnessIds, recipeGaps, recipeGapsFound, recipeGapWarnings, recipeGapNote } from "../lib/files.js";   // named: `files` is shadowed by a local in returnPage
 import * as credit from "../lib/credit.js";
 import { orientation } from "../lib/orientation.js";
 import { inbox, renderInbox } from "../lib/inbox.js";
@@ -1075,7 +1075,7 @@ job.post("/result", bearer, project, assignmentMutation(async (req: any, res) =>
     if (Number(jobRow.assigned_to) !== uid) { res.status(403).json({ error: "job is not assigned to this token" }); return; }
     if (jobRow.status !== "assigned") { res.status(409).json({ error: `job is ${jobRow.status}` }); return; }
     // The return comes from the agent that holds the job. Another agent of the same handle sends X-Session of its own and is refused.
-    if (xs && jobRow.assigned_session && xs !== jobRow.assigned_session) { res.status(403).json({ error: `job ${jobRow.id} is held by another of your sessions (${jobRow.assigned_session}); this session's assignment is at GET /start`, held_by_session: jobRow.assigned_session }); return; }
+    if (xs && jobRow.assigned_session && xs !== jobRow.assigned_session) { res.status(403).json({ error: `job ${jobRow.id} is held by another session; keep your original binding and inspect this run's protected context at GET /run/context. Do not adopt the other session's ownership or headers.` }); return; }
   } else {
     if (!["direction", "paper", "audit", "challenge", "review"].includes(b.type)) { res.status(400).json({ error: "without job_id only type 'direction', 'challenge' (your person thinks something here is wrong: target + human_md + finding), 'review' (an advisory review of any return: return_id + verdict), 'paper' (a new paper) or 'audit' (a change proposal for any served document) is accepted" }); return; }
     // Cap requests for judgment, not recorded ideas. Route proposals have their own
@@ -2241,7 +2241,7 @@ async function openLaneFromDirection(ret: any): Promise<void> {
 job.get("/review/:id", optionalAuth, project, async (req: any, res) => {
   const r = await one(`SELECT rv.id, rv.return_id, u.handle, rv.model, rv.verdict, rv.rung, rv.reject_reason, rv.notes_md, rv.also_fix, rv.verification, rv.trusted, rv.created_at FROM reviews rv JOIN users u ON u.id = rv.user_id JOIN returns r ON r.id = rv.return_id WHERE rv.id = $1 AND r.problem_id = $2`, [Number(req.params.id) || 0, req.project.id]);
   if (!r) { res.status(404).json({ error: `no such review #${String(req.params.id).slice(0, 20)} (a replaced review is in its return's review_history)` }); return; }
-  res.json({ ...r, return_url: `/projects/${req.project.slug}/return/${r.return_id}` });
+  res.type("application/json").send(redactHarnessIds(JSON.stringify({ ...r, return_url: `/projects/${req.project.slug}/return/${r.return_id}` })).text);
 });
 job.get("/finding/:id", optionalAuth, project, async (req: any, res) => {
   const f = await one(`SELECT f.id, f.path, f.note, f.scope, f.status, f.content_sha, f.return_id, f.review_id, f.job_id, f.created_at FROM findings f WHERE f.id = $1 AND f.problem_id = $2`, [Number(req.params.id) || 0, req.project.id]);
@@ -2263,6 +2263,7 @@ job.get("/return/:id", optionalAuth, project, async (req: any, res) => {
   if (r.job_brief != null) r.job_brief += stepCheckContext({step_check_notes_md:r.job_step_check_notes_md,research_stage:r.job_research_stage,step_check_of:r.job_step_check_of});
   delete r.job_step_check_notes_md; delete r.job_research_stage; delete r.job_step_check_of;
   delete r.session;   // an agent's session id is its own
+  for (const field of ['report_md','recipe_md','transcript','patch']) if (typeof r[field]==='string') r[field]=redactHarnessIds(r[field]).text;
   r.review_deferred = r.status === 'pending' && !r.provisional && !r.duplicate_of && !r.review_admitted_at;
   r.in_triage = r.status === 'pending' && !!(await one(`SELECT 1 FROM jobs WHERE parent_return_id = $1 AND type = 'triage' AND status IN ('queued','assigned')`, [r.id]));
   r.triage = await q(`SELECT t.id, u.handle, t.model, t.escalate, t.notes_md, t.created_at FROM triages t JOIN users u ON u.id = t.user_id WHERE t.return_id = $1 ORDER BY t.id`, [r.id]);
@@ -2301,7 +2302,7 @@ job.get("/return/:id", optionalAuth, project, async (req: any, res) => {
   r.cited_messages = citedIds.length ? (await q(`SELECT m.id, c.path AS channel_path, u.handle, m.model, m.kind, left(m.body_md, 600) AS body_md, m.created_at FROM messages m JOIN channels c ON c.id = m.channel_id JOIN users u ON u.id = m.user_id WHERE m.id = ANY($1) AND c.problem_id = $2 ORDER BY m.id`, [citedIds, req.project.id])).map((m: any) => ({ ...m, id: Number(m.id), url: `/projects/${req.project.slug}/chat/messages/${m.id}` })) : [];
   // pg returns bigint and numeric as strings (issue #25): ids and hours are numbers to a client.
   for (const k of Object.keys(r)) if (typeof r[k] === "string" && /(^|_)id$|cpu_hours|^weight$/.test(k) && /^-?\d+(\.\d+)?$/.test(r[k])) r[k] = Number(r[k]);
-  res.json(r);
+  res.type("application/json").send(redactHarnessIds(JSON.stringify(r)).text);
 });
 
 
@@ -2310,13 +2311,15 @@ async function returnPage(req: any, res: any): Promise<void> {
   const r = await one(`SELECT r.*, u.handle, u.display_name, j.title AS job_title, j.type AS job_type, j.research_stage AS job_stage, j.follow_up_of AS job_follow_up_of, l.slug AS lane FROM returns r JOIN users u ON u.id = r.user_id LEFT JOIN jobs j ON j.id = r.job_id LEFT JOIN lanes l ON l.id = r.lane_id WHERE r.id = $1 AND r.problem_id = $2`, [req.params.id, req.project.id]);
   if (!r) { res.status(404).type("text/html").send(notFoundPage(`No return #${String(req.params.id).slice(0, 20)} in this project.`)); return; }
   const files = await q(`SELECT f.sha256, f.name, f.ext, f.bytes FROM file_refs x JOIN files f ON f.sha256 = x.file_sha WHERE x.ref_type = 'return' AND x.ref_id = $1 AND f.deleted_at IS NULL ORDER BY f.name`, [r.id]);
+  for (const f of files) f.name=redactHarnessIds(String(f.name ?? '')).text;
   const reviews = await q(`SELECT rv.id, rv.verdict, rv.rung, rv.reject_reason, rv.notes_md, rv.also_fix, rv.weight, rv.created_at, u.handle, rv.model, rv.verification, rv.rerun_reason, rv.trusted, rv.tokens, rv.transcript_resubmitted_at, rv.needs_reassessment, rv.verification_sufficiency_md, rv.verification_receipt_id, rv.verification_conflict_resolution_md FROM reviews rv JOIN users u ON u.id = rv.user_id WHERE rv.return_id = $1 ORDER BY rv.id`, [r.id]);
   const patchIntegrated = r.patch ? !!(await one(`SELECT 1 FROM document_versions WHERE return_id = $1`, [r.id])) : false;
   const ownHandleDecided = !!(await one(`SELECT 1 FROM reviews WHERE return_id = $1 AND trusted AND user_id = $2 AND verdict = CASE WHEN $3 = 'accepted' THEN 'accept' ELSE 'reject' END`, [r.id, r.user_id, r.status]));
   const pages = await paperPages(req.project.slug);
-  const md = async (t: string) => { const m = protectMath(String(t ?? "").replace(/<!--[\s\S]*?-->/g, "")); return linkPaths(await linkPeople(m.restore(marked.parse(m.text.replace(/</g, "&lt;").replace(/>/g, "&gt;"), { gfm: true }) as string)), req.project.slug, "", pages); };
+  const md = async (t: string) => { const m = protectMath(redactHarnessIds(String(t ?? "")).text.replace(/<!--[\s\S]*?-->/g, "")); return linkPaths(await linkPeople(m.restore(marked.parse(m.text.replace(/</g, "&lt;").replace(/>/g, "&gt;"), { gfm: true }) as string)), req.project.slug, "", pages); };
   const P = `/projects/${req.project.slug}`;
   const inTriage = r.status === "pending" && !!(await one(`SELECT 1 FROM jobs WHERE parent_return_id = $1 AND type = 'triage' AND status IN ('queued','assigned')`, [r.id]));
+  for (const field of ['report_md','recipe_md','transcript','patch']) if (typeof r[field]==='string') r[field]=redactHarnessIds(r[field]).text;
   const meta = `<p class="doc-meta"><span class="tag">${escHtml(r.status)}${inTriage ? " (in triage: a first read decides whether it goes before trusted reviewers)" : ""}${r.status === "pending" && r.triage_lead ? ` (reviewed as part of the series led by <a href="${P}/return/${r.triage_lead}">#${r.triage_lead}</a>)` : ""}${r.status === "pending" && !r.provisional && !r.duplicate_of && !r.review_admitted_at ? " (waiting for validation to be queued)" : ""}${r.provisional ? " (provisional: advisory reviews only, awaiting a trusted reviewer)" : ""}${r.final_rung ? `, ${escHtml(r.final_rung)}` : r.author_rung ? `, claims ${escHtml(r.author_rung)}` : ""}${r.verification ? `, verified by ${escHtml(r.verification === "read" ? "reading" : r.verification === "spot" ? "spot rerun" : "full rerun")}` : ""}</span><span>${escHtml(r.type)}${r.lane ? ` in <a href="${P}#discussion">${escHtml(r.lane)}</a>` : ""}</span><span>by ${creditHtml(r)} (${escHtml(r.model)})</span><span>Submitted: ${timeHtml(r.created_at)}</span>${r.job_id ? `<span>answers assignment #${r.job_id}${r.job_title ? `: ${escHtml(r.job_title)}` : ""}${r.job_type ? ` <span class="tag">${escHtml(jobLabel({ type: r.job_type, research_stage: r.job_stage, follow_up_of: r.job_follow_up_of }))}</span>` : ""}</span>` : ""}${r.paper_slug ? `<span>revision of <a href="${P}/papers/${escHtml(r.paper_slug)}">${escHtml(r.paper_slug)}</a></span>` : ""}${Number(r.cpu_hours) > 0 ? `<span>${escHtml(r.cpu_hours)} CPU h</span>` : ""}${r.patch ? `<span>patch ${patchIntegrated ? "integrated" : "pending integration (applied to the research repository by hand)"}</span>` : ""}${ownHandleDecided ? `<span>decided by the author's own handle, as a trusted reviewer on a second model</span>` : ""}${r.superseded_by ? `<span class="tag">superseded by <a href="${P}/return/${escHtml(String(r.superseded_by))}">#${escHtml(String(r.superseded_by))}</a>: the same change, folded into it</span>` : ""}${r.duplicate_of && r.status === "pending" ? `<span class="tag">same change as pending <a href="${P}/return/${escHtml(String(r.duplicate_of))}">#${escHtml(String(r.duplicate_of))}</a></span>` : ""}${r.transcript_omitted && Number(r.transcript_omitted.omitted) >= 3 && Number(r.transcript_omitted.share) >= 0.5 ? `<span class="tag" title="${escHtml(String(r.transcript_omitted.omitted))} of ${escHtml(String(r.transcript_omitted.outputs))} tool outputs replaced by omission notes">transcript mostly omitted</span>` : ""}${r.revision_path && r.integration ? ` <span class="tag" title="What integrating this accepted revision of ${escHtml(r.revision_path)} did">${escHtml(({ applied: "integrated", unchanged: "already the served text", conflict: "not integrated: the document changed since; a rebase job carries it", missing: "not integrated: revised file missing" } as Record<string, string>)[r.integration] ?? r.integration)}</span>` : ""}</p>`;
   const fileNoteBy: Record<string, { notes: string[]; fixed_by?: string }> = {}; for (const f of Array.isArray(r.file_notes) ? r.file_notes : []) fileNoteBy[f.sha] = { notes: f.notes, fixed_by: f.fixed_by };
   const flist = files.map((f: any) => `<li><a href="/files/${f.sha256}">${escHtml(f.name)}</a> <span class="muted">${Number(f.bytes).toLocaleString("en")} bytes</span>${fileNoteBy[f.sha256] ? `<br><span class="muted"><b>${fileNoteBy[f.sha256].fixed_by ? "Replaced" : "Will not run as shipped"}</b>: ${escHtml(fileNoteBy[f.sha256].notes.join(" "))}${fileNoteBy[f.sha256].fixed_by ? ` Corrected copy: <a href="/files/${fileNoteBy[f.sha256].fixed_by}">${escHtml(f.name)}</a>.` : ""}</span>` : ""}</li>`).join("") || `<li class="muted">No files.</li>`;
@@ -2500,5 +2503,5 @@ job.post("/review/:id/transcript", bearer, project, assignmentMutation((req: any
 job.get("/return/:id/transcript", project, async (req: any, res) => {
   const r = await one(`SELECT transcript FROM returns WHERE id = $1 AND problem_id = $2`, [req.params.id, req.project.id]);
   if (!r) { res.status(404).type("text/plain").send("no such return"); return; }
-  res.set({ "Content-Type": "text/plain; charset=utf-8", "X-Content-Type-Options": "nosniff", "Cache-Control": "public, max-age=3600", "Content-Disposition": `inline; filename="return-${req.params.id}-transcript.jsonl"` }).send(r.transcript ?? "");   // one hour at the edge: a redaction propagates within the hour
+  res.set({ "Content-Type": "text/plain; charset=utf-8", "X-Content-Type-Options": "nosniff", "Cache-Control": "public, max-age=3600", "Content-Disposition": `inline; filename="return-${req.params.id}-transcript.jsonl"` }).send(redactHarnessIds(r.transcript ?? "").text);   // one hour at the edge: a redaction propagates within the hour
 });

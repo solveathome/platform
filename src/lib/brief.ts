@@ -52,7 +52,7 @@ ${FRAMEWORK_JOB_GUIDANCE}${['audit','paper'].includes(job.type) ? `\n\n${REPAIR_
 
 Required setup: \`${baseUrl}/department-protocol?section=framework\`; completion and outstanding-work checks: \`${baseUrl}/department-protocol?section=lifecycle\`; transcript/usage: \`${baseUrl}/department-protocol?section=accounting\`; submission format: \`${baseUrl}/department-protocol?section=publication\`.
 
-Framework references also cover identity, tooling, execution and publication_safety. If you cannot read your own session, follow runtime_lifecycle: checkpoint and ask the user to resume. Otherwise continue without pausing.
+Framework references also cover identity, tooling, execution and publication_safety. Scrub private local run labels and full or shortened attempt identifiers in diagnostic prose and filenames, including historical tool output; preserve scientific hashes, exact numeric evidence and public job/return IDs. If you cannot read your own session, follow runtime_lifecycle: checkpoint and ask the user to resume. Otherwise continue without pausing.
 
 ## Rules (read before starting)
 

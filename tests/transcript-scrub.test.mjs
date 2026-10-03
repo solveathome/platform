@@ -97,3 +97,27 @@ test('privacy redaction preserves exact scientific numeric tokens through nested
   assert.equal(typeof encoded.output,'string');assert.match(encoded.output,new RegExp(`"anchor":${anchor}(?:,|})`));
   assert.equal(redactHarnessIds(scientific.replace('0123456789abcdef0123456789abcdef','[REDACTED]')).text,scientific.replace('0123456789abcdef0123456789abcdef','[REDACTED]'),'already safe evidence keeps exact bytes');
 });
+
+
+test('historical ownership diagnostics redact run labels and replacement/current/short attempts without changing science',()=>{
+  const aid='0123456789abcdef0123456789abcdef',run='run-0123456789abcdef';
+  const diagnostics=[`attempt 01234567… of job #42 was replaced by ${aid}, which another of your sessions holds: send that agent's X-Session`,
+    `X-Attempt names 01234567..., which is not an attempt; its current attempt is ${aid}.`,
+    `Job #42's current attempt is ${aid}: resend with X-Attempt: ${aid}.`,
+    `run\n\`${run}\` and diagnostic-${run}.json`];
+  const science=`MD5 ${'b'.repeat(32)}, SHA256 ${'c'.repeat(64)}, run-${'d'.repeat(64)}; public return #42, witness 75053614359224265389282351.`;
+  for(const text of diagnostics)for(const nested of [text+'\n'+science,JSON.stringify({output:text,evidence:science,usage:{input_tokens:42,output_tokens:7}}),JSON.stringify({output:JSON.stringify({output:text,evidence:science})})]) {
+    assert.ok(findHarnessId(nested));
+    const redacted=redactHarnessIds(nested);assert.equal(findHarnessId(redacted.text),null);assert.ok(redacted.n>0);
+    for(const secret of [aid,run,'01234567…','01234567...'])assert.ok(!redacted.text.includes(secret));
+    for(const preserved of ['b'.repeat(32),'c'.repeat(64),'run-'+ 'd'.repeat(64),'75053614359224265389282351','#42'])assert.ok(redacted.text.includes(preserved));
+    assert.equal(redactHarnessIds(redacted.text).text,redacted.text);
+  }
+  assert.equal(findHarnessId(science),null);assert.equal(redactHarnessIds(science).text,science);
+  assert.equal(findHarnessId(`The candidate was replaced by ${'b'.repeat(32)}, a scientific MD5 digest.`),null);
+});
+
+ test("upload refuses ownership labels in filenames while public digest filenames remain valid",()=>{
+  assert.equal(checkUpload("diagnostic-run-0123456789abcdef.json", "{\"observation\":42}").ok,false);
+  assert.equal(checkUpload("run-"+"a".repeat(64)+".json", "{\"observation\":42}").ok,true);
+ });

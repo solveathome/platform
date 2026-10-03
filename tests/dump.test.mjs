@@ -105,3 +105,18 @@ test('the export never carries an email address or anything of the email tables 
     assert.doesNotMatch(sql, /\bu\.\*|\busers\.\*|FROM users\s+(u\s+)?(ORDER|WHERE|$)/i, name);
   }
 });
+
+
+test('new dump manifests hash sanitized diagnostic prose while original rows and prior-day bytes remain unchanged',async()=>{
+  const dir=scratch();try {
+    mkdirSync(join(dir,'2026-10-02'));writeFileSync(join(dir,'2026-10-02','returns.jsonl'),'historical bytes\n');writeFileSync(join(dir,'2026-10-02','manifest.json'),'historical manifest\n');
+    const row={id:42,report_md:'run run-0123456789abcdef; current attempt is 0123456789abcdef0123456789abcdef.',artifact_hash:'a'.repeat(64),measured:17};
+    const original=JSON.stringify(row);
+    const m=await writeDump({day:'2026-10-03',dumpDir:dir,tables:{returns:'R'},rows:source({R:[row]})});
+    const raw=readFileSync(join(dir,'2026-10-03','returns.jsonl'));const exported=JSON.parse(raw.toString());
+    assert.equal(exported.id,42);assert.equal(exported.measured,17);assert.equal(exported.artifact_hash,row.artifact_hash);
+    assert.ok(!exported.report_md.includes('run-0123456789abcdef'));assert.ok(!exported.report_md.includes('0123456789abcdef0123456789abcdef'));
+    assert.equal(m.files.returns.sha256,sha(raw));assert.equal(JSON.stringify(row),original);
+    assert.equal(readFileSync(join(dir,'2026-10-02','returns.jsonl'),'utf8'),'historical bytes\n');assert.equal(readFileSync(join(dir,'2026-10-02','manifest.json'),'utf8'),'historical manifest\n');
+  }finally{rmSync(dir,{recursive:true,force:true});}
+});

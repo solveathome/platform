@@ -52,6 +52,13 @@ const PRIVATE_KEY = new RegExp(`^(?:${PRIVATE_ID_KEYS})$`, 'i');
 const PRIVATE_VALUE = new RegExp(`^${PRIVATE_ID_VALUE}$`, 'i');
 const HARNESS_VALUE = new RegExp(`("(${PRIVATE_ID_KEYS})"\\s*:\\s*")${PRIVATE_ID_VALUE}(")`, 'gi');
 const HISTORICAL_ATTEMPT = /(\battempt\s*(?:[:=]\s*)?[`"']?)([0-9a-f]{32})(?![0-9a-f])/gi;
+// Private local ownership labels and the platform's old fenced-attempt diagnostics.
+// Do not infer identifiers from bare MD5/SHA hashes or scientific numbers.
+const LOCAL_RUN = /(?<![A-Za-z0-9])run-[0-9a-f]{16}(?![A-Za-z0-9])/gi;
+const SHORT_ATTEMPT = /(\b(?:attempt|X-Attempt\s+names)\s+[`"']?)[0-9a-f]{8}(?:…|\.\.\.)/gi;
+const CURRENT_ATTEMPT = /(\bcurrent\s+attempt\s+is\s+[`"']?)[0-9a-f]{32}(?![0-9a-f])/gi;
+const ATTEMPT_HEADER = /(\bX-Attempt\s*:\s*[`"']?)[0-9a-f]{32}(?![0-9a-f])/gi;
+const REPLACEMENT_ATTEMPT = /(\breplaced\s+by\s+[`"']?)[0-9a-f]{32}(?![0-9a-f])(?=[`"']?\s*,\s*which\s+(?:this\s+run|another\s+of\s+your\s+sessions)\s+holds)/gi;
 // Node22 supplies the original primitive token to a JSON reviver. A scientific
 // anchor can exceed Number's precision; privacy edits must not round its digits.
 const losslessJSON = JSON as typeof JSON & {rawJSON(source: string): object; isRawJSON(value: unknown): boolean};
@@ -60,6 +67,7 @@ if (typeof losslessJSON.rawJSON!=='function' || typeof losslessJSON.isRawJSON!==
   throw new Error('Lossless scientific JSON redaction requires a Node22 runtime with rawJSON and reviver source support');
 /** Decode nested tool output, preserving original bytes when nothing changes. */
 function scrubIdentifiers(text: string): { text: string; n: number; first: string | null } {
+  if (!/(?:atis|account|organisation|organization|session|thread|turn|attempt|run-)/i.test(text)) return {text,n:0,first:null};
   let n = 0, first: string | null = null;
   function strings(s: string, depth = 0, parent?: string): string {
     if (depth < 20) {
@@ -71,7 +79,12 @@ function scrubIdentifiers(text: string): { text: string; n: number; first: strin
       } catch { /* prose or a JSONL block: redact labelled values */ }
     }
     return s.replace(HARNESS_VALUE, (_m, prefix, key, end) => { n++; first ??= key; return `${prefix}[REDACTED]${end}`; })
-      .replace(HISTORICAL_ATTEMPT, (_m, prefix) => { n++; first ??= 'attempt'; return `${prefix}[REDACTED]`; });
+      .replace(HISTORICAL_ATTEMPT, (_m, prefix) => { n++; first ??= 'attempt'; return `${prefix}[REDACTED]`; })
+      .replace(LOCAL_RUN, () => { n++; first ??= 'local run'; return '[REDACTED]'; })
+      .replace(SHORT_ATTEMPT, (_m, prefix) => { n++; first ??= 'attempt prefix'; return `${prefix}[REDACTED]`; })
+      .replace(CURRENT_ATTEMPT, (_m, prefix) => { n++; first ??= 'current attempt'; return `${prefix}[REDACTED]`; })
+      .replace(ATTEMPT_HEADER, (_m, prefix) => { n++; first ??= 'X-Attempt'; return `${prefix}[REDACTED]`; })
+      .replace(REPLACEMENT_ATTEMPT, (_m, prefix) => { n++; first ??= 'replacement attempt'; return `${prefix}[REDACTED]`; });
   }
   function walk(v: any, depth: number, parent?: string): any {
     if (typeof v === 'string') return strings(v, depth, parent);
@@ -117,7 +130,7 @@ export function checkUpload(name: string, content: string): Check {
   if (Buffer.byteLength(content) > MAX_BYTES) return { ok: false, error: `file exceeds ${MAX_BYTES} bytes` };
   if (CONTROL.test(content)) return { ok: false, error: "control characters found; text files only" };
   for (const [label, re] of SECRET_PATTERNS) if (re.test(content)) return { ok: false, error: `looks like it contains a secret (${label}); scrub it and retry` };
-  const identifier = findHarnessId(content);
+  const identifier = findHarnessId(content) ?? findHarnessId(clean);
   if (identifier) return { ok: false, error: `private execution identifier (${identifier}); redact it and retry` };
   if (needsSourceReview(content)) return { ok: false, error: `${SOURCE_REVIEW_MESSAGE} The check tripped on this line: "${sourceReviewHit(content) ?? "?"}". Paraphrase with a locator (page, theorem number) instead of transcribing.` };
   return { ok: true, ext, name: clean };

@@ -13,6 +13,7 @@
 import { createHash } from "node:crypto";
 import { closeSync, existsSync, mkdirSync, openSync, readdirSync, renameSync, rmSync, writeFileSync, writeSync } from "node:fs";
 import { join } from "node:path";
+import { redactHarnessIds } from "./files.js";
 import { needsSourceReview } from "./document-publication.js";
 
 export const DUMP_TABLES: Record<string, string> = {
@@ -82,7 +83,7 @@ export async function writeDump(opts: { day: string; dumpDir: string; rows: RowS
         for await (const row of rows(sql)) {
           const hit = sourceReviewHit(name, row);
           if (hit) throw new Error(hit);
-          const line = Buffer.from(JSON.stringify(row) + "\n");
+          const line = Buffer.from(redactHarnessIds(JSON.stringify(row)).text + "\n");
           writeSync(fd, line); hash.update(line);
           count++; bytes += line.length;
         }

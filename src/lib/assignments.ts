@@ -20,7 +20,6 @@ const digest = (v: any) => createHash("sha256").update(JSON.stringify(canonical(
  * message that turns the diagnosis into the fix is worth the two queries it costs.
  */
 async function staleAttemptError(aid: string, job: any, sessionId: string, userId: number): Promise<string> {
-  const short = (id: unknown) => String(id ?? "").slice(0, 8);
   const named = aid ? await one<{ id: string; job_id: string; status: string; receipt: any }>(`SELECT id, job_id, status, receipt FROM assignment_attempts WHERE id = $1`, [aid]) : null;
   const live = job.attempt_id ? await one<{ id: string; status: string; session_id: string }>(`SELECT id, status, session_id FROM assignment_attempts WHERE id = $1`, [job.attempt_id]) : null;
   const held = await q<{ id: string }>(`SELECT id FROM jobs WHERE problem_id = $1 AND assigned_session = $2 AND status = 'assigned' ORDER BY id`, [job.problem_id, sessionId]);
@@ -29,12 +28,12 @@ async function staleAttemptError(aid: string, job: any, sessionId: string, userI
   if (named && String(named.job_id) !== String(job.id)) {
     const was = named.receipt?.return_id ? `, submitted as return #${named.receipt.return_id}` : named.status ? `, ${named.status}` : "";
     const use = live && live.session_id === sessionId && live.status === "assigned"
-      ? ` Job #${job.id}'s current attempt is ${live.id}: resend this result unchanged with X-Attempt: ${live.id}.`
+      ? ` Job #${job.id}'s current attempt belongs to this run: read its protected context at GET /run/context with this run's saved headers, then resend the unchanged result with that original X-Attempt.`
       : ` Job #${job.id} is ${job.status}${job.status === "assigned" ? " but its attempt is not this run's" : ""}.`;
-    return `X-Attempt names attempt ${short(named.id)}… of job #${named.job_id}${was}, and the body's job_id is ${job.id}: the two name different assignments, so nothing was submitted.${use}${holding ? ` Do not fetch /start while this run still holds ${holding}: that would take another assignment and leave this one unaccounted for.` : ""}`;
+    return `X-Attempt names an attempt for job #${named.job_id}${was}, and the body's job_id is ${job.id}: the two name different assignments, so nothing was submitted.${use}${holding ? ` Do not fetch /start while this run still holds ${holding}: that would take another assignment and leave this one unaccounted for.` : ""}`;
   }
-  if (aid && !named) return `X-Attempt names ${short(aid)}…, which is not an attempt of job #${job.id}${live ? `; its current attempt is ${live.id}` : ""}. Nothing was submitted. Use the attempt id from this assignment's brief${holding ? `, and do not fetch /start while this run still holds ${holding}` : ""}.`;
-  if (aid && named && live && live.id !== aid) return `attempt ${short(aid)}… of job #${job.id} was replaced by ${live.id}${live.session_id === sessionId ? ", which this run holds: resend with that X-Attempt" : ", which another of your sessions holds: send that agent's X-Session"}. Nothing was submitted.`;
+  if (aid && !named) return `X-Attempt names an unknown attempt for job #${job.id}. Nothing was submitted. Use the original attempt id from this assignment's protected brief${holding ? `, and do not fetch /start while this run still holds ${holding}` : ""}.`;
+  if (aid && named && live && live.id !== aid) return `The named attempt of job #${job.id} was replaced${live.session_id === sessionId ? "; this run holds the current attempt: read its protected context at GET /run/context with the original saved headers" : "; the current attempt belongs to another session: preserve your original checkpoint and do not adopt its ownership or headers"}. Nothing was submitted.`;
   const expired = job.expires_at && new Date(job.expires_at).getTime() <= Date.now();
   return `job #${job.id} is ${expired ? `back in the queue after ${ABANDON_AFTER_MIN} minutes without a request from its session` : `no longer assigned (${job.status})`}, so this result was not recorded.${holding ? ` This run still holds ${holding}: finish or release ${held.length === 1 ? "it" : "them"} first.` : " Fetch /start for current work."}`;
 }
@@ -117,7 +116,7 @@ export function assignmentMutation(handler: (req: any, res: any) => Promise<void
             const aid = String(req.body.attempt_id ?? req.header("x-attempt") ?? j.attempt_id ?? "");
             attempt = aid ? await one(`SELECT * FROM assignment_attempts WHERE id = $1 AND job_id = $2`, [aid, j.id]) : null;
             if (Number(attempt?.user_id ?? j.assigned_to) !== req.user.id || ((attempt?.session_id ?? j.assigned_session) && xs !== (attempt?.session_id ?? j.assigned_session))) {
-              res.status(403).json({ error: "this assignment is held by another of your sessions or another owner; send the holding agent's X-Session" }); throw new Refused();
+              res.status(403).json({ error: "this assignment is held by another session or owner; preserve your original checkpoint and inspect your own protected context at GET /run/context. Do not adopt another session's ownership or headers" }); throw new Refused();
             }
             if (req.agentSession?.launch_key && !req.body.attempt_id && !req.header("x-attempt")) {
               res.status(400).json({ error: "attempt_id is required; use the value in your assignment brief" }); throw new Refused();
