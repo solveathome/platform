@@ -36,12 +36,17 @@ import { shareMeta, SITE_DESCRIPTION } from "./lib/share.js";
 import { jsonLd, noindexPath, notFoundPage, ORGANIZATION, WEBSITE } from "./lib/seo.js";
 import { seo } from "./routes/seo.js";
 import { visualizations, visualizationsRoot } from "./routes/visualizations.js";
+import { mountPlugin } from "./lib/chatgpt-plugin/express.js";
+import { solveAtHomePlugin } from "./lib/chatgpt.js";
 
 const app = express();
 
 // Hosts in SPLASH_HOSTS (comma-separated) serve only the splash page, for an instance that is not open yet. Empty: the app everywhere.
 const SPLASH_HOSTS = new Set((process.env.SPLASH_HOSTS ?? "").split(",").map((h) => h.trim().toLowerCase()).filter(Boolean));
 app.use(splash(SPLASH_HOSTS));
+// The ChatGPT plugin: POST /mcp, read-only over public data, and /.well-known/openai-apps-challenge, which pathGuard would refuse
+// as a dotfile. Ahead of the guard, the site's CSP, the page cache and the JSON body parser; see src/lib/chatgpt.ts.
+mountPlugin(app, solveAtHomePlugin());
 app.use(pathGuard);
 app.disable("x-powered-by");
 // Hops to trust for req.ip: 1 = the reverse proxy in front (Caddy). Behind Cloudflare the limiter reads CF-Connecting-IP instead.
