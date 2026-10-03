@@ -1,0 +1,31 @@
+{
+  "project": "solveathome",
+  "compose": "docker-compose.agent.yml",
+  "ports": {
+    "web": "ALIGN_PORT_WEB",
+    "db": "ALIGN_PORT_DB"
+  },
+  "url": "http://localhost:{web}/",
+  "memory_mb": 300,
+  "db": {
+    "service": "postgres",
+    "dependents": [],
+    "volume": "postgres-data",
+    "image": "postgres:16-alpine",
+    "user": "solveathome",
+    "password": "solveathome",
+    "name": "solveathome",
+    "test": "solveathome_test",
+    "source": "postgresql://solveathome:solveathome@host.docker.internal:5434/solveathome",
+    "source_is": "the shared dev database (docker-compose.yml, host port 5434); never production",
+    "migrations_match": "(^|/)src/db/schema\\.sql$",
+    "max_age_hours": 24
+  },
+  "env_file": ".env",
+  "env": {
+    "PORT": "{web}",
+    "BASE_URL": "http://localhost:{web}",
+    "DATABASE_URL": "postgres://solveathome:solveathome@127.0.0.1:{db}/solveathome",
+    "TEST_DATABASE_URL": "postgres://solveathome:solveathome@127.0.0.1:{db}/solveathome_test"
+  }
+}

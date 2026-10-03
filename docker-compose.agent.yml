@@ -1,0 +1,38 @@
+# An agent's own Postgres (Align isolation, level 2), next to the shared dev database of docker-compose.yml and never instead of it.
+# The app itself runs as a plain process from the agent's checkout (`npm run dev`), as everywhere in this repo.
+#
+# Never run by hand: the agent stack tool runs it from the agent's own checkout with `-p <agent>` and with a host port leased
+# for it, so every container, network and volume carries the agent's name. That is why there is no `name:`, no `container_name`
+# and no fixed host port here: any of the three would make a second copy collide. Settings: align-stack.json.
+#
+# Everything this file makes carries the label align.stack, and nothing it makes is anonymous: taking the stack down removes only
+# what carries both the agent's compose project label and this one. Keep the label on anything you add here.
+
+services:
+  postgres:
+    labels:
+      align.stack: solveathome
+    image: postgres:16-alpine
+    ports:
+      - "127.0.0.1:${ALIGN_PORT_DB:?run this through the agent stack tool, never by hand}:5432"
+    environment:
+      - POSTGRES_USER=solveathome
+      - POSTGRES_PASSWORD=solveathome
+      - POSTGRES_DB=solveathome
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -U solveathome -d solveathome"]
+      interval: 2s
+      timeout: 5s
+      retries: 30
+
+volumes:
+  postgres-data:
+    labels:
+      align.stack: solveathome
+
+networks:
+  default:
+    labels:
+      align.stack: solveathome
