@@ -200,7 +200,16 @@ export function mergeByReturn(items: Item[]): Item[] {
     else out.push(it);
   }
   for (const v of verdicts.values()) if (!out.some((o) => String(o.facts?.return_id) === String(v.facts?.return_id))) out.push(v);
-  return out;
+  // One accepted return that cites several of the person's returns is one line, not one per cited return (live check, 3 Oct 2026: eight identical "built on your work" lines).
+  const citers = new Map<string, Item[]>();
+  for (const it of out) if (it.kind === "cited" && it.facts?.by_return_id != null) { const k = String(it.facts.by_return_id); citers.set(k, [...(citers.get(k) ?? []), it]); }
+  return out.flatMap((it) => {
+    const group = it.kind === "cited" && it.facts?.by_return_id != null ? citers.get(String(it.facts.by_return_id))! : null;
+    if (!group || group.length < 2) return [it];
+    if (group[0] !== it) return [];
+    const points = group.reduce((t, g) => t + Number(g.facts?.points ?? 0), 0);
+    return [{ ...it, facts: { ...it.facts, points, count: group.length }, merged: group.flatMap((g: any) => [g.id, ...(g.merged ?? [])]).filter(Boolean) } as any];
+  });
 }
 
 /** The lead: highest score, then more points, then newest. An ask leads only when it is the only news. */
@@ -311,7 +320,7 @@ export function describe(it: Item, x: Pick<Ctx, "slug" | "projectName" | "handle
     case "first": return { head: `Your first accepted result on ${x.projectName(it.problem_id)}${plus}`, why: `Trusted reviewers accepted your agent's ${typeName(f.type)}. It is now part of the project's record.`, path: ret(f.return_id) };
     case "breakthrough": return { head: `Your agent's ${typeName(f.type)} held${plus}`, why: `Trusted reviewers accepted it as a breakthrough: the objection or counterexample stands.`, path: ret(f.return_id) };
     case "accepted": return { head: `Accepted: your agent's ${typeName(f.type)}${plus}`, why: `Trusted reviewers accepted return #${f.return_id}${f.final_rung ? ` as ${f.final_rung}` : ""}. It is now part of the project's record.`, path: ret(f.return_id) };
-    case "cited": { const who = x.handleOfReturn.get(Number(f.by_return_id)) ?? "Another contributor"; return { head: `${who} built on your work${plus}`, why: `Their accepted return #${f.by_return_id} cites your return #${f.return_id}.`, path: ret(f.by_return_id ?? f.return_id) }; }
+    case "cited": { const who = x.handleOfReturn.get(Number(f.by_return_id)) ?? "Another contributor"; return { head: f.count > 1 ? `${who} built on ${f.count} of your returns${plus}` : `${who} built on your work${plus}`, why: f.count > 1 ? `Their accepted return #${f.by_return_id} cites ${f.count} of your returns.` : `Their accepted return #${f.by_return_id} cites your return #${f.return_id}.`, path: ret(f.by_return_id ?? f.return_id) }; }
     case "milestone":
       if (f.what === "top10") return { head: `You're in this month's top 10 on ${x.projectName(it.problem_id)}${f.to ? `: #${f.to}, up from #${f.from}` : ""}`, why: `Ranked by points over the last 30 days.`, path: `/projects/${slug}#contributors` };
       if (f.what === "first_place") return { head: `You're #1 this month on ${x.projectName(it.problem_id)}${f.from ? `, up from #${f.from}` : ""}`, why: `Ranked by points over the last 30 days.`, path: `/projects/${slug}#contributors` };
