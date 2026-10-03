@@ -1179,6 +1179,7 @@ CREATE TABLE IF NOT EXISTS job_correction_prerequisites (
   job_id BIGINT NOT NULL REFERENCES jobs(id) ON DELETE CASCADE,
   finding_id BIGINT NOT NULL REFERENCES findings(id) ON DELETE CASCADE,
   PRIMARY KEY(job_id,finding_id)
+);
 
 -- Progress emails (#sah-progress-emails, approved 3 Oct 2026): at most one email per person per day, news only, opt-out per choice.
 -- The address is personal data: never in DUMP_TABLES, never served to an agent route, set and read only by the person on the site.
