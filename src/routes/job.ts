@@ -406,6 +406,7 @@ ${ENDED_LAUNCH_GUIDANCE}
   const sess = { id: String(session.id), jobs: Number(session.jobs), max: session.max_jobs === null ? null : Number(session.max_jobs), length: lengthWords(session), disk, abandonAfterMin: ABANDON_AFTER_MIN, maxHours: agent.maxHours, compute: describeOffer(offer), transcriptPreapproved: settings.ai?.transcript_preapproved === true, subagents: settings.ai?.subagents?.allowed === false ? "not allowed" : settings.ai?.subagents?.max_parallel ? `allowed, up to ${settings.ai.subagents.max_parallel} at a time` : "allowed", files: await files.quota(uid).then((f) => ({ left: f.files_left, bytes_left: f.bytes_left, per_day: f.files_per_day })) };
   row.operational_deferrals = await deferralHistory(Number(row.id));
   row.handoffs = await handoffHistory(Number(row.id));
+  row.brief_md += row.step_check_notes_md ?? '';
   row.brief_md += handoffBrief(row.handoffs);
   if (row.operational_deferrals.length) row.brief_md += `\n\n## Prior assignment-fit checkpoints\n\nThese are source/execution limits, not mathematical refutations. Compare the current sources and controls cheaply before reopening work. ${row.operational_deferrals.map((d:any)=>`${d.kind} (fit scope: ${d.fit_scope}): ${d.evidence_md} Reopen when: ${d.reopen_when}`).join("\n\n")}`;
   if (Number(row.release_count ?? 0) > 0) row.prior_claims = await q(`SELECT m.id, u.handle, m.model, m.created_at FROM messages m JOIN users u ON u.id = m.user_id WHERE m.job_id = $1 AND m.kind = 'claim' ORDER BY m.id`, [row.id]);
@@ -951,6 +952,7 @@ job.post("/start", bearer, project, assignmentMutation(async (req: any, res: any
 job.get("/job/:id", optionalAuth, project, async (req: any, res) => {
   const row = await one(`SELECT j.*, l.slug AS lane_slug, p.repo_url, u.handle AS assigned_handle FROM jobs j JOIN problems p ON p.id=j.problem_id LEFT JOIN lanes l ON l.id=j.lane_id LEFT JOIN users u ON u.id = j.assigned_to WHERE j.id = $1 AND j.problem_id = $2`, [req.params.id, req.project.id]);
   if (!row) { res.status(404).json({ error: "no such job" }); return; }
+  row.brief_md += row.step_check_notes_md ?? '';
   row.handoffs = await handoffHistory(Number(row.id));
   row.dispatch_state = row.status === 'queued' && row.handoffs.some((h:any)=>h.status==='waiting') ? 'waiting_for_named_recipient' : row.status;
   if (req.query.format === "json" || !wantsHtml(req)) { const { assigned_session, attempt_id, ...pub } = row; res.json({ ...pub, returns: (await q(`SELECT id, status, final_rung FROM returns WHERE job_id = $1 ORDER BY id`, [row.id])).map((r: any) => ({ ...r, id: Number(r.id) })) }); return; }
@@ -2196,7 +2198,7 @@ Fix ${notes.length === 1 ? "it" : "them"}; do not redo the work. Upload a correc
 /** A follow-up job: bring a return that could not be checked to a checkable state. Any tier for mechanical types; the original work travels with it; the follow-up cites the original so its author is paid on acceptance. */
 async function spawnFollowUp(ret: any, needs: string[]): Promise<void> {
   if (await one(`SELECT 1 FROM jobs WHERE follow_up_of = $1 AND status IN ('queued','assigned')`, [ret.id])) return;
-  const orig = ret.job_id ? await one(`SELECT title, brief_md, budget_hours, min_tier, requires_trust, compute_hint, git_ref FROM jobs WHERE id = $1`, [ret.job_id]) : null;
+  const orig = ret.job_id ? await one(`SELECT title, brief_md, step_check_notes_md, budget_hours, min_tier, requires_trust, compute_hint, git_ref FROM jobs WHERE id = $1`, [ret.job_id]) : null;
   const P = "<project base>";
   const mechanical = ["break", "measure", "formalize"].includes(ret.type);
   const files = await q(`SELECT f.sha256, f.name FROM file_refs x JOIN files f ON f.sha256 = x.file_sha WHERE x.ref_type = 'return' AND x.ref_id = $1 AND f.deleted_at IS NULL`, [ret.id]);
@@ -2213,7 +2215,7 @@ Return as this job with \`"recipe_md"\` filled in and \`"cites": { "returns": [$
 
 Original assignment:
 
-${orig?.brief_md ?? "(the return was self-assigned; its report states the task)"}`;
+${orig ? orig.brief_md+orig.step_check_notes_md : "(the return was self-assigned; its report states the task)"}`;
   const follow = await one<{ id: string }>(`INSERT INTO jobs (problem_id, lane_id, type, title, brief_md, git_ref, compute_hint, budget_hours, min_tier, quorum, follow_up_of, requires_trust)
            VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,1,$10,$11) RETURNING id`,
     [ret.problem_id, ret.lane_id, ret.type, `${orig?.title ?? `${ret.type} return #${ret.id}`}`.slice(0, 200), brief, orig?.git_ref ?? "main", JSON.stringify(orig?.compute_hint ?? {}), Number(orig?.budget_hours ?? 2), orig?.requires_trust ? Number(orig.min_tier) : mechanical ? 99 : Number(orig?.min_tier ?? 99), ret.id, Boolean(orig?.requires_trust)]);
@@ -2255,7 +2257,7 @@ job.get("/return/:id/citers", optionalAuth, project, async (req: any, res) => {
 });
 job.get("/return/:id", optionalAuth, project, async (req: any, res) => {
   if (wantsHtml(req) && !req.query.json) { await returnPage(req, res); return; }
-  const r = await one(`SELECT r.*, u.handle, j.brief_md AS job_brief FROM returns r JOIN users u ON u.id = r.user_id LEFT JOIN jobs j ON j.id = r.job_id WHERE r.id = $1 AND r.problem_id=$2`, [req.params.id, req.project.id]);
+  const r = await one(`SELECT r.*, u.handle, j.brief_md||j.step_check_notes_md AS job_brief FROM returns r JOIN users u ON u.id = r.user_id LEFT JOIN jobs j ON j.id = r.job_id WHERE r.id = $1 AND r.problem_id=$2`, [req.params.id, req.project.id]);
   if (!r) { res.status(404).json({ error: `no such return #${String(req.params.id).slice(0, 20)}: it never existed, or it was removed (removals are announced in the lane channel and on the job's hand-back note)` }); return; }
   delete r.session;   // an agent's session id is its own
   r.review_deferred = r.status === 'pending' && !r.provisional && !r.duplicate_of && !r.review_admitted_at;

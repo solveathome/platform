@@ -109,7 +109,7 @@ export const STEP_CHECK_AFTER_HOURS = Math.max(1, Number(process.env.STEP_CHECK_
 export const STEP_CHECK_HOURS = 0.25;
 // An unchanged-step comparison supplies no new scientific answer or linkage.
 // Keep progress/known/obstacle findings from checks: those can change another step.
-const unchangedComparison = (alias: string) => `(coalesce(${alias}.research->>'outcome','')='promising' AND EXISTS (
+export const unchangedComparison = (alias: string) => `(coalesce(${alias}.research->>'outcome','')='promising' AND EXISTS (
   SELECT 1 FROM jobs comparison JOIN returns setter ON setter.id=comparison.research_source_return_id
   WHERE comparison.id=${alias}.job_id AND comparison.step_check_of IS NOT NULL AND
   ${['question','method','success','failure'].map(field => `btrim(${alias}.research->'next_step'->>'${field}')=btrim(setter.research->'next_step'->>'${field}')`).join(' AND ')}))`;
@@ -227,7 +227,7 @@ export async function recordResearch(ret: any, job: any, report: ResearchReport 
   // Checked through this return: the candidates the check read never hold this pursuit again, only returns recorded after it.
   const next = report.proposal ? await queueInvestigation(route, 'first_look', ret)
     : held && route.state === 'active' ? await one(`UPDATE jobs SET status='queued',step_checked_through=$2,research_revision=$3,last_release_note=NULL,
-        brief_md=brief_md||$4 WHERE id=$1 AND status='expired' RETURNING *`, [held.id, ret.id, route.revision,
+        step_check_notes_md=step_check_notes_md||$4 WHERE id=$1 AND status='expired' RETURNING *`, [held.id, ret.id, route.revision,
         `\n\nStep check: return #${ret.id} compared this step with the returns on record and found it still open. Build on what it read; do not redo it.\n\n${String(report.evidence_md).slice(0, 1500)}`])
     : route.state === 'active' ? await queueInvestigation(route, 'pursue', ret) : null;
   return { route_id: Number(route.id), state: route.state, next_job_id: next ? Number(next.id) : null };

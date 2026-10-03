@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import {before, beforeEach, after, afterEach, test} from 'node:test';
 import express from 'express';
 import {randomUUID} from 'node:crypto';
+import {createHash} from 'node:crypto';
 import {mkdtempSync, existsSync, readFileSync, writeFileSync, rmSync} from 'node:fs';
 import {execFile} from 'node:child_process';
 import {promisify} from 'node:util';
@@ -19,6 +20,8 @@ const {asks} = await import('../src/routes/asks.ts');
 const {board} = await import('../src/routes/board.ts');
 const {backlogFor, selectJob, selectRequiredCorrection, allocation, discoveryDue, discoveryShare, workConcentration, ROUTE_REPEAT_PENALTY} = await import('../src/lib/scheduler.ts');
 const {parseCapabilities, matchingMetadata} = await import('../src/lib/agent-profile.ts');
+const {holdForStepCheck} = await import('../src/lib/research.ts');
+const {DUMP_TABLES} = await import('../src/lib/dump.ts');
 let server, base, uid, other, token, otherToken, pid, slug;
 const tag = `scheduler-${Date.now().toString(36)}`;
 
@@ -162,6 +165,29 @@ test('task-source checkpoints reuse unchanged comparisons but detect material ro
   await q(`UPDATE returns SET cites='{}' WHERE id=$1`,[foreign.id]);assert.ok(!await selectJob(f.agent,false));
   await q('UPDATE returns SET research=$2 WHERE id=$1',[ret.id,JSON.stringify({outcome:'progress',next_step:{...f.step,method:'A bounded replacement'}})]);
   assert.equal(Number((await selectJob(f.agent,false)).id),Number(f.j.id),'changed method/progress reopens focused work');
+});
+
+test('actual unchanged step-check completion preserves a task runtime checkpoint and serves its comparison note',async()=>{
+  const f=await runtimeRouteFixture({prepare:async({route,j,step})=>{
+    const key=createHash('sha256').update(JSON.stringify([step.question,step.method,step.success,step.failure])).digest('hex');
+    await q(`UPDATE jobs SET research_stage='pursue',origin_key=$2 WHERE id=$1`,[j.id,`pursue:${route.id}:${key}`]);
+  }});
+  await q(`UPDATE jobs SET created_at=now()-interval '4 days' WHERE id=$1`,[f.j.id]);
+  const check=await transaction(async()=>holdForStepCheck(await one('SELECT * FROM jobs WHERE id=$1',[f.j.id])));
+  assert.ok(check,'another eligible department can perform the aged step comparison');
+  const a=ok(await call(`/start?share=0&job=${check.id}`,{who:otherToken,model:'gpt-6-astra',launch:randomUUID()}));
+  const ret=ok(await call('/result',{method:'POST',who:otherToken,model:'gpt-6-astra',session:a.session,attempt:a.attempt_id,
+    body:{job_id:a.job_id,report_md:'Only the issued step was compared; no new producer or evidence.',transcript:'t',transcript_approved:true,
+      research:{route_id:Number(f.route.id),outcome:'promising',evidence_md:'Exact experiment unchanged; reuse the previous evidence.',next_step:f.step,depends_on:[Number(f.origin.id)]}}}));
+  const held=await one('SELECT * FROM jobs WHERE id=$1',[f.j.id]);
+  assert.equal(held.status,'queued');assert.equal(Number(held.step_checked_through),Number(ret.return_id));
+  assert.ok(!await selectJob(f.agent,false),'certificate and comparison notes must not reopen the unchanged runtime task');
+  assert.deepEqual(await one('SELECT * FROM assignment_deferrals WHERE id=$1',[f.stored.id]),f.stored,'checkpoint history is immutable');
+  const page=ok(await call(`/job/${f.j.id}`));assert.match(page.brief_md,new RegExp(`Step check: return #${ret.return_id}`),'the new evidence note is still served');
+  const dumped=(await q(DUMP_TABLES.jobs)).find(j=>Number(j.id)===Number(f.j.id));
+  assert.equal(dumped.brief_md,f.j.brief_md);assert.match(dumped.step_check_notes_md,new RegExp(`Step check: return #${ret.return_id}`),'public export retains comparison provenance separately');
+  await q(`UPDATE jobs SET brief_md=brief_md||' A genuinely changed task instruction.' WHERE id=$1`,[f.j.id]);
+  assert.equal(Number((await selectJob(f.agent,false)).id),Number(f.j.id),'actual task instructions still permit a focused revisit');
 });
 
 test('task-source snapshots include artifacts outside the twelve displayed candidates and supersede only comparable older runtime checkpoints',async()=>{

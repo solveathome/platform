@@ -1086,6 +1086,9 @@ UPDATE jobs                SET avoid_model = canon_model(avoid_model) WHERE avoi
 -- latest return a check has compared the step against, so the same candidates never trigger a second check.
 ALTER TABLE jobs ADD COLUMN IF NOT EXISTS step_check_of BIGINT REFERENCES jobs(id);
 ALTER TABLE jobs ADD COLUMN IF NOT EXISTS step_checked_through BIGINT;
+-- Server comparison notes are evidence to read, not changes to the experiment.
+-- Existing appended briefs remain intact; only future comparison notes use this field.
+ALTER TABLE jobs ADD COLUMN IF NOT EXISTS step_check_notes_md TEXT NOT NULL DEFAULT '';
 -- The agent's own session window, declared with X-Session-Ends (#mba-sah-held-feedback-items, item 10): jobs are fitted to the time
 -- left (with ends_at, the person's time=); it never ends the session or limits a job.
 ALTER TABLE sessions ADD COLUMN IF NOT EXISTS declared_end TIMESTAMPTZ;
@@ -1149,6 +1152,8 @@ ALTER TABLE assignment_deferrals ADD COLUMN IF NOT EXISTS source_scope TEXT NOT 
   CHECK (source_scope IN ('project','task'));
 ALTER TABLE assignment_deferrals ADD COLUMN IF NOT EXISTS source_paths TEXT[] NOT NULL DEFAULT '{}';
 ALTER TABLE assignment_deferrals ADD COLUMN IF NOT EXISTS task_source_epoch JSONB;
+-- Prospective stable task identity; null retains an older checkpoint's exact semantics.
+ALTER TABLE assignment_deferrals ADD COLUMN IF NOT EXISTS task_job_fingerprint TEXT;
 
 -- Named interventions hold ordinary scheduling, without transferring attempts or judging science.
 CREATE TABLE IF NOT EXISTS job_handoffs (
