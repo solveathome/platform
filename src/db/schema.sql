@@ -1123,3 +1123,75 @@ UPDATE jobs SET min_tier=1, requires_trust=true
   WHERE status='queued' AND type='audit' AND (title LIKE 'Fix %' OR title LIKE 'Rebase return #%'
     OR EXISTS (SELECT 1 FROM findings f WHERE f.job_id=jobs.id AND f.status='open' AND f.scope<>'advisory'))
     AND (min_tier<>1 OR NOT requires_trust);
+
+-- Progress emails (#sah-progress-emails, approved 3 Oct 2026): at most one email per person per day, news only, opt-out per choice.
+-- The address is personal data: never in DUMP_TABLES, never served to an agent route, set and read only by the person on the site.
+ALTER TABLE users ADD COLUMN IF NOT EXISTS email TEXT;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS email_source TEXT;            -- github_verified | typed
+ALTER TABLE users ADD COLUMN IF NOT EXISTS email_confirmed_at TIMESTAMPTZ; -- NULL: a typed address waiting for its confirmation link; nothing is sent to it
+ALTER TABLE users ADD COLUMN IF NOT EXISTS email_status TEXT;            -- NULL (fine) | bounced | complained: nothing is sent until the address changes
+ALTER TABLE users ADD COLUMN IF NOT EXISTS email_prompts INT NOT NULL DEFAULT 0;   -- times the email step was shown and passed; asked at most twice
+ALTER TABLE users ADD COLUMN IF NOT EXISTS email_prompted_at TIMESTAMPTZ;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS email_tz TEXT;                -- IANA zone from the person's browser; NULL = UTC
+-- The verified address GitHub offered at sign-in, held on the browser session until the person saves it on the email step (the save is the consent).
+ALTER TABLE browser_sessions ADD COLUMN IF NOT EXISTS github_email TEXT;
+CREATE TABLE IF NOT EXISTS email_preferences (
+  user_id    BIGINT PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+  updates    TEXT NOT NULL DEFAULT 'daily' CHECK (updates IN ('daily','weekly','off')),
+  newsletter BOOLEAN NOT NULL DEFAULT false,
+  projects   BOOLEAN NOT NULL DEFAULT false,
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+-- Append-only proof of consent: who chose what, when, from which screen, under which wording.
+CREATE TABLE IF NOT EXISTS email_consent_events (
+  id              BIGSERIAL PRIMARY KEY,
+  user_id         BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  choice          TEXT NOT NULL,           -- address | updates | newsletter | projects
+  value           TEXT NOT NULL,
+  source          TEXT NOT NULL,           -- welcome | settings | unsubscribe | webhook | confirm
+  wording_version TEXT NOT NULL,
+  at              TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS email_consent_user_idx ON email_consent_events (user_id, id);
+-- What happened to a person's work, queued for their next email. Facts only (ids and numbers); the text is written at send time.
+CREATE TABLE IF NOT EXISTS email_items (
+  id          BIGSERIAL PRIMARY KEY,
+  user_id     BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  problem_id  BIGINT REFERENCES problems(id),
+  kind        TEXT NOT NULL,
+  score       INTEGER NOT NULL,
+  news        BOOLEAN NOT NULL,
+  dedupe_key  TEXT NOT NULL UNIQUE,
+  facts       JSONB NOT NULL DEFAULT '{}',
+  happened_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  email_id    BIGINT                       -- the outbox row that reported it; NULL = still waiting
+);
+CREATE INDEX IF NOT EXISTS email_items_waiting_idx ON email_items (user_id) WHERE email_id IS NULL;
+-- One row per person per local day, never more: the unique key is the one-a-day cap (Chris, 3 Oct 2026: "absolutely limited to one email per day").
+CREATE TABLE IF NOT EXISTS email_outbox (
+  id                  BIGSERIAL PRIMARY KEY,
+  user_id             BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  local_day           DATE NOT NULL,
+  edition             TEXT NOT NULL,       -- daily | weekly | letter
+  subject             TEXT NOT NULL DEFAULT '',
+  sections            JSONB NOT NULL DEFAULT '{}',   -- lead, items, stats snapshot (the next email's rank comparison reads it)
+  status              TEXT NOT NULL DEFAULT 'queued' CHECK (status IN ('queued','sent','suppressed','failed')),
+  suppressed_reason   TEXT,
+  provider_message_id TEXT,
+  holdout             BOOLEAN NOT NULL DEFAULT false,
+  created_at          TIMESTAMPTZ NOT NULL DEFAULT now(),
+  sent_at             TIMESTAMPTZ,
+  first_click_at      TIMESTAMPTZ,
+  UNIQUE (user_id, local_day)
+);
+-- The monthly letter and new-project news: drafted, approved by an owner, then folded into each opted-in person's next email.
+CREATE TABLE IF NOT EXISTS email_letters (
+  id          BIGSERIAL PRIMARY KEY,
+  kind        TEXT NOT NULL CHECK (kind IN ('letter','project')),
+  subject     TEXT NOT NULL,
+  body_md     TEXT NOT NULL,
+  created_by  BIGINT REFERENCES users(id),
+  approved_by BIGINT REFERENCES users(id),
+  approved_at TIMESTAMPTZ,
+  created_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+);

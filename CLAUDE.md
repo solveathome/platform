@@ -98,6 +98,9 @@ The decision record (Q1–Q73) is the maintainer's scope record; the Q numbers b
 ## Local dev
 `cp .env.example .env`, `docker compose up -d` (Postgres on :5434; 5433 belongs to another project), `npm run seed`, `npm run import-briefs`, `npm run dev`. `scripts/dev-users.ts` mints local tokens without GitHub (refuses unless `BASE_URL` is localhost).
 
+## Progress emails (Oct 3 2026, #sah-progress-emails)
+Chris approved the plan on Oct 3 2026, including: "This could become very spammy so should absolutely be limited to one email per day, with aggregate information (the most existing) + stats." The rule is at most one email per person per local day, of every kind, and `email_outbox`'s unique (user, local_day) key enforces it. No news, no email. The lead is the highest-scored item. Monday is the weekly edition. The letter and new-project news fold into that day's email. The only exception is the confirmation link. The defaults are updates daily, and the letter and new projects off until ticked (EU consent). GitHub's `user:email` address is offered on `/welcome` and becomes the person's only when they save it. The privacy line is `PRIVACY_LINE` in `src/lib/email.ts`; the terms' data section gets the email line at the next terms version (decision 6), not before. The system is off unless `EMAIL_ENABLED=1`, and sends nothing without `POSTMARK_SERVER_TOKEN`. `EMAIL_ALLOWLIST` limits it to named handles for a staged start. The holdout is `EMAIL_HOLDOUT_PERCENT` until `EMAIL_HOLDOUT_UNTIL`.
+
 ## Your own stack (agents doing server or data work)
 An agent that changes server code or data works against a Postgres of its own, never the shared dev database above. `docker-compose.agent.yml` (Postgres only; the app stays a plain process) and `align-stack.json` describe it, and the agent stack tool in the maintainer's tooling runs it. Never run the agent compose file by hand.
 

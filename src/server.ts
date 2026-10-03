@@ -23,6 +23,8 @@ import { projects } from "./routes/projects.js";
 import { trust } from "./routes/trust.js";
 import { announcements } from "./routes/announcements.js";
 import { announceTick } from "./lib/announce.js";
+import { email, emailClicks } from "./routes/email.js";
+import { emailTick } from "./lib/email-update.js";
 import { settings } from "./routes/settings.js";
 import { githubStart, githubCallback, logout } from "./lib/auth.js";
 import { splash } from "./lib/splash.js";
@@ -59,6 +61,7 @@ app.use("/auth", perIp("auth", 30, 60_000));
 app.use("/auth/github/callback", perIp("oauth-callback", 5, 60_000));
 // Anonymous aggregate pages are served from a 20 s cache: one Postgres pass per page per 20 s, however many people are looking.
 // Past 20 s the last copy is served while it rebuilds in the background (src/lib/cache.ts): no visitor waits for the rebuild.
+app.use(emailClicks);   // before the page cache, so a click on a cached page still counts against its email
 app.use(responseCache([/^\/dumps\/?$/, /^\/projects\/?$/, /^\/projects\/[a-z0-9-]+\/(board|activity|standings|leaderboard|who|chat|papers|sequences|lanes|questions|timeline)\/?$/, /^\/projects\/[a-z0-9-]+\/?$/, /^\/leaderboard\/?$/, /^\/credit\/?$/]));
 
 // Assets are referenced with ?v=, bumped whenever the file changes, so a versioned URL is immutable: a year, and no revalidation.
@@ -88,6 +91,7 @@ app.use("/projects/:slug", docs);
 app.use("/projects/:slug", visualizations);
 app.use(projects);
 app.use(settings);
+app.use(email);
 app.use(visualizationsRoot);
 app.use(root);
 app.use(dumps);
@@ -135,6 +139,8 @@ migrate().then(async () => {
   setInterval(() => { flushFileEffects().catch(error => console.error("publication retry:", error)); }, 30000).unref();
   // Announcements (#sah-discord-announcer): scan and send once a minute; off unless a project turns it on, ANNOUNCE_ENABLED=0 stops it.
   setInterval(() => { announceTick().catch(error => console.error("announce:", error)); }, 60_000).unref();
+  // Progress emails (#sah-progress-emails): queue items and write whoever's daily email is due, once a minute. Off unless EMAIL_ENABLED=1.
+  setInterval(() => { emailTick().catch(error => console.error("email:", error)); }, 60_000).unref();
   const srv = app.listen(port, () => {
     console.log(`solveathome on :${port}`);
     // What every visitor fetches: the project page and board, and the standings the home and project pages ask for by default

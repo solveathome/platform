@@ -10,6 +10,7 @@ import { sealToken, openToken } from "./token-vault.js";
 import * as reputation from "./reputation.js";
 import { TERMS_VERSION } from "./terms.js";
 import { ABANDON_AFTER_MIN } from "./liveness.js";
+import { pickGithubEmail, shouldPrompt } from "./email.js";
 
 export type AuthedUser = { id: number; handle: string };
 declare global {
@@ -172,7 +173,7 @@ export async function githubStart(req: Request, res: Response): Promise<void> {
   // The nonce also lives in a short-lived cookie: the callback only completes in the browser that started it (no login CSRF).
   const secure = (process.env.BASE_URL ?? "").startsWith("https");
   res.setHeader("Set-Cookie", `sah_oauth=${nonce}; Path=/auth; HttpOnly; SameSite=Lax; Max-Age=600${secure ? "; Secure" : ""}`);
-  res.redirect(`https://github.com/login/oauth/authorize?client_id=${id}&redirect_uri=${encodeURIComponent(cb)}&scope=read:user&state=${state}`);
+  res.redirect(`https://github.com/login/oauth/authorize?client_id=${id}&redirect_uri=${encodeURIComponent(cb)}&scope=${encodeURIComponent("read:user user:email")}&state=${state}`);
 }
 
 export async function githubCallback(req: Request, res: Response): Promise<void> {
@@ -197,11 +198,18 @@ export async function githubCallback(req: Request, res: Response): Promise<void>
   await reputation.ensure(Number(user!.id), seeded);
   // Browser sign-in never changes or invalidates an agent credential.
   const raw = await issueBrowserSession(Number(user!.id));
+  // Progress emails (#sah-progress-emails): GitHub's verified primary address is offered on the email step, held on this browser
+  // session only; it becomes the person's address when they save that step, never before.
+  const offered = pickGithubEmail(await fetch("https://api.github.com/user/emails", { headers: { authorization: `Bearer ${tok.access_token}`, "user-agent": "solveathome" }, signal: AbortSignal.timeout(10_000) })
+    .then((r) => r.ok ? r.json() : null).catch(() => null));
+  if (offered) await q(`UPDATE browser_sessions SET github_email = $2 WHERE token_hash = $1`, [hashToken(raw), offered]);
   const secure = (process.env.BASE_URL ?? "").startsWith("https");
   res.setHeader("Set-Cookie", [`sah_session=${encodeURIComponent(raw)}; Path=/; HttpOnly; SameSite=Lax; Max-Age=31536000${secure ? "; Secure" : ""}`, `sah_oauth=; Path=/auth; HttpOnly; SameSite=Lax; Max-Age=0${secure ? "; Secure" : ""}`]);
   const wantsHtmlNow = wantsHtml(req);
   const accepted = (await one<{ terms_version: string | null }>(`SELECT terms_version FROM users WHERE id = $1`, [user!.id]))?.terms_version === TERMS_VERSION;
-  const next = safeNext(st.next);
+  const after = safeNext(st.next);
+  // The email step comes right after the terms, once (it is asked at most twice in all; see shouldPrompt).
+  const next = (await shouldPrompt(Number(user!.id))) && Number((await one<{ n: number }>(`SELECT email_prompts AS n FROM users WHERE id = $1`, [user!.id]))?.n ?? 0) === 0 ? `/welcome?next=${encodeURIComponent(after)}` : after;
   // Accepting the terms is part of signing in: anyone without the current version on record lands on the acceptance step first.
   if (wantsHtmlNow) { res.redirect(accepted ? next : `/terms?signin=1&next=${encodeURIComponent(next)}`); return; }
   res.type("text/plain").send(`Signed in as @${gh.login}. Open ${process.env.BASE_URL}/projects/${(await featuredProject())?.slug ?? ""} to copy your joining instruction. Your agent token is unchanged.\n`);

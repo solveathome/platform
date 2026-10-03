@@ -92,3 +92,11 @@ test('the day must be a date and the export never selects a display name', () =>
   assert.rejects(writeDump({day: '../etc', dumpDir: scratch(), tables: {}, rows: source({})}), /YYYY-MM-DD/);
   for (const sql of Object.values(DUMP_TABLES)) assert.doesNotMatch(sql, /display_name/);
 });
+
+test('the export never carries an email address or anything of the email tables (#sah-progress-emails)', () => {
+  for (const [name, sql] of Object.entries(DUMP_TABLES)) {
+    assert.doesNotMatch(sql, /email/i, name);
+    // A table dumped whole would carry users.email: the users table is only ever read column by column.
+    assert.doesNotMatch(sql, /\bu\.\*|\busers\.\*|FROM users\s+(u\s+)?(ORDER|WHERE|$)/i, name);
+  }
+});

@@ -11,6 +11,7 @@ import { projectPartial, readProjectConfig, featuredProject } from "../lib/proje
 import { leaderboard, type Window } from "../lib/credit.js";
 import { projectActivity, runningWork } from "../lib/project-activity.js";
 import { standings, PENDING_POINTS_SQL } from "../lib/standings.js";
+import { shouldPrompt } from "../lib/email.js";
 import { researchSummary } from '../lib/research.js';
 import { jobLabel, JOB_LABEL_SQL, withoutKindPrefix } from '../lib/research-format.js';
 import { researchPolicy, researchAllocation, workConcentration } from '../lib/scheduler.js';
@@ -40,7 +41,9 @@ board.get("/", async (req: any, res) => {
 const OWNER_SET = new Set((process.env.OWNER_HANDLES ?? "").split(",").map((s) => s.trim().toLowerCase()).filter(Boolean));
 root.get("/me", optionalAuth, async (req: any, res) => {
   if (!req.user) { res.json({ signed_in: false }); return; }
-  res.json({ signed_in: true, account_id: (await one(`SELECT agent_account_id FROM users WHERE id=$1`, [req.user.id]))?.agent_account_id, handle: req.user.handle, owner: OWNER_SET.has(String(req.user.handle).toLowerCase()) });
+  res.json({ signed_in: true, account_id: (await one(`SELECT agent_account_id FROM users WHERE id=$1`, [req.user.id]))?.agent_account_id, handle: req.user.handle, owner: OWNER_SET.has(String(req.user.handle).toLowerCase()),
+    // The email banner (#sah-progress-emails): a yes or no for the person's own browser, never the address, never for an agent.
+    email_prompt: !(req.header("authorization") ?? "").startsWith("Bearer ") && await shouldPrompt(req.user.id) });
 });
 
 /** POST /me/token : the signed-in person's token for the start field. Cookie only, same-origin only, never on GET: a page script that can read /me cannot walk off with it by accident. */

@@ -2,10 +2,10 @@
 <html lang="en">
 <head>
 <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Display name · solveathome</title>
+<title>Settings · solveathome</title>
 <meta name="robots" content="noindex">
 <link rel="icon" href="/favicon.ico"><link rel="apple-touch-icon" href="/apple-touch-icon.png"><link rel="manifest" href="/site.webmanifest">
-<link rel="stylesheet" href="/assets/app.css?v=27"><script defer src="https://umami.infessa.com/script.js" data-website-id="3c56339a-8792-42b6-b506-628db725c596"></script>
+<link rel="stylesheet" href="/assets/app.css?v=27"><link rel="stylesheet" href="/assets/email-prefs.css?v=1"><script defer src="https://umami.infessa.com/script.js" data-website-id="3c56339a-8792-42b6-b506-628db725c596"></script>
 <style>
   .name-main { max-width: 46rem; }
   .name-form { margin-top: 2.5rem; }
@@ -46,9 +46,14 @@
     <div><dt>What I store</dt><dd>The name, and the dates it was set or removed. When you remove it, the name is deleted, not hidden.</dd></div>
     <div><dt>Changes</dt><dd>Three in any 30 days. Removing the name is always possible and does not count.</dd></div>
   </dl>
+  <section class="email-settings" id="email" style="margin-top:4rem" aria-labelledby="email-h">
+    <h2 id="email-h">Email</h2>
+    <p class="lead" style="margin-bottom:2rem">What your agent achieved, on the days it happens: one email at most, with your stats.</p>
+    <div id="email-form-wrap"><p class="muted">Checking your sign-in…</p></div>
+  </section>
 </main>
 <footer data-site-footer></footer>
-<script src="/assets/ui.js?v=20"></script><script src="/assets/who.js?v=4"></script>
+<script src="/assets/ui.js?v=20"></script><script src="/assets/who.js?v=5"></script><script src="/assets/email-prefs.js?v=1"></script>
 <script>
 const esc = SA.esc, $ = (s) => document.querySelector(s);
 const form = $("#form");
@@ -103,7 +108,8 @@ function render(st, said = "") {
 }
 
 loadWho($("#who")).then(async (me) => {
-  if (!me.signed_in) { form.innerHTML = `<p><a class="button" href="/auth/github?next=/settings">Sign in with GitHub to set a name</a></p>`; return; }
+  if (!me.signed_in) { form.innerHTML = `<p><a class="button" href="/auth/github?next=/settings">Sign in with GitHub to set a name</a></p>`; $("#email-form-wrap").innerHTML = ""; return; }
+  emailForm($("#email-form-wrap"), { from: "settings" });
   $("#eyebrow").textContent = `Settings for @${me.handle}`;
   const st = await SA.json("/me/display-name").catch(() => null);
   if (!st) { form.innerHTML = `<p class="muted">Could not load your settings. Refresh to try again.</p>`; return; }

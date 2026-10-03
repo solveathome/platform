@@ -1,0 +1,16 @@
+/* The email step and the email section of /settings (#sah-progress-emails). */
+.email-main { max-width: 46rem; }
+.email-label { display: block; font-weight: 600; margin-bottom: .5rem; }
+.email-row input { width: 100%; max-width: 30rem; background: transparent; color: var(--fg); border: 1px solid var(--line); border-radius: 0; padding: .7rem .85rem; }
+.email-row input:focus-visible { outline-offset: 2px; border-color: var(--fg); }
+.email-under { font-size: .875rem; margin: .5rem 0 1.75rem; }
+.email-set { border: 0; border-top: 1px solid var(--line); padding: 1.1rem 0 .6rem; margin: 0; }
+.email-set legend { font-weight: 600; padding: 0 .5rem 0 0; }
+.email-set > p { margin: .25rem 0 .75rem; font-size: .9375rem; }
+.email-choice { display: flex; gap: .6rem; align-items: flex-start; margin: 0 0 .6rem; line-height: 1.55; cursor: pointer; }
+.email-choice input { margin-top: .3rem; width: 1.05rem; height: 1.05rem; }
+.email-set label.email-choice[for], .email-set > label.email-choice:has(input[type=radio]) { display: inline-flex; margin-right: 1.5rem; }
+.email-privacy { font-size: .875rem; border-top: 1px solid var(--line); padding-top: 1rem; margin-top: .5rem; }
+.email-actions { display: flex; gap: 1.25rem; align-items: center; flex-wrap: wrap; margin-top: 1.25rem; }
+.link-button { background: none; border: 0; padding: 0; color: var(--fg); text-decoration: underline; text-underline-offset: 5px; cursor: pointer; font: inherit; }
+.problem { color: var(--fg); }
