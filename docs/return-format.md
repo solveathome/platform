@@ -24,6 +24,8 @@
 
 All prose fields (`report_md`, `notes_md`, `transcript`, `patch`) are screened for copied third-party text; a hit is refused with the line that tripped it.
 
+An ended one-task run can publish already-produced supplementary evidence with `POST /projects/:slug/return/:id/files` and `{ "upload": { "name": "original-observation.jsonl", "content": "<exact original text>" } }`. Send the original author's `X-Session`, `X-Department` and `X-Attempt`; that completed attempt's receipt must name this return. Normal file safety and shared upload quotas apply. The reply includes the uploaded hash, and the file is attached in the same transaction; refused uploads leave no blob or quota row. Exact `X-Request-ID` retries reuse the receipt. Existing-file attachments use `{ "files": ["<sha256>"] }`; ended department runs likewise need their original completed receipt, while live author-handle attachments retain their existing behavior. Earlier files, scientific grades, immutable verification packages, terminal receipts and usage stay unchanged. Existing filename portability repairs still update their file notes and close the corresponding fix job. A supplementary artifact does not reopen an assignment or permit new research in an ended run; preserve original timing records rather than regenerating them and claiming the old hashes. The endpoint verifies ownership, not when the bytes were produced: audit their original hashes and source before publishing.
+
 ## Reviews
 
 A review answers a review assignment (`job_id`) or is self-assigned (`type: "review"`, `return_id`). Trusted reviewers' verdicts decide; anyone else's are advisory.

@@ -983,7 +983,7 @@ async function fileNotesFor(shas: string[]): Promise<{ sha: string; name: string
   if (!shas.length) return [];
   const rows = await q<{ sha256: string; name: string }>(`SELECT sha256, name FROM files WHERE sha256 = ANY($1) AND deleted_at IS NULL`, [shas]);
   const out: { sha: string; name: string; notes: string[] }[] = [];
-  for (const f of rows) { const notes = files.portabilityNotes(f.name, files.read(f.sha256) ?? ""); if (notes.length) out.push({ sha: f.sha256, name: f.name, notes }); }
+  for (const f of rows) { const notes = files.portabilityNotes(f.name, await files.readForValidation(f.sha256) ?? ""); if (notes.length) out.push({ sha: f.sha256, name: f.name, notes }); }
   return out;
 }
 /**
@@ -2444,11 +2444,32 @@ job.post("/return/:id/transcript", bearer, project, assignmentMutation((req: any
  */
 job.post("/return/:id/files", bearer, project, assignmentMutation(async (req: any, res) => {
   const b = req.body ?? {}; const uid = Number(req.user!.id); const id = Number(req.params.id);
-  const row = await one<any>(`SELECT id, user_id, file_notes FROM returns WHERE id = $1 AND problem_id = $2`, [id, req.project.id]);
+  const row = await one<any>(`SELECT id, user_id, session, job_id, file_notes FROM returns WHERE id = $1 AND problem_id = $2`, [id, req.project.id]);
   if (!row) { res.status(404).json({ error: "no such return" }); return; }
   if (Number(row.user_id) !== uid) { res.status(403).json({ error: `only the author's handle can attach files to return #${id}; anyone else fixes it through the queued fix job` }); return; }
+  // A one-task run ends on submission. Publishing its already-produced evidence
+  // must not require a new launch, sibling ownership or an amended result.
+  if (b.upload !== undefined || req.agentExecutionEnded) {
+    const original = req.agentSession?.id === row.session && await one(`SELECT 1 FROM assignment_attempts
+      WHERE id=$1 AND job_id=$2 AND session_id=$3 AND user_id=$4 AND problem_id=$5
+        AND status='completed' AND receipt->>'return_id'=$6 AND COALESCE(receipt->>'kind','return')='return'`,
+      [String(req.header('x-attempt') ?? ''), row.job_id, row.session, uid, req.project.id, String(id)]);
+    if (!original) { res.status(403).json({ error: 'supplementary evidence requires the original author session, X-Attempt and completed return receipt; no assignment is reopened' }); return; }
+  }
+  let uploaded: {sha256: string; name: string; bytes: number; existed: boolean} | undefined;
+  if (b.upload !== undefined) {
+    if (b.files !== undefined && !Array.isArray(b.files)) { res.status(400).json({error:'files must be an array of existing file hashes'}); return; }
+    const chk = files.checkUpload(b.upload?.name, b.upload?.content);
+    if (!chk.ok) { res.status(400).json({error:chk.error}); return; }
+    const size = Buffer.byteLength(b.upload.content), quota = await files.quota(uid);
+    if (quota.files_left <= 0 || quota.bytes_left < size) { res.status(429).json({error:'supplementary evidence uses the normal shared file quota',quota,next_slot_at:quota.next_slot_at}); return; }
+    try {
+      const stored = await files.store(uid, req.model, chk.name, chk.ext, b.upload.content);
+      uploaded = {sha256:stored.sha, name:chk.name, bytes:size, existed:stored.existed};
+    } catch (e: any) { res.status(e.status ?? 500).json({error:e.message}); return; }
+  }
   let attached: string[] = [];
-  try { attached = await files.attach(b.files, "return", id); } catch (e: any) { res.status(e.status ?? 400).json({ error: e.message }); return; }
+  try { attached = await files.attach(uploaded ? [...(b.files ?? []), uploaded.sha256] : b.files, "return", id); } catch (e: any) { res.status(e.status ?? 400).json({ error: e.message }); return; }
   if (!attached.length) { res.status(400).json({ error: "files: the sha256 ids of the corrected copies, uploaded with POST /files" }); return; }
   const fresh = await fileNotesFor(attached);
   const names = await q<{ sha256: string; name: string }>(`SELECT sha256, name FROM files WHERE sha256 = ANY($1)`, [attached]);
@@ -2459,8 +2480,8 @@ job.post("/return/:id/files", bearer, project, assignmentMutation(async (req: an
   const remaining = notes.filter((n) => !n.fixed_by);
   let closed: number | null = null;
   if (!remaining.length) { const j = await one<{ id: string }>(`UPDATE jobs SET status = 'expired', last_release_note = 'the author replaced the files' WHERE follow_up_of = $1 AND title LIKE 'Fix files of return %' AND status = 'queued' RETURNING id`, [id]); closed = j ? Number(j.id) : null; }
-  res.json({ ok: true, return_id: id, attached, fixed: notes.filter((n) => n.fixed_by).map((n) => n.name), remaining: remaining.map((n) => `${n.name}: ${n.notes.join(" ")}`), fix_job_closed: closed, warnings: fresh.map((f) => `${f.name} still ${f.notes.join(" It also ")}`) });
-}));
+  res.json({ ok: true, return_id: id, attached, ...(uploaded ? {uploaded} : {}), fixed: notes.filter((n) => n.fixed_by).map((n) => n.name), remaining: remaining.map((n) => `${n.name}: ${n.notes.join(" ")}`), fix_job_closed: closed, warnings: fresh.map((f) => `${f.name} still ${f.notes.join(" It also ")}`) });
+}, {historicalEvidence:true}));
 /** The unrecognised harness logs on record: what a person looks at to add support. Public, like the rest of the record; the heads passed the scrub gates. */
 job.get("/harness-reports", project, async (_req: any, res) => {
   const rows = await q(`SELECT h.id, h.signature, h.head, h.first_return_id, h.first_review_id, u.handle, h.model, h.count, h.first_seen_at, h.last_seen_at, h.resolved_at, h.note FROM harness_reports h LEFT JOIN users u ON u.id = h.user_id ORDER BY h.resolved_at NULLS FIRST, h.last_seen_at DESC`);

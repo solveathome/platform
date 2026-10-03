@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import {before,after,test} from 'node:test';
-import {randomBytes} from 'node:crypto';
-import {mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync} from 'node:fs';
+import {randomBytes,createHash} from 'node:crypto';
+import {mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, rmSync} from 'node:fs';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {createLab} from './simulation/harness.mjs';
@@ -283,6 +283,59 @@ test('ended runs can correct their own historical transcripts with exact retries
   const recovered=await call(path,{credential,body,headers:{'x-request-id':random()}});assert.equal(recovered.tokens.output,20,'account-level recovery retains validation and deduplication');
   const stored=await w.one(`SELECT run_id,tokens,transcript_resubmitted_at FROM returns WHERE id=$1`,[receipt.return_id]);
   assert.equal(stored.run_id,author.run_id);assert.equal(stored.tokens.output,20);assert.ok(stored.transcript_resubmitted_at);
+});
+
+test('a completed one-task run publishes exact supplementary artifacts only with its original receipt',async()=>{
+  const {id,credential}=await account(),did=(await bootstrap(random(),credential)).department_id;
+  const author=await launch(did,null,'time=1task',credential),sibling=await launch(did,null,'time=1task',credential);
+  const completed=await call('/result',{credential,run:author,headers:{'x-attempt':author.attempt_id},body:{job_id:author.job_id,report_md:'Finite fixture observation; no theorem.',transcript:'Scripted fixture, no inferred usage.',transcript_approved:true}});
+  assert.ok((await call('/run/context',{credential,run:author})).ended_at);
+  const path=`/return/${completed.return_id}/files`,content='{"scientific_anchor":75053614359224265389282351,"observed_seconds":1.2300}\n';
+  const body={upload:{name:'original-observation.jsonl',content}},headers={'x-attempt':author.attempt_id,'x-request-id':random()};
+  const before=await w.one(`SELECT status,receipt FROM assignment_attempts WHERE id=$1`,[author.attempt_id]);
+  const scientific=await w.one(`SELECT status,final_rung,verification_fingerprint,tokens FROM returns WHERE id=$1`,[completed.return_id]);
+  await call(path,{credential,run:sibling,body,headers:{'x-attempt':sibling.attempt_id},status:403});
+  await call(path,{credential:otherToken,body,status:403});
+  await call(path,{credential,run:author,body,status:403});
+  await call(path,{credential,run:author,body,headers:{'x-attempt':sibling.attempt_id},status:403});
+  await call(path,{credential,body,headers,status:403});
+  await call(path,{credential,run:author,body:{upload:{name:'private.json',content:'{"attempt":{"id":"0123456789abcdef0123456789abcdef"}}'}},headers:{'x-attempt':author.attempt_id},status:400});
+  assert.equal((await w.one('SELECT count(*)::int n FROM files WHERE user_id=$1',[id])).n,0,'refused evidence creates no files');
+  const receipt=await call(path,{credential,run:author,body,headers});
+  const sha=createHash('sha256').update(content).digest('hex');
+  assert.equal(receipt.uploaded.sha256,sha);assert.deepEqual(receipt.attached,[sha]);
+  assert.equal(await (await fetch(w.origin+'/files/'+sha)).text(),content,'original numeric and timing tokens retain exact bytes');
+  assert.ok(await w.one(`SELECT 1 FROM file_refs WHERE file_sha=$1 AND ref_type='return' AND ref_id=$2`,[sha,completed.return_id]));
+  assert.deepEqual(await call(path,{credential,run:author,body,headers}),receipt);
+  assert.equal((await w.one('SELECT count(*)::int n FROM files WHERE user_id=$1',[id])).n,1,'exact retry does not consume another quota slot');
+  await call(path,{credential,run:author,body:{upload:{...body.upload,content:content+'\n'}},headers,status:409});
+  await call(path,{credential,run:author,body:{files:[sha]},headers:{'x-attempt':author.attempt_id}});
+  // Preserve live author-handle attachments, including legitimate self-assigned work.
+  const self=await call('/result',{credential,run:sibling,body:{type:'direction',human_md:'Fixture human asks for a scoped direction.',report_md:'A scripted scoped direction, not mathematical evidence.',transcript:'Fixture; no inferred usage.',transcript_approved:true}});
+  assert.equal((await w.one('SELECT job_id FROM returns WHERE id=$1',[self.return_id])).job_id,null);
+  await call(`/return/${self.return_id}/files`,{credential,run:sibling,body:{files:[sha]}});
+  const rollbackContent='original rollback fixture\n',rollbackSha=createHash('sha256').update(rollbackContent).digest('hex');
+  await call(path,{credential,run:author,body:{upload:{name:'rollback.txt',content:rollbackContent},files:['e'.repeat(64)]},headers:{'x-attempt':author.attempt_id},status:400});
+  assert.equal(await w.one('SELECT 1 FROM files WHERE sha256=$1',[rollbackSha]),undefined);
+  assert.equal(await w.one('SELECT 1 FROM file_refs WHERE file_sha=$1',[rollbackSha]),undefined);
+  const {FILES_DIR}=await import('../src/lib/files.ts');
+  assert.equal(existsSync(join(FILES_DIR,rollbackSha.slice(0,2),rollbackSha)),false,'a refused upload leaves no unaccounted disk blob');
+  assert.equal(await w.one('SELECT 1 FROM pending_file_effects WHERE path=$1',[join(FILES_DIR,rollbackSha.slice(0,2),rollbackSha)]),undefined);
+  await call('/release',{credential,run:sibling,body:{job_id:sibling.job_id,note:'Fixture scope is complete.'},headers:{'x-attempt':sibling.attempt_id}});
+  assert.ok((await call('/run/context',{credential,run:sibling})).ended_at);
+  await call(path,{credential,run:sibling,body:{files:[sha]},headers:{'x-attempt':sibling.attempt_id},status:403});
+  await call(path,{credential,run:sibling,body,headers:{'x-attempt':sibling.attempt_id},status:403});
+  await w.q('INSERT INTO reputation(user_id,score) VALUES($1,.1) ON CONFLICT(user_id) DO UPDATE SET score=.1',[id]);
+  const quota=await call('/files/quota',{credential,run:author,root:true});
+  await w.q('UPDATE files SET bytes=$2 WHERE sha256=$1',[sha,quota.bytes_per_day]);
+  const refused=await call(path,{credential,run:author,body:{upload:{name:'over-quota.txt',content:'more fixture data'}},headers:{'x-attempt':author.attempt_id,'x-request-id':random()},status:429});
+  assert.equal(refused.quota.bytes_left,0);
+  await w.q('UPDATE files SET bytes=$2 WHERE sha256=$1',[sha,Buffer.byteLength(content)]);
+  await call('/files',{credential,run:author,root:true,body:{name:'new-work.txt',content:'still forbidden'},status:409});
+  await call('/start',{credential,run:author,status:409});
+  assert.deepEqual(await w.one(`SELECT status,receipt FROM assignment_attempts WHERE id=$1`,[author.attempt_id]),before,'terminal receipt never changes');
+  assert.deepEqual(await w.one(`SELECT status,final_rung,verification_fingerprint,tokens FROM returns WHERE id=$1`,[completed.return_id]),scientific,'attachments do not claim new science, grading or usage');
+  const ctx=await call('/run/context',{credential,run:author});assert.equal(ctx.execution_active,false);assert.equal(ctx.jobs,1);assert.equal(ctx.max_jobs,1);
 });
 
 test('ended review runs can attach their own usage, including self-assigned reviews',async()=>{

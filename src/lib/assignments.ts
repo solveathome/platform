@@ -90,8 +90,10 @@ export function assignmentMutation(handler: (req: any, res: any) => Promise<void
             }
           }
           // Receipts remain readable after a run ends; new work does not.
-          if (req.agentSession?.department_id && req.method === 'POST' && !options.completion && !options.historicalEvidence && !/\/end$/.test(req.path)
-              && (req.agentSession.ended_at || (req.agentSession.ends_at && new Date(req.agentSession.ends_at).getTime() <= Date.now() && !await one(`SELECT 1 FROM jobs WHERE assigned_session=$1 AND status='assigned' AND (expires_at IS NULL OR expires_at>now())`,[xs])))) {
+          req.agentExecutionEnded = !!(req.agentSession?.department_id && (req.agentSession.ended_at
+            || (req.agentSession.ends_at && new Date(req.agentSession.ends_at).getTime() <= Date.now()
+              && !await one(`SELECT 1 FROM jobs WHERE assigned_session=$1 AND status='assigned' AND (expires_at IS NULL OR expires_at>now())`,[xs]))));
+          if (req.agentExecutionEnded && req.method === 'POST' && !options.completion && !options.historicalEvidence && !/\/end$/.test(req.path)) {
             res.status(409).json({ error:'run ended; a fresh instruction is required for new work' }); throw new Refused();
           }
           let attempt: any;

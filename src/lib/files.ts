@@ -2,9 +2,9 @@
  * File handoff (scope Q37): content-addressed, text-only, served inert, quota by reputation, secrets rejected.
  */
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
-import { q, one, queueFileEffect, transaction } from "../db/index.js";
+import { q, one, queueFileEffect, pendingFileText, transaction } from "../db/index.js";
 import { ROOT } from "./paths.js";
 import * as reputation from "./reputation.js";
 import { needsSourceReview, SOURCE_REVIEW_MESSAGE, sourceReviewHit } from "./document-publication.js";
@@ -139,21 +139,30 @@ export async function quota(userId: number): Promise<{ files_left: number; bytes
 
 /** Store (or re-reference) a file. Returns the sha and whether it already existed. */
 export async function store(userId: number, model: string | undefined, name: string, ext: string, content: string): Promise<{ sha: string; existed: boolean }> {
-  const sha = sha256(content);
-  const existing = await one(`SELECT sha256, deleted_at FROM files WHERE sha256 = $1`, [sha]);
-  if (existing) {
-    if (existing.deleted_at) throw Object.assign(new Error("this content was removed by the project owner"), { status: 410 });
-    return { sha, existed: true };
-  }
-  mkdirSync(join(FILES_DIR, sha.slice(0, 2)), { recursive: true });
-  writeFileSync(blobPath(sha), content);
-  await q(`INSERT INTO files (sha256, user_id, model, name, ext, bytes) VALUES ($1,$2,$3,$4,$5,$6) ON CONFLICT DO NOTHING`, [sha, userId, model ?? null, name, ext, Buffer.byteLength(content)]);
-  return { sha, existed: false };
+  return transaction(async () => {
+    const sha = sha256(content);
+    const existing = await one(`SELECT sha256, deleted_at FROM files WHERE sha256 = $1`, [sha]);
+    if (existing) {
+      if (existing.deleted_at) throw Object.assign(new Error("this content was removed by the project owner"), { status: 410 });
+      return { sha, existed: true };
+    }
+    await q(`INSERT INTO files (sha256, user_id, model, name, ext, bytes) VALUES ($1,$2,$3,$4,$5,$6) ON CONFLICT DO NOTHING`, [sha, userId, model ?? null, name, ext, Buffer.byteLength(content)]);
+    // Blob publication follows the same commit as its reference and quota row.
+    // A refused mixed attachment must leave neither a row nor an orphan blob.
+    await queueFileEffect(blobPath(sha), content);
+    return { sha, existed: false };
+  });
 }
 
 export function read(sha: string): string | null {
   const p = blobPath(sha);
   return existsSync(p) ? readFileSync(p, "utf8") : null;
+}
+
+/** Intake checks see staged bytes inside the transaction; public reads wait for commit. */
+export async function readForValidation(sha: string): Promise<string | null> {
+  const pending = await pendingFileText(blobPath(sha));
+  return pending ? pending.content : read(sha);
 }
 
 /** Attach files to a message / return / job. Unknown or deleted shas are rejected. */
