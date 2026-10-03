@@ -8,7 +8,7 @@ import {isoTime, type SourceDates} from "../src/lib/timestamps.js";
  * Git dates are repository evidence, not independently certified discovery dates. */
 export function sourceDates(root: string, path: string, published: string | Buffer): SourceDates {
   const unavailable: SourceDates = {created_at: null, modified_at: null, author_created_at: null, author_modified_at: null, first_commit: null, last_commit: null, state: "unavailable", public_edition: false};
-  const git = (args: string[], input?: Buffer) => execFileSync("git", ["-C", root, "--literal-pathspecs", ...args], {encoding: "utf8", input, stdio: ["pipe", "pipe", "ignore"], timeout: 10000, maxBuffer: 8 * 1024 * 1024}).trim();
+  const git = (args: string[], input?: Buffer) => execFileSync("git", ["-C", root, "--literal-pathspecs", ...args], {encoding: "utf8", env: Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith("GIT_"))), input, stdio: ["pipe", "pipe", "ignore"], timeout: 10000, maxBuffer: 8 * 1024 * 1024}).trim();
   try {
     const original = readFileSync(join(root, path));
     const rows = git(["log", "--follow", "--format=%H%x09%cI%x09%aI", "--", path]).split("\n").filter(Boolean).map(line => line.split("\t"));

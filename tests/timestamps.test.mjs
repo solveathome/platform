@@ -48,7 +48,10 @@ test('publication preserves original author dates separately from commit dates',
     git('init','-q');git('config','user.name','Fixture');git('config','user.email','fixture@example.test');
     writeFileSync(join(root,'note.md'),'Evidence\n');git('add','.');
     execFileSync('git',['-C',root,'commit','-qm','fixture'],{env:{...env,GIT_AUTHOR_DATE:'2026-01-02T03:04:05Z',GIT_COMMITTER_DATE:'2026-02-03T04:05:06Z'}});
-    const d=sourceDates(root,'note.md','Evidence\n');
+    const previousGitDir=process.env.GIT_DIR;
+    process.env.GIT_DIR=join(root,'not-this-repository');
+    let d;try {d=sourceDates(root,'note.md','Evidence\n');} finally {if(previousGitDir===undefined)delete process.env.GIT_DIR;else process.env.GIT_DIR=previousGitDir;}
+    
     assert.equal(d.created_at,'2026-02-03T04:05:06.000Z');
     assert.equal(d.author_created_at,'2026-01-02T03:04:05.000Z');
     assert.equal(d.author_modified_at,d.author_created_at);
