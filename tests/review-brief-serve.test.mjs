@@ -48,6 +48,7 @@ after(async () => {
   await q(`DELETE FROM messages WHERE user_id = ANY($1)`, [ids]);
   await q(`DELETE FROM channel_members WHERE user_id = ANY($1)`, [ids]);
   await q(`DELETE FROM credits WHERE problem_id = $1`, [pid]);
+  await q(`UPDATE returns SET job_id=NULL WHERE problem_id = $1`, [pid]);
   await q(`DELETE FROM jobs WHERE problem_id = $1`, [pid]);
   await q(`DELETE FROM returns WHERE problem_id = $1`, [pid]);
   await q(`DELETE FROM sessions WHERE problem_id = $1`, [pid]);
@@ -104,4 +105,33 @@ test('a review brief with no duplicates and a script patch keeps its paragraph a
   assert.match(s.brief_md, /patch against served scripts/);
   assert.doesNotMatch(s.brief_md, /## Duplicates of the return under review/);
   await call('POST', `/sessions/${s.session}/end`, {body: {note: 'test'}});
+});
+
+
+test('public job HTML and JSON explain the review subject without changing the original instructions',async()=>{
+  const subject=Number((await one(`INSERT INTO returns (problem_id,type,user_id,model,provider,report_md,transcript,status) VALUES ($1,'explore',$2,'test-model','test','# Job #21 (route 4, pursue): a finite window bound\n\nThe stated claim still needs judgment.','t','pending') RETURNING id`,[pid,author])).id);
+  const source=Number((await one(`INSERT INTO jobs (problem_id,type,title,brief_md,status) VALUES ($1,'explore','A finite window experiment','Original experiment.','returned') RETURNING id`,[pid])).id);
+  await q(`UPDATE returns SET job_id=$2 WHERE id=$1`,[subject,source]);
+  const title=`Review return #${subject}`,brief=`Review return #${subject}. Read the evidence.`;
+  const jid=Number((await one(`INSERT INTO jobs (problem_id,type,title,brief_md,status,parent_return_id) VALUES ($1,'review',$2,$3,'queued',$4) RETURNING id`,[pid,title,brief,subject])).id);
+  const r=await fetch(base+`/job/${jid}`,{headers:{accept:'text/html'}}),html=await r.text();
+  assert.equal(r.status,200);assert.match(html,/<h1>A finite window experiment<\/h1>/);
+  assert.match(html,/What this agent is working on/);assert.match(html,/Checking the author&#39;s claim|Checking the author's claim/);
+  assert.match(html,/Why it matters/);assert.match(html,/trusted research record/);
+  assert.ok(html.includes(`/return/${subject}`));
+  const pub=await (await fetch(base+`/job/${jid}`,{headers:{accept:'application/json'}})).json();
+  assert.equal(pub.title,title);assert.equal(pub.brief_md,brief);assert.equal(pub.presentation.title,'A finite window experiment');
+  assert.ok(!('source_report_md' in pub));assert.ok(!('summary_brief_md' in pub));assert.ok(!('assigned_session' in pub));assert.ok(!('attempt_id' in pub));
+  const {board}=await import('../src/routes/board.ts');
+  // Exercise the actual activity response with an original terminal attempt, not just SQL fixtures.
+  const agent=await one(`INSERT INTO sessions (id,user_id,problem_id,model,effort,ended_at) VALUES ($3,$1,$2,'test-model','max',now()) RETURNING id`,[author,pid,'test-public-session-'+jid]);
+  await q(`INSERT INTO assignment_attempts (id,job_id,problem_id,session_id,user_id,model,budget_hours,status,ended_at) VALUES ($1,$2,$3,$4,$5,'test-model',1,'completed',now())`,['test-public-attempt-'+jid,jid,pid,agent.id,author]);
+  const app=express();app.use('/projects/:slug',board);const srv=app.listen(0,'127.0.0.1');await new Promise(resolve=>srv.once('listening',resolve));
+  try {
+    const w=await (await fetch(`http://127.0.0.1:${srv.address().port}/projects/${slug}/activity`)).json();
+    const shown=w.jobs.find(j=>Number(j.id)===jid);assert.ok(shown);assert.equal(shown.live,false);
+    assert.equal(shown.activity_status,'completed');assert.equal(shown.presentation.title,'A finite window experiment');
+    assert.ok(!JSON.stringify(w).includes(agent.id));assert.ok(!JSON.stringify(w).includes('test-public-attempt-'+jid));
+    assert.ok(!('source_report_md' in shown));assert.ok(!('summary_brief_md' in shown));
+  } finally {await new Promise(resolve=>srv.close(resolve));}
 });

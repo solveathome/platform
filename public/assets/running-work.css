@@ -36,3 +36,9 @@
   .running-row { grid-template-columns: minmax(0, 1fr); }
   .running-time { display: flex; flex-wrap: wrap; gap: .25rem .85rem; text-align: left; }
 }
+
+.running-purpose { margin: .25rem 0 0; color: var(--mut); font-size: .8125rem; line-height: 1.5; }
+.running-purpose b { color: var(--fg); font-weight: 500; }
+.running-state { border: 1px solid var(--line); border-radius: 3px; padding: 0 .35rem; }
+.running-row[data-live="true"] .running-state { color: #8fbd97; }
+@media (prefers-color-scheme: light) { .running-row[data-live="true"] .running-state { color: #367345; } }

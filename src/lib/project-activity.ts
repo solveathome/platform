@@ -1,5 +1,6 @@
 import { one, q } from "../db/index.js";
 import { JOB_LABEL_SQL } from "./research-format.js";
+import { JOB_CONTEXT_COLUMNS, JOB_CONTEXT_JOINS, jobPresentation } from "./job-presentation.js";
 
 const CURRENT_ASSIGNMENT = `j.status = 'assigned' AND (j.expires_at IS NULL OR j.expires_at > now())`;
 const LIVE_SESSION = `s.problem_id = j.problem_id AND s.user_id = j.assigned_to
@@ -42,20 +43,55 @@ export const ACTIVE_AGENTS_SQL = `
   WHERE s.problem_id = $1 AND s.last_seen > now() - interval '1 day'
   ORDER BY s.last_seen DESC, u.handle LIMIT 12`;
 
-// Public job and agent details only: a session id is a credential and must never be returned.
-// Counts and rows share one snapshot, including when there is no work or the display limit is reached.
+// Keep every live assignment, then fill a quiet log with the most recently started distinct jobs.
+// Attempts retain the actual last agent even after release clears the job's current ownership.
+// Private attempt/session IDs never enter the selected public fields.
 export const RUNNING_WORK_SQL = `
   WITH running AS (
-    SELECT j.id, j.type, ${JOB_LABEL_SQL} AS label, j.title, j.assigned_at, u.handle, s.department_id,s.run_id,s.model, s.effort, s.last_seen
+    SELECT j.id, j.assigned_at, u.handle, s.department_id, s.run_id, s.model, s.effort, s.last_seen,
+      true AS live, 'active'::text AS activity_status, NULL::timestamptz AS ended_at
     FROM jobs j JOIN sessions s ON s.id = j.assigned_session JOIN users u ON u.id = s.user_id
     WHERE j.problem_id = $1 AND ${CURRENT_ASSIGNMENT} AND (${LIVE_SESSION})
+  ), latest_attempt AS (
+    SELECT DISTINCT ON (a.job_id) a.job_id, a.problem_id, a.session_id, a.user_id, a.model,
+      a.department_id, a.run_id, a.started_at, a.ended_at, a.status
+    FROM assignment_attempts a WHERE a.problem_id = $1 AND (SELECT count(*) FROM running) < 5
+    ORDER BY a.job_id, a.started_at DESC, a.id DESC
+  ), past AS (
+    SELECT j.id, a.started_at AS assigned_at, u.handle, a.department_id, a.run_id, a.model, s.effort, s.last_seen,
+      false AS live, CASE WHEN a.status = 'assigned' THEN 'inactive' ELSE a.status END AS activity_status, a.ended_at
+    FROM latest_attempt a JOIN jobs j ON j.id = a.job_id AND j.problem_id = a.problem_id JOIN users u ON u.id = a.user_id
+    LEFT JOIN sessions s ON s.id = a.session_id AND s.problem_id = a.problem_id AND s.user_id = a.user_id
+    WHERE NOT EXISTS (SELECT 1 FROM running r WHERE r.id = j.id)
+    UNION ALL
+    SELECT j.id, j.assigned_at, u.handle, s.department_id, s.run_id, s.model, s.effort, s.last_seen,
+      false AS live, CASE WHEN j.status = 'returned' THEN 'completed' ELSE 'inactive' END AS activity_status, NULL::timestamptz AS ended_at
+    FROM jobs j JOIN users u ON u.id = j.assigned_to
+    LEFT JOIN sessions s ON s.id = j.assigned_session AND s.problem_id = j.problem_id AND s.user_id = j.assigned_to
+    WHERE j.problem_id = $1 AND j.assigned_at IS NOT NULL AND (SELECT count(*) FROM running) < 5
+      AND NOT EXISTS (SELECT 1 FROM latest_attempt a WHERE a.job_id = j.id)
+      AND NOT EXISTS (SELECT 1 FROM running r WHERE r.id = j.id)
+  ), recent AS (
+    SELECT * FROM past ORDER BY assigned_at DESC, id DESC LIMIT greatest(0, 5 - (SELECT count(*) FROM running))
+  ), selected AS (
+    SELECT * FROM running UNION ALL SELECT * FROM recent
+  ), shown AS (
+    SELECT selected.*, j.type, ${JOB_LABEL_SQL} AS label, j.title, j.research_stage, j.follow_up_of, j.step_check_of, j.requires_trust,
+      ${JOB_CONTEXT_COLUMNS}
+    FROM selected JOIN jobs j ON j.id = selected.id AND j.problem_id = $1 ${JOB_CONTEXT_JOINS}
   )
   SELECT now() AS as_of, (SELECT count(*) FROM running) AS total,
-    coalesce((SELECT json_agg(shown) FROM (
-      SELECT * FROM running ORDER BY last_seen DESC, assigned_at DESC NULLS LAST, id DESC LIMIT 100
-    ) shown), '[]'::json) AS jobs`;
+    (SELECT count(*) FROM recent) AS recent_total,
+    coalesce((SELECT json_agg(shown ORDER BY live DESC, CASE WHEN live THEN last_seen END DESC, assigned_at DESC NULLS LAST, id DESC) FROM shown), '[]'::json) AS jobs`;
 
-export const runningWork = (problemId: number) => one(RUNNING_WORK_SQL, [problemId]);
+export async function runningWork(problemId: number) {
+  const work = await one(RUNNING_WORK_SQL, [problemId]);
+  if (!work) return work;
+  return { ...work, jobs: work.jobs.map((row: any) => {
+    const { source_title, source_report_md, summary_brief_md, subject_return_id, research_stage, follow_up_of, step_check_of, requires_trust, ...pub } = row;
+    return { ...pub, presentation: jobPresentation(row) };
+  }) };
+}
 
 export async function projectActivity(problemId: number) {
   const [totals, agents, running] = await Promise.all([

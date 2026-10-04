@@ -60,7 +60,7 @@ test('work rankings show the chosen metric on the podium and personal rank while
 });
 
 test('running assignments safely link the job and its contributor, with per-agent identity', () => {
-  const job = {id:123, title:'<img src=x onerror=alert(1)>', type:'" onclick="oops', handle:'" onclick="oops', model:'<script>bad</script>', effort:'<b>max</b>', last_seen:new Date().toISOString()};
+  const job = {id:123, title:'<img src=x onerror=alert(1)>', type:'" onclick="oops', handle:'" onclick="oops', model:'<script>bad</script>', effort:'<b>max</b>', presentation:{title:'<img src=x>',what:'<script>bad</script>',why:'<iframe>bad</iframe>'}, last_seen:new Date().toISOString()};
   const html = context.SA.runningWork.rows([job, {...job, id:124, model:'another-agent'}], '/projects/example');
   assert.ok(html.includes('/projects/example/job/123'));
   assert.ok(html.includes('/projects/example/job/124'));
@@ -91,12 +91,36 @@ test('running work expands, handles empty periods, and never labels a failed ref
   assert.equal((get('[data-jobs]').innerHTML.match(/class="running-row"/g)||[]).length, 7);
   ui.fail();
   assert.equal(root.dataset.state, 'stale');
-  assert.equal(get('#running-title').textContent, 'Last seen running');
+  assert.equal(get('#running-title').textContent, 'Last update');
   assert.ok(get('[data-status]').textContent.includes('last update'));
+  assert.doesNotMatch(get('[data-jobs]').innerHTML,/data-live="true"/);
+  assert.match(get('[data-jobs]').innerHTML,/Last seen live/);
   ui.render(work);
-  assert.equal(get('#running-title').textContent, 'Running now');
+  assert.equal(get('#running-title').textContent, 'Agent work');
   ui.render({...work, total:0, jobs:[]});
   assert.equal(root.dataset.state, 'quiet');
-  assert.ok(get('[data-jobs]').innerHTML.includes('No assignments with a recent check-in'));
+  assert.ok(get('[data-jobs]').innerHTML.includes('No agent work recorded yet'));
   assert.equal(get('[data-more]').hidden, true);
+});
+
+
+test('recent assignments fill a quiet log without impersonating live agents; all 200 live jobs expand', () => {
+  const els = new Map();
+  const root = {id:'recent',dataset:{},setAttribute(){},querySelector(s){if(!els.has(s))els.set(s,{innerHTML:'',textContent:'',attrs:{},setAttribute(k,v){this.attrs[k]=v;}});return els.get(s);}};
+  const ui = context.SA.runningWork.create(root,{base:'/projects/example'}), get=s=>root.querySelector(s);
+  const job={id:1,title:'Number-only title',handle:'Alice',model:'model-a',type:'review',live:false,activity_status:'completed',ended_at:new Date().toISOString(),presentation:{title:'Prime-window bound',what:"Checking the author's claim: an improved bound",why:'Decide what the evidence supports.'}};
+  ui.render({total:0,recent_total:5,as_of:new Date().toISOString(),jobs:Array.from({length:5},(_,i)=>({...job,id:i+1}))});
+  assert.equal(root.dataset.state,'quiet');
+  assert.equal(get('[data-count]').textContent,'0 live · 5 recent');
+  const html=get('[data-jobs]').innerHTML;
+  assert.equal((html.match(/data-live="false"/g)||[]).length,5);
+  assert.match(html,/Submitted/);assert.doesNotMatch(html,/Checked in/);
+  assert.match(html,/Prime-window bound/);assert.match(html,/What:/);assert.match(html,/Why:/);
+  assert.doesNotMatch(html,/Number-only title/);
+  ui.render({total:200,recent_total:0,as_of:new Date().toISOString(),jobs:Array.from({length:200},(_,i)=>({...job,id:i+1,live:true}))});
+  assert.equal(get('[data-count]').textContent,'200 live');
+  assert.equal((get('[data-jobs]').innerHTML.match(/class="running-row"/g)||[]).length,5);
+  get('[data-more]').onclick();
+  assert.equal((get('[data-jobs]').innerHTML.match(/class="running-row"/g)||[]).length,200);
+  assert.equal(get('[data-more]').attrs['aria-expanded'],'true');
 });

@@ -1,3 +1,4 @@
+import { JOB_CONTEXT_COLUMNS, JOB_CONTEXT_JOINS, jobPresentation } from "../lib/job-presentation.js";
 import {parseDeferral, recordDeferral, deferralHistory} from '../lib/operational-blockers.js';
 import {handoffHistory, handoffBrief, pendingHandoffs} from '../lib/job-handoffs.js';
 import {jobHandoffs} from './job-handoffs.js';
@@ -951,8 +952,11 @@ job.post("/start", bearer, project, assignmentMutation(async (req: any, res: any
 
 /** GET /job/:id : the assignment as JSON for agents, as a page for browsers. Briefs are public (they are in the dataset). */
 job.get("/job/:id", optionalAuth, project, async (req: any, res) => {
-  const row = await one(`SELECT j.*, l.slug AS lane_slug, p.repo_url, u.handle AS assigned_handle FROM jobs j JOIN problems p ON p.id=j.problem_id LEFT JOIN lanes l ON l.id=j.lane_id LEFT JOIN users u ON u.id = j.assigned_to WHERE j.id = $1 AND j.problem_id = $2`, [req.params.id, req.project.id]);
-  if (!row) { res.status(404).json({ error: "no such job" }); return; }
+  const context = await one(`SELECT j.*, ${JOB_CONTEXT_COLUMNS}, l.slug AS lane_slug, p.repo_url, u.handle AS assigned_handle FROM jobs j JOIN problems p ON p.id=j.problem_id LEFT JOIN lanes l ON l.id=j.lane_id LEFT JOIN users u ON u.id = j.assigned_to ${JOB_CONTEXT_JOINS} WHERE j.id = $1 AND j.problem_id = $2`, [req.params.id, req.project.id]);
+  if (!context) { res.status(404).json({ error: "no such job" }); return; }
+  const presentation = jobPresentation(context);
+  const { source_title, source_report_md, summary_brief_md, subject_return_id, ...row } = context;
+  row.presentation = presentation;
   row.brief_md += stepCheckContext(row);
   row.handoffs = await handoffHistory(Number(row.id));
   row.dispatch_state = row.status === 'queued' && row.handoffs.some((h:any)=>h.status==='waiting') ? 'waiting_for_named_recipient' : row.status;
@@ -964,7 +968,8 @@ job.get("/job/:id", optionalAuth, project, async (req: any, res) => {
   const meta = `<p class="doc-meta"><span>Created: ${timeHtml(row.created_at)}</span><span class="tag">${escHtml(row.dispatch_state === "waiting_for_named_recipient" ? "Needs a specific person or agent" : row.status)}</span><span>${escHtml(jobLabel(row))}${row.lane_slug ? ` in <a href="${P}#discussion">${escHtml(row.lane_slug)}</a>` : ""}</span><span>budget ${escHtml(String(row.budget_hours))} h · tier ${row.min_tier >= 99 ? "any" : `≤ ${escHtml(String(row.min_tier))}`}</span>${row.assigned_handle ? `<span>held by <a href="/@${escHtml(row.assigned_handle)}">@${escHtml(row.assigned_handle)}</a></span>` : ""}${Number(row.release_count ?? 0) > 0 ? `<span>handed back ${row.release_count}×</span>` : ""}${row.parent_return_id ? `<span>reviews <a href="${P}/return/${row.parent_return_id}">return #${row.parent_return_id}</a></span>` : ""}${row.follow_up_of ? `<span>follow-up of <a href="${P}/return/${row.follow_up_of}">return #${row.follow_up_of}</a></span>` : ""}</p>`;
   const rlist = returns.length ? `<ul>${returns.map((r: any) => `<li><a href="${P}/return/${r.id}">Return #${r.id}</a> <span class="tag">${escHtml(r.status)}${r.final_rung ? `, ${escHtml(r.final_rung)}` : ""}</span> ${escHtml(r.model ?? "")}, ${timeHtml(r.created_at)}</li>`).join("")}</ul>` : `<p class="muted">No return yet.</p>`;
   const aside = `<div class="doc-side"><div><h3>Returns</h3>${rlist}</div><div><h3>Compute hint</h3><p class="panel-note"><code>${escHtml(JSON.stringify(row.compute_hint ?? {}))}</code></p><p class="panel-note"><a href="${P}/job/${row.id}?format=json">JSON</a></p></div></div>`;
-  res.type("text/html").send(page({ title: `Job #${row.id}`, dataPage: "job", robots: "noindex, follow", description: `${row.type} assignment on ${req.project.name}: ${row.title}. ${row.status}.`, path: `${P}/job/${row.id}`, crumbs: `<a href="${P}">${escHtml(req.project.name)}</a><span>/ jobs /</span>#${row.id}`, eyebrow: "Assignment", heading: row.title, meta, aside, body: await md(row.brief_md + handoffBrief(row.handoffs)) }));
+  const purpose = `<section class="document job-purpose"><h2>What this agent is working on</h2><p>${escHtml(presentation.what)}</p><h2>Why it matters</h2><p>${escHtml(presentation.why)}</p>${presentation.subject_return_id ? `<p><a href="${P}/return/${presentation.subject_return_id}">Read the claim and evidence · return #${presentation.subject_return_id}</a></p>` : ""}</section>`;
+  res.type("text/html").send(page({ title: `Job #${row.id}`, dataPage: "job", robots: "noindex, follow", description: plainDescription(`${presentation.what} ${presentation.why}`), path: `${P}/job/${row.id}`, crumbs: `<a href="${P}">${escHtml(req.project.name)}</a><span>/ jobs /</span>#${row.id}`, eyebrow: "Assignment", heading: presentation.title, meta: meta + purpose, aside, body: `<h2>Assignment instructions</h2>` + await md(row.brief_md + handoffBrief(row.handoffs)) }));
 });
 
 /**

@@ -52,3 +52,32 @@ test('a title read from a report heading loses a leading kind, and nothing else'
   assert.equal(withoutKindPrefix('Theorem 5.5: inert at (D1)'), 'Theorem 5.5: inert at (D1)');
   assert.equal(withoutKindPrefix('x'), 'x', 'a title with no kind is left exactly as written');
 });
+
+
+const {jobPresentation} = await import('../src/lib/job-presentation.ts');
+test('public review context names the actual subject while retaining claim attribution and original titles', () => {
+  const j={type:'review',title:'Review return #7',source_title:'Prime-window bounds',subject_return_id:7,source_report_md:'# Job #42 (route 3, pursue): a smaller window satisfies the bound\n\nNot an asymptotic result.'};
+  const p=jobPresentation(j);
+  assert.equal(p.title,'Prime-window bounds');
+  assert.match(p.what,/Checking the author.s claim: a smaller window satisfies the bound/);
+  assert.match(p.why,/what the evidence supports/);
+  assert.equal(j.title,'Review return #7');
+  assert.equal(p.subject_return_id,7);
+  assert.equal(jobPresentation({...j,type:'triage',title:'Triage return #7'}).title,'Prime-window bounds');
+  assert.match(jobPresentation({...j,type:'check'}).what,/Independently checking/);
+});
+test('pursuit context reads only the issued experiment and comparison context never promises execution', () => {
+  const step={question:'Can the bound hold uniformly?',success:'A bound for every specified window.',compute:{ram_gb:2}};
+  const j={type:'explore',research_stage:'pursue',title:'Window bound',brief_md:'The step:\n'+JSON.stringify(step)};
+  assert.equal(jobPresentation(j).what,step.question);
+  assert.match(jobPresentation(j).why,/aims to establish: A bound/);
+  assert.match(jobPresentation({...j,research_stage:'first_look',step_check_of:12}).why,/before spending compute/);
+  assert.match(jobPresentation({type:'audit',requires_trust:true,title:'Document correction'}).why,/Correct required review findings/);
+  assert.equal(jobPresentation({type:'explore',title:'A distinct subject'}).title,'A distinct subject');
+});
+
+test('derived context redacts historical private diagnostics before excerpts and preserves scientific numbers',()=>{
+  const p=jobPresentation({type:'review',title:'Review return #7',source_title:'Bound',source_report_md:'# Job #42: bound 12345678901234567890, run-0123456789abcdef and attempt 0123456789abcdef0123456789abcdef'});
+  assert.match(p.what,/12345678901234567890/);assert.match(p.what,/REDACTED/);
+  assert.doesNotMatch(p.what,/run-0123456789abcdef|attempt 0123456789abcdef0123456789abcdef/);
+});
