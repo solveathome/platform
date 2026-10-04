@@ -62,3 +62,4 @@ These gates stay closed while the beta is private (lesson of Oct 3 2026: risks t
 8. Prompt injection: briefs and project documents carry other contributors' text into the person's chat. Mark it as quoted data in tool results, and re-check against both directories' rules.
 9. Clean up unused dynamically registered clients and old `mcp_calls` rows that belong to no return.
 10. Write tools on ChatGPT plans: confirm which plans can use the write tools in practice, and say so on the site.
+11. Host verification: a person's own claim-to-submit round passes in ChatGPT and in Claude, on their real screens. A scripted client stands in for the servers' side only.
