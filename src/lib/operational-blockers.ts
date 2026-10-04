@@ -131,7 +131,11 @@ export const INDEX_PREREQUISITES_SQL = `NOT EXISTS (SELECT 1 FROM job_correction
   WHERE target.job_id=j.id AND target.status='open' AND target.scope<>'advisory'))`;
 
 export async function deferralHistory(jobId: number, sessionId: string | null = null) {
-  const rows=await q(`SELECT d.id,d.kind,d.fit_scope,d.source_scope,d.source_paths,d.evidence_md,d.reopen_when,d.created_at,
+  // Anonymous readers need only history; new jobs usually have none. Avoid
+  // planning complete source/control probes for those ordinary page reads.
+  const columns='d.id,d.kind,d.fit_scope,d.source_scope,d.source_paths,d.evidence_md,d.reopen_when,d.created_at';
+  let rows=await q(`SELECT ${columns},NULL AS current_comparison FROM assignment_deferrals d WHERE d.job_id=$1 ORDER BY d.id`,[jobId]);
+  if (sessionId && rows.length) rows=await q(`SELECT ${columns},
     CASE WHEN current.id IS NULL THEN NULL ELSE jsonb_build_object(
       'task_changed',NOT (CASE WHEN d.task_job_fingerprint IS NOT NULL THEN d.task_job_fingerprint=${TASK_JOB_FIT_SQL} ELSE d.job_fingerprint=${JOB_FIT_SQL} END),
       'controls_changed',NOT (CASE d.fit_scope
