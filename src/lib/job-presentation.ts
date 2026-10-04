@@ -9,7 +9,8 @@ export const JOB_CONTEXT_JOINS = `
 export const JOB_CONTEXT_COLUMNS = `source_job.title AS source_title, subject.id AS subject_return_id,
   left(subject.report_md, 8192) AS source_report_md, left(j.brief_md, 8192) AS summary_brief_md`;
 
-const text = (s: unknown, max = 280) => plainDescription(redactHarnessIds(String(s ?? '')).text, max);
+// Keep in-word subscripts and path names: a reader excerpt must not turn L_F into LF.
+const text = (s: unknown, max = 280) => plainDescription(redactHarnessIds(String(s ?? '')).text.replace(/(?<=[\p{L}\p{N}])_(?=[\p{L}\p{N}{])/gu, '\u0002'), max).replace(/\u0002/g, '_');
 // SQL excerpts may end inside a private diagnostic or a Markdown link. Discard the incomplete last token before redaction.
 const bounded = (s: unknown) => { const v = String(s ?? ''); return v.length === 8192 ? v.replace(/\S+$/, '') : v; };
 function reportHeading(s: string): string {

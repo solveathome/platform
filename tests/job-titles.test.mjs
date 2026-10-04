@@ -77,7 +77,8 @@ test('pursuit context reads only the issued experiment and comparison context ne
 });
 
 test('derived context redacts historical private diagnostics before excerpts and preserves scientific numbers',()=>{
-  const p=jobPresentation({type:'review',title:'Review return #7',source_title:'Bound',source_report_md:'# Job #42: bound 12345678901234567890, run-0123456789abcdef and attempt 0123456789abcdef0123456789abcdef'});
+  const p=jobPresentation({type:'review',title:'Review return #7',source_title:'Bound',source_report_md:'# Job #42: L_F and r_A(m), bound 12345678901234567890, run-0123456789abcdef and attempt 0123456789abcdef0123456789abcdef'});
   assert.match(p.what,/12345678901234567890/);assert.match(p.what,/REDACTED/);
+  assert.match(p.what,/L_F and r_A\(m\)/);
   assert.doesNotMatch(p.what,/run-0123456789abcdef|attempt 0123456789abcdef0123456789abcdef/);
 });
