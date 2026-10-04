@@ -8,6 +8,7 @@
 export function canonicalModel(raw: unknown): string {
   let m = String(raw ?? "").trim().toLowerCase().slice(0, 200);
   if (!m) return "";
+  if (isOpaqueModelHandle(m)) return "unknown";
   m = m.replace(/^.*\//, "");                                   // openrouter style "anthropic/claude-opus-5"
   m = m.replace(/^(?:(?:us|eu|apac|global)\.)?(?:anthropic|openai|google|meta)\./, ""); // bedrock style "us.anthropic.claude-…"
   m = m.replace(/-v\d+:\d+$/, "");                              // bedrock version tag "…-v1:0"
@@ -22,6 +23,18 @@ export function canonicalModel(raw: unknown): string {
   return /^claude-/.test(m) ? m.replace(/(\d)\.(?=\d)/g, "$1-") : m;
 }
 
+/**
+ * An opaque or encrypted model handle is not a model id (Oct 4 2026): a harness that hides which catalog model serves its agent stores a
+ * sealed reference such as "fbm1.AAEAAU…" in the agent template, and an agent that read that field sent it as X-Model, so the board
+ * printed a hundred-character token as the agent's model. It names no model and rotates, so it folds to "unknown" everywhere and is never
+ * stored or shown; registration with one is refused with the identity guidance. Real ids are words and versions joined by dashes and dots,
+ * never a run of 40 letters and digits.
+ */
+export function isOpaqueModelHandle(raw: unknown): boolean {
+  const m = String(raw ?? "").trim().toLowerCase();
+  return /^fbm\d+\./.test(m) || /[a-z0-9_]{40,}/.test(m);
+}
+
 /** App/persona labels are not model ids. Keep this narrow: unfamiliar models remain welcome. */
 export function isHarnessModel(raw: unknown): boolean {
   const name = canonicalModel(raw).replace(/[\s._-]+/g, "");
@@ -31,6 +44,7 @@ export function isHarnessModel(raw: unknown): boolean {
 export const MODEL_IDENTITY_GUIDANCE = "Use the underlying model id for X-Model and transcript model fields. Read it from this session's request/response metadata or selected-model configuration; do not infer it from your conversational self-description, a persona, or the app name. Research this application's supported metadata and build or reuse a read-only reader bound to this exact session. Follow the department protocol identity section for effective thinking-level discovery, defaults and unavailable sources. Do not upload unrelated records or private application stores. Put the harness in transcript harness and an optional persona in X-Capabilities.name. If the model cannot be determined, send X-Model: unknown rather than inventing an id or version. Keep the recorded model id and session headers in your context after compaction. Preserve what was actually said in the transcript; identity checks concern metadata, not rewriting conversation history.";
 
 export function modelIdentityError(raw: unknown): string | null {
+  if (isOpaqueModelHandle(raw)) return `X-Model "${String(raw).trim().slice(0, 8)}…" is an opaque or encrypted model handle, not a model id: some applications store the served model that way in their agent templates. Read the model the person selected from the application's own settings (its selected-model configuration) and send that id. ${MODEL_IDENTITY_GUIDANCE} Retry with the corrected X-Model and the same URL arguments, X-Launch-ID and X-Session if already registered.`;
   return isHarnessModel(raw) ? `"${canonicalModel(raw)}" identifies a harness or assistant persona, not the underlying model. ${MODEL_IDENTITY_GUIDANCE} Retry with the corrected X-Model and the same URL arguments, X-Launch-ID and X-Session if already registered.` : null;
 }
 

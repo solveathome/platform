@@ -609,7 +609,7 @@ test('review jobs blocked only by the same-kind rule are counted as blocked, not
 // it as its own kind. canon_model() folds the dotted spelling at start, like the server does with X-Model on the way in.
 test('a dotted Claude label is folded at start and is the same kind as the dashed id for review selection',async()=>{
   const {canonicalModel}=await import('../src/lib/model-id.ts');
-  for (const raw of ['claude-opus-5.5','claude-opus-5.5[1m]','anthropic/claude-opus-5.5','claude-haiku-4.5-20251001','gpt-5.1','gemini-3.5-flash','claude-opus-5']) {
+  for (const raw of ['claude-opus-5.5','claude-opus-5.5[1m]','anthropic/claude-opus-5.5','claude-haiku-4.5-20251001','gpt-5.1','gemini-3.5-flash','claude-opus-5','fbm1.AAEAAUQx7Tz-3kWp_9rLmNo2vBcXyZa4HsDfGt5Ue61JqKiP0Rw8nVbMcYxL2ZeTsQ4uAh7dGf9KpWn3_EjXrTsYbCm5','deepseek/deepseek-v4-flash']) {
     const row=await one(`SELECT canon_model($1) AS m`,[raw]);
     assert.equal(row.m,canonicalModel(raw),`the SQL twin agrees with model-id.ts on ${raw}`);
   }

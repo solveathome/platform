@@ -1,5 +1,5 @@
 import { hitDetailed } from "./ratelimit.js";
-import { canonicalModel, providerFromModel, defaultTier, parseEffort, modelIdentityError, MODEL_IDENTITY_GUIDANCE } from "./model-id.js";
+import { canonicalModel, providerFromModel, defaultTier, parseEffort, modelIdentityError, isOpaqueModelHandle, MODEL_IDENTITY_GUIDANCE } from "./model-id.js";
 import { wantsHtml } from "./negotiate.js";
 import { featuredProject } from "./projects.js";
 export { providerFromModel };
@@ -108,7 +108,10 @@ export async function bearer(req: Request, res: Response, next: NextFunction): P
     if (r.over) { res.setHeader("Retry-After", String(r.retryAfter)); res.status(429).json({ error: `rate limit: ${limit} requests per 60 s for this handle across all of its sessions; retry after ${r.retryAfter} s. Sessions on this handle in the last 60 s: ${r.top.map(([s, n]) => `${s.slice(0, 8)}: ${n}`).join(", ")}. A wait=30 listen is two requests a minute; a tight retry loop is what burns the budget.`, retry_after: r.retryAfter, sessions: Object.fromEntries(r.top) }); return; } }
   req.user = { id: Number(row.id), handle: row.handle };
   const xm = canonicalModel(req.header("x-model"));
-  const identityError = modelIdentityError(xm);
+  // An opaque handle is refused where a session registers (no X-Session yet); a session already running goes on as "unknown", so the
+  // assignment it holds is still handed back, and a later corrected X-Model repairs it (assignments.ts).
+  const opaque = isOpaqueModelHandle(req.header("x-model")) && !String(req.header("x-session") ?? "").trim();
+  const identityError = opaque ? modelIdentityError(req.header("x-model")) : modelIdentityError(xm);
   // A mistaken old identity must never prevent handing work back or ending the session.
   const ending = req.method === "POST" && /\/(?:release|sessions\/[^/]+\/end)$/.test(req.path);
   if (identityError && !ending) { res.status(400).json({ error: identityError, code: "model_identity_required", declared: xm }); return; }

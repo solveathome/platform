@@ -11,7 +11,7 @@
  * `<USER_SETTINGS_CHANGE>` block ("`Model Selection` from None to Gemini 3.8 Flash (High)") in the user step.
  */
 import { createHash } from "node:crypto";
-import { canonicalModel, parseEffort } from "./model-id.js";
+import { canonicalModel, parseEffort, isOpaqueModelHandle } from "./model-id.js";
 import { HARNESSES, detectHarness, modelOnLine } from "./harnesses.js";
 
 /** The key of a usage entry (Chris, Sep 12 2026: a usage entry counts once per person): the harness's message id when the line carries one, else the line itself. */
@@ -222,7 +222,8 @@ export function parseTranscriptWithKeys(text: string, reported?: any, exclude?: 
   const t: Tokens = { input: 0, output: 0, cache_read: 0, cache_write: 0, entries: 0, source: "none", models: {}, observed_models: [] };
   // Explicit metadata is separate from the synthetic codex/copilot/opencode usage buckets.
   const rememberModel = (raw: unknown): string => {
-    const m = canonicalModel(raw);
+    // An opaque handle names no model: the line counts as naming none and is attributed to the declared X-Model.
+    const m = isOpaqueModelHandle(raw) ? "" : canonicalModel(raw);
     if (m && !t.observed_models!.includes(m)) t.observed_models!.push(m);
     return m;
   };

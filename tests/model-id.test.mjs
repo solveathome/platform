@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { canonicalModel, isHarnessModel, modelIdentityError } from "../src/lib/model-id.ts";
+import { canonicalModel, isHarnessModel, isOpaqueModelHandle, modelIdentityError } from "../src/lib/model-id.ts";
 
 test("harness/persona names require a real model declaration without guessing the provider", () => {
   for (const name of ['Buffy', 'freebuff/Buffy', 'Freebuff Desktop', 'freebuff-desktop', 'Codebuff', 'Claude Code', 'Codex', 'GitHub Copilot CLI', 'OpenCode', 'Google Antigravity']) {
@@ -119,4 +119,19 @@ test("thinking level: parsed from X-Effort or the id; tier 1 needs a top level (
   // canonicalModel still strips the marker, so the model identity is unchanged by the level
   assert.equal(canonicalModel("claude-fable-5-1 (effort: max)"), "claude-fable-5-1");
   assert.equal(canonicalModel("gpt-6-astra-high"), "gpt-6-astra-high");
+});
+
+// Oct 4 2026: an agent read its harness's sealed catalog reference from the agent template and sent it as X-Model, and the board
+// printed the token as the agent's model. A handle names no model: it folds to "unknown" and registering with one is refused.
+test("an opaque or encrypted model handle is not a model id", () => {
+  const handle = "fbm1.AAEAAUQx7Tz-3kWp_9rLmNo2vBcXyZa4HsDfGt5Ue61JqKiP0Rw8nVbMcYxL2ZeTsQ4uAh7dGf9KpWn3_EjXrTsYbCm5";
+  for (const raw of [handle, handle.toLowerCase(), "fbm2.short", "  FBM1.abc  "]) {
+    assert.equal(isOpaqueModelHandle(raw), true, raw);
+    assert.equal(canonicalModel(raw), "unknown", raw);
+    assert.match(modelIdentityError(raw), /opaque or encrypted model handle/);
+    assert.doesNotMatch(modelIdentityError(raw), /AAEAAUQx/, "the error does not repeat the handle");
+  }
+  for (const name of ["deepseek/deepseek-v4-flash", "deepseek-v4.1-flash", "claude-opus-5-5[1m]", "gpt-6.1-sol", "meta/muse-spark-1.3-contributor", "m-096e75164d", "unknown", ""]) {
+    assert.equal(isOpaqueModelHandle(name), false, name);
+  }
 });

@@ -329,8 +329,9 @@ DROP TABLE IF EXISTS proposals;
 -- rewrites stored ids the same way the server rewrites X-Model on the way in ("claude-opus-5[1m]" -> "claude-opus-5").
 -- The UPDATEs are no-ops once every row is canonical, so this block is safe to run at every start.
 -- Anthropic ids use dashes for the version, so "claude-opus-5.5" folds into "claude-opus-5-5" (review 4163 looped on the two spellings).
+-- An opaque or encrypted handle ("fbm1.AAEAAU…", Oct 4 2026) names no model and folds to 'unknown', as isOpaqueModelHandle() does.
 CREATE OR REPLACE FUNCTION canon_model(raw TEXT) RETURNS TEXT LANGUAGE sql IMMUTABLE AS $$
-  SELECT CASE WHEN c ~ '^claude-' THEN regexp_replace(c, '(\d)\.(?=\d)', '\1-', 'g') ELSE c END FROM (SELECT CASE WHEN raw IS NULL THEN NULL ELSE
+  SELECT CASE WHEN lower(btrim(raw)) ~ '^fbm[0-9]+\.' OR lower(btrim(raw)) ~ '[a-z0-9_]{40,}' THEN 'unknown' WHEN c ~ '^claude-' THEN regexp_replace(c, '(\d)\.(?=\d)', '\1-', 'g') ELSE c END FROM (SELECT CASE WHEN raw IS NULL THEN NULL ELSE
     regexp_replace(regexp_replace(regexp_replace(regexp_replace(regexp_replace(regexp_replace(regexp_replace(regexp_replace(
       lower(btrim(raw)),
       '^.*/', ''),                                                        -- "anthropic/claude-opus-5"
@@ -344,7 +345,7 @@ CREATE OR REPLACE FUNCTION canon_model(raw TEXT) RETURNS TEXT LANGUAGE sql IMMUT
   END AS c) s $$;
 -- model_tiers is keyed by model: fold variants into the canonical row, keeping the best (lowest) tier.
 INSERT INTO model_tiers (model, provider, tier)
-  SELECT canon_model(model), min(provider), min(tier) FROM model_tiers WHERE model <> canon_model(model) GROUP BY 1
+  SELECT canon_model(model), min(provider), min(tier) FROM model_tiers WHERE model <> canon_model(model) AND canon_model(model) <> 'unknown' GROUP BY 1
   ON CONFLICT (model) DO UPDATE SET tier = least(model_tiers.tier, EXCLUDED.tier);
 DELETE FROM model_tiers WHERE model <> canon_model(model);
 UPDATE returns         SET model = canon_model(model) WHERE model <> canon_model(model);

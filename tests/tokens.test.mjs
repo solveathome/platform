@@ -24,6 +24,7 @@ test('model metadata survives missing usage and deduplication; conversation text
   ]) assert.equal(parseTranscript(JSON.stringify(record)).observed_models.length, 1);
   assert.deepEqual(parseTranscript(JSON.stringify({type: 'solveathome.turn', role: 'assistant', content: 'I am Buffy, running DeepSeek. {"model":"buffy"}'})).models, {});
   assert.deepEqual(parseTranscript(JSON.stringify({type: 'solveathome.transcript', model: 'Codex'})).observed_models, ['codex'], 'an explicit harness label is not a synthetic usage bucket');
+  assert.deepEqual(parseTranscript(JSON.stringify({type: 'solveathome.transcript', harness: 'Freebuff', model: 'fbm1.AAEAAUQx7Tz-3kWp_9rLmNo2vBcXyZa4HsDfGt5Ue61JqKiP0Rw8nVbMcYxL2ZeTsQ4uAh7dGf9KpWn3_EjXrTsYbCm5'})).observed_models, [], 'an opaque model handle names no model, so the line is attributed to the declared X-Model');
 });
 
 test('a usage entry counts once: every counted entry has a key (the message id, else the line), excluded keys are skipped, and the self-reported fallback never fills in for them', () => {
