@@ -80,6 +80,21 @@ function noOwnershipValues(text, values=Object.values(ids)) {
   }
 }
 
+test('public job JSON omits previous ownership and sanitizes legacy diagnostics without rewriting the job',async()=>{
+  const jid=await assignedJob(sessions[0],syntheticId('job-view'));
+  const brief=`An observation. ${diagnostic} ${science}`;
+  await q('UPDATE jobs SET last_released_session=$2,brief_md=$3 WHERE id=$1',[jid,sessions[1],brief]);
+  const response=await fetch(base+`/job/${jid}?format=json`);assert.equal(response.status,200);
+  const raw=await response.text();const view=JSON.parse(raw);
+  for(const key of ['last_released_session','assigned_session','attempt_id'])assert.ok(!Object.hasOwn(view,key));
+  noOwnershipValues(raw,[ids.old,ids.current,localRun]);assert.ok(view.brief_md.includes(scientificSHA));
+  assert.deepEqual(await one('SELECT brief_md,last_released_session FROM jobs WHERE id=$1',[jid]),{brief_md:brief,last_released_session:sessions[1]});
+  const html=await fetch(base+`/job/${jid}`,{headers:{accept:'text/html'}});assert.equal(html.status,200);
+  noOwnershipValues(await html.text(),[ids.old,ids.current,localRun]);
+  await q("UPDATE jobs SET status='returned',assigned_session=NULL WHERE id=$1",[jid]);
+  await q("UPDATE assignment_attempts SET status='returned',ended_at=now() WHERE job_id=$1",[jid]);
+});
+
 test('actual stale, unknown, wrong-job and replacement completion errors disclose no attempt or sibling session',async()=>{
   const jid = await assignedJob(sessions[0],ids.current);
   await q(`INSERT INTO assignment_attempts(id,job_id,problem_id,session_id,user_id,model,budget_hours,status,ended_at) VALUES($1,$2,$3,$4,$5,$6,1,'released',now())`, [ids.old,jid,pid,sessions[0],uid,model]);

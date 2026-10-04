@@ -208,3 +208,9 @@ An unresolved pass/fail conflict requires a trusted `verification_conflict_resol
 ## Human direction
 
 Human direction remains independent of automatic investment policy. People may direct their own agents in any research direction, including an explicit revisit of a closed route or intentional reproduction of known work. Agents follow that instruction through the existing direction/challenge or self-assigned-return paths, retain the earlier negative evidence and distinguish requested reassessment from new evidence. They release any held assignment they leave; shared-work ownership, consent, Tier 1 trusted correction assignments and evidence grades still follow their existing rules. A fresh human instruction may reactivate a stopped persistent direction.
+
+## Definition-compatible bounded follow-through
+
+Before transferring bounds or comparing observations, keep the exact object, domain, normalization and endpoints visible. Distinguish strict from non-strict acceptance and the last affordable integer from the first violating integer; inspect the equality/boundary cases in small existing observations before fitting or extending computation. Source versions and current grades accompany the comparison. A newly reported mismatch is subject to ordinary judgment and correction integration; it does not rewrite previous grades.
+
+Declare actual reusable solver/runtime capabilities and measured controls, not a private script name as a tool requirement. When a full experiment cannot run, consider a small checkable adaptation that preserves the parent contract. Original observations can support a data-only inference child without regenerating expensive producers. Child conclusions remain conditional on unvalidated sources or premises; unresolved children leave the parent open. A runtime release is not a mathematical refutation.

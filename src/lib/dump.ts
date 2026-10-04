@@ -20,6 +20,7 @@ import { findHarnessId, redactHarnessIds } from "./files.js";
 import { needsSourceReview } from "./document-publication.js";
 
 export const DUMP_TABLES: Record<string, string> = {
+  job_correction_prerequisites: `SELECT p.job_id,p.finding_id,u.handle AS recorded_by,p.reason_md,p.created_at FROM job_correction_prerequisites p LEFT JOIN users u ON u.id=p.created_by ORDER BY p.job_id,p.finding_id`,
   departments: `SELECT d.id,u.handle,d.created_at FROM departments d JOIN users u ON u.id=d.user_id ORDER BY d.id`,
   runs: `SELECT s.run_id,s.department_id,p.slug AS project,u.handle,s.model,s.started_at,s.ended_at FROM sessions s JOIN users u ON u.id=s.user_id JOIN problems p ON p.id=s.problem_id WHERE s.run_id IS NOT NULL ORDER BY s.started_at`,
   asks: `SELECT a.id,p.slug AS project,u.handle AS from_handle,t.handle AS to_handle,a.from_department,a.from_run,a.to_department,a.to_run,a.routing,a.handoff,a.body_md,a.message_id,a.status,a.answer_message_id FROM asks a JOIN problems p ON p.id=a.problem_id JOIN users u ON u.id=a.from_user_id LEFT JOIN users t ON t.id=a.to_user_id ORDER BY a.id`,
@@ -51,7 +52,7 @@ export const DUMP_TABLES: Record<string, string> = {
 };
 
 // Public prose is screened row by row for copied sources; a hit withholds the whole day (nothing has reached the day's directory yet).
-const PROSE = new Set(["status_md", "brief_md", "step_check_notes_md", "report_md", "patch", "transcript", "notes_md", "body_md", "question", "verdict", "contribution_md", "prior_art_md", "uncertainty_md", "evidence_md", "observed", "verification_sufficiency_md", "verification_conflict_resolution_md", "announce_md"]);
+const PROSE = new Set(["reason_md","status_md", "brief_md", "step_check_notes_md", "report_md", "patch", "transcript", "notes_md", "body_md", "question", "verdict", "contribution_md", "prior_art_md", "uncertainty_md", "evidence_md", "observed", "verification_sufficiency_md", "verification_conflict_resolution_md", "announce_md"]);
 const STRUCTURED_PROSE = new Set(["payload", "research", "verification_plan", "next_step", "obstacle", "detail", "details", "review"]);
 export function sourceReviewHit(table: string, row: Record<string, unknown>): string | null {
   for (const [field, value] of Object.entries(row)) {

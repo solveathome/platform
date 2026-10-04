@@ -46,7 +46,10 @@ export function findHomePath(text: unknown): string | null {
   return `${m[1]} (line ${line})`;
 }
 
-const PRIVATE_ID_KEYS = 'atis|ownerAccountUuid|ownerOrganizationUuid|bridgeSessionId|accountUuid|organizationUuid|accountId|organizationId|organisationId|session_id|sessionId|thread_id|turn_id|attempt_id|attemptId';
+const OWNERSHIP_KEYS = 'assigned_session|last_released_session|held_by_session';
+const PRIVATE_ID_KEYS = `atis|ownerAccountUuid|ownerOrganizationUuid|bridgeSessionId|accountUuid|organizationUuid|accountId|organizationId|organisationId|session_id|sessionId|thread_id|turn_id|attempt_id|attemptId|${OWNERSHIP_KEYS}`;
+const OWNERSHIP_KEY = new RegExp(`^(?:${OWNERSHIP_KEYS})$`, 'i');
+const OWNERSHIP_VALUE = new RegExp(String.raw`("(${OWNERSHIP_KEYS})"\s*:\s*")((?:\\.|[^"\\])+)(")`, 'gi');
 const PRIVATE_ID_VALUE = String.raw`(?:v1\.[0-9a-f]{16}\.[A-Za-z0-9_.-]{8,}|[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}|[0-9a-f]{32})`;
 const PRIVATE_KEY = new RegExp(`^(?:${PRIVATE_ID_KEYS})$`, 'i');
 const PRIVATE_VALUE = new RegExp(`^${PRIVATE_ID_VALUE}$`, 'i');
@@ -78,7 +81,10 @@ function scrubIdentifiers(text: string): { text: string; n: number; first: strin
         return n === before ? s : JSON.stringify(changed);
       } catch { /* prose or a JSONL block: redact labelled values */ }
     }
-    return s.replace(HARNESS_VALUE, (_m, prefix, key, end) => { n++; first ??= key; return `${prefix}[REDACTED]${end}`; })
+    return s.replace(OWNERSHIP_VALUE, (m, prefix, key, value, end) => {
+      if (value==='[REDACTED]') return m;
+      n++; first ??= key; return `${prefix}[REDACTED]${end}`;
+    }).replace(HARNESS_VALUE, (_m, prefix, key, end) => { n++; first ??= key; return `${prefix}[REDACTED]${end}`; })
       .replace(HISTORICAL_ATTEMPT, (_m, prefix) => { n++; first ??= 'attempt'; return `${prefix}[REDACTED]`; })
       .replace(LOCAL_RUN, () => { n++; first ??= 'local run'; return '[REDACTED]'; })
       .replace(SHORT_ATTEMPT, (_m, prefix) => { n++; first ??= 'attempt prefix'; return `${prefix}[REDACTED]`; })
@@ -92,7 +98,7 @@ function scrubIdentifiers(text: string): { text: string; n: number; first: strin
     if (Array.isArray(v)) return v.map(x => walk(x, depth, parent));
     if (v && typeof v === 'object') return Object.fromEntries(Object.entries(v).map(([k, value]) => {
       const contextAttempt = k === 'id' && (parent === 'attempt' || parent === 'assignment_attempt');
-      if ((PRIVATE_KEY.test(k) || contextAttempt) && typeof value === 'string' && PRIVATE_VALUE.test(value)) {
+      if (typeof value === 'string' && ((OWNERSHIP_KEY.test(k) && value.length>0 && value!=='[REDACTED]') || ((PRIVATE_KEY.test(k) || contextAttempt) && PRIVATE_VALUE.test(value)))) {
         n++; first ??= contextAttempt ? `${parent}.id` : k; return [k, '[REDACTED]'];
       }
       return [k, walk(value, depth, k)];

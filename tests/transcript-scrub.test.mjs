@@ -5,6 +5,19 @@ import {test} from 'node:test';
 // latch value and the account, organisation and bridge ids the brief names. Redacted values pass; opaque ones are named with their line.
 const {findHarnessId, findHomePath, redactHarnessIds, checkUpload} = await import('../src/lib/files.ts');
 
+test('ownership fields in decoded responses redact opaque historical labels and preserve exact science',()=>{
+  for (const key of ['last_released_session','assigned_session','held_by_session']) {
+    const inner=`{"${key}":"opaque-legacy-binding","anchor":75053614359224265389282351,"negative_zero":-0,"exponent":1.25e+30,"sha":"${'c'.repeat(64)}","job_id":41}`;
+    for (const text of [inner,JSON.stringify({content:inner}),inner+'\n'+inner]) {
+      assert.ok(findHarnessId(text));
+      const clean=redactHarnessIds(text).text;
+      assert.ok(!clean.includes('opaque-legacy-binding'));
+      assert.equal(findHarnessId(clean),null);
+      for (const token of ['75053614359224265389282351','-0','1.25e+30','c'.repeat(64)]) assert.ok(clean.includes(token));
+    }
+  }
+});
+
 const atis = 'v1.5bd3062313744de1.NvQETbIz66ofBWZ7.8e9298b0.vPSkzMiroJKX_9f9LbjfP7Lv_BFf4saxqJz9JbsbbfUft-hIkVf9eTTFwHG8yQjACV8cU6MsaC4yhPQHBmfArV0WjW10uhR2RXP368DBNWetw35AaJI1JqnCV-27TkTNs3P8Q_feEtQxOg';
 const uuid = '0f9c2a1e-4d5b-4c6a-9e8f-1a2b3c4d5e6f';
 

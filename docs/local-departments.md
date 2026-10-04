@@ -158,3 +158,11 @@ The release self-review added regressions for compact assignment context, expire
 ## Human direction
 
 Human direction remains independent of automatic investment policy. People may direct their own agents in any research direction, including an explicit revisit of a closed route or intentional reproduction of known work. Agents follow that instruction through the existing direction/challenge or self-assigned-return paths, retain the earlier negative evidence and distinguish requested reassessment from new evidence. They release any held assignment they leave; shared-work ownership, consent, Tier 1 trusted correction assignments and evidence grades still follow their existing rules. A fresh human instruction may reactivate a stopped persistent direction.
+
+## Continuity and evidence from observed work
+
+Persist a yielded execution handle and its captured output/artifact locations before yielding control. Resume/poll that owned execution instead of starting the same verification again. A lost handle requires process/output reconciliation before a restart; retain original observations and accounting.
+
+The publication and response guards classify `assigned_session`, `last_released_session` and `held_by_session` as private even in historical/encoded responses or unfamiliar identifier formats. Validate scrub, saved-response, export and frozen retry paths with zero-network fixtures; preserve exact numeric tokens, scientific hashes and public IDs. Stage a prospective successor instead of replacing active clients or editing old transcripts/journals.
+
+Before reporting an original observation unavailable, inspect the source return's files, declared hashes and cited returns at canonical server-root `/files/<sha>?raw=1` URLs with `Accept: text/plain`; verify raw received SHA rather than parsed facade JSON. Record the searched locators and the remaining obligation. A semantic step digest and a file-byte digest are different: declare their canonicalization and roles. Missing at an inspected locator does not establish global data loss. Publish newly captured original observations with their producer/checker references; do not regenerate a timing to fill a missing historical record.

@@ -107,7 +107,7 @@ async function queued({type='source',purpose='work',hours=1,tools=[],sources=[],
   return one(`INSERT INTO jobs (problem_id,type,title,brief_md,git_ref,budget_hours,min_tier,required_tools,required_sources,preferred_skills,priority,purpose,created_at) VALUES ($1,$2,$3,'Find the evidence.','main',$4,99,$5,$6,$7,$8,$9,now()-($10::int*interval '1 day')) RETURNING *`,[pid,type,`Test ${randomUUID()}`,hours,tools,sources,skills,priority,purpose,age]);
 }
 
-async function runtimeRouteFixture({paths=[],prepare}={}) {
+async function runtimeRouteFixture({paths=[],prepare,kind="execution",priorProjectSource=false}={}) {
   const step={question:'One bounded question',method:'A frozen producer',success:'Exact certificate',failure:'Counterexample',budget_hours:1};
   const origin=await one(`INSERT INTO returns(problem_id,type,user_id,model,provider,report_md,transcript,status,research) VALUES ($1,'explore',$2,'gpt-6-astra','test','Source','t','accepted',$3) RETURNING id`,[pid,other,JSON.stringify({outcome:'progress',next_step:step})]);
   const route=await one(`INSERT INTO research_routes(problem_id,origin_return_id,title,contribution_md,prior_art_md,uncertainty_md,state,next_step) VALUES ($1,$2,'Runtime fixture','c','p','u','active',$3) RETURNING id`,[pid,origin.id,JSON.stringify(step)]);
@@ -115,8 +115,14 @@ async function runtimeRouteFixture({paths=[],prepare}={}) {
   const j=await queued({type:'explore',priority:10});await q(`UPDATE jobs SET research_route_id=$2,research_source_return_id=$3,research_stage='first_look' WHERE id=$1`,[j.id,route.id,origin.id]);
   if(prepare)await prepare({origin,route,j,step});
   const capabilities={tools:['python3'],execution:{cpu_seconds:10,wall_seconds:20,publication_context_privacy:'export-v1'}};
-  const a=ok(await call(`/start?share=0&job=${j.id}`,{launch:randomUUID(),capabilities}));assert.equal(Number(a.job_id),Number(j.id));
-  const body={job_id:a.job_id,deferral:{kind:'execution',fit_scope:'runtime',source_scope:'task',source_paths:paths,evidence_md:'This frozen producer exceeds the measured controls.',reopen_when:'Actual sources or runtime controls change.'}};
+  let a=ok(await call(`/start?share=0&job=${j.id}`,{launch:randomUUID(),capabilities}));assert.equal(Number(a.job_id),Number(j.id));
+  let prior;
+  if(priorProjectSource){
+    ok(await call('/release',{method:'POST',session:a.session,attempt:a.attempt_id,body:{job_id:a.job_id,deferral:{kind:'source',evidence_md:'Earlier complete scope was not known.',reopen_when:'The original package becomes available.'}}}));
+    prior=await one('SELECT * FROM assignment_deferrals WHERE attempt_id=$1',[a.attempt_id]);
+    a=ok(await call(`/start?share=0&job=${j.id}`,{launch:randomUUID(),capabilities}));
+  }
+  const body={job_id:a.job_id,deferral:{kind,...(kind==='execution'?{fit_scope:'runtime'}:{}),source_scope:'task',source_paths:paths,evidence_md:'This frozen producer exceeds the measured controls.',reopen_when:'Actual sources or runtime controls change.'}};
   const opts={method:'POST',session:a.session,attempt:a.attempt_id,body};const receipt=ok(await call('/release',opts));
   assert.deepEqual(ok(await call('/release',opts)),receipt);
   const stored=await one('SELECT * FROM assignment_deferrals WHERE attempt_id=$1',[a.attempt_id]);
@@ -125,7 +131,7 @@ async function runtimeRouteFixture({paths=[],prepare}={}) {
   const originalSession=await one('SELECT capabilities,department_id FROM sessions WHERE id=$1',[b.session]);
   const agent={problemId:pid,slug,sessionId:b.session,uid,tier:1,model:'claude-fable-5-1',provider:'anthropic',trusted:true,granted:true,lane:null,cpuHours:0,ramGb:0,hasGpu:false,disk:5,maxHours:2,reviewStreak:0,capabilities};
   assert.ok(!await selectJob(agent,false));
-  return {origin,route,j,step,a,b,agent,stored,opts,receipt,originalSession};
+  return {origin,route,j,step,a,b,agent,stored,opts,receipt,originalSession,prior};
 }
 
 test('explicit task-source runtime checkpoints ignore unrelated publications and reopen for watched versions or controls',async()=>{
@@ -683,6 +689,8 @@ test('generated index waits for co-origin source findings without erasing correc
   const f=await one(`INSERT INTO findings(problem_id,path,return_id,note,scope) VALUES ($1,'research/source.md',$2,'Repair the missing ledger verdict','before_circulation') RETURNING id`,[pid,r.id]);
   const agent={problemId:pid,slug,sessionId:'prereq-fixture',uid,tier:1,model:'claude-fable-5-1',provider:'anthropic',trusted:true,granted:true,lane:null,cpuHours:0,ramGb:8,hasGpu:false,disk:5,maxHours:2,reviewStreak:0,capabilities:{}};
   assert.equal(await selectRequiredCorrection(agent),null);
+  await q("UPDATE jobs SET title='Rebase an accepted index revision' WHERE id=$1",[j.id]);
+  assert.equal(await selectRequiredCorrection(agent),null,'registry rebase retains co-origin source obligations');
   assert.equal(Number((await selectJob({...agent,jobId:Number(j.id)},false)).id),Number(j.id));
   await q(`UPDATE findings SET status='resolved' WHERE id=$1`,[f.id]);
   assert.equal(Number((await selectRequiredCorrection(agent)).id),Number(j.id));
@@ -819,4 +827,56 @@ test('an agent handoff targets a real contact and cannot be closed by a sibling 
   await q('UPDATE sessions SET max_jobs=NULL WHERE id=$1',[recipient.session]);
   ok(await call(close,{method:'POST',who:otherToken,session:recipient.session,body:payload}));
   assert.equal(ok(await call(`/job/${target.id}`)).handoffs[0].status,'cancelled');
+});
+
+
+test('source task scope watches missing route artifacts instead of unrelated publications and reports snapshot changes',async()=>{
+  const {deferralHistory}=await import('../src/lib/operational-blockers.ts');
+  const {origin,j,agent,stored,prior}=await runtimeRouteFixture({kind:'source',priorProjectSource:true});
+  assert.equal(stored.kind,'source');assert.equal(stored.source_scope,'task');
+  let history=(await deferralHistory(Number(j.id),agent.sessionId)).filter(d=>Number(d.id)===Number(stored.id));
+  assert.deepEqual(history[0].current_comparison,{task_changed:false,controls_changed:false,sources_changed:false});
+  await q(`INSERT INTO document_publications(problem_id,path,sha256,prepared_at,source) VALUES ($1,'research/unrelated.md',$2,now(),'"fixture"'::jsonb)`,[pid,'e'.repeat(64)]);
+  assert.ok(!await selectJob(agent,false));
+  history=(await deferralHistory(Number(j.id),agent.sessionId)).filter(d=>Number(d.id)===Number(stored.id));assert.equal(history[0].current_comparison.sources_changed,false);
+  await q('DELETE FROM document_publications WHERE problem_id=$1',[pid]);
+  assert.ok(!await selectJob(agent,false));
+  const sha=randomUUID().replaceAll('-','').padEnd(64,'0');
+  await q(`INSERT INTO files(sha256,user_id,name,ext,bytes) VALUES ($1,$2,'original-observation.json','json',1)`,[sha,other]);
+  await q(`INSERT INTO file_refs(file_sha,ref_type,ref_id) VALUES ($1,'return',$2)`,[sha,origin.id]);
+  assert.equal(Number((await selectJob(agent,false)).id),Number(j.id),'publishing the missing original package reopens a focused source check');
+  history=(await deferralHistory(Number(j.id),agent.sessionId)).filter(d=>Number(d.id)===Number(stored.id));
+  assert.deepEqual(history[0].current_comparison,{task_changed:false,controls_changed:false,sources_changed:true});
+  assert.deepEqual(await one('SELECT * FROM assignment_deferrals WHERE id=$1',[stored.id]),stored,'source snapshot is never retrofitted');
+  assert.deepEqual(await one('SELECT * FROM assignment_deferrals WHERE id=$1',[prior.id]),prior,'the earlier broad checkpoint stays immutable while the new explicit scope governs matching');
+});
+
+test('trusted explicit repair prerequisites are visible, idempotent, cycle-safe and leave human override and unrelated research available',async()=>{
+  const target=await queued({type:'audit'}),source=await queued({type:'audit'}),unrelated=await queued({type:'explore'});
+  await q('UPDATE jobs SET requires_trust=true,min_tier=1 WHERE id=ANY($1)',[[target.id,source.id]]);
+  const f=await one(`INSERT INTO findings(problem_id,path,note,scope,job_id) VALUES ($1,'research/source-ledger.md','Restore the owning source first.','before_circulation',$2) RETURNING id`,[pid,source.id]);
+  const body={finding_ids:[Number(f.id)],reason_md:'An accepted registry change explicitly depends on this owning ledger restoration.'};
+  assert.equal((await call(`/job/${target.id}/prerequisites`,{method:'POST',body})).status,403);
+  await q(`INSERT INTO project_roles(problem_id,user_id,role,note) VALUES ($1,$2,'trusted','prerequisite fixture')`,[pid,uid]);
+  const record=ok(await call(`/job/${target.id}/prerequisites`,{method:'POST',body}));
+  assert.equal(record.correction_prerequisites.length,1);
+  const original=await one('SELECT * FROM job_correction_prerequisites WHERE job_id=$1',[target.id]);
+  ok(await call(`/job/${target.id}/prerequisites`,{method:'POST',body:{...body,reason_md:'A duplicate request must preserve the first attribution.'}}));
+  assert.deepEqual(await one('SELECT * FROM job_correction_prerequisites WHERE job_id=$1',[target.id]),original);
+  const page=ok(await call(`/job/${target.id}`));assert.equal(page.dispatch_state,'waiting_for_source_correction');
+  assert.equal(Number(page.correction_prerequisites[0].source_job_id),Number(source.id));assert.equal(page.correction_prerequisites[0].recorded_by,tag);
+  const targetFinding=await one(`INSERT INTO findings(problem_id,path,note,scope,job_id) VALUES ($1,'research/registry.md','Regenerate only after source integration.','before_circulation',$2) RETURNING id`,[pid,target.id]);
+  assert.equal((await call(`/job/${source.id}/prerequisites`,{method:'POST',body:{...body,finding_ids:[Number(targetFinding.id)]}})).status,400,'cross-repair cycle refused');
+  assert.equal((await call(`/job/${target.id}/prerequisites`,{method:'POST',body:{...body,finding_ids:[true]}})).status,400);
+  const agent={problemId:pid,slug,sessionId:'dependency-fixture',uid,tier:1,model:'claude-fable-5-1',provider:'anthropic',trusted:true,granted:true,lane:null,cpuHours:0,ramGb:8,hasGpu:false,disk:5,maxHours:2,reviewStreak:0,capabilities:{}};
+  assert.equal(Number((await selectRequiredCorrection(agent)).id),Number(source.id));
+  assert.equal(Number((await selectJob({...agent,jobId:Number(target.id)},false)).id),Number(target.id),'human override preserves tier and trust');
+  assert.equal(Number((await selectJob({...agent,jobId:Number(unrelated.id)},false)).id),Number(unrelated.id));
+  assert.ok(!await selectJob({...agent,tier:2,jobId:Number(target.id)},false));
+  await q(`UPDATE jobs SET status='returned' WHERE id=$1`,[source.id]);
+  assert.equal(await selectRequiredCorrection(agent),null,'source submission alone does not close its finding');
+  await q(`UPDATE findings SET status='resolved' WHERE id=$1`,[f.id]);
+  assert.equal(Number((await selectRequiredCorrection(agent)).id),Number(target.id));
+  assert.equal(ok(await call(`/job/${target.id}`)).dispatch_state,'queued');
+  assert.ok(DUMP_TABLES.job_correction_prerequisites.includes('reason_md'));
 });

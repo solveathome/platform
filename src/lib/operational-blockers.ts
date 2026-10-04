@@ -1,5 +1,5 @@
 import {q} from '../db/index.js';
-import {findSecret, findHarnessId} from './files.js';
+import {findSecret, findHarnessId, redactHarnessIds} from './files.js';
 import {stepEvidenceSQL, unchangedComparison} from './research.js';
 
 // These fingerprints describe assignment fit, never the truth of a research claim.
@@ -61,8 +61,8 @@ export function parseDeferral(raw: any) {
   if (!['legacy','runtime','publication'].includes(fitScope) || (raw.kind==='source' && fitScope!=='legacy'))
     throw new Error('deferral.fit_scope must be legacy, runtime or publication; source deferrals use legacy');
   const sourceScope=raw.source_scope ?? 'project';
-  if (!['project','task'].includes(sourceScope) || (sourceScope==='task' && (raw.kind!=='execution' || fitScope!=='runtime')))
-    throw new Error('deferral.source_scope task requires an explicit runtime execution deferral');
+  if (!['project','task'].includes(sourceScope) || (sourceScope==='task' && raw.kind==='execution' && fitScope!=='runtime'))
+    throw new Error('deferral.source_scope task requires a source or explicit runtime execution deferral');
   let sourcePaths: string[]=[];
   if (sourceScope==='task') {
     if (!Array.isArray(raw.source_paths) || raw.source_paths.length>20 || raw.source_paths.some((p:any)=>
@@ -108,12 +108,14 @@ export function deferralEligibility(sid: string) {
       WHEN 'runtime' THEN ${runtimeFit('d.session_fit')}=${runtimeFit(SESSION_FIT('current'))}
       WHEN 'publication' THEN (d.session_fit->3->'publication_context_privacy') IS NOT DISTINCT FROM (current.capabilities->'execution'->'publication_context_privacy')
       ELSE d.session_fit=${SESSION_FIT('current')} END)
-    AND NOT EXISTS (SELECT 1 FROM assignment_deferrals newer WHERE newer.id>d.id AND d.fit_scope='runtime'
-      AND newer.fit_scope='runtime' AND newer.source_scope='task' AND newer.job_id=d.job_id AND newer.user_id=d.user_id
+    AND NOT EXISTS (SELECT 1 FROM assignment_deferrals newer WHERE newer.id>d.id
+      AND ((d.kind='execution' AND newer.kind='execution' AND d.fit_scope='runtime' AND newer.fit_scope='runtime')
+        OR (d.kind='source' AND newer.kind='source' AND d.fit_scope='legacy' AND newer.fit_scope='legacy'))
+      AND newer.source_scope='task' AND newer.job_id=d.job_id AND newer.user_id=d.user_id
       AND newer.department_id IS NOT DISTINCT FROM d.department_id
       AND (newer.job_fingerprint=d.job_fingerprint OR (newer.task_job_fingerprint IS NOT NULL AND d.task_job_fingerprint IS NOT NULL
         AND newer.task_job_fingerprint=d.task_job_fingerprint))
-      AND ${runtimeFit('newer.session_fit')}=${runtimeFit('d.session_fit')})
+      AND CASE WHEN d.kind='source' THEN newer.session_fit=d.session_fit ELSE ${runtimeFit('newer.session_fit')}=${runtimeFit('d.session_fit')} END)
     AND CASE WHEN d.source_scope='task' THEN d.task_source_epoch=CASE WHEN d.task_job_fingerprint IS NOT NULL
       THEN ${taskSourceEpoch('d.source_paths')} ELSE ${taskSourceEpoch('d.source_paths', false)} END
       ELSE d.source_epoch=${SOURCE_EPOCH_SQL} END)`;
@@ -121,13 +123,34 @@ export function deferralEligibility(sid: string) {
 
 /** The generated questions index must follow its source repairs, not compete with them.
  * Only exact co-origin trusted findings establish this dependency; no prose heuristic changes scientific status. */
-export const INDEX_PREREQUISITES_SQL = `NOT EXISTS (SELECT 1 FROM job_correction_prerequisites dep JOIN findings f ON f.id=dep.finding_id WHERE dep.job_id=j.id AND f.status='open') AND NOT (j.type='audit' AND j.title='Fix research/QUESTIONS.md' AND EXISTS (
+export const INDEX_PREREQUISITES_SQL = `NOT EXISTS (SELECT 1 FROM job_correction_prerequisites dep JOIN findings f ON f.id=dep.finding_id WHERE dep.job_id=j.id AND f.status='open') AND NOT (j.type='audit' AND (j.title='Fix research/QUESTIONS.md' OR EXISTS (SELECT 1 FROM findings target_path WHERE target_path.job_id=j.id AND target_path.path='research/QUESTIONS.md') OR EXISTS (SELECT 1 FROM returns rebased WHERE rebased.id=j.follow_up_of AND rebased.revision_path='research/QUESTIONS.md')) AND EXISTS (
   SELECT 1 FROM findings target JOIN findings source ON source.problem_id=target.problem_id
     AND source.path<>target.path AND source.path<>'research/OUTCOMES.md' AND source.scope<>'advisory' AND source.status='open'
     AND ((source.review_id IS NOT NULL AND source.review_id=target.review_id)
       OR (source.review_id IS NULL AND target.review_id IS NULL AND source.return_id=target.return_id))
   WHERE target.job_id=j.id AND target.status='open' AND target.scope<>'advisory'))`;
 
-export async function deferralHistory(jobId: number) {
-  return q(`SELECT kind,fit_scope,source_scope,source_paths,evidence_md,reopen_when,created_at FROM assignment_deferrals WHERE job_id=$1 ORDER BY id`,[jobId]);
+export async function deferralHistory(jobId: number, sessionId: string | null = null) {
+  const rows=await q(`SELECT d.id,d.kind,d.fit_scope,d.source_scope,d.source_paths,d.evidence_md,d.reopen_when,d.created_at,
+    CASE WHEN current.id IS NULL THEN NULL ELSE jsonb_build_object(
+      'task_changed',NOT (CASE WHEN d.task_job_fingerprint IS NOT NULL THEN d.task_job_fingerprint=${TASK_JOB_FIT_SQL} ELSE d.job_fingerprint=${JOB_FIT_SQL} END),
+      'controls_changed',NOT (CASE d.fit_scope
+        WHEN 'runtime' THEN ${runtimeFit('d.session_fit')}=${runtimeFit(SESSION_FIT('current'))}
+        WHEN 'publication' THEN (d.session_fit->3->'publication_context_privacy') IS NOT DISTINCT FROM (current.capabilities->'execution'->'publication_context_privacy')
+        ELSE d.session_fit=${SESSION_FIT('current')} END),
+      'sources_changed',NOT (CASE WHEN d.source_scope='task' THEN d.task_source_epoch=CASE WHEN d.task_job_fingerprint IS NOT NULL
+        THEN ${taskSourceEpoch('d.source_paths')} ELSE ${taskSourceEpoch('d.source_paths',false)} END ELSE d.source_epoch=${SOURCE_EPOCH_SQL} END)
+    ) END AS current_comparison
+    FROM assignment_deferrals d JOIN jobs j ON j.id=d.job_id LEFT JOIN sessions current ON current.id=$2 AND current.problem_id=j.problem_id
+    WHERE d.job_id=$1 ORDER BY d.id`,[jobId,sessionId]);
+  return rows.map(row=>({...row,evidence_md:redactHarnessIds(row.evidence_md).text,reopen_when:redactHarnessIds(row.reopen_when).text}));
+}
+
+export function deferralBrief(rows: any[]): string {
+  if (!rows.length) return '';
+  return `\n\n## Prior assignment-fit checkpoints\n\nThese are source/execution limits, not mathematical refutations. Current comparisons describe snapshot differences, not proof that a producer now fits. A project-wide source change may be unrelated: check the named prerequisite cheaply, retain its evidence and narrow a new checkpoint only when its complete dependency scope is known. Human-directed revisits remain available.\n\n${rows.map(d=>{
+    const c=d.current_comparison;
+    const changes=c ? ` Current snapshot: task ${c.task_changed?'changed':'unchanged'}, controls ${c.controls_changed?'changed':'unchanged'}, ${d.source_scope} sources ${c.sources_changed?'changed':'unchanged'}.` : '';
+    return `${d.kind} (fit scope: ${d.fit_scope}, source scope: ${d.source_scope}).${changes} ${d.evidence_md} Reopen when: ${d.reopen_when}`;
+  }).join('\n\n')}`;
 }

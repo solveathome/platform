@@ -1,7 +1,8 @@
 import { JOB_CONTEXT_COLUMNS, JOB_CONTEXT_JOINS, jobPresentation } from "../lib/job-presentation.js";
-import {parseDeferral, recordDeferral, deferralHistory} from '../lib/operational-blockers.js';
+import {parseDeferral, recordDeferral, deferralHistory, deferralBrief} from '../lib/operational-blockers.js';
 import {handoffHistory, handoffBrief, pendingHandoffs} from '../lib/job-handoffs.js';
 import {jobHandoffs} from './job-handoffs.js';
+import {correctionPrerequisites,recordCorrectionPrerequisites,correctionPrerequisiteBrief} from '../lib/correction-prerequisites.js';
 import { DEPARTMENT_PROTOCOL, EFFORT_GUIDANCE, FRAMEWORK_GUIDANCE_VERSION } from '../lib/workspace-guidance.js';
 import { creditHtml, creditText, creditByHandle, nameMap } from "../lib/display-name.js";
 import { departments } from "./departments.js";
@@ -406,11 +407,13 @@ ${ENDED_LAUNCH_GUIDANCE}
   }
   row.repo_url = req.project.repo_url;
   const sess = { id: String(session.id), jobs: Number(session.jobs), max: session.max_jobs === null ? null : Number(session.max_jobs), length: lengthWords(session), disk, abandonAfterMin: ABANDON_AFTER_MIN, maxHours: agent.maxHours, compute: describeOffer(offer), transcriptPreapproved: settings.ai?.transcript_preapproved === true, subagents: settings.ai?.subagents?.allowed === false ? "not allowed" : settings.ai?.subagents?.max_parallel ? `allowed, up to ${settings.ai.subagents.max_parallel} at a time` : "allowed", files: await files.quota(uid).then((f) => ({ left: f.files_left, bytes_left: f.bytes_left, per_day: f.files_per_day })) };
-  row.operational_deferrals = await deferralHistory(Number(row.id));
+  row.operational_deferrals = await deferralHistory(Number(row.id),session.id);
   row.handoffs = await handoffHistory(Number(row.id));
+  row.correction_prerequisites = await correctionPrerequisites(Number(row.id));
   row.brief_md += stepCheckContext(row);
   row.brief_md += handoffBrief(row.handoffs);
-  if (row.operational_deferrals.length) row.brief_md += `\n\n## Prior assignment-fit checkpoints\n\nThese are source/execution limits, not mathematical refutations. Compare the current sources and controls cheaply before reopening work. ${row.operational_deferrals.map((d:any)=>`${d.kind} (fit scope: ${d.fit_scope}): ${d.evidence_md} Reopen when: ${d.reopen_when}`).join("\n\n")}`;
+  row.brief_md += correctionPrerequisiteBrief(row.correction_prerequisites);
+  row.brief_md += deferralBrief(row.operational_deferrals);
   if (Number(row.release_count ?? 0) > 0) row.prior_claims = await q(`SELECT m.id, u.handle, m.model, m.created_at FROM messages m JOIN users u ON u.id = m.user_id WHERE m.job_id = $1 AND m.kind = 'claim' ORDER BY m.id`, [row.id]);
   if (row.research_route_id) row.brief_md += await researchBrief(Number(row.research_route_id));
   // A check worker reconstructs the package, so it gets the record in full; a reviewer gets the summary and the judgment asked, with the record one GET away.
@@ -460,7 +463,7 @@ ${ENDED_LAUNCH_GUIDANCE}
   if (inboxMd) md = md.replace(/\n## /, () => `\n${inboxMd}## `);   // after the title block, before the first section
   if (ib.max_message_id > Number(session.inbox_seen_message_id ?? 0)) await q(`UPDATE sessions SET inbox_seen_message_id = $2 WHERE id = $1`, [session.id, ib.max_message_id]);
   if (session.department_id) md = compactDepartmentBrief(md, row, sess, savedDirection);
-  const payload = { department_id:session.department_id,run_id:session.run_id,direction:savedDirection,protocol_version:session.department_id ? `${DEPARTMENT_PROTOCOL}.${GUIDANCE_VERSION}` : undefined,job_id: row.id, attempt_id: row.attempt_id, guidance_version: GUIDANCE_VERSION, framework_version: FRAMEWORK_GUIDANCE_VERSION, type: row.type, purpose: row.purpose, research_stage: stageOf(row), research_route_id: row.research_route_id ?? null, session: sess.id, session_jobs: sess.jobs, session_max_jobs: sess.max, inbox: ib, assignment_reason: reason, contact_id: session.contact_id, brief_md: md };
+  const payload = { department_id:session.department_id,run_id:session.run_id,direction:savedDirection,protocol_version:session.department_id ? `${DEPARTMENT_PROTOCOL}.${GUIDANCE_VERSION}` : undefined,job_id: row.id, attempt_id: row.attempt_id, guidance_version: GUIDANCE_VERSION, framework_version: FRAMEWORK_GUIDANCE_VERSION, type: row.type, purpose: row.purpose, research_stage: stageOf(row), research_route_id: row.research_route_id ?? null, session: sess.id, session_jobs: sess.jobs, session_max_jobs: sess.max, inbox: ib, assignment_reason: reason, operational_deferrals: row.operational_deferrals, correction_prerequisites: row.correction_prerequisites, contact_id: session.contact_id, brief_md: md };
   await q(`UPDATE assignment_attempts SET assignment_payload = $2 WHERE id = $1`, [row.attempt_id, JSON.stringify(payload)]);
   if (wantsJson) res.json(payload);
   else res.type("text/markdown").send(md);
@@ -802,7 +805,7 @@ job.post("/release", bearer, project, assignmentMutation(async (req: any, res: a
   let deferral;
   try {
     deferral=parseDeferral(req.body?.deferral);
-    if (deferral?.source_scope==='task' && !j.research_route_id && !deferral.source_paths.length) throw new Error('non-route task-source runtime scope requires explicit mutable or missing document dependencies; empty paths are only for immutable research-route evidence');
+    if (deferral?.source_scope==='task' && !j.research_route_id && !deferral.source_paths.length) throw new Error('non-route task-source scope requires explicit mutable or missing document dependencies; empty paths are only for immutable research-route evidence');
   } catch(error:any) { res.status(400).json({error:error.message}); return; }
   await recordDeferral(j,deferral);
   await releaseAssignment(j, String(req.body?.note ?? "released by agent"));
@@ -950,26 +953,42 @@ job.post("/start", bearer, project, assignmentMutation(async (req: any, res: any
   await start(req, res);
 }, { commitErrors: true }));
 
+/** Record source obligations, not a transfer, assignment, finding closure or scientific verdict. */
+job.post('/job/:id/prerequisites',bearer,project,assignmentMutation(async(req:any,res)=>{
+  if (!await isGrantedTrusted(req.project.id,req.user.id,req.user.handle)) {
+    res.status(403).json({error:'a project owner or granted trusted member must record correction prerequisites'});return;
+  }
+  try {
+    const rows=await recordCorrectionPrerequisites(Number(req.params.id),Number(req.project.id),req.user.id,req.body?.finding_ids,req.body?.reason_md);
+    res.json({ok:true,job_id:Number(req.params.id),correction_prerequisites:rows});
+  } catch(error:any) {res.status(400).json({error:error.message});}
+}));
+
 /** GET /job/:id : the assignment as JSON for agents, as a page for browsers. Briefs are public (they are in the dataset). */
 job.get("/job/:id", optionalAuth, project, async (req: any, res) => {
   const context = await one(`SELECT j.*, ${JOB_CONTEXT_COLUMNS}, l.slug AS lane_slug, p.repo_url, u.handle AS assigned_handle FROM jobs j JOIN problems p ON p.id=j.problem_id LEFT JOIN lanes l ON l.id=j.lane_id LEFT JOIN users u ON u.id = j.assigned_to ${JOB_CONTEXT_JOINS} WHERE j.id = $1 AND j.problem_id = $2`, [req.params.id, req.project.id]);
   if (!context) { res.status(404).json({ error: "no such job" }); return; }
+  for (const field of ['brief_md','title','last_release_note','step_check_notes_md','source_title','source_report_md','summary_brief_md'])
+    if (typeof context[field]==='string') context[field]=files.redactHarnessIds(context[field]).text;
   const presentation = jobPresentation(context);
   const { source_title, source_report_md, summary_brief_md, subject_return_id, ...row } = context;
   row.presentation = presentation;
   row.brief_md += stepCheckContext(row);
   row.handoffs = await handoffHistory(Number(row.id));
-  row.dispatch_state = row.status === 'queued' && row.handoffs.some((h:any)=>h.status==='waiting') ? 'waiting_for_named_recipient' : row.status;
-  if (req.query.format === "json" || !wantsHtml(req)) { const { assigned_session, attempt_id, ...pub } = row; res.json({ ...pub, returns: (await q(`SELECT id, status, final_rung FROM returns WHERE job_id = $1 ORDER BY id`, [row.id])).map((r: any) => ({ ...r, id: Number(r.id) })) }); return; }
+  row.correction_prerequisites = await correctionPrerequisites(Number(row.id));
+  row.dispatch_state = row.status==='queued' && row.handoffs.some((h:any)=>h.status==='waiting') ? 'waiting_for_named_recipient'
+    : row.status==='queued' && row.correction_prerequisites.some((p:any)=>p.status==='open') ? 'waiting_for_source_correction' : row.status;
+  row.operational_deferrals = await deferralHistory(Number(row.id));
+  if (req.query.format === "json" || !wantsHtml(req)) { const { assigned_session, last_released_session, attempt_id, ...pub } = row; res.json({ ...pub, returns: (await q(`SELECT id, status, final_rung FROM returns WHERE job_id = $1 ORDER BY id`, [row.id])).map((r: any) => ({ ...r, id: Number(r.id) })) }); return; }
   const P = `/projects/${req.project.slug}`;
   const pages = await paperPages(req.project.slug);
   const md = async (t: string) => { const m = protectMath(String(t ?? "").replace(/<!--[\s\S]*?-->/g, "")); return linkPaths(await linkPeople(m.restore(marked.parse(m.text.replace(/</g, "&lt;").replace(/>/g, "&gt;"), { gfm: true }) as string)), req.project.slug, "", pages); };
   const returns = await q(`SELECT id, status, final_rung, model, created_at FROM returns WHERE job_id = $1 ORDER BY id`, [row.id]);
-  const meta = `<p class="doc-meta"><span>Created: ${timeHtml(row.created_at)}</span><span class="tag">${escHtml(row.dispatch_state === "waiting_for_named_recipient" ? "Needs a specific person or agent" : row.status)}</span><span>${escHtml(jobLabel(row))}${row.lane_slug ? ` in <a href="${P}#discussion">${escHtml(row.lane_slug)}</a>` : ""}</span><span>budget ${escHtml(String(row.budget_hours))} h · tier ${row.min_tier >= 99 ? "any" : `≤ ${escHtml(String(row.min_tier))}`}</span>${row.assigned_handle ? `<span>held by <a href="/@${escHtml(row.assigned_handle)}">@${escHtml(row.assigned_handle)}</a></span>` : ""}${Number(row.release_count ?? 0) > 0 ? `<span>handed back ${row.release_count}×</span>` : ""}${row.parent_return_id ? `<span>reviews <a href="${P}/return/${row.parent_return_id}">return #${row.parent_return_id}</a></span>` : ""}${row.follow_up_of ? `<span>follow-up of <a href="${P}/return/${row.follow_up_of}">return #${row.follow_up_of}</a></span>` : ""}</p>`;
+  const meta = `<p class="doc-meta"><span>Created: ${timeHtml(row.created_at)}</span><span class="tag">${escHtml(row.dispatch_state === "waiting_for_named_recipient" ? "Needs a specific person or agent" : row.dispatch_state === "waiting_for_source_correction" ? "Waiting for source correction" : row.status)}</span><span>${escHtml(jobLabel(row))}${row.lane_slug ? ` in <a href="${P}#discussion">${escHtml(row.lane_slug)}</a>` : ""}</span><span>budget ${escHtml(String(row.budget_hours))} h · tier ${row.min_tier >= 99 ? "any" : `≤ ${escHtml(String(row.min_tier))}`}</span>${row.assigned_handle ? `<span>held by <a href="/@${escHtml(row.assigned_handle)}">@${escHtml(row.assigned_handle)}</a></span>` : ""}${Number(row.release_count ?? 0) > 0 ? `<span>handed back ${row.release_count}×</span>` : ""}${row.parent_return_id ? `<span>reviews <a href="${P}/return/${row.parent_return_id}">return #${row.parent_return_id}</a></span>` : ""}${row.follow_up_of ? `<span>follow-up of <a href="${P}/return/${row.follow_up_of}">return #${row.follow_up_of}</a></span>` : ""}</p>`;
   const rlist = returns.length ? `<ul>${returns.map((r: any) => `<li><a href="${P}/return/${r.id}">Return #${r.id}</a> <span class="tag">${escHtml(r.status)}${r.final_rung ? `, ${escHtml(r.final_rung)}` : ""}</span> ${escHtml(r.model ?? "")}, ${timeHtml(r.created_at)}</li>`).join("")}</ul>` : `<p class="muted">No return yet.</p>`;
   const aside = `<div class="doc-side"><div><h3>Returns</h3>${rlist}</div><div><h3>Compute hint</h3><p class="panel-note"><code>${escHtml(JSON.stringify(row.compute_hint ?? {}))}</code></p><p class="panel-note"><a href="${P}/job/${row.id}?format=json">JSON</a></p></div></div>`;
   const purpose = `<section class="document job-purpose"><h2>What this agent is working on</h2><p>${escHtml(presentation.what)}</p><h2>Why it matters</h2><p>${escHtml(presentation.why)}</p>${presentation.subject_return_id ? `<p><a href="${P}/return/${presentation.subject_return_id}">Read the claim and evidence · return #${presentation.subject_return_id}</a></p>` : ""}</section>`;
-  res.type("text/html").send(page({ title: `Job #${row.id}`, dataPage: "job", robots: "noindex, follow", description: plainDescription(`${presentation.what} ${presentation.why}`), path: `${P}/job/${row.id}`, crumbs: `<a href="${P}">${escHtml(req.project.name)}</a><span>/ jobs /</span>#${row.id}`, eyebrow: "Assignment", heading: presentation.title, meta: meta + purpose, aside, body: `<h2>Assignment instructions</h2>` + await md(row.brief_md + handoffBrief(row.handoffs)) }));
+  res.type("text/html").send(page({ title: `Job #${row.id}`, dataPage: "job", robots: "noindex, follow", description: plainDescription(`${presentation.what} ${presentation.why}`), path: `${P}/job/${row.id}`, crumbs: `<a href="${P}">${escHtml(req.project.name)}</a><span>/ jobs /</span>#${row.id}`, eyebrow: "Assignment", heading: presentation.title, meta: meta + purpose, aside, body: `<h2>Assignment instructions</h2>` + await md(row.brief_md + handoffBrief(row.handoffs) + correctionPrerequisiteBrief(row.correction_prerequisites) + deferralBrief(row.operational_deferrals)) }));
 });
 
 /**
