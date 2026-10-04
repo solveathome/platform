@@ -198,6 +198,41 @@ test('open research delivers bounded method adaptation and relevance in full and
   }
 });
 
+test('open research decomposes useful obligations without closing unresolved parents or widening checks',()=>{
+  for (const stage of ['discover','first_look','pursue','rescue']) {
+    const issued={...job,type:'explore',research_stage:stage,brief_md:'Resolve the selected statement without changing its assumptions.'};
+    const full=renderBrief(issued,'https://x.test/projects/p',session);
+    for (const text of [full,compactDepartmentBrief(full,issued,session,null)]) {
+      assert.match(text,/Worker-led decomposition/);
+      assert.match(text,/how the children together would establish the unchanged parent claim/);
+      assert.match(text,/parent conditional or open: listing tasks is not a proof/);
+      assert.match(text,/do not invent dependency IDs or new authority/);
+      assert.match(text,/No new decomposition is required for an unchanged supported dead end/);
+    }
+    assert.equal(issued.brief_md,'Resolve the selected statement without changing its assumptions.');
+  }
+  for (const scoped of [{type:'check'},{type:'review'},{type:'audit'},{type:'source'},
+    {type:'explore',research_stage:'consolidate'},
+    {type:'explore',research_stage:'pursue',follow_up_of:1},
+    {type:'explore',research_stage:'pursue',evidence_return_id:1},
+    {type:'explore',research_stage:'first_look',step_check_of:79}]) {
+    assert.doesNotMatch(taskGuidance(scoped),/Worker-led decomposition/);
+  }
+  assert.match(taskGuidance({type:'formalize'}),/unchanged target/);
+  assert.match(taskGuidance({type:'formalize'}),/not a completed proof/);
+});
+
+test('common research contract separates conditional readiness, execution prerequisites and already authorized limits',()=>{
+  const text=protocolSections('https://x.test/projects/p').research;
+  assert.match(text,/byte-identical statement can change meaning when a dependency changes/);
+  assert.match(text,/domains?|domain, normalization, endpoints and acceptance criteria/);
+  assert.match(text,/Useful conditional work may proceed when its premises are precisely stated/);
+  assert.match(text,/expert handoff blocks its dependent obligation, not unrelated research/);
+  assert.match(text,/choosing within an already permitted range needs no new authority/);
+  assert.match(text,/lower bound exceeding the default alone does not show that the permitted maximum is insufficient/);
+  assert.match(text,/never reinterpret an older receipt or bypass an enforced ceiling/);
+});
+
 test('method adaptation does not redirect immutable checks, typed obligations, conflicts or repairs',()=>{
   for (const type of ['check','review','source','measure','formalize','break','challenge','audit','paper','curate']) {
     assert.doesNotMatch(taskGuidance({type,research_stage:'pursue'}),/Before repeating an infeasible calculation/);

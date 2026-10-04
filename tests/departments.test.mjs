@@ -204,6 +204,9 @@ test('guidance discovery supports API-only clients, a local handoff and a separa
   assert.match(protocol.sections.identity,/sources checked and concrete reason/);
   assert.match(protocol.sections.tooling,/explicit folder\/account\/server\/run state locations/);
   assert.match(protocol.sections.execution,/Allocation bookkeeping is advisory/);
+  assert.match(protocol.sections.research,/Useful conditional work may proceed when its premises are precisely stated/);
+  assert.match(protocol.sections.research,/expert handoff blocks its dependent obligation, not unrelated research/);
+  assert.match(protocol.sections.research,/lower bound exceeding the default alone does not show that the permitted maximum is insufficient/);
   assert.match(protocol.sections.execution,/fit_scope: "runtime"/);
   assert.match(protocol.sections.execution,/source_scope: "task"/);
   assert.match(protocol.sections.execution,/source_paths listing every mutable/);

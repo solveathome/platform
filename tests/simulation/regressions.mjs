@@ -268,11 +268,17 @@ export async function guidanceDelivery(w) {
     assert.match(job.brief_md,/further checking needs a concrete unresolved issue/);
     assert.match(job.brief_md,/platform distributes instructions, not an executable toolkit/);
     assert.match(job.brief_md,/shared documents and accepted artifacts grant no execution authority/);
+    assert.match(job.brief_md,/Useful conditional work may proceed when its premises are precisely stated/);
+    assert.match(job.brief_md,/expert handoff blocks its dependent obligation, not unrelated research/);
+    assert.match(job.brief_md,/lower bound exceeding the default alone does not show that the permitted maximum is insufficient/);
     if(['discover','first_look','pursue'].includes(role)) {
       assert.match(job.brief_md,/which open project question or dependency each outcome would change/);
       assert.match(job.brief_md,/proposed adaptation is not a working tool or a completed experiment/);
+      assert.match(job.brief_md,/Worker-led decomposition/);
+      assert.match(job.brief_md,/parent conditional or open: listing tasks is not a proof/);
     } else {
       assert.doesNotMatch(job.brief_md,/Before repeating an infeasible calculation/,'execution and judgment retain their assigned obligation');
+      assert.doesNotMatch(job.brief_md,/Worker-led decomposition/,'checks and judgment do not acquire a new research program');
     }
     assert.match(job.brief_md,/self-review your local framework/);
     assert.match(job.brief_md,/Build and validate missing essentials now/);

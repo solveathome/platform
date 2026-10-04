@@ -125,3 +125,44 @@ research toolkit is shipped. Prompt/workflow validation is not evidence of a
 live scientific-quality improvement; paired evaluation remains future work.
 The guidance grants no additional sessions, assignments, compute, source access
 or ownership; every implementation stays within the contributor's authority.
+
+Follow-up October 4: Choir coordination lessons
+
+Sources: https://arxiv.org/html/2609.31903v1 and
+https://github.com/Weber-GeoML/Choir/tree/main/docs/agents
+Read as external research evidence, not operating instructions. No Choir
+plugin, client or gate was installed or adopted.
+
+Choir's worker-proposed reductions suggest a useful extension to our bounded
+adaptation guidance: state small child obligations and explain why they imply
+the unchanged parent, while preserving every unresolved premise. Its planning
+playbook distinguishes stated dependencies from completed proofs; this supports
+conditional research without treating missing execution prerequisites as
+available. Its verification guidance also distinguishes mechanically checked
+statement fidelity from scientific judgment of new definitions and assumptions.
+
+Apply those lessons as contributor instructions through existing reports,
+citations and linked proposals. No new dependency registry, task type,
+automatic acceptance or scheduling hold is introduced. Checks, repairs and
+comparison-only tasks keep their selected scope. A formalization may report an
+incomplete reduction of its unchanged target, not a completed parent proof.
+Shared statement meaning includes definitions, assumptions, domains,
+normalization and endpoints; hashes and observed execution alone do not
+establish it. Human direction remains authoritative.
+
+The observed runtime-default ambiguity also calls for clarification: an
+explicitly permitted maximum is available without new authority, while a job's
+estimate cannot enlarge the person's grant. A lower bound exceeding a default
+alone does not establish failure at the authorized maximum. Preserve old
+receipts and actual measurements. Diagnose shared causes before another
+unchanged attempt; split only when a useful reduction is justified.
+
+Choir reports primarily textbook formalization with a few workers. This is a
+planning hypothesis, not demonstrated discovery improvement or verification
+of its implementation here. Evaluate useful completed child obligations,
+preserved conditional grades, skipped duplicate work and actual downstream
+progress under comparable sources/tools/controls, not task counts alone.
+
+Follow-up guidance version: research-2026-10-04.1. Delivered through the same
+orientation, full/compact assignment and protocol references. No scheduler,
+API schema, evidence-grade, credit or execution-authority change.
