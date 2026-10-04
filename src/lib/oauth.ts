@@ -129,8 +129,11 @@ export function cimdDocument(url: string, doc: any): { ok: true; client: Omit<Cl
   if (doc.client_id !== url) return { ok: false, error: "the client metadata document's client_id is not its own URL" };
   const uris = Array.isArray(doc.redirect_uris) ? doc.redirect_uris.filter(redirectUriOk).slice(0, 20) : [];
   if (!uris.length) return { ok: false, error: "the client metadata document lists no usable redirect_uris" };
+  // A public client with PKCE. ChatGPT's document prefers private_key_jwt and lists none among the methods it supports (Oct 4 2026): this
+  // server advertises none, so the client authenticates with none and PKCE carries the proof.
   const method = String(doc.token_endpoint_auth_method ?? "none");
-  if (method !== "none") return { ok: false, error: `token_endpoint_auth_method ${method} is not supported for a client metadata document; use none (PKCE)` };
+  const supported = Array.isArray(doc.token_endpoint_auth_methods_supported) ? doc.token_endpoint_auth_methods_supported.map(String) : [];
+  if (method !== "none" && !supported.includes("none")) return { ok: false, error: `token_endpoint_auth_method ${method} is not supported for a client metadata document; use none (PKCE)` };
   return { ok: true, client: { client_id: url, client_name: String(doc.client_name ?? new URL(url).hostname).slice(0, 120), redirect_uris: uris, auth_method: "none", host: hostOf(url, uris) } };
 }
 
@@ -297,6 +300,9 @@ const tokenError = (error: string, description: string, status = 400): TokenAnsw
 /** The client a token request authenticates as: client_secret_basic, client_secret_post, or none (a public client with PKCE). */
 async function tokenClient(req: Request, body: Record<string, string>): Promise<Client | TokenAnswer> {
   let id = body.client_id, secret = body.client_secret;
+  // A client that sends private_key_jwt names itself in the assertion (its sub). The assertion is not what proves it here: the code is bound
+  // to this client and to the PKCE verifier, the proof this server asks for (it advertises none).
+  if (!id && typeof body.client_assertion === "string") { try { id = JSON.parse(Buffer.from(body.client_assertion.split(".")[1] ?? "", "base64url").toString("utf8")).sub; } catch { /* no id */ } }
   const basic = /^Basic\s+(.+)$/i.exec(req.header("authorization") ?? "")?.[1];
   if (basic) { const [a, ...rest] = Buffer.from(basic, "base64").toString("utf8").split(":"); id = decodeURIComponent(a); secret = decodeURIComponent(rest.join(":")); }
   const c = await getClient(String(id ?? ""));

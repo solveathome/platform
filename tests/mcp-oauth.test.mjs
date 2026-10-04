@@ -38,6 +38,8 @@ test('a client metadata document must name itself and use PKCE without a secret'
   assert.equal(oauth.cimdDocument(url, {client_id: 'https://other.example/c.json', redirect_uris: ['https://chatgpt.com/x']}).ok, false);
   assert.equal(oauth.cimdDocument(url, {client_id: url, redirect_uris: ['http://evil.example/x']}).ok, false);
   assert.equal(oauth.cimdDocument(url, {client_id: url, redirect_uris: ['https://chatgpt.com/x'], token_endpoint_auth_method: 'private_key_jwt'}).ok, false);
+  // ChatGPT's real document (Oct 4 2026): prefers private_key_jwt, supports none.
+  assert.equal(oauth.cimdDocument(url, {client_id: url, redirect_uris: ['https://chatgpt.com/connector_platform_oauth_redirect'], token_endpoint_auth_method: 'private_key_jwt', token_endpoint_auth_methods_supported: ['none', 'private_key_jwt']}).ok, true);
 });
 
 test('metadata documents fetching never reach private addresses', () => {
