@@ -880,3 +880,19 @@ test('trusted explicit repair prerequisites are visible, idempotent, cycle-safe 
   assert.equal(ok(await call(`/job/${target.id}`)).dispatch_state,'queued');
   assert.ok(DUMP_TABLES.job_correction_prerequisites.includes('reason_md'));
 });
+
+test('additive prerequisite migration leaves legacy chronology unknown and timestamps only new records',async()=>{
+  const target=await queued({type:'audit'});
+  const ids=await q(`INSERT INTO findings(problem_id,path,note,scope) VALUES ($1,'research/a.md','First source','before_circulation'),($1,'research/b.md','Second source','before_circulation') RETURNING id`,[pid]);
+  await transaction(async()=>{
+    // This disposable transaction models the original two-column table.
+    await q('ALTER TABLE job_correction_prerequisites DROP COLUMN created_at');
+    await q('INSERT INTO job_correction_prerequisites(job_id,finding_id) VALUES ($1,$2)',[target.id,ids[0].id]);
+    await q(readFileSync(new URL('../src/db/schema.sql',import.meta.url),'utf8'));
+    assert.equal((await one('SELECT created_at FROM job_correction_prerequisites WHERE job_id=$1',[target.id])).created_at,null);
+    await q('INSERT INTO job_correction_prerequisites(job_id,finding_id) VALUES ($1,$2)',[target.id,ids[1].id]);
+    assert.ok((await one('SELECT created_at FROM job_correction_prerequisites WHERE finding_id=$1',[ids[1].id])).created_at);
+    await q(readFileSync(new URL('../src/db/schema.sql',import.meta.url),'utf8'));
+    assert.equal((await one('SELECT created_at FROM job_correction_prerequisites WHERE finding_id=$1',[ids[0].id])).created_at,null);
+  });
+});

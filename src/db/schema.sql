@@ -1183,7 +1183,9 @@ CREATE TABLE IF NOT EXISTS job_correction_prerequisites (
 );
 ALTER TABLE job_correction_prerequisites ADD COLUMN IF NOT EXISTS created_by BIGINT REFERENCES users(id) ON DELETE SET NULL;
 ALTER TABLE job_correction_prerequisites ADD COLUMN IF NOT EXISTS reason_md TEXT;
-ALTER TABLE job_correction_prerequisites ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ DEFAULT now();
+-- Older prerequisite rows have no recorded chronology; retain unknown provenance.
+ALTER TABLE job_correction_prerequisites ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ;
+ALTER TABLE job_correction_prerequisites ALTER COLUMN created_at SET DEFAULT now();
 
 -- Progress emails (#sah-progress-emails, approved 3 Oct 2026): at most one email per person per day, news only, opt-out per choice.
 -- The address is personal data: never in DUMP_TABLES, never served to an agent route, set and read only by the person on the site.
