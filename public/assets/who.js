@@ -18,8 +18,18 @@
     main.parentNode.insertBefore(bar, main);
     bar.querySelector("#email-banner-no").onclick = async () => { bar.remove(); try { await fetch("/me/email/dismiss", { method: "POST" }); } catch {} };
   }
+  // The terms changed (Oct 4 2026): one short line, the usual link; nothing stops meanwhile.
+  function termsBanner(me) {
+    if (!me || !me.terms_changed || /^\/terms/.test(location.pathname) || document.querySelector("#terms-banner")) return;
+    const main = document.querySelector("main"); if (!main) return;
+    const bar = document.createElement("div");
+    bar.id = "terms-banner"; bar.className = "shell"; bar.setAttribute("role", "note");
+    bar.style.cssText = "border-left:4px solid currentColor;padding:.7rem 1rem;margin:1rem auto;display:flex;gap:1rem;flex-wrap:wrap;align-items:center";
+    bar.innerHTML = `<span style="flex:1 1 18rem">Our Terms changed.</span><a class="button" href="/terms?changed=1&next=${encodeURIComponent(location.pathname)}">I accept the Terms</a>`;
+    main.parentNode.insertBefore(bar, main);
+  }
   window.loadWho = async function (el) {
     const me = await fetch("/me").then((r) => r.json()).catch(() => ({ signed_in: false }));
-    window.renderWho(el, me); emailBanner(me); return me;
+    window.renderWho(el, me); termsBanner(me); if (!me.terms_changed) emailBanner(me); return me;
   };
 })();

@@ -8,16 +8,23 @@ import type { Request, Response, NextFunction } from "express";
 import { one, q, transaction } from "../db/index.js";
 import { sealToken, openToken } from "./token-vault.js";
 import * as reputation from "./reputation.js";
-import { TERMS_VERSION } from "./terms.js";
+import { TERMS_VERSION, termsAcceptedForAgents } from "./terms.js";
+import { verifyAccess, MODEL_LABEL } from "./oauth.js";
 import { ABANDON_AFTER_MIN } from "./liveness.js";
 import { pickGithubEmail, shouldPrompt } from "./email.js";
 
 export type AuthedUser = { id: number; handle: string };
 declare global {
   namespace Express {
-    interface Request { user?: AuthedUser; model?: string; provider?: string }
+    interface Request { user?: AuthedUser; model?: string; provider?: string; via?: "mcp"; oauth?: { grantId: number; host: string } }
   }
 }
+
+/**
+ * The MCP endpoint calls the site's own API in-process for a signed-in chat (src/lib/mcp-work.ts) and proves it with this secret, made fresh
+ * at every start and never stored. An OAuth access token works only with it: a token a chat app holds cannot be used against the API directly.
+ */
+export const MCP_INTERNAL_SECRET = randomBytes(24).toString("base64url");
 
 export function hashToken(t: string): string { return createHash("sha256").update(t).digest("hex"); }
 
@@ -76,6 +83,7 @@ export async function tokenExists(req: Request): Promise<boolean> {
   const h = req.header("authorization") ?? "";
   const raw = (h.startsWith("Bearer ") ? h.slice(7).trim() : "") || cookieToken(req);
   if (!raw || raw.length > 200) return false;
+  if (raw.startsWith("sahoa_")) return req.header("x-mcp-internal") === MCP_INTERNAL_SECRET && !!(await verifyAccess(raw));
   return !!(await authenticated(raw, !h.startsWith("Bearer ")));
 }
 
@@ -89,14 +97,24 @@ export async function bearer(req: Request, res: Response, next: NextFunction): P
     if (/ChatGPT|OpenAI/i.test(req.header("user-agent") ?? "")) { res.status(401).json({ error: "You are reading this from the ChatGPT app's web fetch, which cannot send the Authorization header, the X-Model header or the POST bodies this API needs, so an agent cannot join from inside ChatGPT.", for_your_person: "Paste the same instruction into Codex (OpenAI's coding agent, CLI or cloud) or any agent with a shell, such as Claude Code. It signs in, registers and works the assignment from there; nothing else is needed.", codex: "https://openai.com/codex" }); return; }
     res.status(401).json({ error: "missing bearer token; sign in at /auth/github to get one" }); return;
   }
-  const row = await authenticated(raw, !h.startsWith("Bearer "));
+  // A chat app's OAuth token (#sah-mcp-real-work-build): only through the MCP endpoint, which sets the session's model label from the app.
+  let chat: { grantId: number; host: string } | null = null;
+  let row: any;
+  if (raw.startsWith("sahoa_")) {
+    if (req.header("x-mcp-internal") !== MCP_INTERNAL_SECRET) { res.status(401).json({ error: "this token works only through the MCP endpoint" }); return; }
+    const a = await verifyAccess(raw);
+    if (!a) { res.status(401).json({ error: "unknown, expired or revoked access token" }); return; }
+    row = await one(`SELECT id, handle, terms_version, agent_account_id FROM users WHERE id = $1`, [a.userId]);
+    chat = { grantId: a.grantId, host: a.host };
+  } else row = await authenticated(raw, !h.startsWith("Bearer "));
   if (!row) { res.status(401).json({ error: "unknown or revoked token" }); return; }
   // A session is seen on every authenticated request it makes (issue #19), not only at /start.
   const xs = String(req.header("x-session") ?? "").trim();
   if (xs && xs.length <= 64) await q(`UPDATE sessions SET last_seen = now() WHERE id = $1 AND user_id = $2 AND ended_at IS NULL AND (department_id IS NULL OR last_seen>now()-interval '120 minutes' OR NOT EXISTS(SELECT 1 FROM jobs WHERE assigned_session=sessions.id AND status='assigned'))`, [xs, row.id]);
   // The only clock on an assignment is silence (Sep 19 2026): a request from the holding session moves its hand-back moment forward.
   if (xs && xs.length <= 64) await q(`UPDATE jobs SET expires_at = now() + ($3::int * interval '1 minute') WHERE assigned_session = $1 AND assigned_to = $2 AND status = 'assigned' AND expires_at > now()`, [xs, row.id, ABANDON_AFTER_MIN]);   // never revives an assignment already past the silence window: agents restart, they do not resume
-  if (row.terms_version !== TERMS_VERSION) {
+  // The previous version still covers CLI agents (Oct 4 2026, no pause for the running swarm); a chat connection accepted the current one.
+  if (chat ? row.terms_version !== TERMS_VERSION : !termsAcceptedForAgents(row.terms_version)) {
     const msg = `@${row.handle} has not accepted the current terms of participation (version ${TERMS_VERSION}). Stop and tell your person: they accept on the site, signed in, at ${process.env.BASE_URL ?? ""}/terms. An agent cannot accept for them.`;
     // Never accepted: nothing works. Accepted an earlier version: the channel, files and release still work so a session can finish tidily; everything else waits for the person.
     const tidy = /\/(release|files(\/|$)|chat\/[^?]*\/(messages|join|leave)|chat\/(join|leave))(\?|$)/.test(req.originalUrl);
@@ -107,6 +125,12 @@ export async function bearer(req: Request, res: Response, next: NextFunction): P
   { const limit = Number(process.env.RATE_LIMIT_PER_MIN ?? 1200); const r = hitDetailed(`user:${row.id}`, xs || "no X-Session", limit, 60_000);
     if (r.over) { res.setHeader("Retry-After", String(r.retryAfter)); res.status(429).json({ error: `rate limit: ${limit} requests per 60 s for this handle across all of its sessions; retry after ${r.retryAfter} s. Sessions on this handle in the last 60 s: ${r.top.map(([s, n]) => `${s.slice(0, 8)}: ${n}`).join(", ")}. A wait=30 listen is two requests a minute; a tight retry loop is what burns the budget.`, retry_after: r.retryAfter, sessions: Object.fromEntries(r.top) }); return; } }
   req.user = { id: Number(row.id), handle: row.handle };
+  if (chat) {
+    // A chat app does not say which model ran: the session carries the app's label, never a model id, and no thinking level.
+    req.via = "mcp"; req.oauth = chat; req.model = MODEL_LABEL[chat.host] ?? MODEL_LABEL.other; (req as any).effort = null;
+    req.provider = (await one<{ provider: string }>(`SELECT provider FROM model_tiers WHERE model = $1`, [req.model]))?.provider ?? "unknown";
+    next(); return;
+  }
   const xm = canonicalModel(req.header("x-model"));
   // An opaque handle is refused where a session registers (no X-Session yet); a session already running goes on as "unknown", so the
   // assignment it holds is still handed back, and a later corrected X-Model repairs it (assignments.ts).
@@ -211,6 +235,8 @@ export async function githubCallback(req: Request, res: Response): Promise<void>
   const wantsHtmlNow = wantsHtml(req);
   const accepted = (await one<{ terms_version: string | null }>(`SELECT terms_version FROM users WHERE id = $1`, [user!.id]))?.terms_version === TERMS_VERSION;
   const after = safeNext(st.next);
+  // Connecting a chat app: its authorize page asks for the terms itself, in one step; the site's own steps wait for the next visit.
+  if (wantsHtmlNow && after.startsWith("/oauth/authorize?")) { res.redirect(after); return; }
   // The email step comes right after the terms, once (it is asked at most twice in all; see shouldPrompt).
   const next = (await shouldPrompt(Number(user!.id))) && Number((await one<{ n: number }>(`SELECT email_prompts AS n FROM users WHERE id = $1`, [user!.id]))?.n ?? 0) === 0 ? `/welcome?next=${encodeURIComponent(after)}` : after;
   // Accepting the terms is part of signing in: anyone without the current version on record lands on the acceptance step first.

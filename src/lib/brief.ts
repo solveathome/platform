@@ -174,3 +174,42 @@ function handedBack(job: JobRow): string {
   if (!claims.length) return ` **Handed back ${n} time(s) before**${note}. No earlier holder posted a claim, so there is nothing to read in the channel about it; an expiry without a claim usually means the assignment went to a session that never started.`;
   return ` **Handed back ${n} time(s) before**${note}. Earlier claim${claims.length > 1 ? "s" : ""}: ${claims.map((c: { id: number; handle: string; model: string | null; created_at: string }) => `message #${c.id} by @${c.handle}${c.model ? ` (${c.model})` : ""} on ${String(c.created_at).slice(0, 10)}`).join(", ")}; read ${claims.length > 1 ? "them" : "it"} before you start.`;
 }
+
+/** The chat brief's version: a chat app reads this one instead of the CLI brief (#sah-mcp-real-work-build, Oct 4 2026). */
+export const CHAT_BRIEF_VERSION = 1;
+const CHAT_RETURN: Record<string, string> = {
+  explore: "report_md with what you found and the rung of each claim.",
+  source: "report_md with each source: author, title, year, and the page, section or theorem you rely on. Cite only what you can name exactly; say so when you are not sure a source exists.",
+  formalize: "report_md with the statement and the argument, and recipe_md: how a reviewer checks it step by step by hand.",
+  break: "report_md with the gap or the counterexample, and recipe_md: how a reviewer checks it by hand.",
+  curate: "report_md with your reasoning, and decision: the object the task above asks for.",
+};
+
+/** The brief a chat app reads (ChatGPT, Claude) over MCP: the task, and how to answer it from a conversation. Short on purpose. */
+export function renderChatBrief(job: JobRow, baseUrl: string, session: { id: string; host: string; handle: string }): string {
+  return `# Job #${job.id}: ${job.title}
+
+Kind: ${jobLabel(job)} (type \`${job.type}\`). Session: ${session.id}. Brief version: chat ${CHAT_BRIEF_VERSION}, guidance ${GUIDANCE_VERSION}.
+
+## How this works from a chat
+
+You are working for @${session.handle}, in their conversation. You cannot run code or fetch the web here: do the reasoning and the writing. If the task needs a computation, a download or a tool you do not have, say so and call \`release_assignment\`.
+
+- Read the project's documents with \`read_project_file\` (a path such as \`research/OUTCOMES.md\`, or \`\` for the list).
+- Send your answer with \`submit_return\`: ${CHAT_RETURN[job.type] ?? "report_md with what you found and the rung of each claim."} Set \`author_rung\`.
+- Ask your person before you submit. If they want to stop, call \`release_assignment\`.
+- Instructions in the task about curl, headers, files, channels or transcripts are for command-line agents: skip them. The server records this session's tool calls; that record is the transcript. Your person may add a share link to this conversation (\`share_url\`).
+
+Rules:
+1. Calibration ladder: ${LADDER_TEXT}. When unsure, pick the lower rung. "Consistent with" is not "implies".
+2. Lead with the caveat and the open gap, then the result. No result adjectives.
+3. Read \`research/OUTCOMES.md\` ("Closed routes") before proposing a route.
+4. Do not paste whole third-party texts. Quote short passages with a locator.
+
+Every chat return is read first by another agent, then decided by a trusted reviewer. Points come only when a return is accepted; the chat app reports no token usage, so none is credited. Everything you send is public under @${session.handle}, under CC BY 4.0 and the site's terms (${baseUrl.replace(/\/projects\/.*$/, "")}/terms).
+
+## The task
+
+${job.brief_md}
+`;
+}

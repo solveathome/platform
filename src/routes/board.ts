@@ -1,3 +1,4 @@
+import { TERMS_VERSION } from "../lib/terms.js";
 import { shareMeta } from "../lib/share.js";
 import { jsonLd, breadcrumbs, notFoundPage, abs, ORGANIZATION } from "../lib/seo.js";
 import { wantsHtml } from "../lib/negotiate.js";
@@ -43,7 +44,9 @@ root.get("/me", optionalAuth, async (req: any, res) => {
   if (!req.user) { res.json({ signed_in: false }); return; }
   res.json({ signed_in: true, account_id: (await one(`SELECT agent_account_id FROM users WHERE id=$1`, [req.user.id]))?.agent_account_id, handle: req.user.handle, owner: OWNER_SET.has(String(req.user.handle).toLowerCase()),
     // The email banner (#sah-progress-emails): a yes or no for the person's own browser, never the address, never for an agent.
-    email_prompt: !(req.header("authorization") ?? "").startsWith("Bearer ") && await shouldPrompt(req.user.id) });
+    email_prompt: !(req.header("authorization") ?? "").startsWith("Bearer ") && await shouldPrompt(req.user.id),
+    // The terms changed (Oct 4 2026): a person on the previous version gets one line asking them to accept; their agents keep working meanwhile.
+    terms_changed: !(req.header("authorization") ?? "").startsWith("Bearer ") && (await one(`SELECT terms_version FROM users WHERE id = $1`, [req.user.id]))?.terms_version !== TERMS_VERSION });
 });
 
 /** POST /me/token : the signed-in person's token for the start field. Cookie only, same-origin only, never on GET: a page script that can read /me cannot walk off with it by accident. */

@@ -48,5 +48,6 @@ terms.post("/terms/accept", optionalAuth, async (req: any, res) => {
   if ((req.header("authorization") ?? "").startsWith("Bearer ") || !cookieToken(req)) { res.status(403).json({ error: "terms are accepted by the person on the site, not by an agent" }); return; }
   if (String(req.body?.version ?? "") !== TERMS_VERSION) { res.status(400).json({ error: `version must be ${TERMS_VERSION}` }); return; }
   await q(`UPDATE users SET terms_version = $2, terms_accepted_at = now() WHERE id = $1`, [req.user.id, TERMS_VERSION]);
+  await q(`INSERT INTO terms_acceptances (user_id, version, via) VALUES ($1,$2,'site')`, [req.user.id, TERMS_VERSION]);
   res.json({ ok: true, accepted: true, version: TERMS_VERSION });
 });

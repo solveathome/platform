@@ -1258,3 +1258,102 @@ CREATE TABLE IF NOT EXISTS email_letters (
   approved_at TIMESTAMPTZ,
   created_at  TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+
+-- Chat contributions over MCP (#sah-mcp-real-work-build, Chris, Oct 4 2026: "allowing people using ChatGPT and not Codex would be amazing").
+-- solveathome.org is its own OAuth 2.1 authorization server for its MCP endpoint (src/lib/oauth.ts). These tables hold credentials and are
+-- never exported in the public dump. Tokens are opaque and stored as SHA-256 hashes only; nothing here touches the agent token (tokens).
+CREATE TABLE IF NOT EXISTS oauth_clients (
+  client_id      TEXT PRIMARY KEY,                 -- an https URL (Client ID Metadata Document) or an id we issued (dynamic registration)
+  kind           TEXT NOT NULL CHECK (kind IN ('cimd','dcr')),
+  client_name    TEXT NOT NULL DEFAULT '',
+  redirect_uris  JSONB NOT NULL DEFAULT '[]',
+  secret_hash    TEXT,                             -- dynamic registration with client_secret_post/basic only
+  auth_method    TEXT NOT NULL DEFAULT 'none',
+  host           TEXT NOT NULL DEFAULT 'other',    -- chatgpt | claude | other: the chat app, which names the session's model label
+  metadata       JSONB NOT NULL DEFAULT '{}',
+  registered_ip  TEXT,
+  fetched_at     TIMESTAMPTZ,
+  created_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
+  last_used_at   TIMESTAMPTZ
+);
+CREATE TABLE IF NOT EXISTS oauth_requests (       -- an authorization request waiting for the person's consent (ten minutes)
+  id             TEXT PRIMARY KEY,
+  client_id      TEXT NOT NULL REFERENCES oauth_clients(client_id) ON DELETE CASCADE,
+  redirect_uri   TEXT NOT NULL,
+  state          TEXT,
+  scope          TEXT NOT NULL,
+  resource       TEXT NOT NULL,
+  code_challenge TEXT NOT NULL,
+  csrf           TEXT NOT NULL,
+  created_at     TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE TABLE IF NOT EXISTS oauth_grants (         -- one person's connection of one chat app; revoked only by the person (Disconnect) or a refresh-token replay
+  id             BIGSERIAL PRIMARY KEY,
+  user_id        BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  client_id      TEXT NOT NULL REFERENCES oauth_clients(client_id) ON DELETE CASCADE,
+  scope          TEXT NOT NULL,
+  resource       TEXT NOT NULL,
+  terms_version  TEXT NOT NULL,                    -- the terms the person accepted on the consent page
+  created_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
+  last_used_at   TIMESTAMPTZ,
+  revoked_at     TIMESTAMPTZ,
+  revoke_note    TEXT
+);
+CREATE INDEX IF NOT EXISTS oauth_grants_user_idx ON oauth_grants (user_id) WHERE revoked_at IS NULL;
+CREATE TABLE IF NOT EXISTS oauth_codes (
+  code_hash      TEXT PRIMARY KEY,
+  grant_id       BIGINT NOT NULL REFERENCES oauth_grants(id) ON DELETE CASCADE,
+  redirect_uri   TEXT NOT NULL,
+  code_challenge TEXT NOT NULL,
+  expires_at     TIMESTAMPTZ NOT NULL,
+  used_at        TIMESTAMPTZ
+);
+CREATE TABLE IF NOT EXISTS oauth_tokens (
+  token_hash     TEXT PRIMARY KEY,
+  grant_id       BIGINT NOT NULL REFERENCES oauth_grants(id) ON DELETE CASCADE,
+  kind           TEXT NOT NULL CHECK (kind IN ('access','refresh')),
+  expires_at     TIMESTAMPTZ NOT NULL,
+  created_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
+  used_at        TIMESTAMPTZ,                      -- a refresh token is used once; a second use revokes the grant
+  revoked_at     TIMESTAMPTZ
+);
+CREATE INDEX IF NOT EXISTS oauth_tokens_grant_idx ON oauth_tokens (grant_id);
+-- What the server saw of a chat session: every tool call and its answer. A chat app keeps no session log the server can read, so this is the
+-- transcript of a chat return (kind mcp-observed); its usage is unmeasured and never estimated.
+CREATE TABLE IF NOT EXISTS mcp_calls (
+  id               BIGSERIAL PRIMARY KEY,
+  grant_id         BIGINT REFERENCES oauth_grants(id) ON DELETE SET NULL,
+  user_id          BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  session_id       TEXT,
+  tool             TEXT NOT NULL,
+  args             JSONB NOT NULL DEFAULT '{}',
+  result_text      TEXT NOT NULL DEFAULT '',
+  is_error         BOOLEAN NOT NULL DEFAULT false,
+  protocol_version TEXT,
+  client           TEXT,
+  created_at       TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS mcp_calls_session_idx ON mcp_calls (session_id, id);
+CREATE INDEX IF NOT EXISTS mcp_calls_grant_idx ON mcp_calls (grant_id, created_at);
+ALTER TABLE sessions ADD COLUMN IF NOT EXISTS oauth_grant_id BIGINT;
+-- A chat app does not say which model ran, and the person can switch models mid-chat: chat sessions carry these labels, never a model id.
+-- Tier 3: they contribute and do not judge (no triage, no review), and every return goes to a trusted reviewer.
+INSERT INTO model_tiers (model, provider, tier, note) VALUES
+  ('chatgpt-unmeasured', 'openai', 3, 'ChatGPT over MCP: the model is not measured (Oct 4 2026)'),
+  ('claude-chat-unmeasured', 'anthropic', 3, 'Claude app over MCP: the model is not measured (Oct 4 2026)'),
+  ('mcp-unmeasured', 'unknown', 3, 'another chat app over MCP: the model is not measured (Oct 4 2026)')
+ON CONFLICT (model) DO NOTHING;
+-- Every acceptance of the terms, by version (Chris, Oct 4 2026: "record the accepted version for each user so we can always tell who is on
+-- which"). users.terms_version stays the current one; this keeps the history, and how it was given: on the site or on a chat app's consent page.
+CREATE TABLE IF NOT EXISTS terms_acceptances (
+  id          BIGSERIAL PRIMARY KEY,
+  user_id     BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  version     TEXT NOT NULL,
+  via         TEXT NOT NULL CHECK (via IN ('site','oauth','backfill')),
+  client_id   TEXT,
+  accepted_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS terms_acceptances_user_idx ON terms_acceptances (user_id, accepted_at DESC);
+INSERT INTO terms_acceptances (user_id, version, via, accepted_at)
+  SELECT u.id, u.terms_version, 'backfill', coalesce(u.terms_accepted_at, u.created_at) FROM users u
+  WHERE u.terms_version IS NOT NULL AND NOT EXISTS (SELECT 1 FROM terms_acceptances a WHERE a.user_id = u.id);

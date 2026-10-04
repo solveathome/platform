@@ -79,7 +79,11 @@ export type SchedulingAgent = {
   jobId?: number; directionId?: string | null; directionRevision?: number; reviewStreak: number; capabilities: Partial<Capabilities>;
   /** A reviews-only trusted session with no review waiting (Chris, Sep 23 2026, ask 387): it may take a triage, under the review rules. */
   triageFallback?: boolean;
+  /** A chat app over MCP (#sah-mcp-real-work-build): no shell, no compute, no network beyond the tools; only CHAT_TYPES. */
+  chatOnly?: boolean;
 };
+/** What a chat model can do in a conversation: reasoning and writing, nothing that runs code. */
+export const CHAT_TYPES = ["explore", "source", "formalize", "break", "curate"] as const;
 
 /** Hours a pursuit step waits before a requirement nobody here has ever declared stops holding it back. */
 export const STALE_REQUIREMENT_HOURS = Math.max(1, Number(process.env.STALE_REQUIREMENT_HOURS) || 24);
@@ -150,6 +154,7 @@ function eligibility(a: SchedulingAgent, omitCompute = false, sameKindOnly = fal
     // is passed over for one that fits. The estimate chooses the job; it never limits it (no time budget or deadline, Sep 19 2026).
     [`its estimate (${"${j.budget_hours}"} h) is longer than this session has left (${a.hoursLeft ?? "?"} h)`, `(${p(a.hoursLeft ?? null)}::numeric IS NULL OR j.budget_hours <= $${values.length})`],
   ];
+  if (a.chatOnly) labeled.push(["it needs more than a chat can do (a chat session takes explore, source, formalize, break and curate work)", `j.type = ANY(${p([...CHAT_TYPES])}::text[])`]);
   labeled.push(a.directionId
     ? ["it is outside this session's direction", `((j.agent_direction_id=${p(a.directionId)} AND j.agent_direction_revision=${p(a.directionRevision)}) OR (j.agent_direction_id IS NULL AND EXISTS(SELECT 1 FROM agent_direction_links dl WHERE dl.job_id=j.id AND dl.direction_id=${p(a.directionId)} AND dl.revision=${p(a.directionRevision)})))`]
     : ["it belongs to another agent's direction", `j.agent_direction_id IS NULL`]);

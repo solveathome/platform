@@ -19,7 +19,7 @@ const lineKey = (s: string): string => "l:" + createHash("sha1").update(s).diges
 
 /** No single return spends more than this per field; anything above is a forged or broken transcript, not usage. */
 export const MAX_TOKENS_PER_FIELD = 50_000_000;
-export type LogKind = "claude-code" | "codex" | "copilot" | "opencode" | "antigravity" | "freebuff" | "custom" | "withheld" | "summary" | "unknown";
+export type LogKind = "claude-code" | "codex" | "copilot" | "opencode" | "antigravity" | "freebuff" | "custom" | "withheld" | "summary" | "unknown" | "mcp-observed";
 /** A transcript that is not the assignment's own (issue #55): what it names or when it ends, in words for the agent and the page. */
 export type Mismatch = { reason: string; job: number; jobs_named?: number[]; ends_at?: string };
 /** Usage entries of this transcript that were already counted on the person's earlier returns or reviews, and where. */

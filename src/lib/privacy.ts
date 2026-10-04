@@ -1,10 +1,10 @@
 /** The privacy statement: the site and the ChatGPT plugin. Written in the first person by the operator, like the terms; the terms' section 6 is the short form. */
-export const PRIVACY_UPDATED = "2026-10-03";
+export const PRIVACY_UPDATED = "2026-10-04";
 
 export function privacyMd(baseUrl: string): string {
   return `# Privacy
 
-Last changed ${PRIVACY_UPDATED}. Operator and data controller: Chris Benjaminsen, Denmark. Your data: legal@solveathome.org. Other questions: support@solveathome.org. This covers the website solveathome.org and the Solve at Home plugin for ChatGPT. Plain language on purpose; the plain reading is the intended one.
+Last changed ${PRIVACY_UPDATED}. Operator and data controller: Chris Benjaminsen, Denmark. Your data: legal@solveathome.org. Other questions: support@solveathome.org. This covers the website solveathome.org, the Solve at Home plugin for ChatGPT, and connecting a chat app to your account. Plain language on purpose; the plain reading is the intended one.
 
 ## 1. Reading the site
 
@@ -20,9 +20,11 @@ Everything your agent submits (returns, reviews, files, messages, scrubbed trans
 
 ## 3. The ChatGPT plugin
 
-The plugin lets ChatGPT read the same public research this site shows: an open problem to work on, a search of the research, a project's record. When you use it, ChatGPT's servers send this site only what the tool needs: the topic, search words or project name ChatGPT passes for your question. I use them to answer that one request and store nothing: no account, no record of what was asked, and nothing from your conversation. I do not receive your name, your email or your chat. ChatGPT may attach technical hints such as your language; the plugin does not read or keep them. The plugin only reads: it cannot sign you in, submit, review or change anything.
+The plugin lets ChatGPT read the same public research this site shows: an open problem to work on, a search of the research, a project's record. When you use it, ChatGPT's servers send this site only what the tool needs: the topic, search words or project name ChatGPT passes for your question. I use them to answer that one request and store nothing: no account, no record of what was asked, and nothing from your conversation. I do not receive your name, your email or your chat. ChatGPT may attach technical hints such as your language; the plugin does not read or keep them. The public plugin only reads: it cannot sign you in, submit, review or change anything.
 
 Links in the plugin's answers carry \`utm_source=chatgpt\`, so the page-view count above can tell that a visit came from ChatGPT, and nothing more. Your conversation with ChatGPT is OpenAI's to process, under OpenAI's privacy policy.
+
+**Connecting a chat app to your account** (in beta). You can let a chat app such as ChatGPT or Claude work on open problems for you. You sign in with GitHub on this site and accept the terms; the app then holds a token for your account that can only do contributor work. I store which app you connected, when, and when it was last used; the tokens only as hashes, the access token for an hour and the refresh token until it is used or you disconnect. For each tool call the app makes, I store what it sent and what this site answered: that record is the published transcript of the work. I do not receive your conversation, only those calls; a share link to it is published only if you give one. Disconnect any time at /settings/connections.
 
 ## 4. Who receives it
 
@@ -30,7 +32,7 @@ The public: everything your agent submits, by design. Service providers who proc
 
 ## 5. How long
 
-Your account (GitHub id, handle, token, settings) until you ask me to delete it. Published contributions stay, as the licence allows; you can ask for your handle to be removed from their attribution. A saved email address until you delete it. The sign-in cookie for a year or until you sign out. Request counts for a minute. Plugin requests are not stored.
+Your account (GitHub id, handle, token, settings) until you ask me to delete it. Published contributions stay, as the licence allows; you can ask for your handle to be removed from their attribution. A saved email address until you delete it. The sign-in cookie for a year or until you sign out. Request counts for a minute. Plugin requests are not stored. For a connected chat app, its tool calls are kept as the transcript of the work.
 
 ## 6. Your choices and rights
 

@@ -22,13 +22,18 @@ __SHARE__
   <section class="terms-accept" id="accept" aria-live="polite"><p class="muted">Checking your sign-in…</p></section>
 </main>
 <footer data-site-footer></footer>
-<script src="/assets/ui.js?v=21"></script><script src="/assets/who.js?v=5"></script><script src="/assets/terms-accept.js?v=2"></script>
+<script src="/assets/ui.js?v=21"></script><script src="/assets/who.js?v=6"></script><script src="/assets/terms-accept.js?v=2"></script>
 <script>
 loadWho(document.querySelector('#who'));
 const params = new URLSearchParams(location.search);
 const next = /^\/(?!\/)/.test(params.get('next') || '') ? params.get('next') : '/';
 if (params.get('signin') === '1') {
   document.querySelector('#heading').innerHTML = '<div><p class="eyebrow">Signing in · last step</p><h1>Accept the terms to finish signing in</h1><p class="lead">Two minutes of reading. Your agent gets its instruction once you have accepted; until then your token does nothing.</p></div>';
+  const top = document.querySelector('#accept-top'); top.hidden = false;
+  renderTermsAccept(top, { redirect: next });
+}
+if (params.get('changed') === '1') {
+  document.querySelector('#heading').innerHTML = '<div><p class="eyebrow">Terms changed</p><h1>Our Terms changed</h1><p class="lead">New: a licence to what you submit, and chat apps. Your agents keep working meanwhile.</p></div>';
   const top = document.querySelector('#accept-top'); top.hidden = false;
   renderTermsAccept(top, { redirect: next });
 }

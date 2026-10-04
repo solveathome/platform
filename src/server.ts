@@ -38,6 +38,9 @@ import { seo } from "./routes/seo.js";
 import { visualizations, visualizationsRoot } from "./routes/visualizations.js";
 import { mountPlugin } from "./lib/chatgpt-plugin/express.js";
 import { solveAtHomePlugin } from "./lib/chatgpt.js";
+import { workPlugin } from "./lib/mcp-work.js";
+import { mountWellKnown, oauthRoutes } from "./routes/oauth.js";
+import { betaOn, WORK_PATH } from "./lib/oauth.js";
 
 const app = express();
 
@@ -47,6 +50,10 @@ app.use(splash(SPLASH_HOSTS));
 // The ChatGPT plugin: POST /mcp, read-only over public data, and /.well-known/openai-apps-challenge, which pathGuard would refuse
 // as a dotfile. Ahead of the guard, the site's CSP, the page cache and the JSON body parser; see src/lib/chatgpt.ts.
 mountPlugin(app, solveAtHomePlugin());
+// Chat contributions over MCP, in beta (#sah-mcp-real-work-build): the signed-in endpoint and its OAuth metadata, off unless MCP_WORK_BETA=1.
+// Its tools call this server's own API in-process, on the loopback address.
+if (betaOn()) mountPlugin(app, workPlugin(`http://127.0.0.1:${Number(process.env.PORT ?? 8600)}`), { path: WORK_PATH, challenge: false });
+mountWellKnown(app);
 app.use(pathGuard);
 app.disable("x-powered-by");
 // Hops to trust for req.ip: 1 = the reverse proxy in front (Caddy). Behind Cloudflare the limiter reads CF-Connecting-IP instead.
@@ -80,6 +87,7 @@ app.use("/projects/:slug/result", bigBody("50mb"));
 app.use(["/projects/:slug/return/:id/transcript", "/projects/:slug/review/:id/transcript"], bigBody("50mb"));
 app.use("/files", bigBody("8mb"));
 app.use(express.json({ limit: "1mb" }));
+app.use(oauthRoutes);
 app.get("/auth/github", githubStart);
 app.get("/auth/github/callback", githubCallback);
 app.post("/auth/logout", logout);
