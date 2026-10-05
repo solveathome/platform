@@ -538,7 +538,8 @@ export async function deliver(person: { id: number; email: string; day: string; 
       [person.id, it.problem_id, it.kind, it.score, it.news, it.dedupe_key, it.facts, it.happened_at, id]);
     if (r) it.id = Number(r.id);
   }
-  const ids = c.items.flatMap((i: any) => [i.id, ...(i.merged ?? [])]).filter(Boolean);
+  // A merged line lists its own id in `merged` too: count each item once, so the record says how many items the email carried (second pass, 5 Oct 2026: 27 recorded for 18).
+  const ids = [...new Set(c.items.flatMap((i: any) => [i.id, ...(i.merged ?? [])]).filter(Boolean))];
   // Waiting items that were merged into another line, or cut from a long list, are reported too: the page holds the rest.
   await q(`UPDATE email_items SET email_id = $2 WHERE user_id = $1 AND email_id IS NULL AND (id = ANY($3) OR kind NOT IN ('letter','project'))`, [person.id, id, ids]);
   const m = await render(c, person.id, id);
