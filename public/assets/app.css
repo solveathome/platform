@@ -298,6 +298,10 @@ pre code { padding: 0; background: none; }
 .document blockquote { margin: 1.5rem 0; border-left: 1px solid var(--fg); padding: .1rem 1.5rem; color: var(--mut); }
 .document p.display { white-space: pre-wrap; margin-left: 2rem; }   /* an indented formula line in a plain-text manuscript keeps its breaks */
 .document sub, .document sup { line-height: 0; }
+/* No page scrolls sideways on a phone (Oct 6 2026: kk-lower-bound's display formulas pushed a 390 px page to 746 px). A wide formula scrolls inside its own box; KaTeX's hidden MathML copy is positioned against its formula, not the page. */
+.katex { position: relative; }
+.katex-display { max-width: 100%; overflow-x: auto; overflow-y: hidden; padding: .3em 0; }
+.katex.katex-wide { display: inline-block; max-width: 100%; overflow-x: auto; overflow-y: hidden; vertical-align: middle; padding: .2em 0; }   /* an inline formula with a piece wider than its line, marked by math.js */
 .document hr { border: 0; border-top: 1px solid var(--line); margin: 2.5rem 0; }
 .ledger { padding: 1.25rem 0; border-block: 1px solid var(--line); margin-bottom: 2rem; font-size: .875rem; }
 .ledger b { margin-right: .75rem; text-transform: capitalize; }
