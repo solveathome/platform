@@ -95,7 +95,7 @@ export async function saveVerificationPlan(returnId: number, plan: VerificationP
 }
 export async function verificationRuns(returnId: number): Promise<any[]> {
   return q(`SELECT v.id,v.subject_return_id,v.result_return_id,v.fingerprint,v.outcome,v.observed,v.elapsed_seconds,v.details,v.created_at,
-    u.handle,r.model,r.status AS receipt_status, (r.user_id<>subject.user_id AND CASE WHEN subject.verification_plan ? 'lean' THEN lean_model_identity(r.model)<>lean_model_identity(subject.model) ELSE r.model<>subject.model END) AS independent,
+    u.handle,r.model,r.status AS receipt_status, (CASE WHEN subject.verification_plan ? 'lean' THEN lean_independent(subject.problem_id, r.user_id, r.model, r.effort, subject.user_id, subject.model) ELSE r.user_id<>subject.user_id AND r.model<>subject.model END) AS independent,
     (v.subject_return_id<>subject.id) AS reused
     FROM returns subject JOIN verification_runs v ON v.fingerprint=subject.verification_fingerprint
     JOIN returns r ON r.id=v.result_return_id AND r.problem_id=subject.problem_id JOIN users u ON u.id=r.user_id
@@ -177,7 +177,10 @@ export async function saveCheckReceipt(ret: any, job: any, raw: any): Promise<nu
   const x = object(raw, 'check_receipt');
   const subject = await one(`SELECT * FROM returns WHERE id=$1 AND problem_id=$2`, [job.evidence_return_id, ret.problem_id]);
   if (!subject || !subject.verification_fingerprint || x.fingerprint !== subject.verification_fingerprint) bad('check_receipt fingerprint does not match the assigned immutable package');
-  if (String(subject.user_id) === String(ret.user_id) || (subject.verification_plan?.lean ? underlyingModelIdentity(subject.model) === underlyingModelIdentity(ret.model) : subject.model === ret.model)) bad('a check requires a different contributor and model from the author');
+  const independent = subject.verification_plan?.lean
+    ? underlyingModelIdentity(subject.model) !== underlyingModelIdentity(ret.model) && (await one(`SELECT lean_independent($1,$2,$3,$4,$5,$6) AS ok`, [subject.problem_id, ret.user_id, ret.model, ret.effort ?? null, subject.user_id, subject.model]))?.ok === true
+    : String(subject.user_id) !== String(ret.user_id) && subject.model !== ret.model;
+  if (!independent) bad(subject.verification_plan?.lean ? 'a Lean check requires another model than the author\'s, and another contributor unless yours is approved on this project and runs a tier-1 model at high or above' : 'a check requires a different contributor and model from the author');
   if (subject.verification_plan?.lean && !(await leanStatementReviewed(subject))) bad('Lean statement trust is no longer current; do not execute this package');
   if (!['pass', 'fail', 'unable'].includes(x.outcome)) bad('check_receipt.outcome must be pass|fail|unable');
   if (x.blocker !== undefined && x.outcome !== 'unable') bad('check_receipt.blocker belongs only on an unable receipt');
@@ -396,11 +399,13 @@ export async function saveLeanStatementReview(returnId: number, reviewerId: numb
 export async function leanStatementReviewed(ret: any): Promise<boolean> {
   const p: LeanProfile | undefined = ret.verification_plan?.lean;
   if (!p?.statement_review_id) return false;
-  const review = await one(`SELECT rv.*, r.status AS source_status,r.provisional AS source_provisional,r.user_id AS source_author,r.model AS source_model,r.verification_plan AS source_plan
-    FROM reviews rv JOIN returns r ON r.id=rv.return_id WHERE rv.id=$1 AND r.problem_id=$2`, [p.statement_review_id, ret.problem_id]);
+  // Independence of both authors is lean_independent (schema.sql): always another model; the same user only when approved and on tier 1 (Chris, Oct 6 2026).
+  const review = await one(`SELECT rv.*, r.status AS source_status,r.provisional AS source_provisional,r.user_id AS source_author,r.model AS source_model,r.verification_plan AS source_plan,
+      lean_independent(r.problem_id, rv.user_id, rv.model, rv.effort, $3, $4) AS independent_of_proof, lean_independent(r.problem_id, rv.user_id, rv.model, rv.effort, r.user_id, r.model) AS independent_of_source
+    FROM reviews rv JOIN returns r ON r.id=rv.return_id WHERE rv.id=$1 AND r.problem_id=$2`, [p.statement_review_id, ret.problem_id, ret.user_id, ret.model]);
   return !!review && review.trusted && review.verdict === 'accept' && !review.needs_reassessment && review.source_status === 'accepted' && !review.source_provisional
-    && String(review.user_id) !== String(ret.user_id) && underlyingModelIdentity(review.model) !== underlyingModelIdentity(ret.model)
-    && String(review.user_id) !== String(review.source_author) && underlyingModelIdentity(review.model) !== underlyingModelIdentity(review.source_model)
+    && review.independent_of_proof === true && underlyingModelIdentity(review.model) !== underlyingModelIdentity(ret.model)
+    && review.independent_of_source === true && underlyingModelIdentity(review.model) !== underlyingModelIdentity(review.source_model)
     && !!review.source_plan?.lean && leanStatementBinding(review.source_plan.lean) === leanStatementBinding(p)
     && review.lean_statement_review?.binding_sha256 === leanStatementBinding(p);
 }
@@ -408,7 +413,7 @@ export async function leanVerificationSummary(returnId: number, currentSha: stri
   const ret = await one(`SELECT * FROM returns WHERE id=$1`, [returnId]);
   const p: LeanProfile | undefined = ret?.verification_plan?.lean;
   if (!p) return undefined;
-  const reviews = ret.status === 'accepted' && !ret.provisional ? await q(`SELECT verification_receipt_id FROM reviews WHERE return_id=$1 AND trusted AND verdict='accept' AND NOT needs_reassessment AND user_id<>$2 AND lean_model_identity(model)<>lean_model_identity($3) AND length(trim(verification_sufficiency_md))>0`, [returnId, ret.user_id, ret.model]) : [];
+  const reviews = ret.status === 'accepted' && !ret.provisional ? await q(`SELECT verification_receipt_id FROM reviews WHERE return_id=$1 AND trusted AND verdict='accept' AND NOT needs_reassessment AND lean_independent($4, user_id, model, effort, $2, $3) AND length(trim(verification_sufficiency_md))>0`, [returnId, ret.user_id, ret.model, ret.problem_id]) : [];
   return summarizeLean(p, await verificationRuns(returnId), reviews.map(r => Number(r.verification_receipt_id)), await leanStatementReviewed(ret), currentSha);
 }
 

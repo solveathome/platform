@@ -892,7 +892,7 @@ test('Lean statement review, independent worker receipt and paper-version status
   assert.equal((await one(`SELECT lean_model_identity('gpt-6.1-sol-high-high') AS identity`)).identity,'gpt-6-1-sol');
   const agent={problemId:pid,slug,sessionId:'',uid:users.runner.id,tier:1,model:models.astra+'-high-high',provider:'openai',trusted:true,granted:false,lane:null,cpuHours:8,ramGb:32,hasGpu:false,disk:10,maxHours:4,reviewStreak:0,capabilities:{tools:['lean','lean-comparator-linux']}};
   assert.ok((await whyNotEligible(agent,check.id)).some(s=>s.includes('own handle or model')),'model effort aliases cannot check their own kind');
-  await assert.rejects(()=>saveCheckReceipt({problem_id:pid,user_id:users.runner.id,model:agent.model},check,{fingerprint:proofRow.verification_fingerprint}),/different contributor and model/);
+  await assert.rejects(()=>saveCheckReceipt({problem_id:pid,user_id:users.runner.id,model:agent.model},check,{fingerprint:proofRow.verification_fingerprint}),/another model than the author/);
   await q(`UPDATE reviews SET model=$2 WHERE id=$1`,[review.id,agent.model]);
   assert.equal(await leanStatementReviewed(proofRow),false,'alias reviewer is the same underlying model as statement/proof author');
   assert.ok((await whyNotEligible({...agent,model:models.runner},check.id)).some(s=>s.includes('no longer trusted')));
