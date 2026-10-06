@@ -70,7 +70,8 @@ small { font-size: .875rem; }
 main.shell { padding-block: 3rem 1rem; }
 .page-heading { display: flex; justify-content: space-between; align-items: flex-end; gap: 2rem; margin-bottom: 3rem; }
 .page-heading .lead { margin-bottom: 0; }
-.page-heading h1 { margin-bottom: .9rem; }
+.page-heading > * { min-width: 0; }
+.page-heading h1 { margin-bottom: .9rem; overflow-wrap: anywhere; }   /* a return titled by its file path ("Fix research/history/staging/…md") is one long word */
 .page-heading .eyebrow { margin-bottom: 1rem; }
 .page-actions, .actions { display: flex; gap: .85rem; flex-wrap: wrap; align-items: center; }
 .button, button.button { display: inline-flex; justify-content: center; align-items: center; gap: 1.5rem; min-height: 46px; padding: .7rem 1.1rem; background: transparent; border: 1px solid var(--fg); color: var(--fg); border-radius: 3px; font-size: .875rem; font-weight: 500; line-height: 1.5; text-decoration: none; }

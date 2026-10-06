@@ -15,6 +15,11 @@ test('a display formula scrolls inside its own box and KaTeX\'s hidden MathML is
   assert.match(rule('.katex.katex-wide'), /max-width:\s*100%/);
 });
 
+test('a page title that is one long file path wraps instead of widening the page', () => {
+  assert.match(css, /\.page-heading h1 \{[^}]*overflow-wrap:\s*anywhere/);
+  assert.match(css, /\.page-heading > \* \{[^}]*min-width:\s*0/);
+});
+
 test('the return and paper side panels never let a long file name widen a one-column grid', () => {
   const page = readFileSync('src/lib/page.ts', 'utf8');
   assert.match(page, /\.doc-side\{grid-template-columns:minmax\(0,1fr\)\}/);
