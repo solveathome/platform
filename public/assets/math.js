@@ -6,7 +6,13 @@
                throwOnError: false, ignoredTags: ["script", "noscript", "style", "textarea", "pre", "code", "option"], ignoredClasses: ["sf", "no-math"] };
   var ready = false, pending = [];
   // KaTeX breaks an inline formula only at relations and operators, so a long list of numbers is one unbreakable piece: a formula with a piece wider than its line scrolls in its own box (.katex-wide) instead of widening the page.
+  // KaTeX pins an equation number to the right edge of its box; once the formula and its number no longer fit, the number follows the formula and scrolls with it instead of covering it.
   function fit(root) {
+    (root || document.body).querySelectorAll(".katex-display").forEach(function (d) {
+      var tag = d.querySelector(".katex-html > .tag"), w = 0;
+      d.querySelectorAll(".katex-html > .base").forEach(function (b) { w += b.offsetWidth; });
+      d.classList.toggle("katex-display-wide", !!tag && w + tag.offsetWidth + 16 > d.clientWidth);
+    });
     (root || document.body).querySelectorAll(".katex").forEach(function (k) {
       if (k.closest(".katex-display")) return;
       var box = k.parentElement; while (box && box !== document.body && getComputedStyle(box).display.indexOf("inline") === 0) box = box.parentElement;

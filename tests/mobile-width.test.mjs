@@ -27,12 +27,14 @@ test('the return and paper side panels never let a long file name widen a one-co
   assert.match(page, /\.doc-side>\*\{min-width:0/);
 });
 
-test('math.js marks an inline formula with a piece wider than its line, and only that one', () => {
+test('math.js marks an inline formula with a piece wider than its line, and a numbered display formula whose number would cover it', () => {
   const el = (cls, props = {}) => ({classList: {set: new Set(cls), contains(c) { return this.set.has(c); }, toggle(c, on) { on ? this.set.add(c) : this.set.delete(c); }}, ...props});
   const box = el([], {clientWidth: 358});
   const katex = (widths, display) => { const k = el(['katex'], {parentElement: box, closest: s => s === '.katex-display' && display ? {} : null}); k.querySelectorAll = () => widths.map(w => ({offsetWidth: w})); return k; };
   const wide = katex([500]), narrow = katex([120, 200, 300]), shown = katex([900], true);
-  const root = {querySelectorAll: () => [wide, narrow, shown]};
+  const display = (bases, tag) => { const d = el(['katex-display'], {clientWidth: 358, querySelector: () => tag ? {offsetWidth: tag} : null}); d.querySelectorAll = () => bases.map(w => ({offsetWidth: w})); return d; };
+  const numbered = display([300], 30), crowded = display([200, 200], 30), unnumbered = display([900]);
+  const root = {querySelectorAll: s => s === '.katex-display' ? [numbered, crowded, unnumbered] : [wide, narrow, shown]};
   const document = {head: {appendChild: s => s.onload && s.onload()}, body: root, createElement: () => ({})};
   const window = {addEventListener() {}};
   const context = {window, document, getComputedStyle: () => ({display: 'block'}), setTimeout() {}, clearTimeout() {},
@@ -42,6 +44,9 @@ test('math.js marks an inline formula with a piece wider than its line, and only
   assert.equal(wide.classList.contains('katex-wide'), true);
   assert.equal(narrow.classList.contains('katex-wide'), false);   // several pieces wrap on their own
   assert.equal(shown.classList.contains('katex-wide'), false);    // display math scrolls in .katex-display
+  assert.equal(numbered.classList.contains('katex-display-wide'), false);   // formula and number fit: KaTeX's own layout
+  assert.equal(crowded.classList.contains('katex-display-wide'), true);     // the number would cover the formula: it follows it
+  assert.equal(unnumbered.classList.contains('katex-display-wide'), false);
 });
 
 test('every page asks for the same app.css and math.js versions, so a changed rule reaches every page', () => {

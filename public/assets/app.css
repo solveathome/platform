@@ -302,6 +302,7 @@ pre code { padding: 0; background: none; }
 /* No page scrolls sideways on a phone (Oct 6 2026: kk-lower-bound's display formulas pushed a 390 px page to 746 px). A wide formula scrolls inside its own box; KaTeX's hidden MathML copy is positioned against its formula, not the page. */
 .katex { position: relative; }
 .katex-display { max-width: 100%; overflow-x: auto; overflow-y: hidden; padding: .3em 0; }
+.katex-display.katex-display-wide > .katex > .katex-html > .tag { position: relative; right: auto; display: inline-block; margin-left: 1.5em; }   /* marked by math.js */
 .katex.katex-wide { display: inline-block; max-width: 100%; overflow-x: auto; overflow-y: hidden; vertical-align: middle; padding: .2em 0; }   /* an inline formula with a piece wider than its line, marked by math.js */
 .document hr { border: 0; border-top: 1px solid var(--line); margin: 2.5rem 0; }
 .ledger { padding: 1.25rem 0; border-block: 1px solid var(--line); margin-bottom: 2rem; font-size: .875rem; }
