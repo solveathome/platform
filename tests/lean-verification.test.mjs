@@ -55,3 +55,15 @@ test('status requires trusted statement and receipt judgment; conflicts, stale m
   p.lean.claims[0].assumptions=['Input S remains unproved'];e.statement_binding=leanStatementBinding(p.lean);assert.equal(summary([run(e)]).status,'conditional');
   p.lean.claims[0].coverage='partial';e.statement_binding=leanStatementBinding(p.lean);assert.equal(summary([run(e)]).status,'partial');
 });
+
+test('a rejected or superseded return shows its decision, never a pending or checked Lean status',()=>{
+  const {p,e}=fixture(), summary=(decision)=>summarizeLean(p.lean,[run(e)],[1],true,p.lean.manuscript_sha256,decision);
+  assert.equal(summary({status:'accepted'}).status,'checked');
+  const rejected=summary({status:'rejected'});
+  assert.equal(rejected.status,'rejected');assert.deepEqual(rejected.checked_claims,[]);assert.match(rejected.label,/rejected/);
+  const superseded=summary({status:'superseded',superseded_by:'7'});
+  assert.equal(superseded.status,'superseded');assert.equal(superseded.superseded_by,7);assert.deepEqual(superseded.checked_claims,[]);
+  // A rejected package with no trusted judgment no longer reads as awaiting review.
+  assert.equal(summarizeLean(p.lean,[run(e)],[],true,p.lean.manuscript_sha256,{status:'rejected'}).status,'rejected');
+  assert.equal(summarizeLean(p.lean,[run(e)],[],true,p.lean.manuscript_sha256,{status:'pending'}).status,'awaiting_review');
+});

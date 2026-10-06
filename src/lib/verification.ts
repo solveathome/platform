@@ -414,7 +414,7 @@ export async function leanVerificationSummary(returnId: number, currentSha: stri
   const p: LeanProfile | undefined = ret?.verification_plan?.lean;
   if (!p) return undefined;
   const reviews = ret.status === 'accepted' && !ret.provisional ? await q(`SELECT verification_receipt_id FROM reviews WHERE return_id=$1 AND trusted AND verdict='accept' AND NOT needs_reassessment AND lean_independent($4, user_id, model, effort, $2, $3) AND length(trim(verification_sufficiency_md))>0`, [returnId, ret.user_id, ret.model, ret.problem_id]) : [];
-  return summarizeLean(p, await verificationRuns(returnId), reviews.map(r => Number(r.verification_receipt_id)), await leanStatementReviewed(ret), currentSha);
+  return summarizeLean(p, await verificationRuns(returnId), reviews.map(r => Number(r.verification_receipt_id)), await leanStatementReviewed(ret), currentSha, { status: ret.status, superseded_by: ret.superseded_by });
 }
 
 /** Revoked statement authority cancels both queued and issued work before another brief can be served. */
@@ -425,5 +425,11 @@ export async function expireUntrustedLeanChecks(problemId: number): Promise<void
 /** Per-package evidence, never a blanket paper proof grade; manuscript changes invalidate it on read. */
 export async function paperLeanVerification(problemId: number, paperSlug: string, currentSha: string | null): Promise<any[]> {
   const rows = await q(`SELECT id,verification_fingerprint FROM returns WHERE problem_id=$1 AND verification_plan->'lean'->>'paper_slug'=$2 ORDER BY id DESC`, [problemId, paperSlug]);
-  return Promise.all(rows.map(async r => ({ return_id: Number(r.id), fingerprint: r.verification_fingerprint, ...await leanVerificationSummary(Number(r.id), currentSha) })));
+  const records: any[] = await Promise.all(rows.map(async r => ({ return_id: Number(r.id), fingerprint: r.verification_fingerprint, ...await leanVerificationSummary(Number(r.id), currentSha) })));
+  // A rejected package whose statements, mapping and pins a later accepted package carries unchanged (same statement binding) is replaced by it: name the replacement.
+  for (const r of records) if (r.status === 'rejected' && !r.superseded_by) {
+    const next = records.filter(x => x.return_id > r.return_id && x.return_status === 'accepted' && x.statement_binding === r.statement_binding && !['no_proof', 'stale'].includes(x.status)).sort((a, b) => a.return_id - b.return_id)[0];
+    if (next) r.superseded_by = next.return_id;
+  }
+  return records;
 }

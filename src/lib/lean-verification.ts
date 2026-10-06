@@ -112,9 +112,11 @@ export function assessLeanEvidence(p: LeanProfile, e: LeanEvidence | null): { ch
   }
   return { checked, issues };
 }
-export type LeanStatus = 'no_proof' | 'partial' | 'conditional' | 'checked' | 'stale' | 'failed' | 'conflicting' | 'unable' | 'awaiting_review';
-export type LeanSummary = { status: LeanStatus; label: string; checked_claims: string[]; total_claims: number; issues: string[]; statement_binding: string; manuscript_sha256: string; claims: LeanClaim[] };
-export function summarizeLean(p: LeanProfile, runs: any[], trustedReceiptIds: number[], statementReviewed: boolean, currentSha: string | null): LeanSummary {
+export type LeanStatus = 'no_proof' | 'partial' | 'conditional' | 'checked' | 'stale' | 'failed' | 'conflicting' | 'unable' | 'awaiting_review' | 'rejected' | 'superseded';
+export type LeanSummary = { status: LeanStatus; label: string; checked_claims: string[]; total_claims: number; issues: string[]; statement_binding: string; manuscript_sha256: string; claims: LeanClaim[]; return_status?: string; superseded_by?: number | null };
+/** The return's own decision. A rejected or superseded return's Lean evidence never counts, whatever its receipts say (Oct 6 2026: rejected packages showed as awaiting review on the paper page). */
+export type LeanDecision = { status?: string | null; superseded_by?: number | string | null };
+export function summarizeLean(p: LeanProfile, runs: any[], trustedReceiptIds: number[], statementReviewed: boolean, currentSha: string | null, decision: LeanDecision = {}): LeanSummary {
   const valid = runs.filter(r => r.independent && ['recorded','accepted'].includes(r.receipt_status));
   const passes = valid.filter(r => r.outcome === 'pass'), fails = valid.filter(r => r.outcome === 'fail');
   const issues: string[] = [];
@@ -132,11 +134,14 @@ export function summarizeLean(p: LeanProfile, runs: any[], trustedReceiptIds: nu
   else if (best.checked.length < p.claims.length || p.claims.some(c => c.coverage === 'partial')) status = 'partial';
   else if (p.claims.some(c => c.assumptions.length)) status = 'conditional';
   else status = 'checked';
+  const decided = decision.status === 'rejected' || decision.status === 'superseded';
+  if (decided) status = decision.status as LeanStatus;
   if (!statementReviewed) issues.push('No current independent trusted review of the pinned statement/definitions and claim mapping.');
   for (const x of results) issues.push(...x.issues.map(i => `Receipt #${x.r.id}: ${i}`));
   if (passes.some(r => r.details?.exit_code !== 0)) issues.push('A reported pass lacks a successful exit code.');
-  const labels: Record<LeanStatus,string> = { no_proof: 'No checked Lean proof recorded', partial: 'Partial Lean coverage', conditional: 'Mapped Lean claims checked under stated assumptions', checked: 'All mapped Lean claims checked', stale: 'Lean evidence is for another manuscript version', failed: 'Lean validation failed', conflicting: 'Lean validation observations conflict', unable: 'Lean validation could not run', awaiting_review: 'Lean evidence awaits trusted review' };
-  return { status, label: labels[status], checked_claims: statementReviewed ? best?.checked ?? [] : [], total_claims: p.claims.length, issues, statement_binding: leanStatementBinding(p), manuscript_sha256: p.manuscript_sha256, claims: p.claims };
+  const labels: Record<LeanStatus,string> = { no_proof: 'No checked Lean proof recorded', partial: 'Partial Lean coverage', conditional: 'Mapped Lean claims checked under stated assumptions', checked: 'All mapped Lean claims checked', stale: 'Lean evidence is for another manuscript version', failed: 'Lean validation failed', conflicting: 'Lean validation observations conflict', unable: 'Lean validation could not run', awaiting_review: 'Lean evidence awaits trusted review', rejected: 'Return rejected: its Lean evidence does not count', superseded: 'Return superseded: its Lean evidence does not count' };
+  return { status, label: labels[status], checked_claims: statementReviewed && !decided ? best?.checked ?? [] : [], total_claims: p.claims.length, issues, statement_binding: leanStatementBinding(p), manuscript_sha256: p.manuscript_sha256, claims: p.claims,
+    ...(decision.status ? { return_status: decision.status } : {}), ...(decision.superseded_by ? { superseded_by: Number(decision.superseded_by) } : {}) };
 }
 export const LEAN_GUIDANCE = `Lean evidence uses verification_plan.lean with policy ${LEAN_POLICY}. Pin the manuscript, every mapped claim and fully qualified declaration, trusted statement/definition bundle, exact Lean release, lakefile, lake-manifest, all transitive dependency revisions, comparator and external checker. A statement proposal uses statement_review_id:null; a trusted reviewer records lean_statement_review:{binding_sha256:<lean_statement_binding from the return>,meaning_md:<why the formal statements and definitions express these claims>}. A subsequent immutable proof package references that independent review id with the same statement binding. Do not change the reviewed statement to make a proof pass. Keep unmapped claims, partial lemmas and explicit hypotheses visible; this status is separate from the ordinary review grade.
 
