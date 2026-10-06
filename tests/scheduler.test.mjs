@@ -380,6 +380,8 @@ test('queue matching shares hard eligibility between backlog and choice, then re
   const a={problemId:pid,slug,sessionId:'synthetic',uid,tier:2,model:'test-model',provider:'test',trusted:false,granted:false,lane:null,cpuHours:0,ramGb:0,hasGpu:false,disk:1,maxHours:2,reviewStreak:0,capabilities:{}};
   assert.deepEqual(await backlogFor(a),{reviews:0,research:1,blocked_reviews:0});assert.equal((await selectJob(a,false)).id,plain.id);
   a.capabilities={tools:['lean'],skills:['lean']};
+  assert.deepEqual(await backlogFor(a),{reviews:0,research:1,blocked_reviews:0},'Lean tools do not bypass Tier 1 formalization eligibility');
+  a.tier=1;
   assert.deepEqual(await backlogFor(a),{reviews:0,research:2,blocked_reviews:0});assert.equal((await selectJob(a,false)).id,j.id);
   const old=await queued({age:400});assert.equal((await selectJob(a,false)).id,old.id,'age eventually overtakes bounded matching terms');
   const live=await start({capabilities:a.capabilities});assert.equal(live.job_id,old.id);

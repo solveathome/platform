@@ -18,7 +18,8 @@ import { isDeepStrictEqual } from "node:util";
 import { backlogFor, reviewWorkFor, selectJob, selectRequiredCorrection, REQUIRED_CORRECTION_INTERVAL, whyNotEligible, computeBlocked, discoveryShare, discoveryDue, allocation, researchPolicy, researchAllocation, portfolioOrder, researchBucket, reviewPressure, reviewTriage, unmetRequirements, STALE_REQUIREMENT_HOURS, ROUTE_REPEAT_WINDOW, type SchedulingAgent } from "../lib/scheduler.js";
 import { parseResearch, stageOf, jobLabel } from '../lib/research-format.js';
 import { stepCheckContext, recordResearch, prepareRescue, retireRedundantRescueSamples, retireRedundantStepChecks, researchBrief, routeContext, reconsiderDependents, holdForStepCheck } from '../lib/research.js';
-import { parseVerificationPlan, saveVerificationPlan, queueCheck, saveCheckReceipt, verificationRuns, verificationState, verificationBrief, judgmentBudget, validateReceiptUse, isCompletedCheck, expireWaitingChecks, checkWaitExpired, identicalClaim, verificationSummary, receiptId } from '../lib/verification.js';
+import { leanStatementBinding } from '../lib/lean-verification.js';
+import { expireUntrustedLeanChecks, saveLeanStatementReview, parseVerificationPlan, saveVerificationPlan, queueCheck, saveCheckReceipt, verificationRuns, verificationState, verificationBrief, judgmentBudget, validateReceiptUse, isCompletedCheck, expireWaitingChecks, checkWaitExpired, identicalClaim, verificationSummary, receiptId } from '../lib/verification.js';
 import { readFileSync } from 'node:fs';
 import { ROOT } from '../lib/paths.js';
 import { bearer, optionalAuth, modelTier } from "../lib/auth.js";
@@ -93,6 +94,7 @@ import { ABANDON_AFTER_MIN } from "../lib/liveness.js";
 import { plainDescription, notFoundPage, abs } from "../lib/seo.js";
 import { noticeChannel } from "../lib/lane-channel.js";
 async function sweepExpired(problemId: number): Promise<void> {
+  await expireUntrustedLeanChecks(problemId);
   // Abandonment: the session is ended and its assignment goes back to the queue at once, instead of at the job's expiry hours later.
   const silent = await q<{ id: string; user_id: number; model: string | null }>(`SELECT DISTINCT s.id, s.user_id, s.model FROM sessions s JOIN jobs j ON j.assigned_session = s.id AND j.status = 'assigned' WHERE s.problem_id = $1 AND s.ended_at IS NULL AND s.last_seen < now() - ($2::int * interval '1 minute')`, [problemId, ABANDON_AFTER_MIN]);
   for (const s of silent) await endSession(s.id, Number(s.user_id), problemId, s.model, `abandoned: no request from the agent for ${ABANDON_AFTER_MIN} minutes`);
@@ -229,7 +231,7 @@ ${ENDED_LAUNCH_GUIDANCE}
   // Tier 1 needs a top thinking level (Chris, Sep 10): a frontier model at a lower or undeclared level judges at tier 2.
   // The session's thinking level: evidence from its own transcript wins (set at each return); until then, the latest declaration, which an
   // agent may correct after reading its session file (the registration reply says how).
-  if (session.effort_evidence) req.effort = session.effort_evidence;
+  if (session.effort_evidence && req.header("x-effort") === undefined) req.effort = session.effort_evidence;
   else if (req.effort && req.effort !== session.effort) { await q(`UPDATE sessions SET effort = $2 WHERE id = $1`, [session.id, req.effort]); session.effort = req.effort; }
   const tf = tierForEffort(await modelTier(req.model ?? "unknown"), req.effort ?? null);
   const tier = tf.tier;
@@ -1204,6 +1206,7 @@ job.post("/result", bearer, project, assignmentMutation(async (req: any, res) =>
     await q(`INSERT INTO reviews (return_id, review_job_id, user_id, model, provider, verdict, rung, notes_md, weight, also_credit, transcript, tokens, unverifiable, needs_md, verification, rerun_reason, trusted, effort, reject_reason)
              VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19)`,
       [reviewOf, jobRow?.id ?? null, uid, req.model ?? "unknown", req.provider ?? "unknown", b.verdict, reviewRung, b.notes_md ?? b.report_md ?? "", w, b.also_credit && typeof b.also_credit === "object" ? JSON.stringify(b.also_credit) : null, String(b.transcript), JSON.stringify(tokens), unverifiable, unverifiable ? String(b.needs_md).slice(0, 4000) : null, verification, verification === "read" ? null : rerunReason, reviewerTrusted, req.effort ?? null, rejectReason]);
+    await saveLeanStatementReview(reviewOf, uid, b.lean_statement_review);
     if (priorScoredAt) await q(`UPDATE reviews SET scored_at = $3 WHERE return_id = $1 AND user_id = $2`, [reviewOf, uid, priorScoredAt]);
     // Worth announcing (#sah-discord-announcer): only a reviewer holding a role on the project marks an accepted finding; the final record decides whether it is a candidate. Never refused: a mark that cannot count is a warning.
     const announceWarnings: string[] = [];
@@ -1360,7 +1363,12 @@ job.post("/result", bearer, project, assignmentMutation(async (req: any, res) =>
   // A file repair is mechanical work, even when its source was a paper, audit or direction (issue #57).
   // Recognise jobs already handed out before the fix as well as newly generated measure jobs.
   const rtype = jobRow?.follow_up_of && String(jobRow.title).startsWith(FILE_FIX_TITLE) ? "measure" : jobRow?.type ?? b.type ?? "direction";
+  if (rtype === 'formalize' && tierForEffort(await modelTier(req.model ?? 'unknown'), effortEff).tier !== 1) {
+    res.status(403).json({ error: 'formalize requires a Tier 1 model at high or above, measured on this session/turn; low, medium and unmeasured effort do not qualify' }); return;
+  }
   const verificationPlan = parseVerificationPlan(b.verification_plan);
+  if (verificationPlan?.lean && !['formalize','paper','audit'].includes(rtype)) { res.status(400).json({error:'Lean profiles belong on formalize, paper or audit returns'}); return; }
+  if (verificationPlan?.lean && tierForEffort(await modelTier(req.model ?? 'unknown'), effortEff).tier !== 1) { res.status(403).json({error:'Lean formalization packages require Tier 1 at high or above'}); return; }
   if (b.check_receipt !== undefined && rtype !== 'check') { res.status(400).json({ error: 'check_receipt answers a check assignment only' }); return; }
   // Checkable work carries its own verification recipe, so the reviewer runs it instead of redoing the job.
   const recipe = typeof b.recipe_md === "string" ? b.recipe_md.trim() : "";
@@ -1602,7 +1610,7 @@ export async function resumeDeferredReviews(problemId: number): Promise<number> 
 
 /** Create review jobs for a return. Reviews require tier 1 (scope Q7/Q13). */
 /** Bumped whenever the standard review guidance changes; a queued review from an earlier version is refreshed when served. */
-export const REVIEW_BRIEF_VERSION = 12;   // 12: a chat return's transcript is the server's record of its tool calls, model unmeasured (Oct 4 2026, #sah-mcp-real-work-build);   // 11: review targets match integration closure, including explicit empty lists (Oct 2 2026); 10: required document repairs go to Tier 1 trusted agents and reviews reuse established evidence (Oct 2 2026); 9: a series also gathers the same document's later fixes, chain links and no-op revisions (#mba-sah-held-feedback-items, item 15); 8: the return schema names verification_sufficiency_md on a packaged review and the also_fix note cap (#mba-sah-bot-feedback-fixes, fix 7); 7: a reviewer holding a role on the project may mark an accepted finding worth announcing (Chris, Sep 26 2026, #sah-discord-announcer); 6: the reviewer asks whether the return earns credit, a rung or a citation without the work (Chris, Sep 24 2026, #sah-gemma-mvp; the Gemma Challenge's agents caught a gameable gate themselves);5: a revision's review lists the findings it answers, and also_fix takes a scope (Sep 24 2026); 3: no time budget in the review brief (Chris, Sep 19 2026); 4: series verdicts are decisions with their usual effects, from a trusted reviewer only (Sep 23 2026)
+export const REVIEW_BRIEF_VERSION = 13;   // 13: pinned Lean statement review and trustworthy worker validation (Oct 6 2026); 12: a chat return's transcript is the server's record of its tool calls, model unmeasured (Oct 4 2026, #sah-mcp-real-work-build);   // 11: review targets match integration closure, including explicit empty lists (Oct 2 2026); 10: required document repairs go to Tier 1 trusted agents and reviews reuse established evidence (Oct 2 2026); 9: a series also gathers the same document's later fixes, chain links and no-op revisions (#mba-sah-held-feedback-items, item 15); 8: the return schema names verification_sufficiency_md on a packaged review and the also_fix note cap (#mba-sah-bot-feedback-fixes, fix 7); 7: a reviewer holding a role on the project may mark an accepted finding worth announcing (Chris, Sep 26 2026, #sah-discord-announcer); 6: the reviewer asks whether the return earns credit, a rung or a citation without the work (Chris, Sep 24 2026, #sah-gemma-mvp; the Gemma Challenge's agents caught a gameable gate themselves);5: a revision's review lists the findings it answers, and also_fix takes a scope (Sep 24 2026); 3: no time budget in the review brief (Chris, Sep 19 2026); 4: series verdicts are decisions with their usual effects, from a trusted reviewer only (Sep 23 2026)
 const REASSESSMENT_NOTE = '\n\nEvidence needs reassessment or execution could not find capacity within 24 hours. Assess the specific missing or changed evidence from the record; execution is not included. Preserve existing observations. Do not report that a check ran. If new execution is necessary, name the smallest check and missing capability in needs_md; a repaired package is a new return.';
 /** The standard review brief for a return as it stands now, with the tier, budget and compute hint that go with it. Job-specific text (the reassessment note) is the caller's. */
 export async function composeReviewBrief(returnId: number, problemId: number, options: { judgmentOnly?: boolean } = {}): Promise<{ brief: string; tier: number; budget: number; compute: any; judgmentOnly: boolean; packaged: boolean }> {
@@ -2034,6 +2042,7 @@ export async function reopen(ret: any, userId: number | null, note: string, by: 
   await q(`INSERT INTO return_decisions (return_id, status, final_rung, provisional, by, note, user_id) VALUES ($1,'pending',NULL,false,$2,$3,$4)`, [ret.id, by, note, userId]);
   await q(`UPDATE returns SET status = 'pending', provisional = false WHERE id = $1`, [ret.id]);
   if (by === 'evidence') await q(`UPDATE reviews SET needs_reassessment=true WHERE return_id=$1`, [ret.id]);
+  await expireUntrustedLeanChecks(Number(ret.problem_id));
   if (options.propagate !== false) await reassessAffected(Number(ret.id), 'pending: ' + note);
   if (ret.job_id) await q(`UPDATE jobs SET status = 'returned' WHERE id = $1`, [ret.job_id]);
   const checking = !options.judgmentOnly && await queueCheck(ret);
@@ -2314,6 +2323,7 @@ job.get("/return/:id", optionalAuth, project, async (req: any, res) => {
   r.review_deferred = r.status === 'pending' && !r.provisional && !r.duplicate_of && !r.review_admitted_at;
   r.in_triage = r.status === 'pending' && !!(await one(`SELECT 1 FROM jobs WHERE parent_return_id = $1 AND type = 'triage' AND status IN ('queued','assigned')`, [r.id]));
   r.triage = await q(`SELECT t.id, u.handle, t.model, t.escalate, t.notes_md, t.created_at FROM triages t JOIN users u ON u.id = t.user_id WHERE t.return_id = $1 ORDER BY t.id`, [r.id]);
+  r.lean_statement_binding = r.verification_plan?.lean ? leanStatementBinding(r.verification_plan.lean) : null;
   r.verification_runs = await verificationRuns(Number(r.id));
   r.verification_state = r.verification_plan ? await verificationState(Number(r.id)) : null;
   r.verification_summary = r.verification_plan ? await verificationSummary(Number(r.id)) : null;   // generated from the record; see summaryMarkdown for the page
@@ -2333,7 +2343,7 @@ job.get("/return/:id", optionalAuth, project, async (req: any, res) => {
   // The reviews and the decision record travel with the return (issue #29). `returns.decision` is a curate return's own input, so it is `curation` here;
   // `decision` is the latest decision row (null while nothing has been decided) with the reviews that carried it, and `decisions` the whole record, oldest first.
   if (r.type === "curate") r.curation = r.decision; delete r.decision;
-  r.reviews = (await q(`SELECT rv.id, u.handle, rv.model, rv.verdict, rv.rung, rv.reject_reason, rv.verification, rv.rerun_reason, rv.verification_receipt_id, rv.verification_sufficiency_md, rv.verification_conflict_resolution_md, rv.trusted, rv.weight, rv.notes_md, rv.also_fix, rv.needs_reassessment, rv.created_at FROM reviews rv JOIN users u ON u.id = rv.user_id WHERE rv.return_id = $1 ORDER BY rv.id`, [r.id])).map((v: any) => ({ ...v, id: Number(v.id), weight: Number(v.weight) }));
+  r.reviews = (await q(`SELECT rv.id, u.handle, rv.model, rv.verdict, rv.rung, rv.reject_reason, rv.verification, rv.rerun_reason, rv.verification_receipt_id, rv.verification_sufficiency_md, rv.verification_conflict_resolution_md, rv.lean_statement_review, rv.trusted, rv.weight, rv.notes_md, rv.also_fix, rv.needs_reassessment, rv.created_at FROM reviews rv JOIN users u ON u.id = rv.user_id WHERE rv.return_id = $1 ORDER BY rv.id`, [r.id])).map((v: any) => ({ ...v, id: Number(v.id), weight: Number(v.weight) }));
   // Each decision row names who decided (issue #31): the reviewers whose verdicts carried it, or the person who reopened or challenged; and whether the author's own trusted handle was among them.
   const historicalReviews = [...r.reviews.map((v: any) => ({ ...v, archived_at: null })), ...r.review_history.map((h: any) => ({ ...h.review, archived_at: h.archived_at }))];
   r.decisions = (await q(`SELECT d.status, d.final_rung, d.provisional, d.by, d.note, d.decided_at, u.handle AS actor FROM return_decisions d LEFT JOIN users u ON u.id = d.user_id WHERE d.return_id = $1 ORDER BY d.id`, [r.id])).map((d: any) => {

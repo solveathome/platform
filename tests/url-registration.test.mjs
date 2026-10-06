@@ -102,7 +102,7 @@ test('share and disk decide what fits: 25% never gets the 16 GB job, Mathlib nee
   const mid = await (await get('?share=50')).json();
   assert.notEqual(Number(mid.job_id), mathlibId, 'disk 5 keeps the Mathlib job out');
   await end(mid.session);
-  const lean = await (await get('?share=50&disk=10')).json();
+  const lean = await (await get(`?job=${mathlibId}&share=50&disk=10`, {model: 'claude-opus-5.5'})).json();
   assert.equal(Number(lean.job_id), mathlibId, JSON.stringify(lean).slice(0, 200));
   assert.match(lean.brief_md, /disk up to 10 GB/);
   await end(lean.session);
@@ -282,7 +282,7 @@ test('a posted registration body still works for agents mid-flight and is marked
   await end(j.session);
 });
 
-test('the transcript\'s recorded thinking level corrects a wrong declaration and the session\'s tier', async () => {
+test('the current transcript corrects a wrong effort declaration, but a later turn must qualify on its own', async () => {
   const reg = await fetch(base + '/start?share=0', {headers: {authorization: `Bearer ${token}`, accept: 'application/json', 'x-model': 'claude-fable-5-1', 'x-effort': 'medium'}});
   const j = await reg.json(); assert.equal(reg.status, 200, JSON.stringify(j).slice(0, 300));
   assert.match(j.brief_md, /On record: `medium`: tier 2 this session/);
@@ -300,7 +300,9 @@ test('the transcript\'s recorded thinking level corrects a wrong declaration and
   const list = await (await fetch(base + '/sessions', {headers: {authorization: `Bearer ${token}`, accept: 'application/json', 'x-model': 'claude-fable-5-1'}})).json();
   assert.equal(list.sessions.find(x => x.id === j.session).effort_evidence, 'high');
   const next = await (await fetch(base + '/start', {headers: {authorization: `Bearer ${token}`, accept: 'application/json', 'x-model': 'claude-fable-5-1', 'x-effort': 'medium', 'x-session': j.session}})).json();
-  assert.doesNotMatch(next.brief_md ?? next.orientation_md ?? '', /tier 2 for this session/);
+  assert.match(next.brief_md ?? next.orientation_md ?? '', /tier 2 for this session/);
+  const nextSession = await one(`SELECT effort, effort_evidence FROM sessions WHERE id = $1`, [j.session]);
+  assert.equal(nextSession.effort, 'medium'); assert.equal(nextSession.effort_evidence, null);
   await end(j.session);
 });
 
@@ -485,7 +487,8 @@ test('a script with a hard-coded home path or a progress line is never refused: 
   const up = await fetch(root + '/files', {method: 'POST', headers: H, body: JSON.stringify({name: `${tag}-compare.js`, content: script})});
   const u = await up.json(); assert.equal(up.status, 200, JSON.stringify(u).slice(0, 300));
   assert.equal(u.warnings.length, 2, JSON.stringify(u.warnings)); assert.match(u.warnings[0], /hard-coded home directory: \/Users\/nate\/twin-primes\/research\/ \(line 1\)/); assert.match(u.warnings[1], /progress or timing to stdout on line 2/);
-  const reg = await fetch(base + '/start?share=0', {headers: {...H}});
+  const source = await mkJob('source', 'Check uploaded script source', {});
+  const reg = await fetch(base + `/start?job=${source.id}&share=0`, {headers: {...H}});
   const j = await reg.json(); assert.equal(reg.status, 200, JSON.stringify(j).slice(0, 300));
   assert.match(j.brief_md, /stdout is the artifact and must reproduce byte for byte elsewhere/);
   const r = await fetch(base + '/result', {method: 'POST', headers: {...H, 'x-session': j.session}, body: JSON.stringify({job_id: j.job_id, report_md: 'Compared with the script at /Users/nate/twin-primes/compare.js.', transcript: 't', transcript_approved: true, author_rung: 'measured', files: [u.sha256]})});
@@ -592,7 +595,8 @@ test('legacy persona sessions correct only themselves, keep held work and limits
 });
 
 test('result and replacement uploads validate model metadata without erasing mistaken self-identification', async () => {
-  const reg = await (await get('?share=0', {model: 'deepseek-v4.1-flash'})).json();
+  const source = await mkJob('source', 'Check transcript model identity', {});
+  const reg = await (await get(`?job=${source.id}&share=0`, {model: 'deepseek-v4.1-flash'})).json();
   assert.ok(reg.session && reg.job_id, JSON.stringify(reg));
   const headers = {authorization: `Bearer ${token}`, accept: 'application/json', 'content-type': 'application/json', 'x-model': 'deepseek-v4.1-flash', 'x-session': reg.session};
   const log = (model) => [

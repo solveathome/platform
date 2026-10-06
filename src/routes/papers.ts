@@ -1,3 +1,4 @@
+import { paperLeanVerification } from '../lib/verification.js';
 import {documentRecords, documentDates, recordHtml} from "../lib/document-record.js";
 import { crediter } from "../lib/display-name.js";
 import {isoTime, timeHtml} from "../lib/timestamps.js";
@@ -25,7 +26,7 @@ import { shareMeta } from "../lib/share.js";
 import { jsonLd, breadcrumbs, plainDescription, demoteHeadings, notFoundPage, abs, ORGANIZATION } from "../lib/seo.js";
 import { questions } from "../lib/questions.js";
 import { page as sitePage } from "../lib/page.js";
-import { paperReview, coarseStatus, type PaperReview } from "../lib/paper-state.js";
+import { paperSource, paperReview, coarseStatus, type PaperReview } from "../lib/paper-state.js";
 import { openFindings } from "../lib/findings.js";
 import { posix } from "node:path";
 
@@ -141,16 +142,15 @@ papers.get("/papers/:paper", async (req: any, res) => {
   // Each report says which text it read: a report on another version is history, not a review of the served manuscript.
   const reports = (await q(`SELECT rv.id, rv.return_id, rv.verdict, rv.rung, rv.notes_md, rv.also_fix, rv.trusted, rv.needs_reassessment, rv.created_at, u.handle, rv.model, r.revision_sha FROM reviews rv JOIN returns r ON r.id = rv.return_id JOIN users u ON u.id = rv.user_id WHERE r.problem_id = $1 AND r.paper_slug = $2 ORDER BY rv.id DESC`, [p.id, paper.slug]))
     .map(({ revision_sha, ...r }: any) => ({ ...r, reviewed_sha: revision_sha, on_current_version: !!revision_sha && revision_sha === paper.review.current_sha }));
-  let source = paper.current_file_sha ? files.read(paper.current_file_sha) : null;
-  let from = paper.current_file_sha ? (paper.current_return_id ? `version from return #${paper.current_return_id}` : "version as cut from the research repository") : "";
+  let { source, from } = paperSource(paper,p.slug);
   // An unreviewed proposal is not rendered as the paper: the page links to the return under review instead.
   if (source === null && !paper.path) {
     const pending = await one<{ sha256: string; rid: number }>(`SELECT f.sha256, r.id AS rid FROM returns r JOIN file_refs x ON x.ref_type = 'return' AND x.ref_id = r.id JOIN files f ON f.sha256 = x.file_sha WHERE r.problem_id = $1 AND r.paper_slug = $2 AND f.ext = 'md' AND f.deleted_at IS NULL ORDER BY r.id DESC LIMIT 1`, [p.id, paper.slug]);
     if (pending) { from = `a submitted version is under review on return #${pending.rid}`; source = null; }
   }
   // The seed manuscript comes from the mirror only if it is a published document there (same gate as /docs).
-  if (source === null && paper.path) { const rel = safeRel(paper.path); const root = join(REPOS, p.slug); const abs = rel ? join(root, rel) : null; if (rel && abs && existsSync(abs) && publishedDocument(root, rel, readPublication(root))) { source = readFileSync(abs, "utf8"); from = `seed version from the research mirror (${paper.path})`; } }
-  if (!wantsHtml(req)) { res.json({ paper, versions, reports, source_from: from, manuscript_md: source }); return; }
+  const lean = await paperLeanVerification(Number(p.id), paper.slug, source === null ? null : sha256(source));
+  if (!wantsHtml(req)) { res.json({ paper, versions, reports, lean_verification: lean, source_from: from, manuscript_md: source }); return; }
   const baseDir = paper.path ? posix.dirname(paper.path) : "paper";
   const pages = await paperPages(p.slug);
   const docsBase = `/projects/${p.slug}/docs/`;
@@ -158,7 +158,7 @@ papers.get("/papers/:paper", async (req: any, res) => {
   const linkFn = renderer.link.bind(renderer);
   renderer.link = ({ href, title, tokens }: any) => { let h = String(href ?? ""); if (!/^(?:[a-z]+:|\/|#)/i.test(h)) { const rel = posix.normalize(posix.join(baseDir, h)).replace(/^\/+/, ""); h = pages.get(rel) ?? docsBase + rel; } return linkFn({ href: h, title, tokens } as any); };
   const md = (t: string) => { const m = protectMath(t.replace(/<!--[\s\S]*?-->/g, "")); return linkPaths(m.restore(marked.parse(escapeSource(m.text), { gfm: true, renderer }) as string), p.slug, baseDir, pages); };
-  const body = challengeBanner(await challengesFor(Number(p.id), "paper", paper.slug), `/projects/${p.slug}`) + reviewPanel(paper.review, p.slug) + (source ? demoteHeadings(await linkPeople(md(source))) : "<p class=\"muted\">No manuscript yet.</p>");
+  const body = challengeBanner(await challengesFor(Number(p.id), "paper", paper.slug), `/projects/${p.slug}`) + reviewPanel(paper.review, p.slug) + leanPanel(lean, p.slug) + (source ? demoteHeadings(await linkPeople(md(source))) : "<p class=\"muted\">No manuscript yet.</p>");
   const page = readFileSync(join(PUBLIC_DIR, "paper.html"), "utf8");
   const meta = recordHtml(paper.timestamps, paper.history_url) + `<p class="paper-meta"><span>Registered: ${timeHtml(paper.created_at)}</span><span>Registry updated: ${timeHtml(paper.updated_at)}</span><span class="paper-status ${esc(paper.status)}">${esc(paper.review.label)}</span>${paper.grade ? `<span title="The registry's own grade line, written by the manuscript's authors; not a review conclusion">registry grade: ${esc(paper.grade)}</span>` : ""}${paper.version_by ? `<span>current version by @${esc(paper.version_by)}, ${timeHtml(paper.version_at)}${paper.final_rung ? `, ${esc(paper.final_rung)}` : ""}</span>` : ""}<span>${esc(from)}</span></p>`;
   const tlist = track.slice().reverse().map((v: any) => `<li>Version ${v.version}: ${v.author ? `changed by ${credit(v.author)}${v.model ? ` (${esc(v.model)})` : ""}${(v.verified_by ?? []).length ? `, verified by ${v.verified_by.map((h: string) => { const vm = (v.verified_models ?? []).find((x: any) => x.handle === h); return `${credit(h)}${vm?.model ? ` (${esc(vm.model)}${vm.verification && vm.verification !== "read" ? `, ${esc(vm.verification)}` : ""})` : ""}`; }).join(", ")}` : ""}` : esc(v.summary)}, ${timeHtml(v.created_at)}${v.version > 1 ? ` · <a href="/projects/${esc(p.slug)}/history/${esc(docPath)}/${v.version}/diff">diff</a>` : ""}</li>`).join("");
@@ -187,4 +187,9 @@ function reviewPanel(r: PaperReview, slug: string): string {
   if (r.findings.length) lines.push(`Open corrections:<ul>${r.findings.map((f) => `<li>finding #${f.id}${f.scope === "before_circulation" ? " (before circulation)" : ""}${f.return_id ? `, from <a href="${P}/return/${f.return_id}">return #${f.return_id}</a>` : ""}: ${esc(f.note)}${f.job_id ? ` <span class="muted">(job #${f.job_id}, ${esc(f.job_status ?? "")})</span>` : ""}</li>`).join("")}</ul>`);
   if (r.awaiting_integration.length) lines.push(`Accepted but not applied: ${r.awaiting_integration.map((a) => `<a href="${P}/return/${a.return_id}">return #${a.return_id}</a> (${a.integration === "conflict" ? "made against an earlier text; a rebase job carries it forward" : "its file is missing"})`).join(", ")}.`);
   return lines.length ? `<div class="panel" style="margin:0 0 1.5rem;padding:.9rem 1.1rem;border-left:4px solid var(--line)"><p style="margin:0 0 .4rem"><b>${esc(r.label)}</b></p>${lines.map((l) => `<p style="margin:.25rem 0">${l}</p>`).join("")}</div>` : "";
+}
+
+function leanPanel(records: any[], slug: string): string {
+  if (!records.length) return '<p class="muted">No Lean proof evidence recorded for this paper.</p>';
+  return `<section class="panel"><h2>Lean evidence</h2><p>Worker-reported validation of mapped claims, assessed by trusted reviewers. Unmapped claims and the ordinary paper review grade remain separate.</p>${records.map(r => `<article><p><b>${esc(r.label)}</b> — <a href="/projects/${esc(slug)}/return/${r.return_id}">return #${r.return_id}</a></p><p>Manuscript SHA-256: <code>${esc(r.manuscript_sha256)}</code></p><ul>${r.claims.map((c: any) => `<li>${esc(c.id)} (${esc(c.locator)}): <code>${esc(c.declaration)}</code>; ${esc(c.coverage)} coverage; assumptions: ${esc(c.assumptions.join('; ') || 'none declared')}.</li>`).join('')}</ul>${r.issues.length ? `<ul>${r.issues.map((i: string) => `<li>${esc(i)}</li>`).join('')}</ul>` : ''}</article>`).join('')}</section>`;
 }

@@ -8,6 +8,22 @@
  */
 import { q, one } from "../db/index.js";
 import { openFindings, type Finding } from "./findings.js";
+import { existsSync, readFileSync } from 'node:fs';
+import { join } from 'node:path';
+import * as files from './files.js';
+import { REPOS, safeRel } from './revisions.js';
+import { publishedDocument, readPublication, sha256 } from './document-publication.js';
+
+/** The exact text rendered by the paper page, also used to assess bound proof evidence. */
+export function paperSource(paper: { path: string | null; current_file_sha: string | null; current_return_id?: number | null }, slug: string): { source: string | null; from: string; sha: string | null } {
+  let source = paper.current_file_sha ? files.read(paper.current_file_sha) : null;
+  let from = paper.current_file_sha ? (paper.current_return_id ? `version from return #${paper.current_return_id}` : 'version as cut from the research repository') : '';
+  if (source === null && paper.path) {
+    const rel = safeRel(paper.path), root = join(REPOS, slug), abs = rel ? join(root, rel) : null;
+    if (rel && abs && existsSync(abs) && publishedDocument(root, rel, readPublication(root))) { source = readFileSync(abs, 'utf8'); from = `seed version from the research mirror (${paper.path})`; }
+  }
+  return { source, from, sha: source === null ? null : sha256(source) };
+}
 
 export type ReviewState = "reviewed" | "corrections_required" | "corrections_recorded" | "under_reassessment" | "earlier_version_reviewed" | "unreviewed";
 export type PaperReview = {

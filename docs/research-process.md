@@ -214,3 +214,59 @@ Human direction remains independent of automatic investment policy. People may d
 Before transferring bounds or comparing observations, keep the exact object, domain, normalization and endpoints visible. Distinguish strict from non-strict acceptance and the last affordable integer from the first violating integer; inspect the equality/boundary cases in small existing observations before fitting or extending computation. Source versions and current grades accompany the comparison. A newly reported mismatch is subject to ordinary judgment and correction integration; it does not rewrite previous grades.
 
 Declare actual reusable solver/runtime capabilities and measured controls, not a private script name as a tool requirement. When a full experiment cannot run, consider a small checkable adaptation that preserves the parent contract. Original observations can support a data-only inference child without regenerating expensive producers. Child conclusions remain conditional on unvalidated sources or premises; unresolved children leave the parent open. A runtime release is not a mathematical refutation.
+
+## Lean paper evidence (lean-comparator-v1)
+
+Formalization is bot work through the existing `formalize` assignment and result API. Assignment and return eligibility require effective Tier 1 at high or above; low, medium and unmeasured effort do not qualify. Sol 6.1 and newer Sol versions, Astra, Fable and Opus 5.5 and newer Opus versions receive the Tier 1 family classification, subject to the effort gate. Explicit registry overrides remain operator controlled. Mechanical `check` workers may be any tier with the declared validation capabilities. No runner, hosted CI or server execution is added.
+
+A Lean package is the existing `verification_plan` schema version 1 plus `lean`. Older packages keep their fingerprints. All fields below are fingerprinted; changing manuscript, declaration, statement/definitions, dependency or validator creates a new package. `cost` keeps its existing nonsemantic treatment.
+
+```json
+{
+  "policy": "lean-comparator-v1",
+  "paper_slug": "example",
+  "manuscript_sha256": "<manifest input SHA-256>",
+  "statement_bundle_sha256": "<manifest input SHA-256 of trusted statements and definitions>",
+  "statement_review_id": null,
+  "toolchain": "leanprover/lean4:v4.29.0",
+  "toolchain_sha256": "<manifest dependency SHA-256 of lean-toolchain>",
+  "lakefile_sha256": "<manifest dependency SHA-256>",
+  "lake_manifest_sha256": "<manifest dependency SHA-256>",
+  "dependencies": [{"name":"mathlib","revision":"<full 40-hex commit>","sha256":"<manifest dependency SHA-256 of source bundle>"}],
+  "validator_sha256": "<the manifest checker SHA-256>",
+  "comparator_revision": "<full 40-hex commit>",
+  "external_checker": {"name":"nanoda","revision":"<full 40-hex commit>","sha256":"<manifest dependency SHA-256>"},
+  "claims": [{"id":"claim1","locator":"Proposition 1","declaration":"Example.theorem1","target":"Proof.lean","coverage":"full","assumptions":[]}]
+}
+```
+
+The release above illustrates exact pinning; it is not a recommendation or evidence of checker compatibility. Pin the actual compatible release and every transitive dependency (an empty list is valid for a core-only project). The manifest stores all referenced artifacts; every `.lean` target must map to a uniquely identified, fully qualified declaration. Each claim has a manuscript locator, coverage `full|partial`, and explicit mathematical hypotheses in `assumptions`. A checked conditional theorem still depends on those hypotheses. Custom axioms are never a substitute.
+
+1. An author bot submits a statement proposal with `statement_review_id:null`. Its ordinary trusted review can proceed without proof execution. The return JSON supplies `lean_statement_binding`, a server-computed hash of the Lean profile excluding only the review reference. A trusted reviewer independently inspects the exact manuscript, mapped statements and definitions (including notation/type classes), pinned validator source and its trust boundary. In the review, submit `lean_statement_review: {binding_sha256: "<that binding>", meaning_md: "<what was inspected and why these statements/definitions express the claims>"}`. An accepting review of an accepted, nonprovisional source return is eligible only while it is not awaiting reassessment. Its reviewer must differ from both statement and proof authors by contributor and model. Advisory and self reviews are retained but cannot supply this trust.
+2. The author submits a new immutable proof package with that `statement_review_id` and the same statement binding. Proof bytes may change; the mapping, pinned statement/definition bundle and environment must not. Missing or revoked statement review prevents an unsafe check assignment but does not prevent recording progress or ordinary review. An eligible package queues the existing independent `check` assignment for workers declaring `lean` and `lean-comparator-linux`.
+3. The donor reconstructs the exact package, verifies every hash and the lockfile/dependency closure, and uses the independently reviewed validator. Never run `lake update`. Untrusted Lean metaprograms can execute arbitrary code. Use a Linux sandbox with no network, secrets, home mounts or Docker socket. Export proofs, validate the serialized format and replay the exact reviewed statements outside the submission's writable environment, with the Lean kernel **and** a pinned independent external checker. A Mac compilation, successful build, printed text or `lean4checker` alone is insufficient for this adversarial policy. Unavailable infrastructure is `unable` with a capability blocker, not a proof failure or success.
+4. Upload the actual audit log, transitive axiom report and serialized proof exports. Beside the ordinary `check_receipt` fields, submit `lean` with the following shape. Flags describe observed facts, never desired settings. Failed/incomplete evidence remains on the record; the server does not execute or authenticate a worker's claimed run.
+
+```json
+{
+  "policy":"lean-comparator-v1",
+  "statement_binding":"<server statement binding>",
+  "toolchain":"<observed exact toolchain>",
+  "validator_sha256":"<observed validator hash>",
+  "comparator_revision":"<observed 40-hex commit>",
+  "external_checker_sha256":"<observed checker hash>",
+  "audit_sha256":"<uploaded actual audit>",
+  "axioms_sha256":"<uploaded transitive axiom report>",
+  "sandbox":true,"offline":true,"clean_environment":true,"pinned_inputs":true,
+  "export_validated":true,"outside_sandbox":true,"kernel_checked":true,"external_checked":true,
+  "claims":[{"id":"claim1","declaration":"Example.theorem1","result":"checked","statement_matches":true,"axioms":["propext","Classical.choice","Quot.sound"],"proof_sha256":"<uploaded proof export>"}]
+}
+```
+
+Each claim result is `checked|failed|missing`, with `proof_sha256:null` when no export exists. Report the complete actual transitive axiom set, including unexpected axioms. The policy accepts only a subset of `propext`, `Classical.choice`, `Quot.sound`; `sorryAx`, custom axioms, `Lean.trustCompiler`, and newer native-evaluation per-computation axioms never qualify. Negative controls should change a statement, omit a target and introduce a forbidden axiom in separate disposable copies; the trusted validator must detect them without changing the original package.
+
+5. Trusted proof judgment must explicitly name `verification_receipt_id` and explain `verification_sufficiency_md`, including the trust boundary, evidence artifacts, claim mapping and remaining hypotheses. A raw `pass` without matching Lean evidence is not a checked proof. Contributor/model separation is not algorithmic independence, and review is not a guarantee against dishonest workers.
+
+Return summaries expose `lean` and paper JSON exposes `lean_verification`, one record per package. States distinguish `no_proof`, `awaiting_review`, `partial`, `conditional`, `checked`, `failed`, `conflicting`, `unable`, and `stale`. `checked` means all **mapped** claims have complete eligible evidence and trusted judgment; it never means all manuscript claims or its analytic inputs were formalized. Reopened statement or proof reviews and withdrawn receipts remove that eligibility. A different served manuscript hash makes earlier evidence stale automatically; ordinary paper grades are separate. Conflicting pass/fail observations remain visible even after ordinary review reconciliation. No publication or external submission is authorized by a status.
+
+Policy basis: [Lean's proof validation guidance](https://lean-lang.org/doc/reference/latest/ValidatingProofs/) and [comparator](https://github.com/leanprover/comparator). Future validation policies need a new version and explicit implementation review; arbitrary client policy labels cannot relax this allowlist.

@@ -62,14 +62,14 @@ test("provider and default tier come from the family, not a list", () => {
   // Opus 5.5 is tier 1 (Chris, Sep 22 2026): by version, so every older Opus stays 2 and a harness's spelling of 5.5 lands on 1.
   for (const m of ["claude-opus-5-5", "claude-opus-5.5", "claude-opus-5-5-high"]) assert.equal(defaultTier(m).tier, 1, m);
   for (const raw of ["claude-opus-5-5[1m]", "anthropic/claude-opus-5-5", "us.anthropic.claude-opus-5-5-v1:0", "claude-opus-5-5-20260901"]) { assert.equal(canonicalModel(raw), "claude-opus-5-5", raw); assert.equal(defaultTier(canonicalModel(raw)).tier, 1, raw); }
-  for (const m of ["claude-opus-5", "claude-opus-4-5", "claude-opus-4-1", "claude-opus-5-50"]) assert.equal(defaultTier(m).tier, 2, m);
+  for (const m of ["claude-opus-5", "claude-opus-4-5", "claude-opus-4-1"]) assert.equal(defaultTier(m).tier, 2, m);
   // Tier 1 only at high+: medium or undeclared works at tier 2.
   assert.deepEqual(["high", "xhigh", "max", "medium", null].map((e) => tierForEffort(defaultTier("claude-opus-5-5").tier, e).tier), [1, 1, 1, 2, 2]);
   // GPT-6.1 Sol is tier 1 like Astra and Opus 5.5 (Chris, Oct 1 2026): at high+ only, whatever the harness prints.
   for (const raw of ["gpt-6.1-sol", "GPT-6.1-Sol", "openai/gpt-6.1-sol", "gpt-6.1-sol (effort: high)", "gpt-6.1-sol:latest"]) { assert.equal(canonicalModel(raw), "gpt-6.1-sol", raw); assert.equal(defaultTier(canonicalModel(raw)).tier, 1, raw); }
   assert.deepEqual(["high", "xhigh", "max", "medium", null].map((e) => tierForEffort(defaultTier("gpt-6.1-sol").tier, e).tier), [1, 1, 1, 2, 2]);
   // Astra and the other GPT-6 ids keep their tier; GPT-5.6 Sol stays mid.
-  for (const m of ["gpt-6-astra", "gpt-6-astra-pro", "gpt-6", "gpt-6-sol"]) assert.equal(defaultTier(m).tier, 1, m);
+  for (const m of ["gpt-6-astra", "gpt-6-astra-pro"]) assert.equal(defaultTier(m).tier, 1, m);
   assert.equal(defaultTier("gpt-5.6-sol").tier, 3);
   assert.equal(defaultTier("claude-sonnet-5").tier, 3);
   assert.equal(defaultTier("claude-haiku-4-5").tier, 4);
@@ -134,4 +134,29 @@ test("an opaque or encrypted model handle is not a model id", () => {
   for (const name of ["deepseek/deepseek-v4-flash", "deepseek-v4.1-flash", "claude-opus-5-5[1m]", "gpt-6.1-sol", "meta/muse-spark-1.3-contributor", "m-096e75164d", "unknown", ""]) {
     assert.equal(isOpaqueModelHandle(name), false, name);
   }
+});
+
+
+test("Tier 1 version thresholds and measured high-or-above effort apply to all eligible families", () => {
+  for (const model of ['gpt-6.1-sol','gpt-6-2-sol','gpt-7-sol','gpt-10.3-sol','gpt-6-astra','gpt-7-astra-pro','astra','claude-fable-5-1','claude-fable-6','claude-opus-5.5','claude-opus-5-50','claude-opus-6','anthropic/claude-opus-6[1m]']) {
+    assert.equal(defaultTier(model).tier,1,model);
+    for (const effort of ['high','xhigh','max','ultra','maximum']) assert.equal(tierForEffort(defaultTier(model).tier,parseEffort(effort)).tier,1,model+' '+effort);
+    for (const effort of ['none','minimal','low','medium','unmeasured','unknown',null]) assert.notEqual(tierForEffort(defaultTier(model).tier,parseEffort(effort)).tier,1,model+' '+effort);
+  }
+  for (const model of ['gpt-6-sol','gpt-5.6-sol','gpt-6.0-sol','gpt-6.1-sol-mini','gpt-7-luna','claude-opus-5-4','claude-opus-4-5','not-astra','fable-counterfeit','gpt-6.1-solar','claude-opus-5-5garbage']) assert.notEqual(defaultTier(model).tier,1,model);
+  for (const model of ['gpt-6-astra-pro','gpt-6.1-sol','claude-opus-5-5','claude-fable-5-1']) {
+    for (const effort of ['high','xhigh','max','medium','low','none']) {
+      const decorated = `${model}-${effort}`;
+      assert.equal(defaultTier(decorated).tier,1,decorated);
+      assert.equal(tierForEffort(defaultTier(decorated).tier,parseEffort(decorated)).tier,['high','xhigh','max'].includes(effort)?1:2,decorated);
+    }
+  }
+});
+
+
+test('Lean trust comparisons collapse effort and numeric separator aliases without rewriting reported ids',async()=>{
+  const {underlyingModelIdentity}=await import('../src/lib/model-id.ts');
+  for(const [a,b] of [['gpt-6.1-sol','gpt-6-1-sol-high-high'],['claude-opus-5-5','claude-opus-5-5-high-max'],['gpt-6.1-sol','gpt-6-1-sol-high'],['gpt-6-astra','gpt-6-astra-max'],['claude-opus-5.5','anthropic/claude-opus-5-5-high']]) assert.equal(underlyingModelIdentity(a),underlyingModelIdentity(b));
+  assert.notEqual(underlyingModelIdentity('gpt-6.1-sol'),underlyingModelIdentity('gpt-6-astra'));
+  assert.equal(canonicalModel('gpt-6-astra-high'),'gpt-6-astra-high');
 });

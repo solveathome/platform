@@ -73,18 +73,29 @@ const FAMILY_TIERS: Array<[RegExp, number, string]> = [
   // "flash" stopped meaning small (Chris, Sep 11 2026): DeepSeek V4.1 Flash is DeepSeek's flagship and Gemini 3.5+ Flash outscores Gemini Pro. Mid tier, like their siblings.
   [/^deepseek-v(4|[5-9])[^-]*-flash(-|$)|^gemini-(3[.-][5-9]|[4-9])[^-]*-flash(-|$)/, 3, "flagship flash family"],
   [/(^|-)flash(-|$)/, 4, "small family"],
-  [/fable|mythos/, 1, "frontier anthropic family"],
-  // GPT-6.1 Sol is tier 1 like Astra (Chris, Oct 1 2026); the gpt-6 rule below already gives it 1, this names it. tierForEffort keeps it at 2 below high.
-  [/^gpt-6[.-]1-sol(-|$)/, 1, "frontier openai model"],
-  [/^gpt-6|astra/, 1, "frontier openai family"],
-  // Opus 5.5 is tier 1 like Astra (Chris, Sep 22 2026, "as long as it runs in high+"; tierForEffort keeps it at 2 below high). The version, not the family: claude-opus-5 and 4.x stay 2.
-  [/^claude-opus-5[.-]5(-|$)/, 1, "frontier anthropic model"],
+  [/^(?:claude-)?(?:fable|mythos)(?:-\d+)*(?:-(?:high|xhigh|max))?$/, 1, "frontier anthropic family"],
+  [/^(?:gpt-\d+(?:[.-]\d+)?-)?astra(?:-(?:pro|high|xhigh|max))?$/, 1, "frontier openai family"],
   [/opus/, 2, "opus family"],
   [/^gpt-5|sonnet|^o\d|gemini.*(pro|ultra)|deepseek-r|grok/, 3, "mid family"],
 ];
 export function defaultTier(m: string): { tier: number; rule: string } {
+  // Effort decorates the family id; tierForEffort applies its separate high-or-above gate.
+  m = canonicalModel(m).replace(/(?:-(?:none|minimal|low|medium|high|xhigh|max|maximum|extended|extra-high|extrahigh|x_high|ultra|deep|off))+$/, '');
+  // Size variants never inherit a flagship's tier. Version comparisons handle future releases, not substrings.
+  if (/(^|-)(haiku|mini|nano|lite|small|tiny|flash)(-|$)/.test(m)) {
+    for (const [re, tier, rule] of FAMILY_TIERS.slice(0,3)) if (re.test(m)) return { tier, rule };
+  }
+  const sol = /^gpt-(\d+)(?:[.-](\d+))?-sol(?:-(?:high|xhigh|max))?$/.exec(m);
+  const opus = /^claude-opus-(\d+)(?:[.-](\d+))?(?:-(?:high|xhigh|max))?$/.exec(m);
+  if (sol && (Number(sol[1]) > 6 || Number(sol[1]) === 6 && Number(sol[2] ?? 0) >= 1)) return { tier: 1, rule: 'frontier Sol version (6.1+)' };
+  if (opus && (Number(opus[1]) > 5 || Number(opus[1]) === 5 && Number(opus[2] ?? 0) >= 5)) return { tier: 1, rule: 'frontier Opus version (5.5+)' };
   for (const [re, tier, rule] of FAMILY_TIERS) if (re.test(m)) return { tier, rule };
   return { tier: 3, rule: "unknown family" };
+}
+
+/** Compare underlying models at Lean trust boundaries without rewriting their historical reported IDs. */
+export function underlyingModelIdentity(raw: unknown): string {
+  return canonicalModel(raw).replace(/(?:-(?:none|minimal|low|medium|high|xhigh|max|maximum|extended|extra-high|extrahigh|x_high|ultra|deep|off))+$/, '').replace(/(\d)\.(?=\d)/g, '$1-');
 }
 
 /**

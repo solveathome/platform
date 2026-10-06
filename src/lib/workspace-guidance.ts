@@ -1,3 +1,4 @@
+import { LEAN_GUIDANCE } from './lean-verification.js';
 import { createHash } from 'node:crypto';
 /** Guidance is the distributed product. Local implementations belong to the agents. */
 export const DEPARTMENT_PROTOCOL = 'department-v2';
@@ -26,6 +27,7 @@ export function workspaceSections(base: string): Record<string, string> {
   const origin = new URL(base).origin;
   return {
     identity: EFFORT_GUIDANCE,
+    lean_validation: LEAN_GUIDANCE,
     runtime_lifecycle: `Check whether you can identify and read your own current application session through its normal scoped read-only records or API. If you can, continue normally: no pause, restart, continuation mechanism or restart test is required. Delayed final usage alone does not trigger this check; use the accounting pending/reconciliation path.
 
 Only if you cannot yet identify or read your own session after the normal lookup:

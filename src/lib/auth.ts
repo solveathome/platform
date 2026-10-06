@@ -178,9 +178,13 @@ export async function optionalAuth(req: Request, _res: Response, next: NextFunct
  * so the board shows it properly and one row in model_tiers overrides it. */
 export async function modelTier(model: string): Promise<number> {
   const m = canonicalModel(model); if (!m || m === "unknown") return 99;
-  const r = await one<{ tier: number }>(`SELECT tier FROM model_tiers WHERE model = $1`, [m]);
-  if (r) return Number(r.tier);
+  const r = await one<{ tier: number; note: string | null }>(`SELECT tier,note FROM model_tiers WHERE model = $1`, [m]);
   const d = defaultTier(m);
+  // Refresh automatic classifications while preserving explicit operator overrides.
+  if (r) {
+    if (r.note?.startsWith('auto:') && Number(r.tier) !== d.tier) { await q(`UPDATE model_tiers SET tier=$2,note=$3,updated_at=now() WHERE model=$1 AND note LIKE 'auto:%'`, [m,d.tier,`auto: ${d.rule}`]); return d.tier; }
+    return Number(r.tier);
+  }
   const ins = await one<{ tier: number }>(`INSERT INTO model_tiers (model, provider, tier, note) VALUES ($1,$2,$3,$4)
     ON CONFLICT (model) DO UPDATE SET model = EXCLUDED.model RETURNING tier`, [m, providerFromModel(m), d.tier, `auto: ${d.rule}, first seen ${new Date().toISOString().slice(0, 10)}`]);
   return Number(ins?.tier ?? d.tier);

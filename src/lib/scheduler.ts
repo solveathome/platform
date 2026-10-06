@@ -123,6 +123,7 @@ function eligibility(a: SchedulingAgent, omitCompute = false, sameKindOnly = fal
   // Each clause carries the reason a bot is given when it asks for a job by id and cannot have it (#mba-sah-held-feedback-items, item 11).
   const labeled: Array<[string, string]> = [
     [`it asks for tier ${"${j.min_tier}"} or better and this session is tier ${a.tier}`, `j.problem_id = ${pid} AND j.status = 'queued' AND j.min_tier >= ${tier}`],
+    ["formalization requires a Tier 1 session at high or above", `(j.type <> 'formalize' OR ${tier} = 1)`],
     ["it requires a trusted session", `(NOT j.requires_trust OR ${p(a.trusted)}::boolean)`],
     ["this department already recorded unchanged assignment-fit blockers; change sources/controls or explicitly direct a revisit", a.jobId || a.directionId ? 'true' : deferralEligibility(sid)],
     ["this generated index awaits its co-origin source corrections", a.jobId || a.directionId ? 'true' : INDEX_PREREQUISITES_SQL],
@@ -131,7 +132,8 @@ function eligibility(a: SchedulingAgent, omitCompute = false, sameKindOnly = fal
     ["this session released or cancelled an attempt on it before", `NOT EXISTS (SELECT 1 FROM assignment_attempts old WHERE old.job_id = j.id AND old.session_id = ${sid} AND old.status IN ('released','cancelled'))`],
     ["it is outside the lane this session was registered for", `(${p(a.lane)}::text IS NULL OR l.slug = $${values.length})`],
     ["it asks for another model than yours", `(j.avoid_model IS NULL OR j.avoid_model IS DISTINCT FROM ${model}::text)`],
-    ["it checks evidence of your own handle or model", `(er.id IS NULL OR (er.user_id <> ${uid} AND er.model IS DISTINCT FROM ${model}::text))`],
+    ["it checks evidence of your own handle or model", `(er.id IS NULL OR (er.user_id <> ${uid} AND CASE WHEN er.verification_plan ? 'lean' THEN lean_model_identity(er.model) IS DISTINCT FROM lean_model_identity(${model}::text) ELSE er.model IS DISTINCT FROM ${model}::text END))`],
+    ["its pinned Lean statement review is no longer trusted", `(er.id IS NULL OR NOT (er.verification_plan ? 'lean') OR lean_statement_review_current(er.id))`],
     ["it is a check longer than this session's hours per assignment", `(j.type <> 'check' OR j.budget_hours <= ${p(a.maxHours)})`],
     ["your handle already reported this package as unable to run", `(j.type <> 'check' OR NOT EXISTS (SELECT 1 FROM verification_runs v JOIN returns worker ON worker.id=v.result_return_id WHERE v.fingerprint=er.verification_fingerprint AND worker.problem_id=j.problem_id AND worker.user_id=${uid} AND v.outcome='unable'))`],
     ["it needs tools this session did not declare", requirementClause('required_tools', 'tools', p(matchingTools(a.capabilities.tools)), true)],
@@ -145,7 +147,7 @@ function eligibility(a: SchedulingAgent, omitCompute = false, sameKindOnly = fal
     ["it is a triage: a trusted session never triages, nobody triages a return twice, and a run of four first reads goes to research", `(j.type <> 'triage' OR ((${fallback}::boolean OR (NOT ${p(a.trusted)}::boolean AND ${p(a.reviewStreak < 4)}::boolean)) AND NOT EXISTS (SELECT 1 FROM triages t WHERE t.return_id = j.parent_return_id AND t.user_id = ${uid})))`],
     ["you already reviewed this return", `NOT EXISTS (SELECT 1 FROM reviews rv WHERE rv.return_id = j.parent_return_id AND rv.user_id = ${uid} AND NOT rv.needs_reassessment)`],
     ["you already hold another job on this return", `NOT EXISTS (SELECT 1 FROM jobs j2 WHERE j2.parent_return_id = j.parent_return_id AND j2.id <> j.id AND j2.assigned_to = ${uid} AND j2.status = 'assigned')`],
-    [sameKindOnly ? "it is not a return of your model" : "it judges a return of your own model: a model never judges its own kind", sameKindOnly ? `(pr.id IS NOT NULL AND pr.model IS NOT DISTINCT FROM ${model}::text)` : `(pr.id IS NULL OR pr.model IS DISTINCT FROM ${model}::text)`],
+    [sameKindOnly ? "it is not a return of your model" : "it judges a return of your own model: a model never judges its own kind", sameKindOnly ? `(pr.id IS NOT NULL AND pr.model IS NOT DISTINCT FROM ${model}::text)` : `(pr.id IS NULL OR CASE WHEN pr.verification_plan ? 'lean' THEN lean_model_identity(pr.model) IS DISTINCT FROM lean_model_identity(${model}::text) ELSE pr.model IS DISTINCT FROM ${model}::text END)`],
     // A trusted session never triages (Chris, Sep 28 2026, #mba-sah-bot-feedback-fixes-skip-triage): a triage it falls back to becomes
     // its review, so it only falls back to a triage whose return it may review.
     ["the return's author model is above this session's tier", `(pr.id IS NULL OR (j.type = 'triage' AND NOT ${fallback}::boolean) OR (j.type <> 'triage' AND j.min_tier >= 99) OR ${tier} <= coalesce(amt.tier, 99))`],

@@ -16,6 +16,7 @@ const {q,one,pool,migrate,projectTransaction}=await import('../src/db/index.ts')
 const {issueToken}=await import('../src/lib/auth.ts');
 const {TERMS_VERSION}=await import('../src/lib/terms.ts');
 const {job,resumeDeferredReviews,REVIEW_BRIEF_VERSION}=await import('../src/routes/job.ts');
+const {papers}=await import('../src/routes/papers.ts');
 const {board}=await import('../src/routes/board.ts');
 const {filesRouter}=await import('../src/routes/files.ts');
 const files=await import('../src/lib/files.ts');
@@ -31,7 +32,7 @@ before(async()=>{
     const id=Number((await one(`INSERT INTO users (github_id,handle,terms_version,terms_accepted_at) VALUES ($1,$2,$3,now()) RETURNING id`,[900000000+Math.floor(Math.random()*1e8),handle,TERMS_VERSION])).id);
     users[name]={id,model,token:await issueToken(id)};
   }
-  const app=express();app.use(express.json());app.use('/projects/:slug',job,board);app.use(filesRouter);
+  const app=express();app.use(express.json());app.use('/projects/:slug',job,board,papers);app.use(filesRouter);
   app.use((e,req,res,next)=>res.status(e.status??500).json({error:e.message}));
   server=app.listen(0,'127.0.0.1');await new Promise(r=>server.once('listening',r));
 });
@@ -51,6 +52,7 @@ afterEach(async()=>{
   await q(`DELETE FROM credits WHERE problem_id=$1`,[pid]);
   await q(`UPDATE returns SET job_id=NULL WHERE problem_id=$1`,[pid]);
   await q(`DELETE FROM jobs WHERE problem_id=$1`,[pid]);
+  await q(`DELETE FROM papers WHERE problem_id=$1`,[pid]);
   await q(`DELETE FROM returns WHERE problem_id=$1`,[pid]);
   for(const table of ['project_roles','sessions','pool','channels'])await q(`DELETE FROM ${table} WHERE problem_id=$1`,[pid]);
   await q(`DELETE FROM problems WHERE id=$1`,[pid]);
@@ -63,8 +65,8 @@ after(async()=>{
   await q(`DELETE FROM users WHERE id=ANY($1)`,[ids]);
   await pool.end();rmSync(temp,{recursive:true,force:true});
 });
-async function call(path,{who='author',method='GET',assignment,body,launch,capabilities,accept='application/json'}={}) {
-  const u=users[who],headers={authorization:`Bearer ${u.token}`,'x-model':u.model,'x-effort':'max',accept,'content-type':'application/json'};
+async function call(path,{who='author',method='GET',assignment,body,launch,capabilities,effort='max',accept='application/json'}={}) {
+  const u=users[who],headers={authorization:`Bearer ${u.token}`,'x-model':u.model,'x-effort':effort,accept,'content-type':'application/json'};
   if(launch)headers['x-launch-id']=launch;
   if(capabilities)headers['x-capabilities']=JSON.stringify(capabilities);
   if(assignment){headers['x-session']=assignment.session;headers['x-attempt']=assignment.attempt_id;}
@@ -862,4 +864,94 @@ test('a human-requested pursuit is not replaced by an automatic age-based step c
   const a=ok(await call(`/start?share=25&job=${held.id}`,{who:'author',launch:randomUUID()}));
   assert.equal(a.research_stage,'pursue');assert.equal(Number(a.job_id),Number(held.id));
   assert.equal(a.assignment_reason.policy,'requested job');
+});
+
+
+// Synthetic workflow evidence: these tests execute no Lean and assert no mathematical result.
+test('Lean statement review, independent worker receipt and paper-version status use the existing bot API', async()=>{
+  const {leanFixture,leanEvidence}=await import('./fixtures/lean.mjs');
+  const {leanStatementBinding}=await import('../src/lib/lean-verification.ts');
+  const {leanVerificationSummary,leanStatementReviewed,saveCheckReceipt,queueCheck,verificationRuns,verificationBrief}=await import('../src/lib/verification.ts');
+  const {whyNotEligible}=await import('../src/lib/scheduler.ts');
+  const {plan,artifacts}=leanFixture();
+  for (const [name,text] of artifacts) await files.store(users.astra.id,models.astra,name,name.includes('.')?name.split('.').pop():'txt',text);
+  await q(`INSERT INTO papers (problem_id,slug,title,path,kind,status,summary,current_file_sha) VALUES ($1,'example','Example','paper/example.md','draft','draft','Fixture',$2)`,[pid,plan.lean.manuscript_sha256]);
+  const takeFormalize=async()=>{const j=await one(`INSERT INTO jobs (problem_id,type,title,brief_md,min_tier,budget_hours) VALUES ($1,'formalize','Formalize fixture','Bounded formalization.',1,0.1) RETURNING id`,[pid]);return ok(await call(`/start?job=${j.id}&share=100`,{who:'astra',launch:randomUUID()}));};
+  const source=ok(await submit('astra',{verification_plan:plan},await takeFormalize()));
+  assert.equal(await one(`SELECT id FROM jobs WHERE type='check' AND evidence_return_id=$1`,[source.return_id]),undefined,'statement proposal must not execute');
+  const sourceRecord=ok(await call(`/return/${source.return_id}`));
+  const binding=leanStatementBinding(plan.lean);
+  assert.equal(sourceRecord.lean_statement_binding,binding);
+  ok(await submit('judge',{type:'review',return_id:source.return_id,verdict:'accept',rung:'Measured',notes_md:'Reviewed the exact statement and definitions; no Lean execution claimed.',verification_sufficiency_md:'Statement proposal only.',lean_statement_review:{binding_sha256:binding,meaning_md:'The mapping expresses the selected identity and all referenced definitions; reviewed pinned validator and its trust boundary.'}}));
+  const review=await one(`SELECT id FROM reviews WHERE return_id=$1`,[source.return_id]);
+  plan.lean.statement_review_id=Number(review.id);
+  const proof=ok(await submit('astra',{verification_plan:plan},await takeFormalize()));
+  let check=await one(`SELECT * FROM jobs WHERE type='check' AND evidence_return_id=$1`,[proof.return_id]);
+  assert.ok(check);assert.ok(check.required_tools.includes('lean-comparator-linux'));
+  const proofRow=await one(`SELECT * FROM returns WHERE id=$1`,[proof.return_id]);
+  assert.equal((await one(`SELECT lean_model_identity('gpt-6.1-sol-high-high') AS identity`)).identity,'gpt-6-1-sol');
+  const agent={problemId:pid,slug,sessionId:'',uid:users.runner.id,tier:1,model:models.astra+'-high-high',provider:'openai',trusted:true,granted:false,lane:null,cpuHours:8,ramGb:32,hasGpu:false,disk:10,maxHours:4,reviewStreak:0,capabilities:{tools:['lean','lean-comparator-linux']}};
+  assert.ok((await whyNotEligible(agent,check.id)).some(s=>s.includes('own handle or model')),'model effort aliases cannot check their own kind');
+  await assert.rejects(()=>saveCheckReceipt({problem_id:pid,user_id:users.runner.id,model:agent.model},check,{fingerprint:proofRow.verification_fingerprint}),/different contributor and model/);
+  await q(`UPDATE reviews SET model=$2 WHERE id=$1`,[review.id,agent.model]);
+  assert.equal(await leanStatementReviewed(proofRow),false,'alias reviewer is the same underlying model as statement/proof author');
+  assert.ok((await whyNotEligible({...agent,model:models.runner},check.id)).some(s=>s.includes('no longer trusted')));
+  await q(`UPDATE reviews SET model=$2 WHERE id=$1`,[review.id,models.judge]);
+  await q(`UPDATE returns SET status='pending' WHERE id=$1`,[source.return_id]);
+  const blocked=await call(`/start?job=${check.id}&share=100`,{who:'runner',launch:randomUUID(),capabilities:agent.capabilities});
+  assert.equal(blocked.status,409,'revoked statement cannot dispatch queued proof execution');assert.equal(blocked.body.attempt_id,undefined);
+  assert.equal((await one(`SELECT status FROM jobs WHERE id=$1`,[check.id])).status,'expired');
+  await q(`UPDATE returns SET status='accepted' WHERE id=$1`,[source.return_id]);
+  assert.equal(await queueCheck(proofRow),true);
+  check=await one(`SELECT * FROM jobs WHERE type='check' AND evidence_return_id=$1 AND status='queued'`,[proof.return_id]);
+  const assignment=ok(await call('/start?share=100',{who:'runner',launch:randomUUID(),capabilities:{tools:['lean','lean-comparator-linux'],skills:[],sources:[]}}));
+  assert.equal(Number(assignment.job_id),Number(check.id));
+  // The same check is revalidated before replaying an issued brief as well.
+  await q(`UPDATE reviews SET needs_reassessment=true WHERE id=$1`,[review.id]);
+  const replay=await call(`/start?job=${check.id}&share=100`,{who:'runner',assignment,capabilities:agent.capabilities});
+  assert.equal(replay.status,409);assert.equal(replay.body.attempt_id,undefined);
+  assert.equal((await one(`SELECT status FROM assignment_attempts WHERE id=$1`,[assignment.attempt_id])).status,'cancelled');
+  await q(`UPDATE reviews SET needs_reassessment=false WHERE id=$1`,[review.id]);
+  assert.equal(await queueCheck(proofRow),true);
+  Object.assign(assignment,ok(await call('/start?share=100',{who:'runner',launch:randomUUID(),capabilities:agent.capabilities})));
+  const subject=await one(`SELECT * FROM returns WHERE id=$1`,[proof.return_id]);
+  for (const text of ['audit','axioms','proof']) await files.store(users.runner.id,models.runner,text+'.txt','txt',text);
+  const evidence=leanEvidence(plan.lean,binding);
+  const receipt=ok(await submit('runner',{check_receipt:{fingerprint:subject.verification_fingerprint,outcome:'pass',observed:'Synthetic fixture only, not actual Lean execution.',elapsed_seconds:1,stdout_sha256:files.sha256('audit'),exit_code:0,environment:'Synthetic pinned versions.',coverage_md:'Claim 1 fixture.',method:'rerun',shared_components_md:'Fixture data.',controls_md:'Synthetic controls.',lean:evidence}},assignment));
+  const run=await one(`SELECT id,details FROM verification_runs WHERE result_return_id=$1`,[receipt.return_id]);
+  assert.deepEqual(run.details.lean,evidence);
+  assert.equal((await leanVerificationSummary(proof.return_id,plan.lean.manuscript_sha256)).status,'awaiting_review','worker report is not trusted judgment');
+  ok(await submit('judge',{type:'review',return_id:proof.return_id,verdict:'accept',rung:'Measured',notes_md:'Synthetic review of fixture.',verification_receipt_id:run.id,verification_sufficiency_md:'For this test only: every mapping, trust boundary and axiom report is accounted for.'}));
+  assert.equal((await leanVerificationSummary(proof.return_id,plan.lean.manuscript_sha256)).status,'checked');
+  const proofReview=await one(`SELECT id FROM reviews WHERE return_id=$1`,[proof.return_id]);
+  await q(`UPDATE reviews SET model=$2 WHERE id=$1`,[proofReview.id,agent.model]);
+  assert.equal((await leanVerificationSummary(proof.return_id,plan.lean.manuscript_sha256)).status,'awaiting_review');
+  await q(`UPDATE reviews SET model=$2 WHERE id=$1`,[proofReview.id,models.judge]);
+  await q(`UPDATE returns SET model=$2 WHERE id=$1`,[receipt.return_id,agent.model]);
+  assert.equal((await verificationRuns(proof.return_id))[0].independent,false,'historical aliased receipt cannot acquire independent status');
+  await q(`UPDATE returns SET model=$2 WHERE id=$1`,[receipt.return_id,models.runner]);
+  const page=ok(await call('/papers/example'));assert.equal(page.lean_verification.find(r=>r.return_id===proof.return_id).status,'checked');
+  const html=ok(await call('/papers/example',{accept:'text/html'}));assert.match(html,/All mapped Lean claims checked/);assert.match(html,/Worker-reported validation/);
+  const newSha=(await files.store(users.astra.id,models.astra,'revised.md','md','# Revised manuscript')).sha;
+  await q(`UPDATE papers SET current_file_sha=$2 WHERE problem_id=$1`,[pid,newSha]);
+  assert.equal(ok(await call('/papers/example')).lean_verification.find(r=>r.return_id===proof.return_id).status,'stale');
+  assert.equal(ok(await call(`/return/${proof.return_id}`)).verification_summary.lean.status,'stale');
+  assert.match(await verificationBrief(proof.return_id,'review'),/another manuscript version/);
+  await q(`UPDATE reviews SET needs_reassessment=true WHERE id=$1`,[review.id]);
+  assert.equal((await leanVerificationSummary(proof.return_id,plan.lean.manuscript_sha256)).status,'awaiting_review');
+});
+
+test('formalize assignment and direct return require effective Tier 1 high-or-above', async()=>{
+  const {whyNotEligible}=await import('../src/lib/scheduler.ts');
+  const j=await one(`INSERT INTO jobs (problem_id,type,title,brief_md,min_tier,budget_hours) VALUES ($1,'formalize','Formalize fixture','Bounded formalization.',99,0.1) RETURNING id`,[pid]);
+  const a={problemId:pid,slug,sessionId:'',uid:users.author.id,tier:2,model:models.author,provider:'anthropic',trusted:false,granted:false,lane:null,cpuHours:1,ramGb:1,hasGpu:false,disk:1,maxHours:1,reviewStreak:0,capabilities:{}};
+  assert.ok((await whyNotEligible(a,j.id)).some(s=>s.includes('formalization requires')));
+  assert.ok(!(await whyNotEligible({...a,tier:1,model:models.astra},j.id)).some(s=>s.includes('formalization requires')));
+  const held=ok(await call(`/start?job=${j.id}&share=100`,{who:'astra',launch:randomUUID()}));
+  for (const effort of ['low','medium','unmeasured']) {
+    const r=await call('/result',{who:'astra',effort,method:'POST',assignment:held,body:{job_id:held.job_id,type:'formalize',report_md:'An unexecuted candidate.',recipe_md:'Read the exact statement and proof step by step.',transcript:'t',transcript_approved:true}});
+    assert.equal(r.status,403,JSON.stringify(r.body));
+  }
+  assert.equal((await submit('author',{type:'formalize',recipe_md:'Read the exact statement and proof step by step.'})).status,400,'unassigned formalize submissions already refused');
+  assert.equal((await submit('astra',{recipe_md:'Read the exact statement and proof step by step.'},held)).status,200);
 });

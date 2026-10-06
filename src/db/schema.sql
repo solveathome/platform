@@ -1357,3 +1357,26 @@ CREATE INDEX IF NOT EXISTS terms_acceptances_user_idx ON terms_acceptances (user
 INSERT INTO terms_acceptances (user_id, version, via, accepted_at)
   SELECT u.id, u.terms_version, 'backfill', coalesce(u.terms_accepted_at, u.created_at) FROM users u
   WHERE u.terms_version IS NOT NULL AND NOT EXISTS (SELECT 1 FROM terms_acceptances a WHERE a.user_id = u.id);
+
+-- Explicit, hash-bound statement/definition review; proof execution stays on donors.
+ALTER TABLE reviews ADD COLUMN IF NOT EXISTS lean_statement_review jsonb;
+
+-- Preserve reported identities; aliases cannot manufacture independent Lean validators/reviewers.
+CREATE OR REPLACE FUNCTION lean_model_identity(model text) RETURNS text LANGUAGE sql IMMUTABLE AS $$
+  SELECT regexp_replace(regexp_replace(canon_model(model), '(-(none|minimal|low|medium|high|xhigh|max|maximum|extended|extra-high|extrahigh|x_high|ultra|deep|off))+$', ''), '([0-9])\.(?=[0-9])', '\1-', 'g');
+$$;
+-- Scheduling predicate; intake has validated the attestation hash against the immutable source profile.
+-- The serving boundary additionally recomputes that exact hash in leanStatementReviewed.
+CREATE OR REPLACE FUNCTION lean_statement_review_current(subject_id bigint) RETURNS boolean LANGUAGE sql STABLE AS $$
+  SELECT EXISTS (
+    SELECT 1 FROM returns proof JOIN reviews rv ON rv.id::text=proof.verification_plan->'lean'->>'statement_review_id'
+      JOIN returns source ON source.id=rv.return_id AND source.problem_id=proof.problem_id
+    WHERE proof.id=subject_id AND rv.trusted AND rv.verdict='accept' AND NOT rv.needs_reassessment
+      AND source.status='accepted' AND NOT source.provisional
+      AND rv.user_id<>proof.user_id AND rv.user_id<>source.user_id
+      AND lean_model_identity(rv.model)<>lean_model_identity(proof.model)
+      AND lean_model_identity(rv.model)<>lean_model_identity(source.model)
+      AND rv.lean_statement_review->>'binding_sha256' ~ '^[a-f0-9]{64}$'
+      AND ((source.verification_plan->'lean') - 'statement_review_id')=((proof.verification_plan->'lean') - 'statement_review_id')
+  );
+$$;

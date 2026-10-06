@@ -66,7 +66,15 @@ export function assignmentMutation(handler: (req: any, res: any) => Promise<void
             const ending = options.completion === "release" || (req.method === "POST" && /\/sessions\/[^/]+\/end$/.test(req.path));
             if (identityError && !ending) { res.status(400).json({ error: identityError, code: "model_identity_required" }); throw new Refused(); }
             req.provider = req.model ? (await one(`SELECT provider FROM model_tiers WHERE model = $1`, [req.model]))?.provider ?? providerFromModel(req.model) : undefined;
-            req.effort = parseEffort(s.effort_evidence) ?? req.effort ?? parseEffort(s.effort);
+            // A current explicit low/unknown declaration cannot inherit yesterday's high effort.
+            // The submitted turn's transcript still takes precedence in /result.
+            if (req.header('x-effort') !== undefined) {
+              req.effort = parseEffort(req.header('x-effort'));
+              if (req.effort !== parseEffort(s.effort)) {
+                await q(`UPDATE sessions SET effort=$2,effort_evidence=NULL WHERE id=$1`, [s.id,req.effort]);
+                s.effort=req.effort; s.effort_evidence=null;
+              }
+            } else req.effort = parseEffort(s.effort_evidence) ?? req.effort ?? parseEffort(s.effort);
             req.agentSession = s;
             await q(`SELECT set_config('solveathome.session',$1,true)`,[s.id]);
           }

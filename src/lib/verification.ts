@@ -1,9 +1,13 @@
 /** Immutable check packages and independent execution receipts. No submitted code runs here. */
+import { parseLeanProfile, parseLeanEvidence, leanEvidenceFiles, leanStatementBinding, summarizeLean, LEAN_GUIDANCE, type LeanProfile, type LeanSummary } from './lean-verification.js';
 import { createHash } from 'node:crypto';
 import { one, q } from '../db/index.js';
 import { amount, bad, object, prose, tags } from './research-format.js';
+import { underlyingModelIdentity } from './model-id.js';
+import { paperSource } from './paper-state.js';
 
 export type VerificationPlan = {
+  lean?: LeanProfile;
   schema_version: 1; manifest: { path: string; sha256: string; role: string }[]; targets: string[];
   claim: string; scope: string; assumptions: string; checker: string; inputs: string[];
   environment: string; command: string; expected: string; supports: string; coverage: 'decisive' | 'sample';
@@ -40,6 +44,7 @@ export function parseVerificationPlan(raw: unknown): VerificationPlan | null {
   const tools = p.tools === undefined ? [] : tags(p.tools, 'verification_plan.tools');
   return { schema_version: 1, manifest, targets: [...new Set(p.targets)] as string[], coverage_md: prose(p.coverage_md, 'verification_plan.coverage_md'), comparison: prose(p.comparison, 'verification_plan.comparison'),
     ...(tools.length ? { tools } : {}),
+    ...(p.lean !== undefined ? { lean: parseLeanProfile(p.lean, manifest, p.targets, p.checker) } : {}),
     availability: { status: availability.status, details: prose(availability.details, 'availability.details'), required_sources: availability.required_sources, network: availability.network },
     claim: prose(p.claim, 'verification_plan.claim'), scope: prose(p.scope, 'verification_plan.scope'), assumptions: prose(p.assumptions, 'verification_plan.assumptions'),
     checker: p.checker, inputs: [...new Set(p.inputs)] as string[], environment: prose(p.environment, 'verification_plan.environment'), command: prose(p.command, 'verification_plan.command'),
@@ -77,6 +82,11 @@ export function fingerprint(plan: VerificationPlan): string {
   return createHash('sha256').update('solveathome-verification-v1\n').update(JSON.stringify(canonical(check))).digest('hex');
 }
 export async function saveVerificationPlan(returnId: number, plan: VerificationPlan): Promise<void> {
+  if (plan.lean) {
+    const ret = await one(`SELECT problem_id,paper_slug,revision_sha FROM returns WHERE id=$1`, [returnId]);
+    if (!(await one(`SELECT 1 FROM papers WHERE problem_id=$1 AND slug=$2`, [ret.problem_id,plan.lean.paper_slug]))) bad('Lean binding must name a registered paper in this project');
+    if (ret.paper_slug && ret.paper_slug !== plan.lean.paper_slug || ret.revision_sha && ret.revision_sha !== plan.lean.manuscript_sha256) bad('Lean manuscript binding must match the submitted paper revision');
+  }
   for (const file of new Set(plan.manifest.map(f => f.sha256))) {
     if (!(await one(`SELECT 1 FROM files WHERE sha256=$1 AND deleted_at IS NULL`, [file]))) bad(`verification artifact ${file} is not available; upload it first`);
     await q(`INSERT INTO file_refs (file_sha,ref_type,ref_id) VALUES ($1,'return',$2) ON CONFLICT DO NOTHING`, [file, returnId]);
@@ -85,7 +95,7 @@ export async function saveVerificationPlan(returnId: number, plan: VerificationP
 }
 export async function verificationRuns(returnId: number): Promise<any[]> {
   return q(`SELECT v.id,v.subject_return_id,v.result_return_id,v.fingerprint,v.outcome,v.observed,v.elapsed_seconds,v.details,v.created_at,
-    u.handle,r.model,r.status AS receipt_status, (r.user_id<>subject.user_id AND r.model<>subject.model) AS independent,
+    u.handle,r.model,r.status AS receipt_status, (r.user_id<>subject.user_id AND CASE WHEN subject.verification_plan ? 'lean' THEN lean_model_identity(r.model)<>lean_model_identity(subject.model) ELSE r.model<>subject.model END) AS independent,
     (v.subject_return_id<>subject.id) AS reused
     FROM returns subject JOIN verification_runs v ON v.fingerprint=subject.verification_fingerprint
     JOIN returns r ON r.id=v.result_return_id AND r.problem_id=subject.problem_id JOIN users u ON u.id=r.user_id
@@ -102,6 +112,8 @@ export async function verificationState(returnId: number): Promise<any> {
 export async function queueCheck(ret: any): Promise<boolean> {
   if (!ret.verification_plan) return false;
   const runs = (await verificationRuns(Number(ret.id))).filter(r => ['recorded', 'accepted'].includes(r.receipt_status));
+  // Statement proposals are reviewed before untrusted proof execution. Missing trust is visible, not a reason to run unsafe code.
+  if (ret.verification_plan.lean && !(await leanStatementReviewed(ret))) return false;
   // Failure/conflict also goes to judgment; do not quietly rerun until a pass appears.
   if (runs.some(isCompletedCheck)) return false;
   if (await checkWaitExpired(Number(ret.id))) return false;
@@ -115,12 +127,12 @@ export async function queueCheck(ret: any): Promise<boolean> {
   if (unable.length && (unable.length >= 2 || unable.some(r => r.details?.blocker?.kind !== 'capability'))) return false;
   const plan: VerificationPlan = ret.verification_plan;
   // The package's declared runtimes route the first attempt; an unable worker's named gap narrows the retry.
-  const requiredTools = [...new Set([...(plan.tools ?? []), ...unable.flatMap(r => r.details.blocker.required_tools)])];
+  const requiredTools = [...new Set([...(plan.tools ?? []), ...(plan.lean ? ['lean','lean-comparator-linux'] : []), ...unable.flatMap(r => r.details.blocker.required_tools)])];
   const requiredSources = [...new Set([...plan.availability.required_sources, ...unable.flatMap(r => r.details.blocker.required_sources)])];
   await q(`INSERT INTO jobs (problem_id,lane_id,type,title,brief_md,budget_hours,min_tier,compute_hint,evidence_return_id,research_stage,origin_key)
     VALUES ($1,$2,'check',$3,$4,$5,99,$6,$7,'consolidate',$8)`,
     [ret.problem_id, ret.lane_id, `Check evidence for return #${ret.id}`,
-      `Reconstruct the immutable package from GET <project base>/return/${ret.id} in a clean directory using ONLY its manifest and declared runtime/source requirements. Fetch each file by SHA from /files/<sha> to its relative manifest path. Inspect the checker before executing it within your person's limits. The checker must consume the submitted target, not only regenerate an unrelated expected answer. Check actual coverage and the comparison rule. Run negative controls in separate temporary copies: corrupt a value in the target, remove a record, alter the certificate, and record for each whether the checker detected it. A control the checker misses is a finding, not a failure of yours. Preserve the original files and results. Do not redo discovery. Return report_md, transcript, and check_receipt: {fingerprint: "${ret.verification_fingerprint}", outcome: "pass|fail|unable", observed: "actual output and differences", elapsed_seconds: <actual time>, stdout_sha256: "<uploaded actual output>", exit_code: <integer or null if unable>, environment: "observed versions", coverage_md: "exactly what ran, exclusions and seeds", method: "rerun|independent_implementation", shared_components_md: "shared algorithm, code, parser or library", controls_md: "negative controls and their observed outcomes", controls: [{name: "what you corrupted", detected: true|false, note: "exit code and message"}], limits_md: "what this execution does not establish (an unpinned producer, an unread input, a scope the checker skips)"}. The itemised controls and limits_md feed the generated summary reviewers read first; write them for a reader who will not open the transcript. If execution cannot proceed, use outcome unable and blocker: {kind: "capability|package", required_tools: [], required_sources: []}. Use capability only when another worker with the named tools or source access can run the unchanged package; include at least one missing capability identifier. Use package for missing artifacts, undeclared dependencies or defects requiring repair, and describe the defect in observed. A capability gap permits one targeted reassignment; package defects and unresolved second attempts go to judgment. A repair requires a new package. Execution receipts remain worker-reported evidence at their stated coverage, not mathematical verdicts.`,
+      `${plan.lean ? LEAN_GUIDANCE + "\n\n" : ""}Reconstruct the immutable package from GET <project base>/return/${ret.id} in a clean directory using ONLY its manifest and declared runtime/source requirements. Fetch each file by SHA from /files/<sha> to its relative manifest path. Inspect the checker before executing it within your person's limits. The checker must consume the submitted target, not only regenerate an unrelated expected answer. Check actual coverage and the comparison rule. Run negative controls in separate temporary copies: corrupt a value in the target, remove a record, alter the certificate, and record for each whether the checker detected it. A control the checker misses is a finding, not a failure of yours. Preserve the original files and results. Do not redo discovery. Return report_md, transcript, and check_receipt: {fingerprint: "${ret.verification_fingerprint}", outcome: "pass|fail|unable", observed: "actual output and differences", elapsed_seconds: <actual time>, stdout_sha256: "<uploaded actual output>", exit_code: <integer or null if unable>, environment: "observed versions", coverage_md: "exactly what ran, exclusions and seeds", method: "rerun|independent_implementation", shared_components_md: "shared algorithm, code, parser or library", controls_md: "negative controls and their observed outcomes", controls: [{name: "what you corrupted", detected: true|false, note: "exit code and message"}], limits_md: "what this execution does not establish (an unpinned producer, an unread input, a scope the checker skips)"}. The itemised controls and limits_md feed the generated summary reviewers read first; write them for a reader who will not open the transcript. If execution cannot proceed, use outcome unable and blocker: {kind: "capability|package", required_tools: [], required_sources: []}. Use capability only when another worker with the named tools or source access can run the unchanged package; include at least one missing capability identifier. Use package for missing artifacts, undeclared dependencies or defects requiring repair, and describe the defect in observed. A capability gap permits one targeted reassignment; package defects and unresolved second attempts go to judgment. A repair requires a new package. Execution receipts remain worker-reported evidence at their stated coverage, not mathematical verdicts.`,
       Math.min(4, Math.max(0.1, plan.cost.minutes / 60 + 0.1)), JSON.stringify(plan.cost), ret.id, `check:${ret.id}:${ret.verification_fingerprint}:${unable.length + 1}`]);
   await q(`UPDATE jobs SET required_tools=$2,required_sources=$3 WHERE evidence_return_id=$1 AND type='check' AND status='queued'`, [ret.id, requiredTools, requiredSources]);
   await q(`UPDATE returns SET review_admitted_at=coalesce(review_admitted_at,now()) WHERE id=$1`, [ret.id]);
@@ -165,7 +177,8 @@ export async function saveCheckReceipt(ret: any, job: any, raw: any): Promise<nu
   const x = object(raw, 'check_receipt');
   const subject = await one(`SELECT * FROM returns WHERE id=$1 AND problem_id=$2`, [job.evidence_return_id, ret.problem_id]);
   if (!subject || !subject.verification_fingerprint || x.fingerprint !== subject.verification_fingerprint) bad('check_receipt fingerprint does not match the assigned immutable package');
-  if (String(subject.user_id) === String(ret.user_id) || subject.model === ret.model) bad('a check requires a different contributor and model from the author');
+  if (String(subject.user_id) === String(ret.user_id) || (subject.verification_plan?.lean ? underlyingModelIdentity(subject.model) === underlyingModelIdentity(ret.model) : subject.model === ret.model)) bad('a check requires a different contributor and model from the author');
+  if (subject.verification_plan?.lean && !(await leanStatementReviewed(subject))) bad('Lean statement trust is no longer current; do not execute this package');
   if (!['pass', 'fail', 'unable'].includes(x.outcome)) bad('check_receipt.outcome must be pass|fail|unable');
   if (x.blocker !== undefined && x.outcome !== 'unable') bad('check_receipt.blocker belongs only on an unable receipt');
   const blocker = parseCheckBlocker(x.blocker);
@@ -176,12 +189,18 @@ export async function saveCheckReceipt(ret: any, job: any, raw: any): Promise<nu
     if (!sha(x.stdout_sha256) || !(await one(`SELECT 1 FROM files WHERE sha256=$1 AND deleted_at IS NULL`, [x.stdout_sha256]))) bad('upload actual stdout before submitting the receipt');
     await q(`INSERT INTO file_refs (file_sha,ref_type,ref_id) VALUES ($1,'return',$2) ON CONFLICT DO NOTHING`, [x.stdout_sha256, ret.id]);
   }
+  const lean = parseLeanEvidence(x.lean);
+  if (lean && !subject.verification_plan?.lean) bad('Lean evidence requires an assigned Lean profile');
+  if (lean) for (const file of leanEvidenceFiles(lean)) {
+    if (!(await one(`SELECT 1 FROM files WHERE sha256=$1 AND deleted_at IS NULL`, [file]))) bad('upload actual Lean audit, axiom and proof exports before recording evidence');
+    await q(`INSERT INTO file_refs (file_sha,ref_type,ref_id) VALUES ($1,'return',$2) ON CONFLICT DO NOTHING`, [file, ret.id]);
+  }
   const controls = parseCheckControls(x.controls);
   if (controls && x.outcome === 'unable') bad('itemised controls belong on a completed check; an unable receipt describes what could not run in controls_md');
   if (x.expected_visible !== undefined && typeof x.expected_visible !== 'boolean') bad('check_receipt.expected_visible must be true|false');
   // A rerun of the author's checker always has the expected answer in hand; only a separate implementation can claim otherwise.
   const expectedVisible = x.method === 'independent_implementation' && x.expected_visible === false ? false : true;
-  const details = { stdout_sha256: x.stdout_sha256 ?? null, exit_code: x.exit_code, environment: prose(x.environment, 'check_receipt.environment'), coverage_md: prose(x.coverage_md, 'check_receipt.coverage_md'), method: x.method, shared_components_md: prose(x.shared_components_md, 'check_receipt.shared_components_md'), controls_md: prose(x.controls_md, 'check_receipt.controls_md'), expected_visible: expectedVisible, blocker,
+  const details = { ...(lean ? { lean } : {}), stdout_sha256: x.stdout_sha256 ?? null, exit_code: x.exit_code, environment: prose(x.environment, 'check_receipt.environment'), coverage_md: prose(x.coverage_md, 'check_receipt.coverage_md'), method: x.method, shared_components_md: prose(x.shared_components_md, 'check_receipt.shared_components_md'), controls_md: prose(x.controls_md, 'check_receipt.controls_md'), expected_visible: expectedVisible, blocker,
     ...(controls ? { controls } : {}), ...(x.limits_md !== undefined ? { limits_md: prose(x.limits_md, 'check_receipt.limits_md') } : {}) };
   await q(`INSERT INTO verification_runs (subject_return_id,result_return_id,fingerprint,outcome,observed,elapsed_seconds,details) VALUES ($1,$2,$3,$4,$5,$6,$7)`,
     [subject.id, ret.id, x.fingerprint, x.outcome, prose(x.observed, 'check_receipt.observed', 12000), amount(x.elapsed_seconds, 'check_receipt.elapsed_seconds', 0, 86400), JSON.stringify(details)]);
@@ -211,6 +230,7 @@ export async function validateReceiptUse(returnId: number, raw: unknown): Promis
   if (!receipt || !receipt.independent || !['recorded', 'accepted'].includes(receipt.receipt_status)) bad('verification_receipt_id must reference independent execution of this exact package in this project, with a valid receipt');
 }
 export type VerificationSummary = {
+  lean?: LeanSummary;
   execution: 'not_attempted' | 'pass' | 'fail' | 'unable' | 'conflicting';
   headline: string;
   lines: string[];
@@ -324,8 +344,11 @@ export async function verificationSummary(returnId: number): Promise<Verificatio
   else if (ret.status === 'pending') lines.push(`Awaiting trusted judgment${advisory.length ? ` (${advisory.length} advisory review${advisory.length === 1 ? '' : 's'} so far)` : ''}.`);
   else if (ret.status === 'recorded') lines.push('Recorded without a review request; elevate it to put it before reviewers.');
   else lines.push(`Status: ${ret.status}.`);
+  const paper = plan.lean ? await one(`SELECT p.*, project.slug AS project_slug FROM papers p JOIN problems project ON project.id=p.problem_id WHERE p.problem_id=$1 AND p.slug=$2`, [ret.problem_id,plan.lean.paper_slug]) : null;
+  const lean = plan.lean ? await leanVerificationSummary(returnId, paper ? paperSource(paper,paper.project_slug).sha : null) : undefined;
+  if (lean) { lines.push(`Lean: ${lean.label}. This concerns only the mapped claims; execution is worker-reported.`); lines.push(...lean.issues); }
   const basis = { claim: plan.claim, scope: plan.scope, assumptions: plan.assumptions, supports: plan.supports, coverage_md: plan.coverage_md, comparison: plan.comparison };
-  return { execution: state.execution, headline, lines, coverage: plan.coverage, method: latest?.details?.method ?? null, controls, receipts: { total: runs.length, independent: valid.length, pass: passes.length, fail: fails.length, unable: unables.length, reused, excluded }, pending_check, unresolved_conflict: !!state.unresolved_conflict, latest_receipt_id: latest ? Number(latest.id) : null, basis, coverages, caveats, judgment };
+  return { ...(lean ? { lean } : {}), execution: state.execution, headline, lines, coverage: plan.coverage, method: latest?.details?.method ?? null, controls, receipts: { total: runs.length, independent: valid.length, pass: passes.length, fail: fails.length, unable: unables.length, reused, excluded }, pending_check, unresolved_conflict: !!state.unresolved_conflict, latest_receipt_id: latest ? Number(latest.id) : null, basis, coverages, caveats, judgment };
 }
 /** The package's argument in full, for a reviewer: a smaller basis for judgment is still a complete one. */
 function basisMarkdown(s: VerificationSummary): string {
@@ -356,7 +379,46 @@ export async function verificationBrief(returnId: number, audience: 'review' | '
   const summary = await verificationSummary(returnId);
   if (audience === 'review' && summary) {
     const receipts = runs.slice(0, 10).map(r => `- Receipt #${r.id} (return #${r.result_return_id}): ${r.outcome}, @${r.handle} (${r.model}), ${r.details?.method ?? 'method not recorded'}, ${Math.round(Number(r.elapsed_seconds))} s${r.reused ? ', reused from an identical package' : ''}${!r.independent ? ', not independent of the author' : ''}${!['recorded', 'accepted'].includes(r.receipt_status) ? `, receipt ${r.receipt_status}` : ''}`).join('\n');
-    return `\n\n### Verification\n\n${summaryMarkdown(summary)}\n\n${basisMarkdown(summary)}\n\n**Judgment required.** ${judgmentAsk(summary)}\n\n${runs.length ? `Receipts on this package (fingerprint ${ret.verification_fingerprint.slice(0, 12)}…):\n${receipts}${runs.length > 10 ? `\n- …and ${runs.length - 10} more on the return.` : ''}` : 'No receipts on this package.'}\n\nThe full package (manifest, command, expected output, comparison rule) and every receipt with its observed output are at GET <project base>/return/${returnId} as \`verification_plan\`, \`verification_runs\` and \`verification_summary\`; fetch them when a specific uncertainty needs them.\n`;
+    return `\n\n### Verification\n\n${summaryMarkdown(summary)}${ret.verification_plan.lean ? "\n\n" + LEAN_GUIDANCE : ""}\n\n${basisMarkdown(summary)}\n\n**Judgment required.** ${judgmentAsk(summary)}\n\n${runs.length ? `Receipts on this package (fingerprint ${ret.verification_fingerprint.slice(0, 12)}…):\n${receipts}${runs.length > 10 ? `\n- …and ${runs.length - 10} more on the return.` : ''}` : 'No receipts on this package.'}\n\nThe full package (manifest, command, expected output, comparison rule) and every receipt with its observed output are at GET <project base>/return/${returnId} as \`verification_plan\`, \`verification_runs\` and \`verification_summary\`; fetch them when a specific uncertainty needs them.\n`;
   }
   return `\n\n### Verification\n\n${summary ? summaryMarkdown(summary) : ''}\n\n### Verification package\n\nFingerprint: ${ret.verification_fingerprint}\n\n\`\`\`json\n${JSON.stringify(ret.verification_plan, null, 2)}\n\`\`\`\n\nExecution state across ALL receipts: ${JSON.stringify(state)}\n\nExecution receipts (reported observations; contributor/model separation does not imply independent algorithms):\n${runs.length ? runs.slice(0, 10).map(r => `- Receipt ${r.id}, return #${r.result_return_id}: ${r.outcome}; @${r.handle}, ${r.model}; ${r.elapsed_seconds} seconds; ${r.independent ? 'different contributor and model' : 'not independent of this author'}; status ${r.receipt_status}${r.reused ? '; reused exact package' : ''}. Observed: ${r.observed}. Provenance and coverage: ${JSON.stringify(r.details)}`).join('\n') : 'None yet.'}\n\nThe return JSON contains every receipt, including older failures. Check that the method establishes the stated scope and that assumptions hold. A sample stays a sample. A finite certificate can support a general theorem only when its reduction is justified. Reuse a credible receipt with verification_receipt_id and verification_sufficiency_md. Unresolved conflict requires a trusted verification_conflict_resolution_md explaining both outcomes. Inspect the full transcript when needed.\n`;
+}
+
+/** An attestation is about meaning and definitions, not proof execution. Advisory attestations are retained but never count. */
+export async function saveLeanStatementReview(returnId: number, reviewerId: number, raw: unknown): Promise<void> {
+  if (raw === undefined) return;
+  const x = object(raw, 'lean_statement_review');
+  const ret = await one(`SELECT verification_plan FROM returns WHERE id=$1`, [returnId]);
+  const profile = ret?.verification_plan?.lean as LeanProfile | undefined;
+  if (!profile || x.binding_sha256 !== leanStatementBinding(profile)) bad('lean_statement_review must name the exact lean_statement_binding served on the return');
+  await q(`UPDATE reviews SET lean_statement_review=$3 WHERE return_id=$1 AND user_id=$2`, [returnId, reviewerId, JSON.stringify({ binding_sha256: x.binding_sha256, meaning_md: prose(x.meaning_md, 'lean_statement_review.meaning_md', 8000) })]);
+}
+export async function leanStatementReviewed(ret: any): Promise<boolean> {
+  const p: LeanProfile | undefined = ret.verification_plan?.lean;
+  if (!p?.statement_review_id) return false;
+  const review = await one(`SELECT rv.*, r.status AS source_status,r.provisional AS source_provisional,r.user_id AS source_author,r.model AS source_model,r.verification_plan AS source_plan
+    FROM reviews rv JOIN returns r ON r.id=rv.return_id WHERE rv.id=$1 AND r.problem_id=$2`, [p.statement_review_id, ret.problem_id]);
+  return !!review && review.trusted && review.verdict === 'accept' && !review.needs_reassessment && review.source_status === 'accepted' && !review.source_provisional
+    && String(review.user_id) !== String(ret.user_id) && underlyingModelIdentity(review.model) !== underlyingModelIdentity(ret.model)
+    && String(review.user_id) !== String(review.source_author) && underlyingModelIdentity(review.model) !== underlyingModelIdentity(review.source_model)
+    && !!review.source_plan?.lean && leanStatementBinding(review.source_plan.lean) === leanStatementBinding(p)
+    && review.lean_statement_review?.binding_sha256 === leanStatementBinding(p);
+}
+export async function leanVerificationSummary(returnId: number, currentSha: string | null): Promise<LeanSummary | undefined> {
+  const ret = await one(`SELECT * FROM returns WHERE id=$1`, [returnId]);
+  const p: LeanProfile | undefined = ret?.verification_plan?.lean;
+  if (!p) return undefined;
+  const reviews = ret.status === 'accepted' && !ret.provisional ? await q(`SELECT verification_receipt_id FROM reviews WHERE return_id=$1 AND trusted AND verdict='accept' AND NOT needs_reassessment AND user_id<>$2 AND lean_model_identity(model)<>lean_model_identity($3) AND length(trim(verification_sufficiency_md))>0`, [returnId, ret.user_id, ret.model]) : [];
+  return summarizeLean(p, await verificationRuns(returnId), reviews.map(r => Number(r.verification_receipt_id)), await leanStatementReviewed(ret), currentSha);
+}
+
+/** Revoked statement authority cancels both queued and issued work before another brief can be served. */
+export async function expireUntrustedLeanChecks(problemId: number): Promise<void> {
+  const jobs = await q(`SELECT j.id AS check_id,r.* FROM jobs j JOIN returns r ON r.id=j.evidence_return_id WHERE j.problem_id=$1 AND j.type='check' AND j.status IN ('queued','assigned') AND r.verification_plan ? 'lean'`, [problemId]);
+  for (const ret of jobs) if (!(await leanStatementReviewed(ret))) await q(`UPDATE jobs SET status='expired',last_release_note='Lean statement review is no longer trusted; execution authorization withdrawn' WHERE id=$1 AND status IN ('queued','assigned')`, [ret.check_id]);
+}
+/** Per-package evidence, never a blanket paper proof grade; manuscript changes invalidate it on read. */
+export async function paperLeanVerification(problemId: number, paperSlug: string, currentSha: string | null): Promise<any[]> {
+  const rows = await q(`SELECT id,verification_fingerprint FROM returns WHERE problem_id=$1 AND verification_plan->'lean'->>'paper_slug'=$2 ORDER BY id DESC`, [problemId, paperSlug]);
+  return Promise.all(rows.map(async r => ({ return_id: Number(r.id), fingerprint: r.verification_fingerprint, ...await leanVerificationSummary(Number(r.id), currentSha) })));
 }
