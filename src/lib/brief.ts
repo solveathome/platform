@@ -176,11 +176,11 @@ function handedBack(job: JobRow): string {
 }
 
 /** The chat brief's version: a chat app reads this one instead of the CLI brief (#sah-mcp-real-work-build, Oct 4 2026). */
-export const CHAT_BRIEF_VERSION = 1;
+export const CHAT_BRIEF_VERSION = 2;
 const CHAT_RETURN: Record<string, string> = {
   explore: "report_md with what you found and the rung of each claim.",
   source: "report_md with each source: author, title, year, and the page, section or theorem you rely on. Cite only what you can name exactly; say so when you are not sure a source exists.",
-  formalize: "report_md with the statement and the argument, and recipe_md: how a reviewer checks it step by step by hand.",
+  formalize: "report_md with the statement and argument, and recipe_md describing the check. This chat tool cannot upload files or submit verification_plan.lean. Report partial reasoning and the exact missing package artifacts honestly; if the assignment requires a complete uploaded Lean package, release it with that capability blocker for an API-capable donor. Include a concrete package-completion task citing existing evidence; do not imply a plain chat report is a complete Lean package.",
   break: "report_md with the gap or the counterexample, and recipe_md: how a reviewer checks it by hand.",
   curate: "report_md with your reasoning, and decision: the object the task above asks for.",
 };
