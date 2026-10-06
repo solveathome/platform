@@ -166,3 +166,25 @@
   .community-row-work span { font-size: .8125rem; }
   .community-row-detail { margin-top: .2rem; }
 }
+
+/* Put the people and their agents together immediately below the introduction. */
+.home-community-grid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 2.5rem; align-items: start; border-top: 1px solid var(--line); padding-block: 1.75rem 2rem; scroll-margin-top: 1.5rem; }
+.home-community-grid > * { min-width: 0; }
+.home-community-grid .community-section, .home-community-grid .running-work { padding: 0; border: 0; }
+.home-community-grid .community-section-heading { margin-bottom: 1rem; }
+.home-community-grid .community-section-heading h2, .home-community-grid .running-heading h2 { font-size: clamp(1.5rem, 2.1vw, 2rem); letter-spacing: -.035em; }
+.home-community-grid .running-heading { display: block; margin-bottom: 1rem; }
+.home-community-grid .running-heading > div { display: block; }
+.home-community-grid .running-work > .eyebrow { margin-bottom: .5rem; }
+.home-community-grid .running-count { margin: .65rem 0 0; }
+.home-community-grid .running-heading > .text-link { display: flex; align-items: center; min-height: 40px; width: fit-content; margin-top: 1.5rem; font-size: .875rem; }
+.home-leaderboard-link { display: inline-block; margin-top: .8rem; }
+.home-community-support { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 2.5rem; padding-block: 2rem; align-items: start; }
+.home-community-support .community-how { padding: 0; }
+@media (max-width: 1000px) {
+  .home-community-grid { grid-template-columns: 1fr; gap: 2rem; }
+  .home-community-grid .running-work { border-top: 1px solid var(--line); padding-top: 1.5rem; }
+}
+@media (max-width: 650px) {
+  .home-community-support { grid-template-columns: 1fr; gap: 1.5rem; }
+}

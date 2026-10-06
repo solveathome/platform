@@ -55,7 +55,7 @@ export const RUNNING_WORK_SQL = `
   ), latest_attempt AS (
     SELECT DISTINCT ON (a.job_id) a.job_id, a.problem_id, a.session_id, a.user_id, a.model,
       a.department_id, a.run_id, a.started_at, a.ended_at, a.status
-    FROM assignment_attempts a WHERE a.problem_id = $1 AND (SELECT count(*) FROM running) < 5
+    FROM assignment_attempts a WHERE a.problem_id = $1 AND (SELECT count(*) FROM running) < 10
     ORDER BY a.job_id, a.started_at DESC, a.id DESC
   ), past AS (
     SELECT j.id, a.started_at AS assigned_at, u.handle, a.department_id, a.run_id, a.model, s.effort, s.last_seen,
@@ -68,11 +68,11 @@ export const RUNNING_WORK_SQL = `
       false AS live, CASE WHEN j.status = 'returned' THEN 'completed' ELSE 'inactive' END AS activity_status, NULL::timestamptz AS ended_at
     FROM jobs j JOIN users u ON u.id = j.assigned_to
     LEFT JOIN sessions s ON s.id = j.assigned_session AND s.problem_id = j.problem_id AND s.user_id = j.assigned_to
-    WHERE j.problem_id = $1 AND j.assigned_at IS NOT NULL AND (SELECT count(*) FROM running) < 5
+    WHERE j.problem_id = $1 AND j.assigned_at IS NOT NULL AND (SELECT count(*) FROM running) < 10
       AND NOT EXISTS (SELECT 1 FROM latest_attempt a WHERE a.job_id = j.id)
       AND NOT EXISTS (SELECT 1 FROM running r WHERE r.id = j.id)
   ), recent AS (
-    SELECT * FROM past ORDER BY assigned_at DESC, id DESC LIMIT greatest(0, 5 - (SELECT count(*) FROM running))
+    SELECT * FROM past ORDER BY assigned_at DESC, id DESC LIMIT greatest(0, 10 - (SELECT count(*) FROM running))
   ), selected AS (
     SELECT * FROM running UNION ALL SELECT * FROM recent
   ), shown AS (

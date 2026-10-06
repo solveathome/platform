@@ -4,7 +4,7 @@
   const base = `/projects/${encodeURIComponent(root.dataset.communityProject)}`;
   const $ = s => root.querySelector(s);
   const C = SA.community;
-  const running = SA.runningWork.create($('#home-running'), {base});
+  const running = SA.runningWork.create($('#home-running'), {base, eyebrow: 'Live and recent assignments'});
   running.refresh();
   const activityTimer = setInterval(() => { if (!document.hidden) running.refresh(); }, 30000);
   document.addEventListener('visibilitychange', () => { if (!document.hidden) running.refresh(); });
@@ -16,7 +16,6 @@
     const people = st.active_people || st.people;
     const selectedSort = st.sort || 'points';
     $('#home-sort').value = selectedSort;
-    $('#home-podium').innerHTML = C.podium(people, {me, sort: selectedSort});
     $('#home-leaders').innerHTML = C.rows(people, {me, sort: selectedSort});
     const person = st.me ? {...st.me, rank: st.me.active_rank ?? null} : people.find(p => me?.signed_in && p.handle.toLowerCase() === me.handle.toLowerCase());
     $('#home-progress').innerHTML = C.progress(person, me, base, {sort: selectedSort});

@@ -102,9 +102,9 @@ test('live count belongs to the actual session and recent inactive work is expli
   assert.deepEqual(running.jobs.filter(j=>j.live).map(j => [j.handle, j.model, j.effort, j.title]), [
     ['Alice', 'model-a', 'high', 'Check a proof'], ['Alice', 'model-b', 'max', 'Try a new direction'],
   ]);
-  assert.equal(running.jobs.length, 5);
-  assert.equal(Number(running.recent_total), 3);
-  assert.equal(running.jobs.filter(j=>!j.live).length,3);
+  assert.equal(running.jobs.length, 9);
+  assert.equal(Number(running.recent_total), 7);
+  assert.equal(running.jobs.filter(j=>!j.live).length,7);
   for(const j of running.jobs) { assert.ok(!('assigned_session' in j));assert.ok(!('session_id' in j));assert.ok(!('attempt_id' in j)); }
   const {rows: [activity]} = await db.query(ACTIVITY_SQL, [4]);
   assert.equal(Number(activity.assignments_underway), Number(running.total));
@@ -143,22 +143,24 @@ test('quiet log uses original last attempts after cleared ownership, deduplicate
       ('sixth',7,7006,1,'old-model',now()-interval '5 minutes',now(),'released'),
       ('foreign',8,7007,1,'foreign-model',now(),now(),'released');
   `);
+  await db.query(`INSERT INTO jobs (id,problem_id,status,title,type,assigned_to,assigned_at)
+    SELECT 7010+n,7,'returned','Earlier work '||n,'explore',1,now() - (10+n)*interval '1 minute' FROM generate_series(0,5)n;`);
   const read=async()=> (await db.query(RUNNING_WORK_SQL,[7])).rows[0];
   let w=await read();
-  assert.equal(Number(w.total),0);assert.equal(Number(w.recent_total),5);
-  assert.deepEqual(w.jobs.map(j=>j.id),[7001,7002,7004,7005,7006]);
+  assert.equal(Number(w.total),0);assert.equal(Number(w.recent_total),10);
+  assert.deepEqual(w.jobs.map(j=>j.id),[7001,7002,7004,7005,7006,7010,7011,7012,7013,7014]);
   assert.equal(w.jobs[0].handle,'Bob');assert.equal(w.jobs[0].model,'last-model');
   assert.equal(w.jobs[0].activity_status,'released');assert.equal(w.jobs[1].activity_status,'completed');
   assert.ok(w.jobs.every(j=>!j.live));
   await db.query(`INSERT INTO sessions (id,problem_id,user_id,model,last_seen) VALUES ('now-live',7,1,'live-model',now());
     UPDATE jobs SET assigned_session='now-live',assigned_to=1,assigned_at=now(),status='assigned' WHERE id=7001;`);
-  w=await read();assert.equal(Number(w.total),1);assert.equal(Number(w.recent_total),4);
-  assert.equal(w.jobs.length,5);assert.equal(w.jobs[0].model,'live-model');assert.equal(w.jobs[0].live,true);
+  w=await read();assert.equal(Number(w.total),1);assert.equal(Number(w.recent_total),9);
+  assert.equal(w.jobs.length,10);assert.equal(w.jobs[0].model,'live-model');assert.equal(w.jobs[0].live,true);
   assert.equal(w.jobs.filter(j=>j.id===7001).length,1);
-  // Four live jobs still get exactly one recent row; five live jobs get no backfill.
+  // Four live jobs still get six recent rows; ten live jobs get no backfill.
   await db.query(`INSERT INTO jobs (problem_id,assigned_to,assigned_session,status,title,type,assigned_at)
     SELECT 7,1,'now-live','assigned','Live '||n,'explore',now() FROM generate_series(1,3)n;`);
-  w=await read();assert.equal(Number(w.total),4);assert.equal(Number(w.recent_total),1);assert.equal(w.jobs.length,5);
-  await db.query(`INSERT INTO jobs (problem_id,assigned_to,assigned_session,status,title,type,assigned_at) VALUES (7,1,'now-live','assigned','Last live','explore',now());`);
-  w=await read();assert.equal(Number(w.total),5);assert.equal(Number(w.recent_total),0);assert.equal(w.jobs.length,5);
+  w=await read();assert.equal(Number(w.total),4);assert.equal(Number(w.recent_total),6);assert.equal(w.jobs.length,10);
+  await db.query(`INSERT INTO jobs (problem_id,assigned_to,assigned_session,status,title,type,assigned_at) SELECT 7,1,'now-live','assigned','More live '||n,'explore',now() FROM generate_series(1,6)n;`);
+  w=await read();assert.equal(Number(w.total),10);assert.equal(Number(w.recent_total),0);assert.equal(w.jobs.length,10);
 });
