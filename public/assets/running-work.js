@@ -2,12 +2,30 @@
 (function () {
   const {esc, ago, number} = SA;
   const stateLabel = job => job.live !== false ? 'Live' : ({completed:'Submitted', released:'Handed back', cancelled:'Cancelled', expired:'Expired',last_seen_live:'Last seen live'}[job.activity_status] || 'Not live');
+  // Match families, not release numbers: a new version keeps its mark and an unfamiliar model stays neutral.
+  const modelFamilies = [
+    ['openai', /^(?:gpt(?:[-.\d]|$)|chatgpt(?:-|$)|o\d(?:[-.]|$)|astra(?:-|$))/],
+    ['claude', /^(?:claude|fable|mythos)(?:[-.\d]|$)/],
+    ['deepseek', /^deepseek(?:[-.\d]|$)/],
+    ['gemini', /^(?:gemini|palm)(?:[-.\d]|$)/],
+    ['gemma', /^gemma(?:[-.\d]|$)/],
+    ['meta', /^llama(?:[-.\d]|$)/],
+    ['mistral', /^(?:mistral|mixtral|codestral|magistral|devstral|ministral)(?:[-.\d]|$)/],
+    ['qwen', /^(?:qwen|qwq)(?:[-.\d]|$)/],
+    ['grok', /^grok(?:[-.\d]|$)/],
+    ['kimi', /^(?:kimi|moonshot)(?:[-.\d]|$)/],
+  ];
+  function modelIcon(raw) {
+    const name = String(raw ?? '').trim().toLowerCase().replace(/^.*\//, '').replace(/^(?:(?:us|eu|apac|global)\.)?(?:anthropic|openai|google|meta)\./, '').replace(/\s+/g, '-');
+    const family = modelFamilies.find(([, matches]) => matches.test(name))?.[0] || 'unknown';
+    return `<span class="running-model-icon" data-model-family="${family}" aria-hidden="true"></span>`;
+  }
   function rows(jobs, base) {
     return jobs.map(job => {
       const title = job.presentation?.title || job.title;
       return `<li class="running-row" data-live="${job.live !== false}">
         <div class="running-task"><div class="running-task-meta"><span class="running-kind">${esc(job.label || job.type)}</span><span>#${esc(job.id)}</span><span class="running-state">${esc(stateLabel(job))}</span><span class="running-time">${job.live !== false ? `Checked in ${esc(ago(job.last_seen))}` : job.ended_at ? `${esc(stateLabel(job))} ${esc(ago(job.ended_at))}` : 'No live check-in'}</span></div><a class="running-title" href="${esc(base)}/job/${encodeURIComponent(job.id)}">${esc(title)}</a></div>
-        <div class="running-agent"><b>${esc(job.model || 'Model not specified')}</b>${job.effort ? `<span class="running-effort"> · ${esc(job.effort)}</span>` : ''}<span class="running-owner">by <a href="/@${encodeURIComponent(job.handle)}">@${esc(job.handle)}</a></span></div>
+        <div class="running-agent"><b>${modelIcon(job.model)}${esc(job.model || 'Model not specified')}</b>${job.effort ? `<span class="running-effort"> · ${esc(job.effort)}</span>` : ''}<span class="running-owner">by <a href="/@${encodeURIComponent(job.handle)}">@${esc(job.handle)}</a></span></div>
         <details class="running-details" data-job="${esc(job.id)}"><summary>Details<span class="sr-only"> for assignment #${esc(job.id)}</span></summary>
           ${job.presentation?.what && job.presentation.what !== title ? `<p class="running-purpose"><b>What:</b> ${esc(job.presentation.what)}</p>` : ''}${job.presentation?.why ? `<p class="running-purpose"><b>Why:</b> ${esc(job.presentation.why)}</p>` : ''}
           ${job.run_id ? `<p class="running-purpose"><b>Department:</b> ${esc(job.department_id)}<br><b>Run:</b> ${esc(job.run_id)}</p>` : ''}${job.assigned_at ? `<p class="running-purpose">Started ${esc(ago(job.assigned_at))}</p>` : ''}

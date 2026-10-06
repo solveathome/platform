@@ -71,6 +71,23 @@ test('running assignments safely link the job and its contributor, with per-agen
   assert.ok(!html.includes('No accepted results yet'));
 });
 
+test('model icons recognize family aliases and future versions without attributing unknown models', () => {
+  const families = [
+    ['openai/gpt-6.1-sol', 'openai'], ['o3-mini', 'openai'], ['gpt-99', 'openai'],
+    ['us.anthropic.claude-opus-5-5-v1:0', 'claude'], ['Claude Fable 5.1', 'claude'], ['mythos-5', 'claude'],
+    ['deepseek-v4.1-flash', 'deepseek'], ['google/gemini-3.8-flash', 'gemini'], ['gemma-3-27b-it', 'gemma'],
+    ['meta-llama/Llama-4-Scout', 'meta'], ['codestral-latest', 'mistral'], ['devstral-small', 'mistral'],
+    ['qwen3.8', 'qwen'], ['grok-4', 'grok'], ['moonshotai/kimi-k2', 'kimi'],
+    ['unfamiliar-model', 'unknown'], ['not-gpt-6', 'unknown'], ['codex', 'unknown'], ['', 'unknown'],
+  ];
+  for (const [model, family] of families) {
+    const html = context.SA.runningWork.rows([{id:1, title:'Assignment', handle:'Alice', model}], '/projects/example');
+    assert.ok(html.includes(`data-model-family="${family}" aria-hidden="true"`), model);
+    assert.ok(html.includes(context.SA.esc(model || 'Model not specified')), 'the exact reported name remains readable');
+    assert.ok(readFileSync(new URL(`../public/assets/model-icons/${family}.svg`, import.meta.url), 'utf8').includes('<svg'));
+  }
+});
+
 test('running work expands, handles empty periods, and never labels a failed refresh as live', () => {
   const elements = new Map();
   const root = {id:'running', dataset:{}, setAttribute(){}, querySelectorAll(){return [];}, querySelector(selector) {

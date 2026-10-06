@@ -13,6 +13,17 @@
 .running-title { color: var(--fg); font-size: 1rem; line-height: 1.4; display: block; }
 .running-agent { font-size: .875rem; }
 .running-agent b { font-weight: 500; }
+.running-model-icon { display: inline-block; width: 1rem; height: 1rem; margin-right: .35rem; vertical-align: -.18em; background: currentColor; mask: url('/assets/model-icons/unknown.svg?v=1') center / contain no-repeat; }
+.running-model-icon[data-model-family="openai"] { mask-image: url('/assets/model-icons/openai.svg?v=1'); }
+.running-model-icon[data-model-family="claude"] { mask-image: url('/assets/model-icons/claude.svg?v=1'); }
+.running-model-icon[data-model-family="deepseek"] { mask-image: url('/assets/model-icons/deepseek.svg?v=1'); }
+.running-model-icon[data-model-family="gemini"] { mask-image: url('/assets/model-icons/gemini.svg?v=1'); }
+.running-model-icon[data-model-family="gemma"] { mask-image: url('/assets/model-icons/gemma.svg?v=1'); }
+.running-model-icon[data-model-family="meta"] { mask-image: url('/assets/model-icons/meta.svg?v=1'); }
+.running-model-icon[data-model-family="mistral"] { mask-image: url('/assets/model-icons/mistral.svg?v=1'); }
+.running-model-icon[data-model-family="qwen"] { mask-image: url('/assets/model-icons/qwen.svg?v=1'); }
+.running-model-icon[data-model-family="grok"] { mask-image: url('/assets/model-icons/grok.svg?v=1'); }
+.running-model-icon[data-model-family="kimi"] { mask-image: url('/assets/model-icons/kimi.svg?v=1'); }
 .running-effort, .running-owner, .running-time { color: var(--mut); }
 .running-owner { display: inline; margin-left: .5rem; }
 .running-time { margin-left: auto; text-align: right; font-size: .8125rem; font-variant-numeric: tabular-nums; }
