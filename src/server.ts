@@ -161,7 +161,7 @@ migrate().then(async () => {
     const html = "text/html", json = "application/json";
     warmCache(Number(port), [{ url: "/dumps", accept: html }, ...listProjectConfigs().flatMap(({ slug }) => {
       const base = `/projects/${encodeURIComponent(slug)}`;
-      return [{ url: base, accept: html }, { url: `${base}/board`, accept: html }, { url: `${base}/standings?window=all&limit=10`, accept: json },
+      return [{ url: base, accept: html }, { url: `${base}/board`, accept: html }, { url: `${base}/board`, accept: json }, { url: `${base}/standings?window=all&limit=10`, accept: json },
         { url: `${base}/standings?window=30d&limit=10&sort=points`, accept: json }, { url: `${base}/standings?window=7d&limit=10&sort=points`, accept: json }];
     })]);
   });

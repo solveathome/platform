@@ -20,6 +20,16 @@ test('a page title that is one long file path wraps instead of widening the page
   assert.match(css, /\.page-heading > \* \{[^}]*min-width:\s*0/);
 });
 
+test('the project tab row wraps on a phone, so every tab is in sight (Oct 7 2026: four of eight sat off the right edge)', () => {
+  const phone = css.slice(css.indexOf('@media (max-width: 800px)'));
+  assert.match(phone, /\.section-nav \{[^}]*flex-wrap:\s*wrap/);
+  assert.doesNotMatch(phone.slice(0, phone.indexOf('\n}')), /\.section-nav \{[^}]*overflow:\s*auto/);
+});
+
+test('the board page keeps short cells on one line and scrolls its tables in their own box', () => {
+  assert.match(css, /\.document \.board-table th, \.document \.board-table td \{[^}]*white-space:\s*nowrap/);
+});
+
 test('the return and paper side panels never let a long file name widen a one-column grid', () => {
   const page = readFileSync('src/lib/page.ts', 'utf8');
   assert.match(page, /\.doc-side\{grid-template-columns:minmax\(0,1fr\)\}/);

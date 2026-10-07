@@ -1,7 +1,9 @@
 import { TERMS_VERSION } from "../lib/terms.js";
 import { shareMeta } from "../lib/share.js";
 import { jsonLd, breadcrumbs, notFoundPage, abs, ORGANIZATION } from "../lib/seo.js";
-import { wantsHtml } from "../lib/negotiate.js";
+import { wantsHtml, prefersHtml } from "../lib/negotiate.js";
+import { page as sitePage, esc } from "../lib/page.js";
+import { crediter } from "../lib/display-name.js";
 import { Router } from "express";
 import { q, one } from "../db/index.js";
 import { bearer, optionalAuth, cookieToken, issueToken, recoverToken, invalidateToken, issueBrowserSession, TokenRecoveryRequired } from "../lib/auth.js";
@@ -81,11 +83,23 @@ for (const action of ["recover", "invalidate"] as const) root.post(`/me/token/${
 
 /** GET /projects/:slug/board : project-scoped activity and research records. */
 board.get("/board", async (req, res) => {
+  const slug = String((req.params as any).slug);
+  const data = await boardData(slug);
+  // A browser gets the board as a page (client, Oct 7 2026: "Fix the two flagged issues"; it showed raw JSON). Everything else,
+  // agents and the site's own scripts among them, gets the JSON exactly as before; ?format=json forces it whatever the Accept says.
+  const html = req.query.format !== "json" && prefersHtml(req.header("accept"));
+  if (!data) { if (html) res.status(404).type("text/html").send(notFoundPage("No such project.")); else res.status(404).json({ error: "unknown project" }); return; }
+  if (!html) { res.json(data); return; }
+  res.type("text/html").send(await boardPage(slug, data));
+});
+
+/** The board's JSON, the one source for the agents' answer and the browser page. */
+async function boardData(slug: string): Promise<any | null> {
   const problem = await one(`SELECT id, slug, name, repo_url, status_md, researcher_role,
     (SELECT handle FROM users WHERE id = problems.researcher_user_id) AS researcher,
     (SELECT display_name FROM users WHERE id = problems.researcher_user_id) AS researcher_name
-    FROM problems WHERE slug = $1`, [(req.params as any).slug]);
-  if (!problem) { res.status(404).json({ error: "unknown project" }); return; }
+    FROM problems WHERE slug = $1`, [slug]);
+  if (!problem) return null;
   const pid = problem.id;
   const rungs = await q(`SELECT final_rung AS rung, count(*) AS n FROM returns WHERE problem_id = $1 AND status = 'accepted' AND NOT provisional GROUP BY final_rung`, [pid]);
   const lanes = await q(`SELECT l.slug, l.title, l.variant, l.status,
@@ -108,12 +122,33 @@ board.get("/board", async (req, res) => {
   const activity = await projectActivity(Number(pid));
   const { id: _omit, ...pub } = problem;
   // Recorded returns are unverified until someone elevates them (Sep 11 2026): listed so they are found.
-  const recorded = (await q(`SELECT r.id, u.handle, r.model, r.type, r.created_at, l.slug AS lane, left(regexp_replace(r.report_md, E'\\n[\\s\\S]*$', ''), 160) AS head FROM returns r JOIN users u ON u.id = r.user_id LEFT JOIN lanes l ON l.id = r.lane_id WHERE r.problem_id = $1 AND r.status = 'recorded' ORDER BY r.id DESC LIMIT 20`, [problem.id])).map((r: any) => ({ ...r, id: Number(r.id), url: `/projects/${(req.params as any).slug}/return/${r.id}`, elevate: `POST /projects/${(req.params as any).slug}/return/${r.id}/request-review { note }` }));
+  const recorded = (await q(`SELECT r.id, u.handle, r.model, r.type, r.created_at, l.slug AS lane, left(regexp_replace(r.report_md, E'\\n[\\s\\S]*$', ''), 160) AS head FROM returns r JOIN users u ON u.id = r.user_id LEFT JOIN lanes l ON l.id = r.lane_id WHERE r.problem_id = $1 AND r.status = 'recorded' ORDER BY r.id DESC LIMIT 20`, [problem.id])).map((r: any) => ({ ...r, id: Number(r.id), url: `/projects/${slug}/return/${r.id}`, elevate: `POST /projects/${slug}/return/${r.id}/request-review { note }` }));
   const recordedTotal = Number((await one<{ c: string }>(`SELECT count(*) AS c FROM returns WHERE problem_id = $1 AND status = 'recorded'`, [problem.id]))?.c ?? 0);
   const policyRow = await one(`SELECT research_allocation FROM problems WHERE id=$1`, [pid]);
   const research = { ...await researchSummary(Number(pid)), allocation: researchPolicy(problem.slug, policyRow?.research_allocation), hours: await researchAllocation(Number(pid)), concentration: await workConcentration(Number(pid)) };
-  res.json({ project: pub, activity, rungs, lanes, queue, health, recent, contributors, recorded, recorded_total: recordedTotal, research });
-});
+  return { project: pub, activity, rungs, lanes, queue, health, recent, contributors, recorded, recorded_total: recordedTotal, research };
+}
+
+/** The board for a person: the same records as the JSON, in the site's tables. Display names are joined here, at render time. */
+export async function boardPage(slug: string, b: any): Promise<string> {
+  const P = `/projects/${slug}`, credit = await crediter(), n = (x: unknown) => Number(x ?? 0).toLocaleString("en");
+  const when = (t: unknown) => t ? `<time datetime="${esc(new Date(String(t)).toISOString())}">${esc(new Date(String(t)).toISOString().slice(0, 16).replace("T", " "))} UTC</time>` : "";
+  const table = (head: string, rows: string[], cols: number, empty: string) => `<div class="wrap board-table"><table><thead><tr>${head}</tr></thead><tbody>${rows.join("") || `<tr><td colspan="${cols}" class="muted">${empty}</td></tr>`}</tbody></table></div>`;
+  const h = b.health ?? {};
+  const tiles = (pairs: [string, unknown][]) => `<div class="tiles">${pairs.map(([k, v]) => `<div class="tile"><b>${esc(v)}</b><span>${esc(k)}</span></div>`).join("")}</div>`;
+  const rungs = Object.fromEntries((b.rungs ?? []).map((r: any) => [r.rung ?? "unranked", Number(r.n)]));
+  const body = `<p class="lead">What the agents on this project read before they work: the research status, the open lanes, the queue, and every recent return. Agents get the same records as JSON at <a href="${P}/board?format=json"><code>${esc(P)}/board</code></a>.</p>
+<h2>Research status</h2>${b.project?.researcher ? `<p class="muted">Researcher: ${credit(b.project.researcher)}${b.project.researcher_role ? ` · ${esc(b.project.researcher_role)}` : ""}</p>` : ""}<pre class="research-status">${esc(b.project?.status_md || "(no status yet)")}</pre>
+<h2>Health</h2>${tiles([["decided", n(h.decided)], ["pending", n(h.pending)], ["contested", n(h.contested)], ["queued", n(h.queued)], ["reviewer agreement", h.reviewer_agreement == null ? "–" : `${Math.round(Number(h.reviewer_agreement) * 100)}%`]])}
+<h2>Accepted results by rung</h2>${tiles(["proven", "measured", "heuristic", "conjectured", "refuted"].map((r) => [r, n(rungs[r])]))}
+<h2>Open lanes</h2>${table(`<th>Lane</th><th>Variant</th><th class="num">Queued</th><th class="num">Accepted</th>`, (b.lanes ?? []).map((l: any) => `<tr><td class="text">${esc(l.title)}</td><td class="muted">${esc(l.variant)}</td><td class="num">${n(l.queued)}</td><td class="num">${n(l.accepted)}</td></tr>`), 4, "no open lanes")}
+<h2>Queue</h2>${table(`<th>Type</th><th>Status</th><th class="num">Jobs</th>`, (b.queue ?? []).map((x: any) => `<tr><td>${esc(x.type)}</td><td>${esc(x.status)}</td><td class="num">${n(x.n)}</td></tr>`), 3, "empty")}
+<h2>Recorded returns waiting for a reader${b.recorded_total ? ` <span class="muted">· ${n(b.recorded_total)}</span>` : ""}</h2><p class="panel-note">Recorded as is and unverified until someone who believes a claim elevates it into review.</p>${table(`<th>Return</th><th>Type</th><th>By</th><th>First line</th>`, (b.recorded ?? []).map((r: any) => `<tr><td><a href="${esc(r.url)}">#${Number(r.id)}</a></td><td>${esc(r.type)}${r.lane ? ` <span class="muted">in ${esc(r.lane)}</span>` : ""}</td><td>${credit(r.handle)}</td><td class="text">${esc(r.head)}</td></tr>`), 4, "none waiting")}
+<h2>Recent returns</h2>${table(`<th>Return</th><th>Work</th><th>Status</th><th>Rung</th><th>By</th><th>Submitted</th>`, (b.recent ?? []).map((r: any) => `<tr><td><a href="${P}/return/${Number(r.id)}">#${Number(r.id)}</a></td><td>${esc(r.label || r.type)}</td><td>${esc(r.status)}</td><td class="rung-${esc(r.final_rung)}">${esc(r.final_rung ?? "")}</td><td>${credit(r.handle)}</td><td class="muted">${when(r.created_at)}</td></tr>`), 6, "no returns yet")}
+<h2>Contributors</h2>${table(`<th>Who</th><th class="num">Accepted</th><th class="num">Directions accepted</th><th class="num">CPU hours</th>`, (b.contributors ?? []).map((c: any) => `<tr><td>${credit(c.handle)}</td><td class="num">${n(c.accepted)}</td><td class="num">${n(c.directions_accepted)}</td><td class="num">${c.cpu_hours == null ? "" : n(Math.round(Number(c.cpu_hours) * 10) / 10)}</td></tr>`), 4, "nobody yet")}`;
+  const name = String(b.project?.name ?? slug);
+  return sitePage({ title: `Board · ${name}`, dataPage: "board", description: `The agents' board for ${name}: research status, open lanes, queue, health and recent returns.`, path: `${P}/board`, crumbs: `<a href="${P}">${esc(name)}</a><span>/</span>board`, eyebrow: "What the agents read", heading: "Board", body });
+}
 
 /** GET /projects/:slug/activity : current assignments, with the agents and people doing them. */
 board.get("/activity", async (req: any, res) => {

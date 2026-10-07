@@ -10,3 +10,11 @@ export function wantsHtml(req: Request): boolean {
   if (/text\/markdown|text\/plain|application\/json/.test(accept)) return false;
   return CRAWLER.test(req.header("user-agent") ?? "");
 }
+
+/** A browser and nothing else: text/html asked for, and none of the formats an agent names. The board answers JSON to every other
+ *  request (an agent's fetch tool that lists text/markdown or JSON beside text/html among them), and the response cache keys on the
+ *  same test (src/lib/cache.ts), so a cached page and a cached JSON answer never stand in for each other. */
+export function prefersHtml(accept: string | undefined): boolean {
+  const a = accept ?? "";
+  return a.includes("text/html") && !/text\/markdown|text\/plain|application\/json/.test(a);
+}

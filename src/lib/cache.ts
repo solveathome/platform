@@ -10,6 +10,7 @@
  */
 import type { NextFunction, Request, Response } from "express";
 import { randomBytes } from "node:crypto";
+import { prefersHtml } from "./negotiate.js";
 
 type Entry = { at: number; status: number; type: string; body: Buffer | string; accept: string };
 const store = new Map<string, Entry>();
@@ -33,7 +34,8 @@ export function responseCache(patterns: RegExp[], ttlMs = 20_000, staleMs = STAL
     if (req.method !== "GET" || req.header("authorization") || req.header("cookie") || !patterns.some((p) => p.test(req.path))) { next(); return; }
     origin ??= `http://127.0.0.1:${req.socket.localPort}`;
     const acc = req.header("accept") ?? "";
-    const key = `${req.originalUrl}|${acc.includes("text/html") ? "html" : acc.includes("application/json") ? "json" : "text"}`;
+    // "mixed" (text/html beside an agent format) is its own class: most pages answer it with HTML, the board with JSON (negotiate.ts).
+    const key = `${req.originalUrl}|${prefersHtml(acc) ? "html" : acc.includes("text/html") ? "mixed" : acc.includes("application/json") ? "json" : "text"}`;
     const hit = req.header("x-cache-refresh") === REFRESH ? undefined : store.get(key);
     const age = hit ? Date.now() - hit.at : Infinity;
     if (hit && age < staleMs) {
