@@ -1366,8 +1366,8 @@ CREATE OR REPLACE FUNCTION lean_model_identity(model text) RETURNS text LANGUAGE
   SELECT regexp_replace(regexp_replace(canon_model(model), '(-(none|minimal|low|medium|high|xhigh|max|maximum|extended|extra-high|extrahigh|x_high|ultra|deep|off))+$', ''), '([0-9])\.(?=[0-9])', '\1-', 'g');
 $$;
 -- Lean independence (Chris, Oct 6 2026: "Different model I think we should keep but it can be same user for approved users and tier 1 models").
--- A statement review, check, receipt or verified-status review of a Lean package is independent of an author when its model differs, and
--- its user differs or is approved on the project (owner or trusted by grant, or the researcher) and ran a tier-1 model at high or above.
+-- A statement review, check, receipt or verified-status review requires a distinct model family and Tier 1/high.
+-- Its user differs or is approved on the project (owner or trusted by grant, or the researcher).
 -- The maintainer handles of OWNER_HANDLES are known to the scheduler's session check, not here. Non-Lean packages keep their rules.
 CREATE OR REPLACE FUNCTION lean_approved_member(p_problem bigint, p_user bigint) RETURNS boolean LANGUAGE sql STABLE AS $$
   SELECT EXISTS (SELECT 1 FROM project_roles WHERE problem_id=p_problem AND user_id=p_user AND revoked_at IS NULL)
@@ -1376,9 +1376,24 @@ $$;
 CREATE OR REPLACE FUNCTION lean_tier1(p_model text, p_effort text) RETURNS boolean LANGUAGE sql STABLE AS $$
   SELECT coalesce(lower(p_effort) IN ('high','xhigh','max'), false) AND EXISTS (SELECT 1 FROM model_tiers WHERE model=canon_model(p_model) AND tier=1);
 $$;
+-- Model versions and sibling models do not supply a second proof-review family.
+CREATE OR REPLACE FUNCTION lean_model_family(model text) RETURNS text LANGUAGE sql IMMUTABLE AS $$
+  SELECT CASE
+    WHEN lean_model_identity(model) ~ '^(claude-(opus|sonnet|haiku|fable|mythos)(-|$)|(fable|mythos)(-|$))' THEN 'anthropic'
+    WHEN lean_model_identity(model) ~ '^(gpt-[0-9]|o[0-9](-|$)|astra(-|$))' THEN 'openai'
+    WHEN lean_model_identity(model) ~ '^(gemini|gemma|palm)(-|$)' THEN 'google'
+    WHEN lean_model_identity(model) ~ '^llama(-|$)' THEN 'meta'
+    WHEN lean_model_identity(model) ~ '^(mistral|mixtral|codestral|magistral)(-|$)' THEN 'mistral'
+    WHEN lean_model_identity(model) ~ '^deepseek(-|$)' THEN 'deepseek'
+    WHEN lean_model_identity(model) ~ '^(qwen|qwq)(-|$)' THEN 'alibaba'
+    WHEN lean_model_identity(model) ~ '^grok(-|$)' THEN 'xai'
+    WHEN lean_model_identity(model) ~ '^(kimi|moonshot)(-|$)' THEN 'moonshot'
+    ELSE NULL END;
+$$;
 CREATE OR REPLACE FUNCTION lean_independent(p_problem bigint, p_actor bigint, p_actor_model text, p_actor_effort text, p_author bigint, p_author_model text) RETURNS boolean LANGUAGE sql STABLE AS $$
-  SELECT coalesce(lean_model_identity(p_actor_model)<>lean_model_identity(p_author_model), false)
-    AND (p_actor<>p_author OR (lean_approved_member(p_problem, p_actor) AND lean_tier1(p_actor_model, p_actor_effort)));
+  SELECT coalesce(lean_model_family(p_actor_model)<>lean_model_family(p_author_model), false)
+    AND lean_tier1(p_actor_model, p_actor_effort)
+    AND (p_actor<>p_author OR lean_approved_member(p_problem, p_actor));
 $$;
 -- Scheduling predicate; intake has validated the attestation hash against the immutable source profile.
 -- The serving boundary additionally recomputes that exact hash in leanStatementReviewed.
@@ -1386,7 +1401,7 @@ CREATE OR REPLACE FUNCTION lean_statement_review_current(subject_id bigint) RETU
   SELECT EXISTS (
     SELECT 1 FROM returns proof JOIN reviews rv ON rv.id::text=proof.verification_plan->'lean'->>'statement_review_id'
       JOIN returns source ON source.id=rv.return_id AND source.problem_id=proof.problem_id
-    WHERE proof.id=subject_id AND rv.trusted AND rv.verdict='accept' AND NOT rv.needs_reassessment
+    WHERE proof.id=subject_id AND lean_tier1(proof.model,proof.effort) AND lean_tier1(source.model,source.effort) AND rv.trusted AND rv.verdict='accept' AND NOT rv.needs_reassessment
       AND source.status='accepted' AND NOT source.provisional
       AND lean_independent(proof.problem_id, rv.user_id, rv.model, rv.effort, proof.user_id, proof.model)
       AND lean_independent(proof.problem_id, rv.user_id, rv.model, rv.effort, source.user_id, source.model)

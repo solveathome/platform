@@ -160,3 +160,12 @@ test('Lean trust comparisons collapse effort and numeric separator aliases witho
   assert.notEqual(underlyingModelIdentity('gpt-6.1-sol'),underlyingModelIdentity('gpt-6-astra'));
   assert.equal(canonicalModel('gpt-6-astra-high'),'gpt-6-astra-high');
 });
+
+
+test('Lean family independence rejects versions, siblings, aliases and unknown identities', async()=>{
+  const {leanModelFamily,distinctLeanFamilies}=await import('../src/lib/model-id.ts');
+  for(const m of ['gpt-6.1-sol','openai/gpt-6-1-sol-high','gpt-6-astra','astra','o3']) assert.equal(leanModelFamily(m),'openai');
+  for(const m of ['claude-opus-5.5','us.anthropic.claude-opus-5-5-v1:0','claude-fable-5-1','fable-5-1']) assert.equal(leanModelFamily(m),'anthropic');
+  assert.equal(distinctLeanFamilies('gpt-6.1-sol','claude-opus-5-5'),true);
+  for(const [a,b] of [['gpt-6.1-sol','gpt-6-sol'],['claude-opus-5-5','claude-fable-5-1'],['unknown','gpt-6.1-sol'],['invented','other-invented'],['codex','claude-opus-5-5']]) assert.equal(distinctLeanFamilies(a,b),false);
+});

@@ -12,6 +12,7 @@ const {issueToken} = await import('../src/lib/auth.ts');
 const {TERMS_VERSION} = await import('../src/lib/terms.ts');
 const {job} = await import('../src/routes/job.ts');
 const {challengesFor} = await import('../src/lib/tangent.ts');
+const {runningWork, projectActivity} = await import('../src/lib/project-activity.ts');
 
 const tag = `tangent-test-${Date.now().toString(36)}`;
 const slug = tag, handle = `${tag}-person`;
@@ -81,6 +82,12 @@ test('a session registered with a challenge gets the challenge as its first assi
   assert.match(j.brief_md, new RegExp(`"ref":"${targetReturn}"`));
   const queued = await one(`SELECT status FROM jobs WHERE problem_id = $1 AND title = 'Queued source'`, [pid]);
   assert.equal(queued.status, 'queued', 'the queue was not touched');
+  const activity = await projectActivity(pid);
+  const shown = activity.running.jobs.find(row => Number(row.id) === Number(reg.job_id));
+  assert.equal(shown?.live, true, 'the canonical assignment appears as live Agent work');
+  assert.equal(shown?.handle, handle);
+  assert.equal(shown?.model, 'claude-opus-5');
+  assert.ok(!('session_id' in shown) && !('attempt_id' in shown), 'private execution identifiers are excluded');
 });
 
 test('the challenge return carries the target, the finding and the words, and shows on the target', async () => {
@@ -92,6 +99,13 @@ test('the challenge return carries the target, the finding and the words, and sh
   const r = await one(`SELECT type, target, finding, human_md, status FROM returns WHERE id = $1`, [res.return_id]);
   assert.equal(r.type, 'challenge'); assert.equal(r.finding, 'partial'); assert.equal(r.human_md, words);
   assert.deepEqual(r.target, {kind: 'return', ref: String(targetReturn)});
+  const work = await runningWork(pid);
+  const shown = work.jobs.find(row => Number(row.id) === Number(reg.job_id));
+  assert.equal(shown?.live, false, 'the submitted assignment is no longer presented as running');
+  assert.equal(shown?.activity_status, 'completed', 'completed Agent work retains the actual assignment');
+  assert.equal(shown?.handle, handle);
+  assert.equal(shown?.model, 'claude-opus-5');
+  assert.equal(Number((await projectActivity(pid)).results_submitted), 2, 'the submitted result is included once with the preexisting source fixture');
   const listed = await challengesFor(pid, 'return', String(targetReturn));
   assert.equal(listed.length, 1); assert.equal(Number(listed[0].id), res.return_id); assert.equal(listed[0].status, 'pending');
   // After the tangent, the queue.

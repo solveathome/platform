@@ -873,6 +873,9 @@ test('Lean statement review, independent worker receipt and paper-version status
   const {leanStatementBinding}=await import('../src/lib/lean-verification.ts');
   const {leanVerificationSummary,leanStatementReviewed,saveCheckReceipt,queueCheck,verificationRuns,verificationBrief}=await import('../src/lib/verification.ts');
   const {whyNotEligible}=await import('../src/lib/scheduler.ts');
+  const priorRunner=users.runner.model;
+  users.runner.model='claude-opus-5-5';
+  try {
   const {plan,artifacts}=leanFixture();
   for (const [name,text] of artifacts) await files.store(users.astra.id,models.astra,name,name.includes('.')?name.split('.').pop():'txt',text);
   await q(`INSERT INTO papers (problem_id,slug,title,path,kind,status,summary,current_file_sha) VALUES ($1,'example','Example','paper/example.md','draft','draft','Fixture',$2)`,[pid,plan.lean.manuscript_sha256]);
@@ -892,7 +895,7 @@ test('Lean statement review, independent worker receipt and paper-version status
   assert.equal((await one(`SELECT lean_model_identity('gpt-6.1-sol-high-high') AS identity`)).identity,'gpt-6-1-sol');
   const agent={problemId:pid,slug,sessionId:'',uid:users.runner.id,tier:1,model:models.astra+'-high-high',provider:'openai',trusted:true,granted:false,lane:null,cpuHours:8,ramGb:32,hasGpu:false,disk:10,maxHours:4,reviewStreak:0,capabilities:{tools:['lean','lean-comparator-linux']}};
   assert.ok((await whyNotEligible(agent,check.id)).some(s=>s.includes('own handle or model')),'model effort aliases cannot check their own kind');
-  await assert.rejects(()=>saveCheckReceipt({problem_id:pid,user_id:users.runner.id,model:agent.model},check,{fingerprint:proofRow.verification_fingerprint}),/another model than the author/);
+  await assert.rejects(()=>saveCheckReceipt({problem_id:pid,user_id:users.runner.id,model:agent.model},check,{fingerprint:proofRow.verification_fingerprint}),/distinct model family/);
   await q(`UPDATE reviews SET model=$2 WHERE id=$1`,[review.id,agent.model]);
   assert.equal(await leanStatementReviewed(proofRow),false,'alias reviewer is the same underlying model as statement/proof author');
   assert.ok((await whyNotEligible({...agent,model:models.runner},check.id)).some(s=>s.includes('no longer trusted')));
@@ -915,7 +918,7 @@ test('Lean statement review, independent worker receipt and paper-version status
   assert.equal(await queueCheck(proofRow),true);
   Object.assign(assignment,ok(await call('/start?share=100',{who:'runner',launch:randomUUID(),capabilities:agent.capabilities})));
   const subject=await one(`SELECT * FROM returns WHERE id=$1`,[proof.return_id]);
-  for (const text of ['audit','axioms','proof']) await files.store(users.runner.id,models.runner,text+'.txt','txt',text);
+  for (const text of ['audit','axioms','proof']) await files.store(users.runner.id,users.runner.model,text+'.txt','txt',text);
   const evidence=leanEvidence(plan.lean,binding);
   const receipt=ok(await submit('runner',{check_receipt:{fingerprint:subject.verification_fingerprint,outcome:'pass',observed:'Synthetic fixture only, not actual Lean execution.',elapsed_seconds:1,stdout_sha256:files.sha256('audit'),exit_code:0,environment:'Synthetic pinned versions.',coverage_md:'Claim 1 fixture.',method:'rerun',shared_components_md:'Fixture data.',controls_md:'Synthetic controls.',lean:evidence}},assignment));
   const run=await one(`SELECT id,details FROM verification_runs WHERE result_return_id=$1`,[receipt.return_id]);
@@ -929,7 +932,7 @@ test('Lean statement review, independent worker receipt and paper-version status
   await q(`UPDATE reviews SET model=$2 WHERE id=$1`,[proofReview.id,models.judge]);
   await q(`UPDATE returns SET model=$2 WHERE id=$1`,[receipt.return_id,agent.model]);
   assert.equal((await verificationRuns(proof.return_id))[0].independent,false,'historical aliased receipt cannot acquire independent status');
-  await q(`UPDATE returns SET model=$2 WHERE id=$1`,[receipt.return_id,models.runner]);
+  await q(`UPDATE returns SET model=$2 WHERE id=$1`,[receipt.return_id,users.runner.model]);
   const page=ok(await call('/papers/example'));assert.equal(page.lean_verification.find(r=>r.return_id===proof.return_id).status,'checked');
   const html=ok(await call('/papers/example',{accept:'text/html'}));assert.match(html,/All mapped Lean claims checked/);assert.match(html,/Worker-reported validation/);
   const newSha=(await files.store(users.astra.id,models.astra,'revised.md','md','# Revised manuscript')).sha;
@@ -939,6 +942,7 @@ test('Lean statement review, independent worker receipt and paper-version status
   assert.match(await verificationBrief(proof.return_id,'review'),/another manuscript version/);
   await q(`UPDATE reviews SET needs_reassessment=true WHERE id=$1`,[review.id]);
   assert.equal((await leanVerificationSummary(proof.return_id,plan.lean.manuscript_sha256)).status,'awaiting_review');
+  } finally {users.runner.model=priorRunner;}
 });
 
 test('formalize assignment and direct return require effective Tier 1 high-or-above', async()=>{

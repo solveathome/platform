@@ -3,7 +3,7 @@ import { parseLeanProfile, parseLeanEvidence, leanEvidenceFiles, leanStatementBi
 import { createHash } from 'node:crypto';
 import { one, q } from '../db/index.js';
 import { amount, bad, object, prose, tags } from './research-format.js';
-import { underlyingModelIdentity } from './model-id.js';
+import { distinctLeanFamilies } from './model-id.js';
 import { paperSource } from './paper-state.js';
 
 export type VerificationPlan = {
@@ -95,7 +95,7 @@ export async function saveVerificationPlan(returnId: number, plan: VerificationP
 }
 export async function verificationRuns(returnId: number): Promise<any[]> {
   return q(`SELECT v.id,v.subject_return_id,v.result_return_id,v.fingerprint,v.outcome,v.observed,v.elapsed_seconds,v.details,v.created_at,
-    u.handle,r.model,r.status AS receipt_status, (CASE WHEN subject.verification_plan ? 'lean' THEN lean_independent(subject.problem_id, r.user_id, r.model, r.effort, subject.user_id, subject.model) ELSE r.user_id<>subject.user_id AND r.model<>subject.model END) AS independent,
+    u.handle,r.model,r.provider,r.effort,r.status AS receipt_status, (CASE WHEN subject.verification_plan ? 'lean' THEN lean_tier1(subject.model,subject.effort) AND lean_independent(subject.problem_id, r.user_id, r.model, r.effort, subject.user_id, subject.model) ELSE r.user_id<>subject.user_id AND r.model<>subject.model END) AS independent,
     (v.subject_return_id<>subject.id) AS reused
     FROM returns subject JOIN verification_runs v ON v.fingerprint=subject.verification_fingerprint
     JOIN returns r ON r.id=v.result_return_id AND r.problem_id=subject.problem_id JOIN users u ON u.id=r.user_id
@@ -178,9 +178,9 @@ export async function saveCheckReceipt(ret: any, job: any, raw: any): Promise<nu
   const subject = await one(`SELECT * FROM returns WHERE id=$1 AND problem_id=$2`, [job.evidence_return_id, ret.problem_id]);
   if (!subject || !subject.verification_fingerprint || x.fingerprint !== subject.verification_fingerprint) bad('check_receipt fingerprint does not match the assigned immutable package');
   const independent = subject.verification_plan?.lean
-    ? underlyingModelIdentity(subject.model) !== underlyingModelIdentity(ret.model) && (await one(`SELECT lean_independent($1,$2,$3,$4,$5,$6) AS ok`, [subject.problem_id, ret.user_id, ret.model, ret.effort ?? null, subject.user_id, subject.model]))?.ok === true
+    ? distinctLeanFamilies(subject.model, ret.model) && (await one(`SELECT lean_independent($1,$2,$3,$4,$5,$6) AND lean_tier1($6,$7) AS ok`, [subject.problem_id, ret.user_id, ret.model, ret.effort ?? null, subject.user_id, subject.model, subject.effort]))?.ok === true
     : String(subject.user_id) !== String(ret.user_id) && subject.model !== ret.model;
-  if (!independent) bad(subject.verification_plan?.lean ? 'a Lean check requires another model than the author\'s, and another contributor unless yours is approved on this project and runs a tier-1 model at high or above' : 'a check requires a different contributor and model from the author');
+  if (!independent) bad(subject.verification_plan?.lean ? 'a Lean check requires a distinct model family and Tier 1 at high or above, and another contributor unless yours is approved on this project' : 'a check requires a different contributor and model from the author');
   if (subject.verification_plan?.lean && !(await leanStatementReviewed(subject))) bad('Lean statement trust is no longer current; do not execute this package');
   if (!['pass', 'fail', 'unable'].includes(x.outcome)) bad('check_receipt.outcome must be pass|fail|unable');
   if (x.blocker !== undefined && x.outcome !== 'unable') bad('check_receipt.blocker belongs only on an unable receipt');
@@ -398,14 +398,14 @@ export async function saveLeanStatementReview(returnId: number, reviewerId: numb
 }
 export async function leanStatementReviewed(ret: any): Promise<boolean> {
   const p: LeanProfile | undefined = ret.verification_plan?.lean;
-  if (!p?.statement_review_id) return false;
-  // Independence of both authors is lean_independent (schema.sql): always another model; the same user only when approved and on tier 1 (Chris, Oct 6 2026).
-  const review = await one(`SELECT rv.*, r.status AS source_status,r.provisional AS source_provisional,r.user_id AS source_author,r.model AS source_model,r.verification_plan AS source_plan,
+  if (!p?.statement_review_id || !(await one('SELECT lean_tier1($1,$2) AS ok',[ret.model,ret.effort]))?.ok) return false;
+  // Independence of both authors is lean_independent (schema.sql): distinct families and Tier 1/high; the same user only when approved (Chris, Oct 6 2026).
+  const review = await one(`SELECT rv.*, r.status AS source_status,r.provisional AS source_provisional,r.user_id AS source_author,r.model AS source_model,lean_tier1(r.model,r.effort) AS source_tier1,r.verification_plan AS source_plan,
       lean_independent(r.problem_id, rv.user_id, rv.model, rv.effort, $3, $4) AS independent_of_proof, lean_independent(r.problem_id, rv.user_id, rv.model, rv.effort, r.user_id, r.model) AS independent_of_source
     FROM reviews rv JOIN returns r ON r.id=rv.return_id WHERE rv.id=$1 AND r.problem_id=$2`, [p.statement_review_id, ret.problem_id, ret.user_id, ret.model]);
-  return !!review && review.trusted && review.verdict === 'accept' && !review.needs_reassessment && review.source_status === 'accepted' && !review.source_provisional
-    && review.independent_of_proof === true && underlyingModelIdentity(review.model) !== underlyingModelIdentity(ret.model)
-    && review.independent_of_source === true && underlyingModelIdentity(review.model) !== underlyingModelIdentity(review.source_model)
+  return !!review && review.source_tier1 === true && review.trusted && review.verdict === 'accept' && !review.needs_reassessment && review.source_status === 'accepted' && !review.source_provisional
+    && review.independent_of_proof === true && distinctLeanFamilies(review.model, ret.model)
+    && review.independent_of_source === true && distinctLeanFamilies(review.model, review.source_model)
     && !!review.source_plan?.lean && leanStatementBinding(review.source_plan.lean) === leanStatementBinding(p)
     && review.lean_statement_review?.binding_sha256 === leanStatementBinding(p);
 }

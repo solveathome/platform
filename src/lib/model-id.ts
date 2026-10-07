@@ -98,6 +98,26 @@ export function underlyingModelIdentity(raw: unknown): string {
   return canonicalModel(raw).replace(/(?:-(?:none|minimal|low|medium|high|xhigh|max|maximum|extended|extra-high|extrahigh|x_high|ultra|deep|off))+$/, '').replace(/(\d)\.(?=\d)/g, '$1-');
 }
 
+/** Conservative proof-review families: versions and sibling models share a provider lineage.
+ * Unknown identities cannot establish independence; routing-provider labels are not evidence. */
+export function leanModelFamily(raw: unknown): string | null {
+  const m = underlyingModelIdentity(raw);
+  if (/^(?:claude-(?:opus|sonnet|haiku|fable|mythos)(?:-|$)|(?:fable|mythos)(?:-|$))/.test(m)) return 'anthropic';
+  if (/^(?:gpt-\d|o\d(?:-|$)|astra(?:-|$))/.test(m)) return 'openai';
+  if (/^(?:gemini|gemma|palm)(?:-|$)/.test(m)) return 'google';
+  if (/^llama(?:-|$)/.test(m)) return 'meta';
+  if (/^(?:mistral|mixtral|codestral|magistral)(?:-|$)/.test(m)) return 'mistral';
+  if (/^deepseek(?:-|$)/.test(m)) return 'deepseek';
+  if (/^(?:qwen|qwq)(?:-|$)/.test(m)) return 'alibaba';
+  if (/^grok(?:-|$)/.test(m)) return 'xai';
+  if (/^(?:kimi|moonshot)(?:-|$)/.test(m)) return 'moonshot';
+  return null;
+}
+export function distinctLeanFamilies(a: unknown, b: unknown): boolean {
+  const fa = leanModelFamily(a), fb = leanModelFamily(b);
+  return fa !== null && fb !== null && fa !== fb;
+}
+
 /**
  * Thinking level (Chris, Sep 10): frontier models run at several reasoning efforts, and only the highest count as tier 1.
  * The level comes from the X-Effort header or a marker in the id: "gpt-6-astra-high", "claude-fable-5-1 (effort: max)",

@@ -65,6 +65,7 @@ after(async () => {
   await q(`DELETE FROM lanes WHERE problem_id = $1`, [pid]);
   await q(`DELETE FROM problems WHERE id = $1`, [pid]);
   await q(`DELETE FROM tokens WHERE user_id = ANY($1)`, [ids]);
+  await q(`DELETE FROM counted_entries WHERE user_id = ANY($1)`, [ids]);
   await q(`DELETE FROM reputation WHERE user_id = ANY($1)`, [ids]);
   await q(`DELETE FROM users WHERE id = ANY($1)`, [ids]);
   const residue = await one(`SELECT (SELECT count(*) FROM users WHERE handle LIKE $1) + (SELECT count(*) FROM problems WHERE slug = $2) + (SELECT count(*) FROM project_roles WHERE problem_id = $3) AS n`, [`${tag}-%`, slug, pid]);
@@ -368,4 +369,80 @@ test('spawnReviews asks for n more and never passes the cap', async () => {
   await spawnReviews(Number(r.id), pid, null, 2);
   const n = await one(`SELECT count(*) AS c FROM jobs WHERE parent_return_id = $1`, [r.id]);
   assert.equal(Number(n.c), 5);
+});
+
+
+test('self-assigned Lean acceptance enforces distinct families and high effort for same and different contributors',async()=>{
+  const {leanFixture}=await import('./fixtures/lean.mjs');
+  const {modelTier}=await import('../src/lib/auth.ts');
+  for(const m of ['claude-opus-5-5','claude-fable-5-1','gpt-6.1-sol']) await modelTier(m);
+  for(const [who,model,effort,expected] of [['owner','claude-fable-5-1','high',403],['trusted','claude-fable-5-1','high',403],['trusted','gpt-6.1-sol','low',403],['trusted','gpt-6.1-sol','high',200],['owner','gpt-6.1-sol','high',200]]) {
+    const r=await one(`INSERT INTO returns(problem_id,type,user_id,model,provider,report_md,transcript,status,verification_plan,effort)
+      VALUES($1,'formalize',$2,'claude-opus-5-5','anthropic','Statement proposal.','t','pending',$3,'high') RETURNING id`,[pid,people.owner.id,JSON.stringify(leanFixture().plan)]);
+    const response=await call(who,'POST','/result',{model,effort,body:review('accept',{return_id:Number(r.id),verification_sufficiency_md:'Synthetic statement proposal only; no proof execution.'})});
+    const body=await response.json();assert.equal(response.status,expected,JSON.stringify(body));
+    if(expected===403) {
+      assert.match(body.error,/distinct model family/);
+      assert.equal((await one('SELECT count(*) AS n FROM reviews WHERE return_id=$1',[r.id])).n,'0');
+    }
+  }
+});
+
+test('Lean series verdicts recheck each child family and author effort and leave ineligible children pending', async()=>{
+  const {leanFixture}=await import('./fixtures/lean.mjs');
+  const {modelTier}=await import('../src/lib/auth.ts');
+  for(const model of ['claude-opus-5-5','claude-fable-5-1','claude-opus-5-5-high','gpt-6.1-sol']) await modelTier(model);
+  const lead=await one(`INSERT INTO returns(problem_id,type,user_id,model,provider,report_md,transcript,status)
+    VALUES($1,'source',$2,'gpt-6.1-sol','openai','Synthetic source lead.','t','pending') RETURNING id`,[pid,people.author.id]);
+  const job=await one(`INSERT INTO jobs(problem_id,type,title,brief_md,parent_return_id,status,assigned_to,assigned_at)
+    VALUES($1,'review','Review synthetic series','Synthetic fixture',$2,'assigned',$3,now()) RETURNING id`,[pid,lead.id,people.trusted.id]);
+  const children=[];
+  for(const [model,effort,eligible] of [['claude-fable-5-1','high',false],['claude-opus-5-5-high','high',false],['gpt-6.1-sol','low',false],['gpt-6.1-sol','high',true]]) {
+    const child=await one(`INSERT INTO returns(problem_id,type,user_id,model,provider,report_md,transcript,status,verification_plan,effort,triage_lead)
+      VALUES($1,'formalize',$2,$3,'test','Synthetic statement proposal; no proof execution.','t','pending',$4,$5,$6) RETURNING id`,[pid,people.author.id,model,JSON.stringify(leanFixture().plan),effort,lead.id]);
+    children.push({...child,eligible});
+  }
+  const body=await okJson(await call('trusted','POST','/result',{model:'claude-opus-5-5',effort:'high',body:review('accept',{job_id:Number(job.id),return_id:Number(lead.id),also_verdicts:Object.fromEntries(children.map(child=>[child.id,{verdict:'accept',rung:'measured'}])),verification_sufficiency_md:'Synthetic proposal judgments only; no Lean proof executed.'})}));
+  assert.equal(body.outcome,'accepted');
+  for(const child of children) {
+    const row=await one('SELECT status,effects_applied_at FROM returns WHERE id=$1',[child.id]);
+    assert.equal(row.status,child.eligible?'accepted':'pending');
+    if(!child.eligible) {
+      assert.equal(row.effects_applied_at,null);
+      assert.equal((await one('SELECT count(*) AS n FROM reviews WHERE return_id=$1',[child.id])).n,'0');
+      assert.equal((await one("SELECT count(*) AS n FROM credits WHERE source_type='return' AND source_id=$1 AND kind='result'",[String(child.id)])).n,'0');
+      assert.ok(body.warnings.some(w=>w.includes(`#${child.id}`)&&w.includes('Lean')));
+      assert.ok(await one("SELECT 1 FROM jobs WHERE parent_return_id=$1 AND type='review' AND status='queued'",[child.id]),'ineligible child gets an independent reviewer');
+    }
+  }
+});
+
+test('Lean statement reviews persist transcript-derived high effort and authorize the matching proof proposal',async()=>{
+  const {leanFixture}=await import('./fixtures/lean.mjs');
+  const {modelTier}=await import('../src/lib/auth.ts');
+  const {leanStatementBinding}=await import('../src/lib/lean-verification.ts');
+  const {leanStatementReviewed}=await import('../src/lib/verification.ts');
+  await modelTier('gpt-6.1-sol');await modelTier('claude-opus-5-5');
+  const plan=leanFixture().plan;
+  const source=await one(`INSERT INTO returns(problem_id,type,user_id,model,provider,report_md,transcript,status,verification_plan,effort)
+    VALUES($1,'formalize',$2,'gpt-6.1-sol','openai','Synthetic frozen statement proposal.','t','pending',$3,'high') RETURNING id`,[pid,people.author.id,JSON.stringify(plan)]);
+  const transcript=JSON.stringify({type:'assistant',effort:'high',message:{model:'claude-opus-5-5',usage:{input_tokens:1,output_tokens:1},content:[{type:'text',text:'Synthetic statement mapping review.'}]}});
+  await okJson(await call('trusted','POST','/result',{model:'claude-opus-5-5',effort:'low',body:review('accept',{return_id:Number(source.id),transcript,verification_sufficiency_md:'Synthetic statement mapping only; no proof execution.',lean_statement_review:{binding_sha256:leanStatementBinding(plan.lean),meaning_md:'The synthetic identity target expresses precisely the fixture claim and definitions.'}})}));
+  const rv=await one('SELECT id,effort,trusted FROM reviews WHERE return_id=$1',[source.id]);
+  assert.equal(rv.effort,'high');assert.equal(rv.trusted,true);
+  const proofPlan=structuredClone(plan);proofPlan.lean.statement_review_id=Number(rv.id);
+  const proof=await one(`INSERT INTO returns(problem_id,type,user_id,model,provider,report_md,transcript,status,verification_plan,effort)
+    VALUES($1,'formalize',$2,'gpt-6.1-sol','openai','Synthetic proof proposal.','t','pending',$3,'high') RETURNING *`,[pid,people.author.id,JSON.stringify(proofPlan)]);
+  assert.equal(await leanStatementReviewed(proof),true,'validated effort remains current at the persisted trust boundary');
+});
+
+test('a first-seen eligible reviewer alias is registered before Lean eligibility is checked',async()=>{
+  const {leanFixture}=await import('./fixtures/lean.mjs');
+  const {modelTier}=await import('../src/lib/auth.ts');
+  await modelTier('claude-opus-5-5');
+  const alias='gpt-6.1-sol-xhigh';await q('DELETE FROM model_tiers WHERE model=$1',[alias]);
+  const source=await one(`INSERT INTO returns(problem_id,type,user_id,model,provider,report_md,transcript,status,verification_plan,effort)
+    VALUES($1,'formalize',$2,'claude-opus-5-5','anthropic','Synthetic statement proposal.','t','pending',$3,'high') RETURNING id`,[pid,people.owner.id,JSON.stringify(leanFixture().plan)]);
+  await okJson(await call('owner','POST','/result',{model:alias,effort:'high',body:review('accept',{return_id:Number(source.id),verification_sufficiency_md:'Synthetic statement proposal only; no Lean proof execution.'})}));
+  assert.equal(Number((await one('SELECT tier FROM model_tiers WHERE model=$1',[alias])).tier),1);
 });
