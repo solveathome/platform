@@ -12,6 +12,7 @@ const {TERMS_VERSION}=await import('../src/lib/terms.ts');
 const {leanFixture}=await import('./fixtures/lean.mjs');
 const {leanStatementBinding}=await import('../src/lib/lean-verification.ts');
 const {leanStatementReviewed,verificationRuns,saveCheckReceipt}=await import('../src/lib/verification.ts');
+const {leanExecutionFixture}=await import('./fixtures/lean-execution.mjs');
 const {whyNotEligible}=await import('../src/lib/scheduler.ts');
 
 const AUTHOR='claude-opus-5-5', OTHER='gpt-6.1-sol', SMALL='claude-sonnet-5';
@@ -31,8 +32,12 @@ after(async()=>{
   await q(`DELETE FROM reviews WHERE return_id IN (SELECT id FROM returns WHERE problem_id=$1)`,[pid]);
   await q(`UPDATE returns SET job_id=NULL WHERE problem_id=$1`,[pid]);
   await q(`DELETE FROM jobs WHERE problem_id=$1`,[pid]);
+  await q(`DELETE FROM file_refs WHERE ref_type='return' AND ref_id IN (SELECT id FROM returns WHERE problem_id=$1)`,[pid]);
   await q(`DELETE FROM returns WHERE problem_id=$1`,[pid]);
   await q(`DELETE FROM project_roles WHERE problem_id=$1`,[pid]);
+  await q(`DELETE FROM assignment_attempts WHERE problem_id=$1`,[pid]);
+  await q(`DELETE FROM sessions WHERE problem_id=$1`,[pid]);
+  await q(`DELETE FROM files WHERE user_id=ANY($1::bigint[])`,[Object.values(users)]);
   await q(`DELETE FROM problems WHERE id=$1`,[pid]);
   await q(`DELETE FROM users WHERE id = ANY($1::bigint[])`,[Object.values(users)]);
   await pool.end();
@@ -82,11 +87,13 @@ test('statement trust, receipt independence and check assignment follow the rule
   const plainProof=await ret(users.plain,AUTHOR,{plan:{...plan,lean:{...plan.lean,statement_review_id:Number(plainReview.id)}}});
   assert.equal(await leanStatementReviewed(plainProof),false,'an unapproved user reviewing their own return is refused');
 
-  // Receipts: the owner's own receipt on another tier-1 model counts for a Lean package, never for a plain one.
+  // Historical observations never acquire authenticated execution provenance, even for an approved owner.
   const receipt=async(subject,model)=>{const r=await ret(users.owner,model,{type:'check',status:'recorded'});
     await q(`INSERT INTO verification_runs (subject_return_id,result_return_id,fingerprint,outcome,observed,elapsed_seconds,details) VALUES ($1,$2,$3,'pass','{}',1,'{}')`,[subject.id,r.id,subject.verification_fingerprint]);};
   await receipt(own,OTHER);
-  assert.equal((await verificationRuns(own.id))[0].independent,true,'Lean receipt by the approved owner on another tier-1 model');
+  assert.equal((await verificationRuns(own.id))[0].trusted_execution,false,'old owner receipt has no attestation');
+  assert.equal((await verificationRuns(own.id))[0].independent,true,'historical cross-family metadata remains truthful');
+  assert.equal((await verificationRuns(own.id))[0].execution_eligible,false,'independence metadata cannot promote old execution');
   await receipt(same,AUTHOR);
   assert.equal((await verificationRuns(same.id))[0].independent,false,'Lean receipt on the author model');
   const plainPkg=await ret(users.owner,AUTHOR,{plan:{...plan,lean:undefined}});
@@ -96,15 +103,15 @@ test('statement trust, receipt independence and check assignment follow the rule
   // Check intake and assignment.
   const job=await one(`INSERT INTO jobs (problem_id,type,title,brief_md,min_tier,budget_hours,evidence_return_id,required_tools) VALUES ($1,'check','Check fixture','Replay.',99,0.5,$2,ARRAY['lean','lean-comparator-linux']) RETURNING *`,[pid,own.id]);
   const intake=async(user,model,effort)=>saveCheckReceipt({problem_id:pid,user_id:user,model,effort},job,{fingerprint:own.verification_fingerprint}).catch(e=>e.message);
-  assert.doesNotMatch(String(await intake(users.owner,OTHER,'high')),/distinct model family/,'owner on another tier-1 model passes the independence gate');
-  assert.match(String(await intake(users.owner,AUTHOR,'high')),/distinct model family/);
-  assert.match(String(await intake(users.owner,SMALL,'high')),/distinct model family/);
+  assert.match(String(await intake(users.owner,OTHER,'high')),/execution_policy/);
+  assert.match(String(await intake(users.owner,AUTHOR,'high')),/execution_policy/,'same model can execute, but cannot bypass authenticated intake');
+  assert.match(String(await intake(users.owner,SMALL,'high')),/currently approved project contributor/);
   const agent={problemId:pid,slug,sessionId:'',uid:users.owner,tier:1,model:OTHER,provider:'openai',trusted:true,granted:true,lane:null,cpuHours:8,ramGb:32,hasGpu:false,disk:10,maxHours:4,reviewStreak:0,capabilities:{tools:['lean','lean-comparator-linux']}};
   const reasons=async(a)=>(await whyNotEligible(a,job.id)).join(' | ');
   assert.doesNotMatch(await reasons(agent),/own handle or model/,'the approved owner on another tier-1 model may take the check');
-  assert.match(await reasons({...agent,model:AUTHOR}),/own handle or model/,'never on the author model');
+  assert.doesNotMatch(await reasons({...agent,model:AUTHOR}),/own handle or model/,'same model may execute; correctness review remains cross-family');
   assert.match(await reasons({...agent,tier:2}),/own handle or model/,'never below tier 1');
-  assert.match(await reasons({...agent,granted:false,trusted:true}),/own handle or model/,'trust by model alone does not open the own-handle path');
+  assert.match(await reasons({...agent,uid:users.plain,granted:false,trusted:true}),/own handle or model/,'trust by model alone does not authorize execution');
 });
 
 
@@ -125,4 +132,79 @@ test('SQL and serving boundaries agree on families, effort, and author eligibili
   await q(`UPDATE returns SET effort='medium' WHERE id=$1`,[source.id]);assert.deepEqual(await current(),[false,false],'statement author must be high');
   await q(`UPDATE returns SET effort='high' WHERE id=$1`,[source.id]);
   proof.effort='medium';await q(`UPDATE returns SET effort='medium' WHERE id=$1`,[proof.id]);assert.deepEqual(await current(),[false,false],'proof author must be high');
+});
+
+
+test('new authenticated execution allows approved author/same family; binds evidence, trust and exact package',async()=>{
+  const {plan}=leanFixture(), binding=leanStatementBinding(plan.lean);
+  const source=await ret(users.owner,AUTHOR,{plan});
+  const rv=await one(`INSERT INTO reviews(return_id,user_id,model,provider,verdict,rung,notes_md,trusted,effort,lean_statement_review)
+    VALUES($1,$2,$3,'openai','accept','Measured','fixture',true,'high',$4) RETURNING id`,[source.id,users.owner,OTHER,JSON.stringify({binding_sha256:binding,meaning_md:'fixture'})]);
+  const proof=await ret(users.owner,AUTHOR,{plan:{...plan,lean:{...plan.lean,statement_review_id:Number(rv.id)}}});
+  // An old unable report is retained but must not exhaust/suppress the new authenticated attempt.
+  const legacy=await ret(users.owner,AUTHOR,{type:'check',status:'recorded'});
+  const oldRun=await one(`INSERT INTO verification_runs(subject_return_id,result_return_id,fingerprint,outcome,observed,elapsed_seconds,details) VALUES($1,$2,$3,'unable','Historical package blocker',1,$4) RETURNING id`,[proof.id,legacy.id,proof.verification_fingerprint,JSON.stringify({blocker:{kind:'package',required_tools:[],required_sources:[]}})]);
+  const {queueCheck,verificationState}=await import('../src/lib/verification.ts');
+  assert.equal(await queueCheck(proof),true,'unattested legacy unable cannot suppress a new check');
+  const freshJob=await one(`SELECT id FROM jobs WHERE evidence_return_id=$1 AND type='check' AND status='queued'`,[proof.id]);
+  const freshAgent={problemId:pid,slug,sessionId:'',uid:users.owner,tier:1,model:AUTHOR,provider:'anthropic',trusted:true,granted:true,lane:null,cpuHours:8,ramGb:32,hasGpu:false,disk:10,maxHours:4,reviewStreak:0,capabilities:{tools:['lean','lean-comparator-linux']}};
+  assert.ok(!(await whyNotEligible(freshAgent,freshJob.id)).some(reason=>reason.includes('already reported this package as unable')),'legacy unable cannot block the approved owner assignment');
+  assert.ok((await verificationRuns(proof.id)).some(r=>Number(r.id)===Number(oldRun.id)),'historical unable remains visible');
+  await q(`UPDATE jobs SET status='expired' WHERE id=$1`,[freshJob.id]);
+  const f=await leanExecutionFixture(proof,users.owner,AUTHOR);
+  await assert.rejects(saveCheckReceipt(f.ret,f.job,f.raw),/authenticated account and session/);
+  await assert.rejects(saveCheckReceipt(f.ret,f.job,f.raw,{...f.authenticated,userId:users.plain}),/authenticated account and session/);
+  await assert.rejects(saveCheckReceipt(f.ret,f.job,f.raw,{...f.authenticated,sessionId:randomUUID()}),/authenticated account and session/);
+  await assert.rejects(saveCheckReceipt(f.ret,f.job,{...f.raw,execution_policy:'legacy'},f.authenticated),/execution_policy/);
+  await assert.rejects(saveCheckReceipt(f.ret,f.job,{...f.raw,attestation_md:true},f.authenticated),/nonempty text/);
+  await assert.rejects(saveCheckReceipt(f.ret,f.job,{...f.raw,controls:[]},f.authenticated),/controls/);
+  const saved=await f.submit();
+  assert.equal(await queueCheck(proof),false,'one eligible execution suffices; no second family replay is queued');
+  const {researchSummary}=await import('../src/lib/research.ts');
+  assert.equal((await researchSummary(pid)).checks.first_attempt_completed,1,'board metrics use current execution eligibility, including an authenticated author receipt');
+  const current=async(subject=proof)=>(await verificationRuns(subject.id)).find(r=>Number(r.id)===Number(saved.id));
+  assert.equal((await current()).trusted_execution,true,'one authenticated author execution is eligible');
+  assert.equal((await current()).execution_eligible,true);
+  assert.equal((await current()).independent,false,'same-family execution is not falsely labelled model-independent');
+  const {leanVerificationSummary,verificationSummary}=await import('../src/lib/verification.ts');
+  assert.equal((await leanVerificationSummary(proof.id,plan.lean.manuscript_sha256)).status,'awaiting_review','execution alone is not mathematical correctness review');
+  const correctness=await one(`INSERT INTO reviews(return_id,user_id,model,provider,verdict,rung,notes_md,trusted,effort,verification_receipt_id,verification_sufficiency_md)
+    VALUES($1,$2,$3,'fixture','accept','Measured','Synthetic review',true,'high',$4,$5) RETURNING id`,[proof.id,users.owner,AUTHOR,saved.id,'Synthetic independent correctness assessment: mapped identity follows from its hypothesis; proof reasoning, assumptions, artifacts, isolation, controls and limits assessed.']);
+  assert.equal((await leanVerificationSummary(proof.id,plan.lean.manuscript_sha256)).status,'awaiting_review','same-family semantic self-approval is ineligible');
+  await q(`UPDATE reviews SET model=$2 WHERE id=$1`,[correctness.id,OTHER]);
+  assert.equal((await leanVerificationSummary(proof.id,plan.lean.manuscript_sha256)).status,'checked','one author execution plus same-human cross-family correctness review suffices');
+  const summary=await verificationSummary(proof.id);
+  assert.equal(summary.receipts.eligible,1);assert.equal(summary.receipts.trusted_execution,1);assert.equal(summary.receipts.independent,0);
+  assert.equal(await independent(users.owner,AUTHOR,'high',users.owner),false,'same-family correctness self-approval stays prohibited');
+  const identical=await ret(users.owner,AUTHOR,{plan:proof.verification_plan});
+  await q(`UPDATE returns SET verification_fingerprint=$2 WHERE id=$1`,[identical.id,proof.verification_fingerprint]);
+  assert.equal((await current(identical)).trusted_execution,true,'same exact package reuses this one receipt');
+  await q(`UPDATE returns SET verification_fingerprint='changed' WHERE id=$1`,[identical.id]);
+  assert.equal((await current(identical)),undefined,'different package cannot reuse the receipt');
+  await q(`UPDATE verification_runs SET details=jsonb_set(details,'{exit_code}','1') WHERE id=$1`,[saved.id]);
+  assert.equal((await current()).trusted_execution,false,'receipt edits invalidate provenance');
+  await q(`UPDATE verification_runs SET details=$2 WHERE id=$1`,[saved.id,JSON.stringify(saved.details)]);
+  assert.equal((await current()).trusted_execution,true,'exact original observation remains bound');
+  await q(`UPDATE files SET deleted_at=now() WHERE sha256=$1`,[f.raw.stdout_sha256]);
+  assert.equal((await current()).trusted_execution,false,'missing/deleted evidence invalidates');
+  await q(`UPDATE files SET deleted_at=NULL WHERE sha256=$1`,[f.raw.stdout_sha256]);
+  await q(`UPDATE returns SET effort='medium' WHERE id=$1`,[f.ret.id]);
+  assert.equal((await current()).trusted_execution,false,'low effort invalidates');
+  await q(`UPDATE returns SET effort='high',status='withdrawn' WHERE id=$1`,[f.ret.id]);
+  const {validateReceiptUse}=await import('../src/lib/verification.ts');
+  await assert.rejects(validateReceiptUse(proof.id,saved.id),/valid receipt/);
+  await q(`UPDATE returns SET status='recorded' WHERE id=$1`,[f.ret.id]);
+  const trusted=await leanExecutionFixture(proof,users.trusted,AUTHOR), trustedRun=await trusted.submit();
+  const trustedCurrent=async()=>(await verificationRuns(proof.id)).find(r=>Number(r.id)===Number(trustedRun.id)).trusted_execution;
+  assert.equal(await trustedCurrent(),true,'approved external same-family executor is also eligible');
+  await q(`UPDATE project_roles SET revoked_at=now() WHERE problem_id=$1 AND user_id=$2`,[pid,users.trusted]);
+  assert.equal(await trustedCurrent(),false,'revoked trust is not current');
+  await q(`UPDATE project_roles SET revoked_at=NULL,granted_at=now() WHERE problem_id=$1 AND user_id=$2`,[pid,users.trusted]);
+  assert.equal(await trustedCurrent(),false,'a replacement grant cannot retrospectively promote an old attestation');
+  const unapproved=await leanExecutionFixture(proof,users.plain,OTHER);
+  await assert.rejects(unapproved.submit(),/currently approved project contributor/);
+  const failed=await leanExecutionFixture(proof,users.owner,AUTHOR);
+  failed.raw.outcome='fail';failed.raw.exit_code=1;failed.raw.observed='Synthetic detected failure.';
+  await failed.submit();
+  assert.equal((await verificationState(proof.id)).unresolved_conflict,true,'new authenticated failures remain visible beside a pass');
 });

@@ -132,11 +132,11 @@ function eligibility(a: SchedulingAgent, omitCompute = false, sameKindOnly = fal
     ["this session released or cancelled an attempt on it before", `NOT EXISTS (SELECT 1 FROM assignment_attempts old WHERE old.job_id = j.id AND old.session_id = ${sid} AND old.status IN ('released','cancelled'))`],
     ["it is outside the lane this session was registered for", `(${p(a.lane)}::text IS NULL OR l.slug = $${values.length})`],
     ["it asks for another model than yours", `(j.avoid_model IS NULL OR j.avoid_model IS DISTINCT FROM ${model}::text)`],
-    // A Lean package may be checked by its author's own handle when that handle is approved and the session runs tier 1, never on the author's model (Chris, Oct 6 2026).
-    ["it checks evidence of your own handle or model", `(er.id IS NULL OR CASE WHEN er.verification_plan ? 'lean' THEN coalesce(lean_model_family(er.model) <> lean_model_family(${model}::text),false) AND lean_tier1(er.model,er.effort) AND ${tier}=1 AND (er.user_id <> ${uid} OR ${p(a.granted && a.tier === 1)}::boolean) ELSE er.user_id <> ${uid} AND er.model IS DISTINCT FROM ${model}::text END)`],
+    // One authenticated execution by an approved contributor suffices; model diversity belongs to correctness review.
+    ["it checks evidence of your own handle or model", `(er.id IS NULL OR CASE WHEN er.verification_plan ? 'lean' THEN lean_tier1(er.model,er.effort) AND ${tier}=1 AND lean_approved_member(j.problem_id,${uid}) ELSE er.user_id <> ${uid} AND er.model IS DISTINCT FROM ${model}::text END)`],
     ["its pinned Lean statement review is no longer trusted", `(er.id IS NULL OR NOT (er.verification_plan ? 'lean') OR lean_statement_review_current(er.id))`],
     ["it is a check longer than this session's hours per assignment", `(j.type <> 'check' OR j.budget_hours <= ${p(a.maxHours)})`],
-    ["your handle already reported this package as unable to run", `(j.type <> 'check' OR NOT EXISTS (SELECT 1 FROM verification_runs v JOIN returns worker ON worker.id=v.result_return_id WHERE v.fingerprint=er.verification_fingerprint AND worker.problem_id=j.problem_id AND worker.user_id=${uid} AND v.outcome='unable'))`],
+    ["your handle already reported this package as unable to run", `(j.type <> 'check' OR NOT EXISTS (SELECT 1 FROM verification_runs v JOIN returns worker ON worker.id=v.result_return_id WHERE v.fingerprint=er.verification_fingerprint AND worker.problem_id=j.problem_id AND worker.user_id=${uid} AND v.outcome='unable' AND (NOT (er.verification_plan ? 'lean') OR (lean_execution_current(v.id,er.id) AND worker.status IN ('recorded','accepted')))))`],
     ["it needs tools this session did not declare", requirementClause('required_tools', 'tools', p(matchingTools(a.capabilities.tools)), true)],
     ["it needs sources this session did not declare", requirementClause('required_sources', 'sources', p(a.capabilities.sources ?? []), false)],
     ["it judges your own handle's return, which needs a grant", `(pr.id IS NULL OR pr.user_id <> ${uid} OR ((j.type <> 'triage' OR ${fallback}::boolean) AND ${p(a.granted)}::boolean))`],
@@ -205,9 +205,9 @@ export async function reviewWorkFor(a: SchedulingAgent, triage: boolean) {
 }
 
 const DEFAULT_SKILLS = `CASE j.type WHEN 'formalize' THEN ARRAY['lean','formalize'] WHEN 'measure' THEN ARRAY['python','computation'] WHEN 'source' THEN ARRAY['literature-search'] WHEN 'break' THEN ARRAY['proof-analysis','counterexamples'] WHEN 'review' THEN ARRAY['verification','proof-analysis'] WHEN 'explore' THEN ARRAY['proof-analysis','research'] ELSE ARRAY[]::text[] END`;
-/** Judgment of a packaged return that already has completed independent execution: a bounded decision, not a review-pool task. */
+/** Judgment of a packaged return that already has completed eligible execution: a bounded decision, not a review-pool task. */
 const CHECKED_JUDGMENT_SQL = `j.type='review' AND pr.verification_plan IS NOT NULL AND EXISTS (SELECT 1 FROM verification_runs v JOIN returns w ON w.id=v.result_return_id
-  WHERE v.fingerprint=pr.verification_fingerprint AND w.problem_id=pr.problem_id AND CASE WHEN pr.verification_plan ? 'lean' THEN lean_independent(pr.problem_id,w.user_id,w.model,w.effort,pr.user_id,pr.model) ELSE w.user_id<>pr.user_id AND w.model<>pr.model END AND w.status IN ('recorded','accepted') AND v.outcome IN ('pass','fail'))`;
+  WHERE v.fingerprint=pr.verification_fingerprint AND w.problem_id=pr.problem_id AND CASE WHEN pr.verification_plan ? 'lean' THEN lean_execution_current(v.id,pr.id) ELSE w.user_id<>pr.user_id AND w.model<>pr.model END AND w.status IN ('recorded','accepted') AND v.outcome IN ('pass','fail'))`;
 /** Route spread (Chris, Sep 24 2026, #sah-gemma-mvp). A research job on a route this handle and model worked in their last
  * ROUTE_REPEAT_WINDOW assignments ranks ROUTE_REPEAT_PENALTY points lower: one agent running all day otherwise keeps extending
  * its own recent routes, the loop the Gemma Challenge's agents fell into ("quickly converged on a small set of axes"). Keyed on

@@ -10,6 +10,7 @@ const {q,one,pool,migrate}=await import('../src/db/index.ts');
 const {modelTier}=await import('../src/lib/auth.ts');
 const {TERMS_VERSION}=await import('../src/lib/terms.ts');
 const {leanFixture,leanEvidence}=await import('./fixtures/lean.mjs');
+const {leanExecutionFixture}=await import('./fixtures/lean-execution.mjs');
 const {leanStatementBinding}=await import('../src/lib/lean-verification.ts');
 const {paperLeanVerification}=await import('../src/lib/verification.ts');
 
@@ -26,7 +27,12 @@ after(async()=>{
   await q(`DELETE FROM verification_runs WHERE subject_return_id IN (SELECT id FROM returns WHERE problem_id=$1) OR result_return_id IN (SELECT id FROM returns WHERE problem_id=$1)`,[pid]);
   await q(`DELETE FROM reviews WHERE return_id IN (SELECT id FROM returns WHERE problem_id=$1)`,[pid]);
   await q(`UPDATE returns SET superseded_by=NULL WHERE problem_id=$1`,[pid]);
+  await q(`DELETE FROM file_refs WHERE ref_type='return' AND ref_id IN (SELECT id FROM returns WHERE problem_id=$1)`,[pid]);
+  await q(`UPDATE returns SET job_id=NULL WHERE problem_id=$1`,[pid]);
+  await q(`DELETE FROM jobs WHERE problem_id=$1`,[pid]);
   await q(`DELETE FROM returns WHERE problem_id=$1`,[pid]);
+  await q(`DELETE FROM sessions WHERE problem_id=$1`,[pid]);
+  await q(`DELETE FROM files WHERE user_id=ANY($1::bigint[])`,[[author,reviewer]]);
   await q(`DELETE FROM project_roles WHERE problem_id=$1`,[pid]);
   await q(`DELETE FROM problems WHERE id=$1`,[pid]);
   await q(`DELETE FROM users WHERE id = ANY($1::bigint[])`,[[author,reviewer]]);
@@ -43,12 +49,11 @@ test('rejected and superseded packages show their decision; a rejected one names
     [source.id,reviewer,JSON.stringify({binding_sha256:binding,meaning_md:'fixture'})]);
   const proofPlan={...plan,lean:{...plan.lean,statement_review_id:Number(sreview.id)}};
   // A receipt that passes, on every package below.
-  const receipt=async(subject)=>{const w=await one(`INSERT INTO returns (problem_id,type,user_id,model,provider,report_md,transcript,status,effort) VALUES ($1,'check',$2,'gpt-6.1-sol','openai','check','t','recorded','high') RETURNING id`,[pid,reviewer]);
-    return one(`INSERT INTO verification_runs (subject_return_id,result_return_id,fingerprint,outcome,observed,elapsed_seconds,details) VALUES ($1,$2,$3,'pass','{}',1,$4) RETURNING id`,[subject.id,w.id,subject.verification_fingerprint,JSON.stringify({exit_code:0,lean:leanEvidence(plan.lean,binding)})]);};
+  const receipt=async(subject)=>(await leanExecutionFixture(subject,reviewer,'gpt-6.1-sol')).submit();
   const rejected=await ret('rejected',proofPlan); await receipt(rejected);
   const older=await ret('rejected',proofPlan); await receipt(older);
   const accepted=await ret('accepted',proofPlan); const run=await receipt(accepted);
-  await q(`INSERT INTO reviews (return_id,user_id,model,provider,verdict,rung,notes_md,trusted,effort,verification_receipt_id,verification_sufficiency_md) VALUES ($1,$2,'gpt-6.1-sol','openai','accept','verified','fixture',true,'high',$3,'The receipt suffices.')`,[accepted.id,reviewer,run.id]);
+  await q(`INSERT INTO reviews (return_id,user_id,model,provider,verdict,rung,notes_md,trusted,effort,verification_receipt_id,verification_sufficiency_md) VALUES ($1,$2,'gpt-6.1-sol','openai','accept','verified','fixture',true,'high',$3,'Synthetic review: the mapped identity follows from its hypothesis; assumptions, proof reasoning, exact claim match, provenance, isolation and controls were assessed.')`,[accepted.id,reviewer,run.id]);
   const folded=await ret('superseded',proofPlan); await q(`UPDATE returns SET superseded_by=$2 WHERE id=$1`,[folded.id,accepted.id]); await receipt(folded);
   const later=await ret('rejected',proofPlan); await receipt(later);   // rejected after the accepted one: nothing later replaces it
   const list=await paperLeanVerification(pid,'example',plan.lean.manuscript_sha256);
@@ -58,7 +63,7 @@ test('rejected and superseded packages show their decision; a rejected one names
   assert.equal(by[folded.id].status,'superseded'); assert.equal(by[folded.id].superseded_by,Number(accepted.id));
   assert.equal(by[later.id].status,'rejected'); assert.equal(by[later.id].superseded_by,undefined);
   assert.equal(by[source.id].status,'no_proof','the accepted statement proposal keeps its own status');
-  // Historical same-family acceptance remains historical acceptance, but cannot satisfy the current independent Lean gate.
+  // Changing the executor model after attestation invalidates its binding, while the historical acceptance remains.
   await q(`UPDATE returns SET model='claude-fable-5-1',provider='anthropic' WHERE id IN (SELECT result_return_id FROM verification_runs WHERE subject_return_id=$1)`,[accepted.id]);
   const legacy=(await paperLeanVerification(pid,'example',plan.lean.manuscript_sha256)).find(r=>r.return_id===Number(accepted.id));
   assert.equal(legacy.return_status,'accepted');assert.equal(legacy.status,'no_proof');assert.deepEqual(legacy.checked_claims,[]);

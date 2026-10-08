@@ -1366,7 +1366,7 @@ CREATE OR REPLACE FUNCTION lean_model_identity(model text) RETURNS text LANGUAGE
   SELECT regexp_replace(regexp_replace(canon_model(model), '(-(none|minimal|low|medium|high|xhigh|max|maximum|extended|extra-high|extrahigh|x_high|ultra|deep|off))+$', ''), '([0-9])\.(?=[0-9])', '\1-', 'g');
 $$;
 -- Lean independence (Chris, Oct 6 2026: "Different model I think we should keep but it can be same user for approved users and tier 1 models").
--- A statement review, check, receipt or verified-status review requires a distinct model family and Tier 1/high.
+-- Statement and mathematical correctness review require a distinct model family and Tier 1/high.
 -- Its user differs or is approved on the project (owner or trusted by grant, or the researcher).
 -- The maintainer handles of OWNER_HANDLES are known to the scheduler's session check, not here. Non-Lean packages keep their rules.
 CREATE OR REPLACE FUNCTION lean_approved_member(p_problem bigint, p_user bigint) RETURNS boolean LANGUAGE sql STABLE AS $$
@@ -1408,4 +1408,47 @@ CREATE OR REPLACE FUNCTION lean_statement_review_current(subject_id bigint) RETU
       AND rv.lean_statement_review->>'binding_sha256' ~ '^[a-f0-9]{64}$'
       AND ((source.verification_plan->'lean') - 'statement_review_id')=((proof.verification_plan->'lean') - 'statement_review_id')
   );
+$$;
+
+-- Oct 8 2026: model diversity belongs to correctness review, not duplicate execution.
+-- No backfill: historical receipts lack authenticated execution provenance and never acquire it by migration.
+ALTER TABLE verification_runs ADD COLUMN IF NOT EXISTS execution_attestation jsonb;
+CREATE OR REPLACE FUNCTION lean_execution_eligible(p_problem bigint, p_actor bigint, p_model text, p_effort text, p_author bigint) RETURNS boolean LANGUAGE sql STABLE AS $$
+  SELECT lean_approved_member(p_problem,p_actor) AND lean_tier1(p_model,p_effort);
+$$;
+CREATE OR REPLACE FUNCTION lean_execution_authority(p_problem bigint, p_actor bigint) RETURNS jsonb LANGUAGE sql STABLE AS $$
+  SELECT CASE WHEN EXISTS(SELECT 1 FROM problems WHERE id=p_problem AND researcher_user_id=p_actor)
+    THEN jsonb_build_object('kind','researcher','user_id',p_actor)
+    ELSE (SELECT jsonb_build_object('kind','grant','role',role,'granted_at',granted_at)
+      FROM project_roles WHERE problem_id=p_problem AND user_id=p_actor AND revoked_at IS NULL) END;
+$$;
+-- Bind the whole observation and authenticated assignment without publishing session credentials or attempt IDs.
+CREATE OR REPLACE FUNCTION lean_execution_snapshot(p_run_id bigint) RETURNS jsonb LANGUAGE sql STABLE AS $$
+  SELECT jsonb_build_object('fingerprint',v.fingerprint,'outcome',v.outcome,'observed',v.observed,
+    'elapsed_seconds',v.elapsed_seconds,'details',v.details,'subject_return_id',v.subject_return_id,'created_at',v.created_at,'result_return_id',r.id,'user_id',r.user_id,
+    'model',r.model,'effort',r.effort,'job_id',r.job_id,'assignment_started_at',a.started_at)
+  FROM verification_runs v JOIN returns r ON r.id=v.result_return_id
+    JOIN jobs j ON j.id=r.job_id AND j.problem_id=r.problem_id AND j.type='check'
+    JOIN assignment_attempts a ON a.id=j.attempt_id AND a.job_id=j.id AND a.problem_id=r.problem_id
+      AND a.user_id=r.user_id AND a.session_id=r.session AND a.model=r.model AND a.status='completed'
+    JOIN sessions s ON s.id=r.session AND s.user_id=r.user_id AND s.problem_id=r.problem_id AND s.model=r.model
+  WHERE v.id=p_run_id;
+$$;
+CREATE OR REPLACE FUNCTION lean_execution_current(p_run_id bigint, p_subject_id bigint) RETURNS boolean LANGUAGE sql STABLE AS $$
+  SELECT EXISTS(SELECT 1 FROM verification_runs v JOIN returns r ON r.id=v.result_return_id
+    JOIN returns subject ON subject.id=p_subject_id AND subject.problem_id=r.problem_id
+      AND subject.verification_fingerprint=v.fingerprint
+    WHERE v.id=p_run_id AND lean_tier1(subject.model,subject.effort)
+      AND lean_execution_eligible(subject.problem_id,r.user_id,r.model,r.effort,subject.user_id)
+      AND v.execution_attestation->>'version'='authenticated-contributor-v1'
+      AND v.details->>'execution_policy'='authenticated-contributor-v1'
+      AND length(trim(v.details->>'attestation_md'))>=40
+      AND v.execution_attestation->'authority'=lean_execution_authority(subject.problem_id,r.user_id)
+      AND v.execution_attestation->'receipt'=lean_execution_snapshot(v.id)
+      AND NOT EXISTS(SELECT 1 FROM (
+        SELECT unnest(ARRAY[v.details->>'stdout_sha256',v.details->'lean'->>'audit_sha256',v.details->'lean'->>'axioms_sha256']) AS sha
+        UNION SELECT claim->>'proof_sha256' FROM jsonb_array_elements(coalesce(v.details->'lean'->'claims','[]'::jsonb)) claim
+      ) artifact WHERE artifact.sha IS NOT NULL AND NOT EXISTS(
+        SELECT 1 FROM files f JOIN file_refs ref ON ref.file_sha=f.sha256
+        WHERE f.sha256=artifact.sha AND f.deleted_at IS NULL AND ref.ref_type='return' AND ref.ref_id=r.id)));
 $$;

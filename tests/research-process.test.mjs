@@ -567,7 +567,7 @@ test('itemised controls, stated limits and declared tools feed a summary generat
   assert.ok(s.lines.some(l=>/^Method \(receipt #\d+\): rerun of the supplied checker; expected answer visible to the worker\./.test(l)));
   assert.match(a.brief_md,/"schema_version": 1/,'a check worker gets the package in full');
   assert.ok(s.lines.some(l=>l==='Awaiting trusted judgment.'));
-  assert.deepEqual(s.receipts,{total:1,independent:1,pass:1,fail:0,unable:0,reused:0,excluded:0});
+  assert.deepEqual(s.receipts,{total:1,eligible:1,trusted_execution:0,independent:1,pass:1,fail:0,unable:0,reused:0,excluded:0});
   const review=await start('judge');assert.equal(review.type,'review');
   assert.match(review.brief_md,/### Verification\n\n\*\*A rerun of the author's checker by @research-runner/);assert.match(review.brief_md,/Negative controls: 1 of 2 detected/);
   assert.match(review.brief_md,/\*\*Judgment required\.\*\* Decide whether this method at this coverage establishes the claim at the rung requested, with the 2 caveats above/);
@@ -868,7 +868,7 @@ test('a human-requested pursuit is not replaced by an automatic age-based step c
 
 
 // Synthetic workflow evidence: these tests execute no Lean and assert no mathematical result.
-test('Lean statement review, independent worker receipt and paper-version status use the existing bot API', async()=>{
+test('Lean statement review, authenticated trusted execution and paper-version status use the existing bot API', async()=>{
   const {leanFixture,leanEvidence}=await import('./fixtures/lean.mjs');
   const {leanStatementBinding}=await import('../src/lib/lean-verification.ts');
   const {leanVerificationSummary,leanStatementReviewed,saveCheckReceipt,queueCheck,verificationRuns,verificationBrief}=await import('../src/lib/verification.ts');
@@ -895,7 +895,9 @@ test('Lean statement review, independent worker receipt and paper-version status
   assert.equal((await one(`SELECT lean_model_identity('gpt-6.1-sol-high-high') AS identity`)).identity,'gpt-6-1-sol');
   const agent={problemId:pid,slug,sessionId:'',uid:users.runner.id,tier:1,model:models.astra+'-high-high',provider:'openai',trusted:true,granted:false,lane:null,cpuHours:8,ramGb:32,hasGpu:false,disk:10,maxHours:4,reviewStreak:0,capabilities:{tools:['lean','lean-comparator-linux']}};
   assert.ok((await whyNotEligible(agent,check.id)).some(s=>s.includes('own handle or model')),'model effort aliases cannot check their own kind');
-  await assert.rejects(()=>saveCheckReceipt({problem_id:pid,user_id:users.runner.id,model:agent.model},check,{fingerprint:proofRow.verification_fingerprint}),/distinct model family/);
+  await assert.rejects(()=>saveCheckReceipt({problem_id:pid,user_id:users.runner.id,model:agent.model},check,{fingerprint:proofRow.verification_fingerprint}),/currently approved project contributor/);
+  await q(`INSERT INTO project_roles(problem_id,user_id,role,note) VALUES($1,$2,'trusted','Synthetic execution fixture')`,[pid,users.runner.id]);
+  assert.ok(!(await whyNotEligible({...agent,model:users.runner.model},check.id)).some(s=>s.includes('own handle or model')),'approved same-family execution is eligible');
   await q(`UPDATE reviews SET model=$2 WHERE id=$1`,[review.id,agent.model]);
   assert.equal(await leanStatementReviewed(proofRow),false,'alias reviewer is the same underlying model as statement/proof author');
   assert.ok((await whyNotEligible({...agent,model:models.runner},check.id)).some(s=>s.includes('no longer trusted')));
@@ -920,18 +922,19 @@ test('Lean statement review, independent worker receipt and paper-version status
   const subject=await one(`SELECT * FROM returns WHERE id=$1`,[proof.return_id]);
   for (const text of ['audit','axioms','proof']) await files.store(users.runner.id,users.runner.model,text+'.txt','txt',text);
   const evidence=leanEvidence(plan.lean,binding);
-  const receipt=ok(await submit('runner',{check_receipt:{fingerprint:subject.verification_fingerprint,outcome:'pass',observed:'Synthetic fixture only, not actual Lean execution.',elapsed_seconds:1,stdout_sha256:files.sha256('audit'),exit_code:0,environment:'Synthetic pinned versions.',coverage_md:'Claim 1 fixture.',method:'rerun',shared_components_md:'Fixture data.',controls_md:'Synthetic controls.',lean:evidence}},assignment));
+  const receipt=ok(await submit('runner',{check_receipt:{fingerprint:subject.verification_fingerprint,execution_policy:'authenticated-contributor-v1',attestation_md:'Synthetic test only: personally observed fixture artifacts, isolated execution, negative controls and stated limits.',outcome:'pass',observed:'Synthetic fixture only, not actual Lean execution.',elapsed_seconds:1,stdout_sha256:files.sha256('audit'),exit_code:0,environment:'Synthetic pinned versions.',coverage_md:'Claim 1 fixture.',method:'rerun',shared_components_md:'Fixture data.',controls_md:'Synthetic controls.',controls:[{name:'forbidden axiom',detected:true,note:'Synthetic rejection'},{name:'modified statement',detected:true,note:'Synthetic rejection'},{name:'missing target',detected:true,note:'Synthetic rejection'}],limits_md:'Synthetic records only; no Lean execution.',lean:evidence}},assignment));
   const run=await one(`SELECT id,details FROM verification_runs WHERE result_return_id=$1`,[receipt.return_id]);
   assert.deepEqual(run.details.lean,evidence);
   assert.equal((await leanVerificationSummary(proof.return_id,plan.lean.manuscript_sha256)).status,'awaiting_review','worker report is not trusted judgment');
-  ok(await submit('judge',{type:'review',return_id:proof.return_id,verdict:'accept',rung:'Measured',notes_md:'Synthetic review of fixture.',verification_receipt_id:run.id,verification_sufficiency_md:'For this test only: every mapping, trust boundary and axiom report is accounted for.'}));
+  assert.equal((await submit('judge',{type:'review',return_id:proof.return_id,verdict:'accept',rung:'Measured',verification_receipt_id:run.id,verification_sufficiency_md:'Pass receipt endorsed.'})).status,400,'status endorsement lacks substantive correctness assessment');
+  ok(await submit('judge',{type:'review',return_id:proof.return_id,verdict:'accept',rung:'Measured',notes_md:'Synthetic review of fixture.',verification_receipt_id:run.id,verification_sufficiency_md:'Synthetic review: the identity follows from its hypothesis; mathematical reasoning, assumptions, exact claim match, evidence authenticity, isolation and controls were independently assessed.'}));
   assert.equal((await leanVerificationSummary(proof.return_id,plan.lean.manuscript_sha256)).status,'checked');
   const proofReview=await one(`SELECT id FROM reviews WHERE return_id=$1`,[proof.return_id]);
   await q(`UPDATE reviews SET model=$2 WHERE id=$1`,[proofReview.id,agent.model]);
   assert.equal((await leanVerificationSummary(proof.return_id,plan.lean.manuscript_sha256)).status,'awaiting_review');
   await q(`UPDATE reviews SET model=$2 WHERE id=$1`,[proofReview.id,models.judge]);
   await q(`UPDATE returns SET model=$2 WHERE id=$1`,[receipt.return_id,agent.model]);
-  assert.equal((await verificationRuns(proof.return_id))[0].independent,false,'historical aliased receipt cannot acquire independent status');
+  assert.equal((await verificationRuns(proof.return_id))[0].trusted_execution,false,'changing the bound executor identity invalidates attestation');
   await q(`UPDATE returns SET model=$2 WHERE id=$1`,[receipt.return_id,users.runner.model]);
   const page=ok(await call('/papers/example'));assert.equal(page.lean_verification.find(r=>r.return_id===proof.return_id).status,'checked');
   const html=ok(await call('/papers/example',{accept:'text/html'}));assert.match(html,/All mapped Lean claims checked/);assert.match(html,/Worker-reported validation/);

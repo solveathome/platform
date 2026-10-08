@@ -51,11 +51,11 @@ test('unable receipts require targeted capabilities to retry and never count as 
   assert.equal(parseCheckBlocker({kind:'package'}).kind,'package');
   assert.throws(()=>parseCheckBlocker({kind:'capability'}),/missing tools or sources/);
   assert.throws(()=>parseCheckBlocker({kind:'capability',required_sources:['invalid source']}),/identifiers/);
-  const run={independent:true,receipt_status:'recorded',outcome:'unable'};
+  const run={independent:true,execution_eligible:true,receipt_status:'recorded',outcome:'unable'};
   assert.equal(isCompletedCheck(run),false);
   assert.equal(isCompletedCheck({...run,outcome:'fail'}),true);
   assert.equal(isCompletedCheck({...run,outcome:'pass'}),true);
-  assert.equal(isCompletedCheck({...run,outcome:'pass',independent:false}),false);
+  assert.equal(isCompletedCheck({...run,outcome:'pass',execution_eligible:false}),false);
   assert.equal(isCompletedCheck({...run,outcome:'pass',receipt_status:'rejected'}),false);
 });
 test('verification manifests reject missing targets, unsafe paths and undeclared files',()=>{

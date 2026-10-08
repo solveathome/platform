@@ -73,7 +73,7 @@ export function parseCheckControls(raw: unknown): CheckControl[] | null {
   });
 }
 export function isCompletedCheck(run: any): boolean {
-  return run.independent && ['recorded', 'accepted'].includes(run.receipt_status) && ['pass', 'fail'].includes(run.outcome);
+  return run.execution_eligible === true && ['recorded', 'accepted'].includes(run.receipt_status) && ['pass', 'fail'].includes(run.outcome);
 }
 function canonical(x: any): any { return Array.isArray(x) ? x.map(canonical) : x && typeof x === 'object' ? Object.fromEntries(Object.keys(x).sort().map(k => [k, canonical(x[k])])) : x; }
 export function fingerprint(plan: VerificationPlan): string {
@@ -95,7 +95,11 @@ export async function saveVerificationPlan(returnId: number, plan: VerificationP
 }
 export async function verificationRuns(returnId: number): Promise<any[]> {
   return q(`SELECT v.id,v.subject_return_id,v.result_return_id,v.fingerprint,v.outcome,v.observed,v.elapsed_seconds,v.details,v.created_at,
-    u.handle,r.model,r.provider,r.effort,r.status AS receipt_status, (CASE WHEN subject.verification_plan ? 'lean' THEN lean_tier1(subject.model,subject.effort) AND lean_independent(subject.problem_id, r.user_id, r.model, r.effort, subject.user_id, subject.model) ELSE r.user_id<>subject.user_id AND r.model<>subject.model END) AS independent,
+    u.handle,r.model,r.provider,r.effort,r.status AS receipt_status,
+    v.execution_attestation->>'version' AS execution_policy, v.execution_attestation->>'recorded_at' AS execution_attested_at,
+    lean_execution_current(v.id,subject.id) AS trusted_execution,
+    (CASE WHEN subject.verification_plan ? 'lean' THEN lean_execution_current(v.id,subject.id) ELSE r.user_id<>subject.user_id AND r.model<>subject.model END) AS execution_eligible,
+    (CASE WHEN subject.verification_plan ? 'lean' THEN lean_tier1(subject.model,subject.effort) AND lean_independent(subject.problem_id,r.user_id,r.model,r.effort,subject.user_id,subject.model) ELSE r.user_id<>subject.user_id AND r.model<>subject.model END) AS independent,
     (v.subject_return_id<>subject.id) AS reused
     FROM returns subject JOIN verification_runs v ON v.fingerprint=subject.verification_fingerprint
     JOIN returns r ON r.id=v.result_return_id AND r.problem_id=subject.problem_id JOIN users u ON u.id=r.user_id
@@ -103,7 +107,7 @@ export async function verificationRuns(returnId: number): Promise<any[]> {
 }
 export async function verificationState(returnId: number): Promise<any> {
   const runs = await verificationRuns(returnId);
-  const valid = runs.filter(r => r.independent && ['recorded', 'accepted'].includes(r.receipt_status));
+  const valid = runs.filter(r => r.execution_eligible === true && ['recorded', 'accepted'].includes(r.receipt_status));
   const latest = valid.reduce((latest, r) => Math.max(latest, Number(r.id)), 0);
   const conflict = valid.some(r => r.outcome === 'pass') && valid.some(r => r.outcome === 'fail');
   const resolution = await one(`SELECT rv.id,rv.verification_conflict_resolution_md,rv.verification_conflict_through FROM reviews rv JOIN returns r ON r.id=rv.return_id JOIN returns subject ON subject.id=$1 AND subject.problem_id=r.problem_id AND subject.verification_fingerprint=r.verification_fingerprint WHERE rv.trusted AND NOT rv.needs_reassessment AND rv.verification_conflict_through >= $2 ORDER BY rv.id DESC LIMIT 1`, [returnId, latest]);
@@ -121,7 +125,7 @@ export async function queueCheck(ret: any): Promise<boolean> {
     await q(`UPDATE returns SET review_admitted_at=coalesce(review_admitted_at,now()) WHERE id=$1`, [ret.id]);
     return true;
   }
-  const unable = runs.filter(r => r.outcome === 'unable');
+  const unable = runs.filter(r => r.execution_eligible === true && r.outcome === 'unable');
   // One targeted reassignment for a declared worker capability gap. Package defects,
   // unknown causes or two unable observations go to judgment with the missing execution visible.
   if (unable.length && (unable.length >= 2 || unable.some(r => r.details?.blocker?.kind !== 'capability'))) return false;
@@ -132,7 +136,7 @@ export async function queueCheck(ret: any): Promise<boolean> {
   await q(`INSERT INTO jobs (problem_id,lane_id,type,title,brief_md,budget_hours,min_tier,compute_hint,evidence_return_id,research_stage,origin_key)
     VALUES ($1,$2,'check',$3,$4,$5,99,$6,$7,'consolidate',$8)`,
     [ret.problem_id, ret.lane_id, `Check evidence for return #${ret.id}`,
-      `${plan.lean ? LEAN_GUIDANCE + "\n\n" : ""}Reconstruct the immutable package from GET <project base>/return/${ret.id} in a clean directory using ONLY its manifest and declared runtime/source requirements. Fetch each file by SHA from /files/<sha> to its relative manifest path. Inspect the checker before executing it within your person's limits. The checker must consume the submitted target, not only regenerate an unrelated expected answer. Check actual coverage and the comparison rule. Run negative controls in separate temporary copies: corrupt a value in the target, remove a record, alter the certificate, and record for each whether the checker detected it. A control the checker misses is a finding, not a failure of yours. Preserve the original files and results. Do not redo discovery. Return report_md, transcript, and check_receipt: {fingerprint: "${ret.verification_fingerprint}", outcome: "pass|fail|unable", observed: "actual output and differences", elapsed_seconds: <actual time>, stdout_sha256: "<uploaded actual output>", exit_code: <integer or null if unable>, environment: "observed versions", coverage_md: "exactly what ran, exclusions and seeds", method: "rerun|independent_implementation", shared_components_md: "shared algorithm, code, parser or library", controls_md: "negative controls and their observed outcomes", controls: [{name: "what you corrupted", detected: true|false, note: "exit code and message"}], limits_md: "what this execution does not establish (an unpinned producer, an unread input, a scope the checker skips)"}. The itemised controls and limits_md feed the generated summary reviewers read first; write them for a reader who will not open the transcript. If execution cannot proceed, use outcome unable and blocker: {kind: "capability|package", required_tools: [], required_sources: []}. Use capability only when another worker with the named tools or source access can run the unchanged package; include at least one missing capability identifier. Use package for missing artifacts, undeclared dependencies or defects requiring repair, and describe the defect in observed. A capability gap permits one targeted reassignment; package defects and unresolved second attempts go to judgment. A repair requires a new package. Execution receipts remain worker-reported evidence at their stated coverage, not mathematical verdicts.`,
+      `${plan.lean ? LEAN_GUIDANCE + "\n\n" : ""}Reconstruct the immutable package from GET <project base>/return/${ret.id} in a clean directory using ONLY its manifest and declared runtime/source requirements. Fetch each file by SHA from /files/<sha> to its relative manifest path. Inspect the checker before executing it within your person's limits. The checker must consume the submitted target, not only regenerate an unrelated expected answer. Check actual coverage and the comparison rule. Run negative controls in separate temporary copies: corrupt a value in the target, remove a record, alter the certificate, and record for each whether the checker detected it. A control the checker misses is a finding, not a failure of yours. Preserve the original files and results. Do not redo discovery. Return report_md, transcript, and check_receipt: {fingerprint: "${ret.verification_fingerprint}", outcome: "pass|fail|unable", observed: "actual output and differences", elapsed_seconds: <actual time>, stdout_sha256: "<uploaded actual output>", exit_code: <integer or null if unable>, environment: "observed versions", coverage_md: "exactly what ran, exclusions and seeds", execution_policy: "authenticated-contributor-v1", attestation_md: "for Lean: personally observed execution, actual artifacts, negative controls and limitations; unable attests only the blocker", method: "rerun|independent_implementation", shared_components_md: "shared algorithm, code, parser or library", controls_md: "negative controls and their observed outcomes", controls: [{name: "what you corrupted", detected: true|false, note: "exit code and message"}], limits_md: "what this execution does not establish (an unpinned producer, an unread input, a scope the checker skips)"}. The itemised controls and limits_md feed the generated summary reviewers read first; write them for a reader who will not open the transcript. If execution cannot proceed, use outcome unable and blocker: {kind: "capability|package", required_tools: [], required_sources: []}. Use capability only when another worker with the named tools or source access can run the unchanged package; include at least one missing capability identifier. Use package for missing artifacts, undeclared dependencies or defects requiring repair, and describe the defect in observed. A capability gap permits one targeted reassignment; package defects and unresolved second attempts go to judgment. A repair requires a new package. Execution receipts remain worker-reported evidence at their stated coverage, not mathematical verdicts.`,
       Math.min(4, Math.max(0.1, plan.cost.minutes / 60 + 0.1)), JSON.stringify(plan.cost), ret.id, `check:${ret.id}:${ret.verification_fingerprint}:${unable.length + 1}`]);
   await q(`UPDATE jobs SET required_tools=$2,required_sources=$3 WHERE evidence_return_id=$1 AND type='check' AND status='queued'`, [ret.id, requiredTools, requiredSources]);
   await q(`UPDATE returns SET review_admitted_at=coalesce(review_admitted_at,now()) WHERE id=$1`, [ret.id]);
@@ -173,14 +177,28 @@ export async function identicalClaim(ret: any): Promise<any> {
       ret.patch,ret.revision_sha,ret.revision_path,ret.target ? JSON.stringify(ret.target) : null,
       ret.finding,ret.paper_slug,ret.author_rung,ret.research?.evidence_md ?? null]);
 }
-export async function saveCheckReceipt(ret: any, job: any, raw: any): Promise<number> {
+/** authenticated is server ingress context, never a field from check_receipt. */
+export async function saveCheckReceipt(ret: any, job: any, raw: any, authenticated?: { userId: number; sessionId: string | null }): Promise<number> {
   const x = object(raw, 'check_receipt');
   const subject = await one(`SELECT * FROM returns WHERE id=$1 AND problem_id=$2`, [job.evidence_return_id, ret.problem_id]);
   if (!subject || !subject.verification_fingerprint || x.fingerprint !== subject.verification_fingerprint) bad('check_receipt fingerprint does not match the assigned immutable package');
-  const independent = subject.verification_plan?.lean
-    ? distinctLeanFamilies(subject.model, ret.model) && (await one(`SELECT lean_independent($1,$2,$3,$4,$5,$6) AND lean_tier1($6,$7) AS ok`, [subject.problem_id, ret.user_id, ret.model, ret.effort ?? null, subject.user_id, subject.model, subject.effort]))?.ok === true
+  const executionEligible = subject.verification_plan?.lean
+    ? (await one(`SELECT lean_execution_eligible($1,$2,$3,$4,$5) AND lean_tier1($6,$7) AS ok`, [subject.problem_id, ret.user_id, ret.model, ret.effort ?? null, subject.user_id, subject.model, subject.effort]))?.ok === true
     : String(subject.user_id) !== String(ret.user_id) && subject.model !== ret.model;
-  if (!independent) bad(subject.verification_plan?.lean ? 'a Lean check requires a distinct model family and Tier 1 at high or above, and another contributor unless yours is approved on this project' : 'a check requires a different contributor and model from the author');
+  if (!executionEligible) bad(subject.verification_plan?.lean ? 'a Lean check requires a currently approved project contributor and Tier 1 at high or above; model diversity is required for correctness review' : 'a check requires a different contributor and model from the author');
+  let attestationMd: string | undefined;
+  if (subject.verification_plan?.lean) {
+    if (x.execution_policy !== 'authenticated-contributor-v1') bad('Lean receipts require execution_policy:authenticated-contributor-v1; legacy receipts are not promoted');
+    if (!authenticated?.sessionId || Number(authenticated.userId) !== Number(ret.user_id) || !(await one(`SELECT 1 FROM returns r
+      JOIN sessions s ON s.id=r.session AND s.user_id=r.user_id AND s.problem_id=r.problem_id AND s.model=r.model
+      JOIN jobs j ON j.id=r.job_id AND j.id=$4 AND j.type='check' AND j.problem_id=r.problem_id
+      JOIN assignment_attempts a ON a.id=j.attempt_id AND a.job_id=j.id AND a.session_id=s.id
+        AND a.user_id=r.user_id AND a.problem_id=r.problem_id AND a.model=r.model AND a.status='completed'
+      WHERE r.id=$1 AND r.user_id=$2 AND r.session=$3 AND r.type='check'`, [ret.id, authenticated?.userId, authenticated?.sessionId, job.id])))
+      bad('Lean execution attestation requires the authenticated account and session holding this completed check assignment');
+    attestationMd = prose(x.attestation_md, 'check_receipt.attestation_md');
+    if (attestationMd.length < 40) bad('check_receipt.attestation_md must explicitly describe personally observed execution, artifacts and limits (or the observed unable blocker)');
+  }
   if (subject.verification_plan?.lean && !(await leanStatementReviewed(subject))) bad('Lean statement trust is no longer current; do not execute this package');
   if (!['pass', 'fail', 'unable'].includes(x.outcome)) bad('check_receipt.outcome must be pass|fail|unable');
   if (x.blocker !== undefined && x.outcome !== 'unable') bad('check_receipt.blocker belongs only on an unable receipt');
@@ -199,14 +217,19 @@ export async function saveCheckReceipt(ret: any, job: any, raw: any): Promise<nu
     await q(`INSERT INTO file_refs (file_sha,ref_type,ref_id) VALUES ($1,'return',$2) ON CONFLICT DO NOTHING`, [file, ret.id]);
   }
   const controls = parseCheckControls(x.controls);
+  if (subject.verification_plan?.lean && x.outcome !== 'unable' && (!lean || !controls?.length || typeof x.limits_md !== 'string' || !x.limits_md.trim()))
+    bad('completed Lean attestations require actual structured audit/axiom/proof evidence, itemised negative controls and explicit limits');
   if (controls && x.outcome === 'unable') bad('itemised controls belong on a completed check; an unable receipt describes what could not run in controls_md');
   if (x.expected_visible !== undefined && typeof x.expected_visible !== 'boolean') bad('check_receipt.expected_visible must be true|false');
   // A rerun of the author's checker always has the expected answer in hand; only a separate implementation can claim otherwise.
   const expectedVisible = x.method === 'independent_implementation' && x.expected_visible === false ? false : true;
-  const details = { ...(lean ? { lean } : {}), stdout_sha256: x.stdout_sha256 ?? null, exit_code: x.exit_code, environment: prose(x.environment, 'check_receipt.environment'), coverage_md: prose(x.coverage_md, 'check_receipt.coverage_md'), method: x.method, shared_components_md: prose(x.shared_components_md, 'check_receipt.shared_components_md'), controls_md: prose(x.controls_md, 'check_receipt.controls_md'), expected_visible: expectedVisible, blocker,
+  const details = { ...(lean ? { lean } : {}), ...(attestationMd ? { execution_policy: 'authenticated-contributor-v1', attestation_md: attestationMd } : {}), stdout_sha256: x.stdout_sha256 ?? null, exit_code: x.exit_code, environment: prose(x.environment, 'check_receipt.environment'), coverage_md: prose(x.coverage_md, 'check_receipt.coverage_md'), method: x.method, shared_components_md: prose(x.shared_components_md, 'check_receipt.shared_components_md'), controls_md: prose(x.controls_md, 'check_receipt.controls_md'), expected_visible: expectedVisible, blocker,
     ...(controls ? { controls } : {}), ...(x.limits_md !== undefined ? { limits_md: prose(x.limits_md, 'check_receipt.limits_md') } : {}) };
-  await q(`INSERT INTO verification_runs (subject_return_id,result_return_id,fingerprint,outcome,observed,elapsed_seconds,details) VALUES ($1,$2,$3,$4,$5,$6,$7)`,
+  const saved = await one(`INSERT INTO verification_runs (subject_return_id,result_return_id,fingerprint,outcome,observed,elapsed_seconds,details) VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING id`,
     [subject.id, ret.id, x.fingerprint, x.outcome, prose(x.observed, 'check_receipt.observed', 12000), amount(x.elapsed_seconds, 'check_receipt.elapsed_seconds', 0, 86400), JSON.stringify(details)]);
+  if (attestationMd) await q(`UPDATE verification_runs SET execution_attestation=jsonb_build_object(
+    'version','authenticated-contributor-v1','recorded_at',now(),
+    'authority',lean_execution_authority($2,$3),'receipt',lean_execution_snapshot(id)) WHERE id=$1`, [saved!.id, subject.problem_id, ret.user_id]);
   const state = await verificationState(Number(subject.id));
   if (state.unresolved_conflict && !(await one(`SELECT 1 FROM jobs WHERE problem_id=$1 AND origin_key LIKE $2 AND status IN ('queued','assigned')`, [ret.problem_id, `check-conflict:${x.fingerprint}:%`]))) {
     await q(`INSERT INTO jobs (problem_id,lane_id,type,title,brief_md,budget_hours,min_tier,research_stage,evidence_return_id,origin_key) VALUES ($1,$2,'explore',$3,$4,0.5,1,'consolidate',$5,$6)`,
@@ -230,7 +253,7 @@ export async function validateReceiptUse(returnId: number, raw: unknown): Promis
   const id = receiptId(raw);
   if (id === null) return;
   const receipt = (await verificationRuns(returnId)).find(r => Number(r.id) === id);
-  if (!receipt || !receipt.independent || !['recorded', 'accepted'].includes(receipt.receipt_status)) bad('verification_receipt_id must reference independent execution of this exact package in this project, with a valid receipt');
+  if (!receipt || receipt.execution_eligible !== true || !['recorded', 'accepted'].includes(receipt.receipt_status)) bad('verification_receipt_id must reference eligible execution of this exact package in this project, with a valid receipt (Lean requires a current authenticated trusted attestation)');
 }
 export type VerificationSummary = {
   lean?: LeanSummary;
@@ -240,7 +263,7 @@ export type VerificationSummary = {
   coverage: 'decisive' | 'sample';
   method: 'rerun' | 'independent_implementation' | null;
   controls: { reported: boolean; itemised: boolean; detected: number | null; total: number | null; missed: string[] };
-  receipts: { total: number; independent: number; pass: number; fail: number; unable: number; reused: number; excluded: number };
+  receipts: { total: number; eligible: number; trusted_execution: number; independent: number; pass: number; fail: number; unable: number; reused: number; excluded: number };
   pending_check: 'queued' | 'assigned' | 'expired' | null;
   unresolved_conflict: boolean;
   latest_receipt_id: number | null;
@@ -270,7 +293,7 @@ export async function verificationSummary(returnId: number): Promise<Verificatio
   const plan: VerificationPlan = ret.verification_plan;
   const runs = await verificationRuns(returnId);
   const state = await verificationState(returnId);
-  const valid = runs.filter(r => r.independent && ['recorded', 'accepted'].includes(r.receipt_status));
+  const valid = runs.filter(r => r.execution_eligible === true && ['recorded', 'accepted'].includes(r.receipt_status));
   const completed = valid.filter(r => ['pass', 'fail'].includes(r.outcome));
   const latest = completed[0] ?? valid[0] ?? null;   // runs are newest first
   const reviews = await q(`SELECT rv.verdict,rv.rung,rv.trusted,rv.reject_reason,rv.needs_reassessment,rv.verification_receipt_id,rv.verification_sufficiency_md,u.handle FROM reviews rv JOIN users u ON u.id=rv.user_id WHERE rv.return_id=$1 ORDER BY rv.id`, [returnId]);
@@ -283,13 +306,15 @@ export async function verificationSummary(returnId: number): Promise<Verificatio
   lines.push(plan.coverage === 'sample' ? `Coverage declared by the author: sample, not decisive. ${show(plan.coverage_md, 240)}` : `Coverage declared by the author: decisive for this scope (a claim for review). ${show(plan.coverage_md, 240)}`);
   if (plan.availability.status !== 'complete') lines.push(`Availability declared: ${plan.availability.status}. ${show(plan.availability.details, 200)}`);
   let headline: string;
+  const executionLabel = plan.lean ? 'authenticated trusted execution attestation' : 'independent execution';
+  const receiptLabel = plan.lean ? 'trusted execution attestations' : 'independent receipts';
   const passes = completed.filter(r => r.outcome === 'pass'), fails = completed.filter(r => r.outcome === 'fail'), unables = valid.filter(r => r.outcome === 'unable');
   const methodWord = (r: any) => r.details?.method === 'independent_implementation' ? 'A separate implementation' : 'A rerun of the author\'s checker';
   if (state.execution === 'conflicting') {
-    headline = `Observations conflict: ${passes.length} pass and ${fails.length} fail across independent receipts.`;
+    headline = `Observations conflict: ${passes.length} pass and ${fails.length} fail across ${receiptLabel}.`;
     lines.push(state.resolution ? `A trusted reviewer reconciled the conflict: ${clip(state.resolution.verification_conflict_resolution_md, 300)}` : 'No trusted reconciliation yet; acceptance is blocked until one explains both observations.');
   } else if (state.execution === 'pass') {
-    headline = `${methodWord(latest)} by ${who(latest)} matched the expected result: exit ${latest.details?.exit_code ?? '?'}, ${Math.round(Number(latest.elapsed_seconds))} s.${passes.length > 1 ? ` ${passes.length} independent receipts report pass.` : ''}`;
+    headline = `${methodWord(latest)} by ${who(latest)} matched the expected result: exit ${latest.details?.exit_code ?? '?'}, ${Math.round(Number(latest.elapsed_seconds))} s.${passes.length > 1 ? ` ${passes.length} ${receiptLabel} report pass.` : ''}`;
   } else if (state.execution === 'fail') {
     headline = `${methodWord(latest)} by ${who(latest)} did not match the expected result (exit ${latest.details?.exit_code ?? '?'}). Observed: ${clip(latest.observed, 200)}`;
   } else if (state.execution === 'unable') {
@@ -299,10 +324,10 @@ export async function verificationSummary(returnId: number): Promise<Verificatio
       : `Execution has not happened: ${who(latest)} could not run the package. ${clip(latest?.observed, 200)}`;
     if (unables.length > 1) lines.push(`${unables.length} workers were unable to run it.`);
   } else {
-    headline = pending_check === 'assigned' ? 'No independent execution recorded yet; a worker holds the check assignment.'
-      : pending_check === 'queued' ? 'No independent execution recorded yet; a check assignment is queued for a worker on another model.'
+    headline = pending_check === 'assigned' ? `No ${executionLabel} recorded yet; a worker holds the check assignment.`
+      : pending_check === 'queued' ? `No ${executionLabel} recorded yet; a check assignment is queued for a worker${plan.lean ? '' : ' on another model'}.`
       : pending_check === 'expired' ? 'No worker claimed the check within 24 hours; judgment proceeds without execution, and the missing capacity is part of what to assess.'
-      : 'No independent execution recorded.';
+      : `No ${executionLabel} recorded.`;
   }
   // Controls, aggregated over every completed independent receipt, itemised where the worker itemised them.
   const itemised = completed.filter(r => Array.isArray(r.details?.controls));
@@ -329,12 +354,12 @@ export async function verificationSummary(returnId: number): Promise<Verificatio
     const shown = coverages.slice(0, 3);
     for (const c of shown) lines.push(`Worker-observed coverage (receipt #${c.receipt_id}, @${c.handle}${c.highlighted ? ', highlighted above' : ''}): ${show(c.text, 240, `in verification_summary.coverages on the return`)}`);
     if (coverages.length > shown.length) lines.push(`${coverages.length - shown.length} other distinct coverage description${coverages.length - shown.length === 1 ? '' : 's'} not shown; every receipt is on the return.`);
-    if (completed.length > 1) lines.push(`${completed.length} completed independent receipts; all are on the record.`);
+    if (completed.length > 1) lines.push(`${completed.length} completed ${receiptLabel}; all are on the record.`);
     for (const c of caveats) lines.push(`Caveat from receipt #${c.receipt_id} (@${c.handle}): ${show(c.text, 300, 'in verification_summary.caveats on the return')}`);
   }
   const reused = runs.filter(r => r.reused).length, excluded = runs.length - valid.length;
   if (reused) lines.push(`${reused} receipt${reused === 1 ? '' : 's'} come from another submission of the identical package.`);
-  if (excluded) lines.push(`${excluded} receipt${excluded === 1 ? '' : 's'} excluded: from the author's own handle or model, or withdrawn.`);
+  if (excluded) lines.push(`${excluded} receipt${excluded === 1 ? '' : 's'} excluded: ${plan.lean ? 'no current authenticated trusted execution attestation, or withdrawn' : "from the author's own handle or model, or withdrawn"}.`);
   // Judgment: read from the decision record. Advisory-only decisions are provisional and never count as accepted or rejected.
   const trusted = reviews.filter(v => v.trusted && !v.needs_reassessment), advisory = reviews.filter(v => !v.trusted);
   const provisional = !!ret.provisional;
@@ -351,7 +376,7 @@ export async function verificationSummary(returnId: number): Promise<Verificatio
   const lean = plan.lean ? await leanVerificationSummary(returnId, paper ? paperSource(paper,paper.project_slug).sha : null) : undefined;
   if (lean) { lines.push(`Lean: ${lean.label}. This concerns only the mapped claims; execution is worker-reported.`); lines.push(...lean.issues); }
   const basis = { claim: plan.claim, scope: plan.scope, assumptions: plan.assumptions, supports: plan.supports, coverage_md: plan.coverage_md, comparison: plan.comparison };
-  return { ...(lean ? { lean } : {}), execution: state.execution, headline, lines, coverage: plan.coverage, method: latest?.details?.method ?? null, controls, receipts: { total: runs.length, independent: valid.length, pass: passes.length, fail: fails.length, unable: unables.length, reused, excluded }, pending_check, unresolved_conflict: !!state.unresolved_conflict, latest_receipt_id: latest ? Number(latest.id) : null, basis, coverages, caveats, judgment };
+  return { ...(lean ? { lean } : {}), execution: state.execution, headline, lines, coverage: plan.coverage, method: latest?.details?.method ?? null, controls, receipts: { total: runs.length, eligible: valid.length, trusted_execution: valid.filter(r => r.trusted_execution).length, independent: valid.filter(r => r.independent).length, pass: passes.length, fail: fails.length, unable: unables.length, reused, excluded }, pending_check, unresolved_conflict: !!state.unresolved_conflict, latest_receipt_id: latest ? Number(latest.id) : null, basis, coverages, caveats, judgment };
 }
 /** The package's argument in full, for a reviewer: a smaller basis for judgment is still a complete one. */
 function basisMarkdown(s: VerificationSummary): string {
@@ -365,9 +390,9 @@ export function summaryMarkdown(s: VerificationSummary): string {
 function judgmentAsk(s: VerificationSummary): string {
   const tail = ' If more work is needed, reject as unverifiable and name in needs_md the precise missing obligation and the smallest useful next check, with its judgment_minutes: a certificate to read, a reduction step to inspect, a changed output to compare, or one small decisive test. Never a rerun of the research.';
   if (s.execution === 'conflicting') return `Receipts conflict. Acceptance needs a trusted verification_conflict_resolution_md explaining both observations and any restriction on the claim. If you cannot reconcile them, name the smallest check that would decide between them.${tail}`;
-  if (s.execution === 'fail') return `Independent execution did not match. Decide whether the mismatch is in the claim, the package or the environment; reject with the exact difference, or, if the package is repairable, say what a corrected package needs.${tail}`;
+  if (s.execution === 'fail') return `Eligible execution did not match. Decide whether the mismatch is in the claim, the package or the environment; reject with the exact difference, or, if the package is repairable, say what a corrected package needs.${tail}`;
   if (s.execution === 'pass') return `Decide whether this method at this coverage establishes the claim at the rung requested${s.caveats.length ? `, with the ${s.caveats.length} caveat${s.caveats.length === 1 ? '' : 's'} above either accounted for or restricting the claim` : ''}. Reuse the receipt: name it in verification_receipt_id and state in verification_sufficiency_md what it establishes and which assumptions remain. Do not rerun the package unless you can name a specific weakness the receipt leaves open; then do the smallest check that addresses it and say why. A sample stays a sample.${tail}`;
-  return `No independent execution exists${s.pending_check === 'queued' || s.pending_check === 'assigned' ? ' yet' : ''}. Judge the supplied evidence on its own terms at its actual coverage, or reject as unverifiable.${tail}`;
+  return `No eligible execution receipt exists${s.pending_check === 'queued' || s.pending_check === 'assigned' ? ' yet' : ''}. Judge the supplied evidence on its own terms at its actual coverage, or reject as unverifiable.${tail}`;
 }
 /**
  * The verification section of a brief or page. A reviewer gets the summary, the specific judgment asked, and one line per
@@ -381,10 +406,10 @@ export async function verificationBrief(returnId: number, audience: 'review' | '
   const state = await verificationState(returnId);
   const summary = await verificationSummary(returnId);
   if (audience === 'review' && summary) {
-    const receipts = runs.slice(0, 10).map(r => `- Receipt #${r.id} (return #${r.result_return_id}): ${r.outcome}, @${r.handle} (${r.model}), ${r.details?.method ?? 'method not recorded'}, ${Math.round(Number(r.elapsed_seconds))} s${r.reused ? ', reused from an identical package' : ''}${!r.independent ? ', not independent of the author' : ''}${!['recorded', 'accepted'].includes(r.receipt_status) ? `, receipt ${r.receipt_status}` : ''}`).join('\n');
+    const receipts = runs.slice(0, 10).map(r => `- Receipt #${r.id} (return #${r.result_return_id}): ${r.outcome}, @${r.handle} (${r.model}), ${r.details?.method ?? 'method not recorded'}, ${Math.round(Number(r.elapsed_seconds))} s${r.reused ? ', reused from an identical package' : ''}${r.trusted_execution ? ', authenticated trusted contributor attestation' : !r.execution_eligible ? ', not eligible as trusted execution' : ''}${!['recorded', 'accepted'].includes(r.receipt_status) ? `, receipt ${r.receipt_status}` : ''}`).join('\n');
     return `\n\n### Verification\n\n${summaryMarkdown(summary)}${ret.verification_plan.lean ? "\n\n" + LEAN_GUIDANCE : ""}\n\n${basisMarkdown(summary)}\n\n**Judgment required.** ${judgmentAsk(summary)}\n\n${runs.length ? `Receipts on this package (fingerprint ${ret.verification_fingerprint.slice(0, 12)}…):\n${receipts}${runs.length > 10 ? `\n- …and ${runs.length - 10} more on the return.` : ''}` : 'No receipts on this package.'}\n\nThe full package (manifest, command, expected output, comparison rule) and every receipt with its observed output are at GET <project base>/return/${returnId} as \`verification_plan\`, \`verification_runs\` and \`verification_summary\`; fetch them when a specific uncertainty needs them.\n`;
   }
-  return `\n\n### Verification\n\n${summary ? summaryMarkdown(summary) : ''}\n\n### Verification package\n\nFingerprint: ${ret.verification_fingerprint}\n\n\`\`\`json\n${JSON.stringify(ret.verification_plan, null, 2)}\n\`\`\`\n\nExecution state across ALL receipts: ${JSON.stringify(state)}\n\nExecution receipts (reported observations; contributor/model separation does not imply independent algorithms):\n${runs.length ? runs.slice(0, 10).map(r => `- Receipt ${r.id}, return #${r.result_return_id}: ${r.outcome}; @${r.handle}, ${r.model}; ${r.elapsed_seconds} seconds; ${r.independent ? 'different contributor and model' : 'not independent of this author'}; status ${r.receipt_status}${r.reused ? '; reused exact package' : ''}. Observed: ${r.observed}. Provenance and coverage: ${JSON.stringify(r.details)}`).join('\n') : 'None yet.'}\n\nThe return JSON contains every receipt, including older failures. Check that the method establishes the stated scope and that assumptions hold. A sample stays a sample. A finite certificate can support a general theorem only when its reduction is justified. Reuse a credible receipt with verification_receipt_id and verification_sufficiency_md. Unresolved conflict requires a trusted verification_conflict_resolution_md explaining both outcomes. Inspect the full transcript when needed.\n`;
+  return `\n\n### Verification\n\n${summary ? summaryMarkdown(summary) : ''}\n\n### Verification package\n\nFingerprint: ${ret.verification_fingerprint}\n\n\`\`\`json\n${JSON.stringify(ret.verification_plan, null, 2)}\n\`\`\`\n\nExecution state across ALL receipts: ${JSON.stringify(state)}\n\nExecution receipts (reported observations; contributor/model separation does not imply independent algorithms):\n${runs.length ? runs.slice(0, 10).map(r => `- Receipt ${r.id}, return #${r.result_return_id}: ${r.outcome}; @${r.handle}, ${r.model}; ${r.elapsed_seconds} seconds; ${r.trusted_execution ? 'current authenticated trusted contributor attestation (execution itself is worker-reported)' : r.execution_eligible ? 'different contributor and model' : 'not eligible as trusted execution'}; status ${r.receipt_status}${r.reused ? '; reused exact package' : ''}. Observed: ${r.observed}. Provenance and coverage: ${JSON.stringify(r.details)}`).join('\n') : 'None yet.'}\n\nThe return JSON contains every receipt, including older failures. Check that the method establishes the stated scope and that assumptions hold. A sample stays a sample. A finite certificate can support a general theorem only when its reduction is justified. Reuse a credible receipt with verification_receipt_id and verification_sufficiency_md. Unresolved conflict requires a trusted verification_conflict_resolution_md explaining both outcomes. Inspect the full transcript when needed.\n`;
 }
 
 /** An attestation is about meaning and definitions, not proof execution. Advisory attestations are retained but never count. */
@@ -413,7 +438,7 @@ export async function leanVerificationSummary(returnId: number, currentSha: stri
   const ret = await one(`SELECT * FROM returns WHERE id=$1`, [returnId]);
   const p: LeanProfile | undefined = ret?.verification_plan?.lean;
   if (!p) return undefined;
-  const reviews = ret.status === 'accepted' && !ret.provisional ? await q(`SELECT verification_receipt_id FROM reviews WHERE return_id=$1 AND trusted AND verdict='accept' AND NOT needs_reassessment AND lean_independent($4, user_id, model, effort, $2, $3) AND length(trim(verification_sufficiency_md))>0`, [returnId, ret.user_id, ret.model, ret.problem_id]) : [];
+  const reviews = ret.status === 'accepted' && !ret.provisional ? await q(`SELECT verification_receipt_id FROM reviews WHERE return_id=$1 AND trusted AND verdict='accept' AND NOT needs_reassessment AND lean_independent($4, user_id, model, effort, $2, $3) AND length(trim(verification_sufficiency_md))>=80`, [returnId, ret.user_id, ret.model, ret.problem_id]) : [];
   return summarizeLean(p, await verificationRuns(returnId), reviews.map(r => Number(r.verification_receipt_id)), await leanStatementReviewed(ret), currentSha, { status: ret.status, superseded_by: ret.superseded_by });
 }
 

@@ -49,9 +49,9 @@ export async function researchSummary(problemId: number): Promise<any> {
   // Advisory-only (provisional) decisions are open work, never judged. A trusted decision that preceded execution (judgment on
   // the supplied evidence, receipt later) is counted apart; receipt-to-judgment time is measured only where the receipt came first. how fast a first receipt arrives, whether the first attempt
   // reconstructs at all, and whether the controls workers ran caught anything. Counted from receipts, never from acceptance rate.
-  const packages = await one(`WITH pkg AS (SELECT r.id,r.status,r.provisional,(r.status='pending' OR r.provisional) AS open,r.user_id,r.model,r.verification_fingerprint AS fp,r.created_at FROM returns r WHERE r.problem_id=$1 AND r.verification_plan IS NOT NULL AND r.duplicate_of IS NULL),
-    run AS (SELECT v.outcome,v.fingerprint,v.created_at,w.user_id,w.model FROM verification_runs v JOIN returns w ON w.id=v.result_return_id WHERE w.problem_id=$1 AND w.status IN ('recorded','accepted')),
-    independent AS (SELECT p.id,r.outcome,r.created_at FROM pkg p JOIN run r ON r.fingerprint=p.fp AND r.user_id<>p.user_id AND r.model<>p.model),
+  const packages = await one(`WITH pkg AS (SELECT r.id,r.status,r.provisional,(r.status='pending' OR r.provisional) AS open,r.user_id,r.model,(r.verification_plan ? 'lean') AS lean,r.verification_fingerprint AS fp,r.created_at FROM returns r WHERE r.problem_id=$1 AND r.verification_plan IS NOT NULL AND r.duplicate_of IS NULL),
+    run AS (SELECT v.id AS receipt_id,v.outcome,v.fingerprint,v.created_at,w.user_id,w.model FROM verification_runs v JOIN returns w ON w.id=v.result_return_id WHERE w.problem_id=$1 AND w.status IN ('recorded','accepted')),
+    independent AS (SELECT p.id,r.outcome,r.created_at FROM pkg p JOIN run r ON r.fingerprint=p.fp AND CASE WHEN p.lean THEN lean_execution_current(r.receipt_id,p.id) ELSE r.user_id<>p.user_id AND r.model<>p.model END),
     completed AS (SELECT id,min(created_at) AS first_at FROM independent WHERE outcome IN ('pass','fail') GROUP BY id),
     first_attempt AS (SELECT DISTINCT ON (id) id,outcome FROM independent ORDER BY id,created_at),
     decided AS (SELECT d.return_id AS id,min(d.decided_at) AS decided_at FROM return_decisions d JOIN pkg p ON p.id=d.return_id WHERE d.status IN ('accepted','rejected') AND NOT d.provisional GROUP BY d.return_id)

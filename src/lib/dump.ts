@@ -46,14 +46,14 @@ export const DUMP_TABLES: Record<string, string> = {
   research_dependencies: `SELECT d.* FROM research_dependencies d ORDER BY d.route_id,d.return_id`,
   return_dependencies: `SELECT * FROM return_dependencies ORDER BY return_id,depends_on_id`,
   review_history: `SELECT * FROM review_history ORDER BY id`,
-  verification_runs: `SELECT v.* FROM verification_runs v ORDER BY v.id`,
+  verification_runs: `SELECT v.*, lean_execution_current(v.id,v.subject_return_id) AS trusted_execution FROM verification_runs v ORDER BY v.id`,
   announcements: `SELECT a.id, p.slug AS project, a.return_id, a.review_id, u.handle AS finder, a.kind, a.final_rung, a.decided_at, a.due_at, a.status, a.flag, a.approved_at, g.handle AS approved_by, a.suppressed_reason, a.payload, a.discord_message_id, a.sent_at, a.corrected_at, a.correction, a.created_at FROM announcements a JOIN problems p ON p.id = a.problem_id JOIN users u ON u.id = a.finder_user_id LEFT JOIN users g ON g.id = a.approved_by ORDER BY a.id`,
   files:     `SELECT f.sha256, u.handle, f.model, f.name, f.ext, f.bytes, f.created_at, f.deleted_at, f.deleted_note, (SELECT json_agg(json_build_object('type', r.ref_type, 'id', r.ref_id)) FROM file_refs r WHERE r.file_sha = f.sha256) AS refs FROM files f JOIN users u ON u.id = f.user_id ORDER BY f.created_at`,
 };
 
 // Public prose is screened row by row for copied sources; a hit withholds the whole day (nothing has reached the day's directory yet).
 const PROSE = new Set(["reason_md","status_md", "brief_md", "step_check_notes_md", "report_md", "patch", "transcript", "notes_md", "body_md", "question", "verdict", "contribution_md", "prior_art_md", "uncertainty_md", "evidence_md", "observed", "verification_sufficiency_md", "verification_conflict_resolution_md", "announce_md"]);
-const STRUCTURED_PROSE = new Set(["payload", "research", "verification_plan", "lean_statement_review", "next_step", "obstacle", "detail", "details", "review"]);
+const STRUCTURED_PROSE = new Set(["payload", "research", "verification_plan", "lean_statement_review", "execution_attestation", "next_step", "obstacle", "detail", "details", "review"]);
 export function sourceReviewHit(table: string, row: Record<string, unknown>): string | null {
   for (const [field, value] of Object.entries(row)) {
     if ((PROSE.has(field) && typeof value === "string" && needsSourceReview(value)) || (STRUCTURED_PROSE.has(field) && value != null && needsSourceReview(JSON.stringify(value)))) {

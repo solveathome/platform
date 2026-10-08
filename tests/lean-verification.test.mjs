@@ -1,10 +1,17 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import {parseVerificationPlan,fingerprint} from '../src/lib/verification.ts';
+import {parseVerificationPlan,fingerprint,isCompletedCheck} from '../src/lib/verification.ts';
 import {LEAN_POLICY,parseLeanEvidence,assessLeanEvidence,leanStatementBinding,summarizeLean} from '../src/lib/lean-verification.ts';
 import {leanFixture,leanEvidence,digest} from './fixtures/lean.mjs';
 const fixture=()=>{const p=parseVerificationPlan(leanFixture().plan);return {p,e:leanEvidence(p.lean,leanStatementBinding(p.lean))}};
-const run=(e,extra={})=>({id:1,independent:true,receipt_status:'recorded',outcome:'pass',details:{exit_code:0,lean:e},...extra});
+const run=(e,extra={})=>({id:1,independent:true,trusted_execution:true,receipt_status:'recorded',outcome:'pass',details:{exit_code:0,lean:e},...extra});
+
+test('completion uses execution eligibility without falsely requiring model-family independence',()=>{
+  const base={receipt_status:'recorded',outcome:'pass'};
+  assert.equal(isCompletedCheck({...base,independent:false,trusted_execution:true,execution_eligible:true}),true);
+  assert.equal(isCompletedCheck({...base,independent:true,execution_eligible:false}),false,'old independent metadata alone cannot promote execution');
+  assert.equal(isCompletedCheck({...base,independent:true}),false,'an absent eligibility attestation fails closed');
+});
 
 test('Lean packages pin manuscript, claims, dependencies and versioned policy without changing old packages',()=>{
   const {p}=fixture();assert.equal(p.lean.policy,LEAN_POLICY);
@@ -45,7 +52,9 @@ test('status requires trusted statement and receipt judgment; conflicts, stale m
   assert.equal(summary([run(e)]).status,'checked');
   assert.equal(summary([run(e)],[]).status,'awaiting_review');
   assert.equal(summary([run(e)],[1],false).status,'awaiting_review');
-  assert.equal(summary([run(e,{independent:false})]).status,'no_proof');
+  assert.equal(summary([run(e,{independent:false,trusted_execution:false})]).status,'no_proof');
+  assert.equal(summary([run(e,{trusted_execution:undefined})]).status,'no_proof','old independent receipts do not acquire authenticated provenance');
+  assert.equal(summary([run(e,{trusted_execution:false})]).status,'no_proof','a self-asserted pass cannot substitute for current authenticated provenance');
   assert.equal(summary([run(e,{receipt_status:'withdrawn'})]).status,'no_proof');
   assert.equal(summary([]).status,'no_proof');
   assert.equal(summary([run(null,{outcome:'unable'})]).status,'unable');
