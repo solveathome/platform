@@ -1,3 +1,5 @@
+import { leanEvidencePanel, mainTheoremDesignation, mainTheoremEvidence, mainTheoremCallout } from '../lib/lean-display.js';
+import { readProjectConfig } from '../lib/projects.js';
 import { paperLeanVerification } from '../lib/verification.js';
 import {documentRecords, documentDates, recordHtml} from "../lib/document-record.js";
 import { crediter } from "../lib/display-name.js";
@@ -150,7 +152,14 @@ papers.get("/papers/:paper", async (req: any, res) => {
   }
   // The seed manuscript comes from the mirror only if it is a published document there (same gate as /docs).
   const lean = await paperLeanVerification(Number(p.id), paper.slug, source === null ? null : sha256(source));
-  if (!wantsHtml(req)) { res.json({ paper, versions, reports, lean_verification: lean, source_from: from, manuscript_md: source }); return; }
+  const designation = mainTheoremDesignation(readProjectConfig(p.slug)?.lean_main_theorems, paper.slug, source === null ? null : sha256(source));
+  if (!wantsHtml(req)) {
+    const request = typeof req.query.lean_request === 'string' && /^[a-zA-Z0-9-]{1,100}$/.test(req.query.lean_request) ? req.query.lean_request : null;
+    res.set('Cache-Control','no-store').json({ paper, versions, reports, lean_verification: lean,
+      lean_milestone_request: request,
+      lean_milestone_html: mainTheoremCallout(mainTheoremEvidence(lean, designation), designation, p.slug, paper.slug, paper.title),
+      source_from: from, manuscript_md: source }); return;
+  }
   const baseDir = paper.path ? posix.dirname(paper.path) : "paper";
   const pages = await paperPages(p.slug);
   const docsBase = `/projects/${p.slug}/docs/`;
@@ -158,7 +167,7 @@ papers.get("/papers/:paper", async (req: any, res) => {
   const linkFn = renderer.link.bind(renderer);
   renderer.link = ({ href, title, tokens }: any) => { let h = String(href ?? ""); if (!/^(?:[a-z]+:|\/|#)/i.test(h)) { const rel = posix.normalize(posix.join(baseDir, h)).replace(/^\/+/, ""); h = pages.get(rel) ?? docsBase + rel; } return linkFn({ href: h, title, tokens } as any); };
   const md = (t: string) => { const m = protectMath(t.replace(/<!--[\s\S]*?-->/g, "")); return linkPaths(m.restore(marked.parse(escapeSource(m.text), { gfm: true, renderer }) as string), p.slug, baseDir, pages); };
-  const body = challengeBanner(await challengesFor(Number(p.id), "paper", paper.slug), `/projects/${p.slug}`) + reviewPanel(paper.review, p.slug) + leanPanel(lean, p.slug) + (source ? demoteHeadings(await linkPeople(md(source))) : "<p class=\"muted\">No manuscript yet.</p>");
+  const body = challengeBanner(await challengesFor(Number(p.id), "paper", paper.slug), `/projects/${p.slug}`) + reviewPanel(paper.review, p.slug) + leanEvidencePanel(lean, p.slug, designation) + (source ? demoteHeadings(await linkPeople(md(source))) : "<p class=\"muted\">No manuscript yet.</p>");
   const page = readFileSync(join(PUBLIC_DIR, "paper.html"), "utf8");
   const meta = recordHtml(paper.timestamps, paper.history_url) + `<p class="paper-meta"><span>Registered: ${timeHtml(paper.created_at)}</span><span>Registry updated: ${timeHtml(paper.updated_at)}</span><span class="paper-status ${esc(paper.status)}">${esc(paper.review.label)}</span>${paper.grade ? `<span title="The registry's own grade line, written by the manuscript's authors; not a review conclusion">registry grade: ${esc(paper.grade)}</span>` : ""}${paper.version_by ? `<span>current version by @${esc(paper.version_by)}, ${timeHtml(paper.version_at)}${paper.final_rung ? `, ${esc(paper.final_rung)}` : ""}</span>` : ""}<span>${esc(from)}</span></p>`;
   const tlist = track.slice().reverse().map((v: any) => `<li>Version ${v.version}: ${v.author ? `changed by ${credit(v.author)}${v.model ? ` (${esc(v.model)})` : ""}${(v.verified_by ?? []).length ? `, verified by ${v.verified_by.map((h: string) => { const vm = (v.verified_models ?? []).find((x: any) => x.handle === h); return `${credit(h)}${vm?.model ? ` (${esc(vm.model)}${vm.verification && vm.verification !== "read" ? `, ${esc(vm.verification)}` : ""})` : ""}`; }).join(", ")}` : ""}` : esc(v.summary)}, ${timeHtml(v.created_at)}${v.version > 1 ? ` · <a href="/projects/${esc(p.slug)}/history/${esc(docPath)}/${v.version}/diff">diff</a>` : ""}</li>`).join("");
@@ -187,9 +196,4 @@ function reviewPanel(r: PaperReview, slug: string): string {
   if (r.findings.length) lines.push(`Open corrections:<ul>${r.findings.map((f) => `<li>finding #${f.id}${f.scope === "before_circulation" ? " (before circulation)" : ""}${f.return_id ? `, from <a href="${P}/return/${f.return_id}">return #${f.return_id}</a>` : ""}: ${esc(f.note)}${f.job_id ? ` <span class="muted">(job #${f.job_id}, ${esc(f.job_status ?? "")})</span>` : ""}</li>`).join("")}</ul>`);
   if (r.awaiting_integration.length) lines.push(`Accepted but not applied: ${r.awaiting_integration.map((a) => `<a href="${P}/return/${a.return_id}">return #${a.return_id}</a> (${a.integration === "conflict" ? "made against an earlier text; a rebase job carries it forward" : "its file is missing"})`).join(", ")}.`);
   return lines.length ? `<div class="panel" style="margin:0 0 1.5rem;padding:.9rem 1.1rem;border-left:4px solid var(--line)"><p style="margin:0 0 .4rem"><b>${esc(r.label)}</b></p>${lines.map((l) => `<p style="margin:.25rem 0">${l}</p>`).join("")}</div>` : "";
-}
-
-function leanPanel(records: any[], slug: string): string {
-  if (!records.length) return '<p class="muted">No Lean proof evidence recorded for this paper.</p>';
-  return `<section class="panel"><h2>Lean evidence</h2><p>Worker-reported validation of mapped claims, assessed by trusted reviewers. Unmapped claims and the ordinary paper review grade remain separate.</p>${records.map(r => `<article><p><b>${esc(r.label)}</b> — <a href="/projects/${esc(slug)}/return/${r.return_id}">return #${r.return_id}</a>${r.superseded_by ? ` (replaced by <a href="/projects/${esc(slug)}/return/${r.superseded_by}">return #${r.superseded_by}</a>)` : ''}</p><p>Manuscript SHA-256: <code>${esc(r.manuscript_sha256)}</code></p><ul>${r.claims.map((c: any) => `<li>${esc(c.id)} (${esc(c.locator)}): <code>${esc(c.declaration)}</code>; ${esc(c.coverage)} coverage; assumptions: ${esc(c.assumptions.join('; ') || 'none declared')}.</li>`).join('')}</ul>${r.issues.length ? `<ul>${r.issues.map((i: string) => `<li>${esc(i)}</li>`).join('')}</ul>` : ''}</article>`).join('')}</section>`;
 }

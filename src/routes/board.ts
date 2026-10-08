@@ -26,18 +26,22 @@ export const root = Router();
 
 /** GET /projects/:slug : project introduction, agent activity, and research workspace. */
 board.get("/", async (req: any, res) => {
-  const p = await one(`SELECT slug, name, summary FROM problems WHERE slug = $1`, [req.params.slug]);
+  const p = await one(`SELECT id, slug, name, summary FROM problems WHERE slug = $1`, [req.params.slug]);
   if (!p) { if (wantsHtml(req)) res.status(404).type("text/html").send(notFoundPage("No such project.")); else res.status(404).type("text/plain").send("unknown project"); return; }
   if (!wantsHtml(req)) { res.redirect(`/projects/${p.slug}/board`); return; }
   const escape = (text: unknown) => String(text ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
   const intro = projectPartial(p.slug, "intro") ?? `<h2>About this project</h2><p class="lead">${escape(p.summary)}</p>`;
   const prior = projectPartial(p.slug, "prior-work") ?? '<h2>The research behind this project</h2><p class="muted">Explore the research, its origins, and the evidence available to build on.</p>';
   const readings = projectPartial(p.slug, "prior-readings") ?? "";
-  const share = readProjectConfig(p.slug)?.share ?? {};
+  const config = readProjectConfig(p.slug);
+  const share = config?.share ?? {};
+  // Cached HTML carries candidate names only. Every verdict comes from an uncached paper read.
+  const candidates = Array.isArray(config?.lean_main_theorems) && config.lean_main_theorems.length <= 100
+    ? [...new Set(config.lean_main_theorems.map(x => x?.paper_slug).filter(x => typeof x === 'string' && /^[a-z0-9][a-z0-9-]{0,100}$/.test(x)))] : [];
   const ld = jsonLd({ "@context": "https://schema.org", "@graph": [
     { "@type": "ResearchProject", "@id": abs(`/projects/${p.slug}`), url: abs(`/projects/${p.slug}`), name: p.name, description: share.description ?? p.summary ?? "", parentOrganization: { "@id": abs("/#organization") } },
     ORGANIZATION(), breadcrumbs([{ name: "solveathome", path: "/" }, { name: p.name, path: `/projects/${p.slug}` }]) ] });
-  res.type("text/html").send(page("project.html").replace("__SHARE__", shareMeta({ title: share.title ?? `${p.name} · solveathome`, description: share.description ?? (p.summary || undefined), path: `/projects/${p.slug}`, image: share.image }) + ld).replaceAll("__SLUG__", p.slug).replaceAll("__NAME__", escape(p.name)).replace("__PROJECT_INTRO__", intro).replace("__PROJECT_PRIOR_WORK__", prior).replace("__PROJECT_PRIOR_READINGS__", readings));
+  res.type("text/html").send(page("project.html").replace("__SHARE__", shareMeta({ title: share.title ?? `${p.name} · solveathome`, description: share.description ?? (p.summary || undefined), path: `/projects/${p.slug}`, image: share.image }) + ld).replaceAll("__SLUG__", p.slug).replaceAll("__NAME__", escape(p.name)).replace("__LEAN_CANDIDATES__", escape(JSON.stringify(candidates))).replace("__PROJECT_INTRO__", intro).replace("__PROJECT_PRIOR_WORK__", prior).replace("__PROJECT_PRIOR_READINGS__", readings));
 });
 
 /** GET /me : who the cookie or bearer token belongs to (for the browser UI). */

@@ -438,8 +438,16 @@ export async function leanVerificationSummary(returnId: number, currentSha: stri
   const ret = await one(`SELECT * FROM returns WHERE id=$1`, [returnId]);
   const p: LeanProfile | undefined = ret?.verification_plan?.lean;
   if (!p) return undefined;
-  const reviews = ret.status === 'accepted' && !ret.provisional ? await q(`SELECT verification_receipt_id FROM reviews WHERE return_id=$1 AND trusted AND verdict='accept' AND NOT needs_reassessment AND lean_independent($4, user_id, model, effort, $2, $3) AND length(trim(verification_sufficiency_md))>=80`, [returnId, ret.user_id, ret.model, ret.problem_id]) : [];
-  return summarizeLean(p, await verificationRuns(returnId), reviews.map(r => Number(r.verification_receipt_id)), await leanStatementReviewed(ret), currentSha, { status: ret.status, superseded_by: ret.superseded_by });
+  const reviews = ret.status === 'accepted' && !ret.provisional ? await q(`SELECT id,verification_receipt_id FROM reviews WHERE return_id=$1 AND trusted AND verdict='accept' AND NOT needs_reassessment AND lean_independent($4, user_id, model, effort, $2, $3) AND length(trim(verification_sufficiency_md))>=80`, [returnId, ret.user_id, ret.model, ret.problem_id]) : [];
+  const runs = await verificationRuns(returnId);
+  const summary = summarizeLean(p, runs, reviews.map(r => Number(r.verification_receipt_id)), await leanStatementReviewed(ret), currentSha, { status: ret.status, provisional: ret.provisional, superseded_by: ret.superseded_by });
+  const judged = runs.find(r => Number(r.id) === summary.judged_receipt_id);
+  if (judged && p.statement_review_id) summary.current_evidence = {
+    receipt_id: Number(judged.id), execution_return_id: Number(judged.result_return_id),
+    statement_review_id: p.statement_review_id,
+    semantic_review_ids: reviews.filter(r => Number(r.verification_receipt_id) === Number(judged.id)).map(r => Number(r.id))
+  };
+  return summary;
 }
 
 /** Revoked statement authority cancels both queued and issued work before another brief can be served. */
