@@ -63,3 +63,12 @@ test('old responses, invalid URLs and wrong current request echoes cannot restor
  await c.show();await c.show();pending({lean_milestone_request:'request-fixture',paper:{reviewed_pdf:{url:'/projects/fixture/papers/main/expositions/7/pdf'}}});await new Promise(resolve=>setImmediate(resolve));assert.equal(c.root.children.length,0);
  for(const reply of [{lean_milestone_request:'wrong',paper:{reviewed_pdf:{url:'/projects/fixture/papers/main/expositions/7/pdf'}}},{lean_milestone_request:'request-fixture',paper:{reviewed_pdf:{url:'https://elsewhere.invalid/file'}}}]){const x=pdfClient(async()=>reply);await x.show();assert.equal(x.root.children.length,0);}
 });
+
+test('actual project initialization invalidates its first pending Papers read before starting polling',{timeout:1000},async()=>{
+ let pending,markStarted;const started=new Promise(resolve=>markStarted=resolve),c=client(()=>new Promise(resolve=>{pending=resolve;markStarted();})),window=new EventTarget(),noop=async()=>{};let timers=0;
+ const start=page.lastIndexOf('(async () => {'),end=page.indexOf('})();',start)+5;
+ const initialization=runInNewContext(page.slice(start,end),{document:c.document,addEventListener:window.addEventListener.bind(window),clearPaperLists:c.clear,loadMe:noop,refreshBoard:c.load,renderStartField:noop,$:()=>({}),SLUG:'fixture',safeLoad:noop,loadPapers:c.load,loadDocuments:noop,loadProvenance:noop,loadHighscores:noop,sequenceList:{refresh:noop},openChannel:noop,polling:null,channelRequest:null,setInterval:()=>++timers,clearInterval(){}});
+ await started;const hide=new Event('pagehide');hide.persisted=false;window.dispatchEvent(hide);
+ pending({papers:[{url:'/main',title:'Old proof',status:'reviewed',status_label:'Main theorem proven with Lean',reviewed_pdf:{url:'/projects/fixture/papers/main/expositions/7/pdf'}}]});await initialization;
+ for(const el of Object.values(c.elements))assert.equal(el.innerHTML,'');assert.equal(timers,0,'departed initial pages start no polling timers');
+});
