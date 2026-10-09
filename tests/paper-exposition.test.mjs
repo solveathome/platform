@@ -2,7 +2,7 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {createHash} from 'node:crypto';
-import {decodeExpositionPdf,acceptedExpositionSource,expositionKey,validateExpositionMapping} from '../src/lib/paper-exposition.ts';
+import {decodeExpositionPdf,acceptedExpositionSource,expositionKey,validateExpositionMapping,expositionReviewMatches} from '../src/lib/paper-exposition.ts';
 const hash=s=>createHash('sha256').update(s).digest('hex');
 const summary={status:'checked',judged_receipt_id:3,manuscript_sha256:'a'.repeat(64),statement_binding:'b'.repeat(64),checked_claims:['main'],claims:[{id:'main',declaration:'Proof.main',target:'Proof.lean',coverage:'full',assumptions:['S is a prime family']}]};
 const source={id:1,status:'accepted',provisional:false,verification_fingerprint:'c'.repeat(64)};
@@ -27,7 +27,15 @@ test('a revised exposition binds its own exact TeX and preserves formal paramete
   }
   const n=map();n.unproved_claims[0].status='verified';assert.throws(()=>validateExpositionMapping(n,source,summary,n.tex_sha256),/open status/);
   const duplicate=map();duplicate.claims.push(duplicate.claims[0]);assert.throws(()=>validateExpositionMapping(duplicate,source,summary,duplicate.tex_sha256),/unique/);
+  const duplicateOpen=map();duplicateOpen.unproved_claims.push(duplicateOpen.unproved_claims[0]);assert.throws(()=>validateExpositionMapping(duplicateOpen,source,summary,duplicateOpen.tex_sha256),/unique/);
   assert.throws(()=>validateExpositionMapping(map(),source,{...summary,checked_claims:['main','other']},map().tex_sha256),/every accepted/);
+});
+test('fidelity acceptance is bound to this artifact version and every mapped claim, including at decision time',()=>{
+  const e={tex_sha256:'d'.repeat(64),claim_map_sha256:'e'.repeat(64),pdf_sha256:'f'.repeat(64),source_fingerprint:source.verification_fingerprint,claims:[{source_claim_id:'main'}]};
+  const review={...e,reviewed_claim_ids:['main'],fidelity_md:'The exact exposition artifacts preserve the accepted formal statement, definitions, domains and explicit open scope.'};
+  assert.equal(expositionReviewMatches(e,review),true);
+  for(const change of [{tex_sha256:'a'.repeat(64)},{reviewed_claim_ids:[]},{reviewed_claim_ids:['main','main']},{source_fingerprint:'b'.repeat(64)},{fidelity_md:'Too short'}]) assert.equal(expositionReviewMatches(e,{...review,...change}),false);
+  assert.equal(expositionReviewMatches(e,null),false);
 });
 test('PDF envelope decoding is bounded, canonical and hash-exact, without interpreting PDF data',()=>{
   const bytes=Buffer.from('%PDF-1.4\nSynthetic transport fixture, not a rendered paper.\n%%EOF\n');

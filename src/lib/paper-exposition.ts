@@ -100,8 +100,12 @@ export function validateExpositionMapping(map: any, source: any, summary: LeanSu
     seen.add(original!.id);
   }
   if (!same(ids([...seen] as string[]),ids(summary.checked_claims))) fail('Exposition must map every accepted checked source claim; missing claims are not silently completed');
-  for (const c of map.unproved_claims) if (c?.status !== 'open' || typeof c.id !== 'string' || !c.id || !c.tex_locator || !c.description || seen.has(c.id))
-    fail('Unproved exposition claims must have separate ids, locators, descriptions and explicit open status');
+  for (const c of map.unproved_claims) {
+    if (c?.status !== 'open' || typeof c.id !== 'string' || !c.id.trim() || typeof c.tex_locator !== 'string' || !c.tex_locator.trim()
+      || typeof c.description !== 'string' || !c.description.trim() || seen.has(c.id))
+      fail('Unproved exposition claims must have unique separate ids, locators, descriptions and explicit open status');
+    seen.add(c.id);
+  }
   return map.claims.map((c: any) => ({source_claim_id:c.source_claim_id,declaration:c.declaration,target:c.target,coverage:c.coverage,assumptions:c.assumptions,tex_locator:c.tex_locator}));
 }
 
@@ -133,12 +137,16 @@ export async function expositionEvidence(e: PaperExposition, problemId: number) 
   return {current, status:s.summary?.status ?? 'no_proof', source_return_status:s.source?.status ?? 'missing', label:current ? 'Current accepted mapped proof evidence' : 'Source evidence pending, stale or revoked', receipt_id:e.receipt_id};
 }
 
+export function expositionReviewMatches(e: PaperExposition, review: any): boolean {
+  return !!review && review.tex_sha256 === e.tex_sha256 && review.claim_map_sha256 === e.claim_map_sha256 && review.pdf_sha256 === e.pdf_sha256
+    && review.source_fingerprint === e.source_fingerprint && Array.isArray(review.reviewed_claim_ids)
+    && same(ids(review.reviewed_claim_ids),ids(e.claims.map(c=>c.source_claim_id))) && typeof review.fidelity_md === 'string' && review.fidelity_md.trim().length >= 80;
+}
+
 export async function validateExpositionReview(ret: any, review: any) {
   const e: PaperExposition = ret.paper_exposition;
   if (!(await expositionEvidence(e,Number(ret.problem_id))).current) fail('Exposition acceptance requires current accepted source evidence; this source is pending, stale or revoked');
-  if (review?.tex_sha256 !== e.tex_sha256 || review.claim_map_sha256 !== e.claim_map_sha256 || review.pdf_sha256 !== e.pdf_sha256
-    || review.source_fingerprint !== e.source_fingerprint || !Array.isArray(review.reviewed_claim_ids)
-    || !same(ids(review.reviewed_claim_ids),ids(e.claims.map(c=>c.source_claim_id))) || typeof review.fidelity_md !== 'string' || review.fidelity_md.trim().length < 80)
+  if (!expositionReviewMatches(e,review))
     fail('paper_exposition_review must bind the exact TeX, PDF envelope, map and source fingerprint, list every reviewed source claim id and substantively assess fidelity_md (at least 80 characters)');
   return {tex_sha256:e.tex_sha256,claim_map_sha256:e.claim_map_sha256,pdf_sha256:e.pdf_sha256,source_fingerprint:e.source_fingerprint,reviewed_claim_ids:ids(review.reviewed_claim_ids),fidelity_md:review.fidelity_md};
 }

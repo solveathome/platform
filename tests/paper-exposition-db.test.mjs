@@ -40,7 +40,8 @@ before(async()=>{
   server=app.listen(0,'127.0.0.1');await new Promise(r=>server.once('listening',r));base=`http://127.0.0.1:${server.address().port}/projects/${slug}`;
 });
 after(async()=>{
-  await new Promise(r=>server.close(r));
+  if(server) await new Promise(r=>server.close(r));
+  if(!pid) { await pool.end();rmSync(tmp,{recursive:true,force:true});return; }
   await q(`DELETE FROM file_refs WHERE file_sha IN (SELECT sha256 FROM files WHERE user_id=$1)`,[uid]);
   await q(`DELETE FROM messages WHERE user_id=$1`,[uid]);await q(`DELETE FROM credits WHERE problem_id=$1`,[pid]);
   await q(`DELETE FROM verification_runs WHERE subject_return_id IN (SELECT id FROM returns WHERE problem_id=$1)`,[pid]);
@@ -88,6 +89,10 @@ test('HTTP submission rejects changed claims without orphan rows, then records a
 });
 test('ordinary accepting review must bind this version; downloads preserve bytes and stale evidence stays visible',async()=>{
   const e=(await one(`SELECT paper_exposition FROM returns WHERE id=$1`,[submission])).paper_exposition;
+  const unbound=await one(`INSERT INTO reviews(return_id,user_id,model,provider,verdict,rung,notes_md,trusted,effort) VALUES($1,$2,'claude-opus-5-5','anthropic','accept','proven','Synthetic legacy or series vote without an exposition mapping',true,'high') RETURNING id`,[submission,uid]);
+  assert.match(await resolveReturn(submission),/^pending/);
+  assert.equal((await one(`SELECT status FROM returns WHERE id=$1`,[submission])).status,'pending');
+  await q(`DELETE FROM reviews WHERE id=$1`,[unbound.id]);
   const body={type:'review',return_id:submission,verdict:'accept',rung:'proven',notes_md:'Synthetic ordinary fidelity review.'};
   const bad=await call(body,'claude-opus-5-5');assert.equal(bad.status,400,await bad.text());
   const binding={tex_sha256:tex,claim_map_sha256:map,pdf_sha256:pdf,source_fingerprint:e.source_fingerprint,reviewed_claim_ids:['claim1'],fidelity_md:'Synthetic correspondence review checks the exact source statement, unchanged formal parameters and every scoped artifact. This is a database test, not mathematical evidence.'};

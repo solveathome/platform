@@ -72,7 +72,7 @@ const MAX_LIVE_SESSIONS = Number(process.env.MAX_LIVE_SESSIONS ?? 16), MAX_HELD_
 export const job = Router({ mergeParams: true });
 job.use(jobHandoffs);
 job.use(departments);
-import { queuePaperExposition, reconcilePaperExpositions, validatePaperExposition, validateExpositionReview, expositionEvidence, expositionReviewGuidance } from '../lib/paper-exposition.js';
+import { queuePaperExposition, reconcilePaperExpositions, validatePaperExposition, validateExpositionReview, expositionEvidence, expositionReviewGuidance, expositionReviewMatches } from '../lib/paper-exposition.js';
 
 const BASE = () => process.env.BASE_URL ?? "http://localhost:8600";
 
@@ -1274,6 +1274,7 @@ job.post("/result", bearer, project, assignmentMutation(async (req: any, res) =>
         if (await one(`SELECT 1 FROM reviews WHERE return_id = $1 AND user_id = $2`, [id, uid])) { seriesWarnings.push(`return #${key}: you already reviewed it`); continue; }
         const v = raw && typeof raw === "object" ? raw : { verdict: raw };
         if (!["accept", "reject"].includes(v.verdict)) { seriesWarnings.push(`return #${key}: verdict must be accept or reject; no verdict recorded`); continue; }
+        if (o.paper_exposition && v.verdict === 'accept') { seriesWarnings.push(`return #${key}: an exposition needs its own exact artifact fidelity mapping; no inherited series acceptance recorded, it gets its own reviewer`); continue; }
         const vr = parseRung(v.rung); if (vr === undefined) { seriesWarnings.push(`return #${key}: ${RUNG_ERROR("rung", v.rung)}; no verdict recorded`); continue; }
         const rr = v.verdict === "reject" ? (v.reject_reason !== undefined && v.reject_reason !== null ? String(v.reject_reason) : null) : null;
         if (rr !== null && !REJECT_REASONS.includes(rr as any)) { seriesWarnings.push(`return #${key}: reject_reason must be one of ${REJECT_REASONS.join(", ")}; no verdict recorded`); continue; }
@@ -1357,7 +1358,7 @@ job.post("/result", bearer, project, assignmentMutation(async (req: any, res) =>
     if (subject.status !== "pending" || openTriage) {
       note = `Your triage is on the record. Return #${subject.id} is ${subject.status}${openTriage ? " and another triage of it is open" : ""}: a trusted reviewer or an earlier decision got there first, so this answer changes nothing now.`;
     } else if (b.escalate || isChatModel(subject.model)) {
-      reviewsRequested = subject.verification_plan || subject.research ? 1 : MIN_REVIEWS;
+      reviewsRequested = subject.paper_exposition || subject.verification_plan || subject.research ? 1 : MIN_REVIEWS;
       await q(`INSERT INTO return_decisions (return_id, status, final_rung, provisional, by, note, user_id) VALUES ($1,'pending',NULL,false,'triage',$2,$3)`, [subject.id, `Triage by @${req.user!.handle} (${req.model ?? "unknown"}): ${b.escalate ? "a trusted verdict would change the record." : "a trusted verdict would not change the record, and the return goes to a trusted reviewer anyway: every chat return is decided by one."} ${notes}${covered.length ? ` Read as one series with #${covered.map((o) => o.id).join(", #")}.` : ""}`, uid]);
       for (const o of covered) {
         await q(`UPDATE returns SET triage_lead = $2, review_admitted_at = coalesce(review_admitted_at, now()) WHERE id = $1`, [o.id, subject.id]);
@@ -1929,7 +1930,7 @@ Return: { "job_id": <this job>, "escalate": true | false, "reason": "<on a no: f
 /** A review queued under an earlier guidance version gets the current standard brief when served; its job-specific reassessment note is kept. Packaged reviews only: that is the template that changed. */
 async function refreshReviewBrief(row: any, problemId: number): Promise<string> {
   if (row.type !== 'review' || !row.parent_return_id || Number(row.brief_version ?? 0) >= REVIEW_BRIEF_VERSION) return row.brief_md;
-  if (!(await one(`SELECT 1 FROM returns WHERE id=$1 AND verification_plan IS NOT NULL`, [row.parent_return_id]))) return row.brief_md;
+  if (!(await one(`SELECT 1 FROM returns WHERE id=$1 AND (verification_plan IS NOT NULL OR paper_exposition IS NOT NULL)`, [row.parent_return_id]))) return row.brief_md;
   const composed = await composeReviewBrief(Number(row.parent_return_id), problemId);
   const brief = composed.brief + (String(row.brief_md ?? '').includes('Evidence needs reassessment or execution could not find capacity within 24 hours.') ? REASSESSMENT_NOTE : '');   // the note's head is stable across wording changes
   await q(`UPDATE jobs SET brief_md=$2, brief_version=$3 WHERE id=$1`, [row.id, brief, REVIEW_BRIEF_VERSION]);
@@ -1967,8 +1968,10 @@ export async function resolveReturn(returnId: number): Promise<string> {
 async function resolveReturnLocked(returnId: number): Promise<string> {
   const ret = await one(`SELECT * FROM returns WHERE id = $1`, [returnId]);
   if (!ret) return "unknown";
-  const votes = await q<{ id: number; verdict: "accept" | "reject"; weight: string; provider: string; rung: string | null; user_id: number; model: string; also_credit: any; unverifiable: boolean; needs_md: string | null; verification: string; trusted: boolean; scored_at: string | null; effort: string | null; reject_reason: string | null }>(
-    `SELECT id, verdict, weight, provider, rung, user_id, model, also_credit, unverifiable, needs_md, verification, trusted, scored_at, effort, reject_reason FROM reviews WHERE return_id = $1 AND NOT needs_reassessment`, [returnId]);
+  const recordedVotes = await q<{ id: number; verdict: "accept" | "reject"; weight: string; provider: string; rung: string | null; user_id: number; model: string; also_credit: any; unverifiable: boolean; needs_md: string | null; verification: string; trusted: boolean; scored_at: string | null; effort: string | null; reject_reason: string | null; paper_exposition_review: any }>(
+    `SELECT id, verdict, weight, provider, rung, user_id, model, also_credit, unverifiable, needs_md, verification, trusted, scored_at, effort, reject_reason, paper_exposition_review FROM reviews WHERE return_id = $1 AND NOT needs_reassessment`, [returnId]);
+  // A series verdict or a historical unbound vote cannot review different exposition bytes by inheritance.
+  const votes = recordedVotes.filter(v => !ret.paper_exposition || v.verdict !== 'accept' || expositionReviewMatches(ret.paper_exposition,v.paper_exposition_review));
   const d = decide(votes.map((v) => ({ ...v, weight: Number(v.weight) })));
   if (ret.paper_exposition && d.status === 'accepted' && !(await expositionEvidence(ret.paper_exposition,Number(ret.problem_id))).current) return 'pending (exposition source evidence is pending, stale or revoked)';
   const isFinal = ret.status !== "pending" && !ret.provisional;
@@ -2342,7 +2345,7 @@ async function openLaneFromDirection(ret: any): Promise<void> {
 
 /** One review or one finding by id, as JSON (#mba-sah-bot-feedback-fixes, fix 16: "got 404 at /review/292 and /finding/152"). The review's transcript is its own resource. */
 job.get("/review/:id", optionalAuth, project, async (req: any, res) => {
-  const r = await one(`SELECT rv.id, rv.return_id, u.handle, rv.model, rv.verdict, rv.rung, rv.reject_reason, rv.notes_md, rv.also_fix, rv.verification, rv.trusted, rv.created_at FROM reviews rv JOIN users u ON u.id = rv.user_id JOIN returns r ON r.id = rv.return_id WHERE rv.id = $1 AND r.problem_id = $2`, [Number(req.params.id) || 0, req.project.id]);
+  const r = await one(`SELECT rv.id, rv.return_id, u.handle, rv.model, rv.verdict, rv.rung, rv.reject_reason, rv.notes_md, rv.also_fix, rv.verification, rv.paper_exposition_review, rv.trusted, rv.created_at FROM reviews rv JOIN users u ON u.id = rv.user_id JOIN returns r ON r.id = rv.return_id WHERE rv.id = $1 AND r.problem_id = $2`, [Number(req.params.id) || 0, req.project.id]);
   if (!r) { res.status(404).json({ error: `no such review #${String(req.params.id).slice(0, 20)} (a replaced review is in its return's review_history)` }); return; }
   res.type("application/json").send(redactHarnessIds(JSON.stringify({ ...r, return_url: `/projects/${req.project.slug}/return/${r.return_id}` })).text);
 });
@@ -2377,6 +2380,7 @@ job.get("/return/:id", optionalAuth, project, async (req: any, res) => {
   r.verification_runs = await verificationRuns(Number(r.id));
   r.verification_state = r.verification_plan ? await verificationState(Number(r.id)) : null;
   r.verification_summary = r.verification_plan ? await verificationSummary(Number(r.id)) : null;   // generated from the record; see summaryMarkdown for the page
+  if (r.paper_exposition) r.paper_exposition_evidence = await expositionEvidence(r.paper_exposition,Number(r.problem_id));
   r.canonical_return = r.verification_plan && r.duplicate_of ? await one(`SELECT id,status,final_rung,provisional FROM returns WHERE id=$1`, [r.duplicate_of]) : null;
   r.review_history = await q(`SELECT h.review-'transcript'||jsonb_build_object('handle',u.handle) AS review,h.archived_at FROM review_history h LEFT JOIN users u ON u.id=(h.review->>'user_id')::bigint WHERE h.return_id=$1 ORDER BY h.id`, [r.id]);
   r.dependencies = await q(`SELECT source.id,source.status,source.final_rung,source.duplicate_of AS canonical_return_id FROM return_dependencies d JOIN returns source ON source.id=d.depends_on_id WHERE d.return_id=$1 ORDER BY source.id`, [r.id]);
@@ -2393,7 +2397,7 @@ job.get("/return/:id", optionalAuth, project, async (req: any, res) => {
   // The reviews and the decision record travel with the return (issue #29). `returns.decision` is a curate return's own input, so it is `curation` here;
   // `decision` is the latest decision row (null while nothing has been decided) with the reviews that carried it, and `decisions` the whole record, oldest first.
   if (r.type === "curate") r.curation = r.decision; delete r.decision;
-  r.reviews = (await q(`SELECT rv.id, u.handle, rv.model, rv.verdict, rv.rung, rv.reject_reason, rv.verification, rv.rerun_reason, rv.verification_receipt_id, rv.verification_sufficiency_md, rv.verification_conflict_resolution_md, rv.lean_statement_review, rv.lean_execution_review, rv.trusted, rv.weight, rv.notes_md, rv.also_fix, rv.needs_reassessment, rv.created_at FROM reviews rv JOIN users u ON u.id = rv.user_id WHERE rv.return_id = $1 ORDER BY rv.id`, [r.id])).map((v: any) => ({ ...v, id: Number(v.id), weight: Number(v.weight) }));
+  r.reviews = (await q(`SELECT rv.id, u.handle, rv.model, rv.verdict, rv.rung, rv.reject_reason, rv.verification, rv.rerun_reason, rv.verification_receipt_id, rv.verification_sufficiency_md, rv.verification_conflict_resolution_md, rv.lean_statement_review, rv.lean_execution_review, rv.paper_exposition_review, rv.trusted, rv.weight, rv.notes_md, rv.also_fix, rv.needs_reassessment, rv.created_at FROM reviews rv JOIN users u ON u.id = rv.user_id WHERE rv.return_id = $1 ORDER BY rv.id`, [r.id])).map((v: any) => ({ ...v, id: Number(v.id), weight: Number(v.weight) }));
   // Each decision row names who decided (issue #31): the reviewers whose verdicts carried it, or the person who reopened or challenged; and whether the author's own trusted handle was among them.
   const historicalReviews = [...r.reviews.map((v: any) => ({ ...v, archived_at: null })), ...r.review_history.map((h: any) => ({ ...h.review, archived_at: h.archived_at }))];
   r.decisions = (await q(`SELECT d.status, d.final_rung, d.provisional, d.by, d.note, d.decided_at, u.handle AS actor FROM return_decisions d LEFT JOIN users u ON u.id = d.user_id WHERE d.return_id = $1 ORDER BY d.id`, [r.id])).map((d: any) => {
