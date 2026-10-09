@@ -7,6 +7,9 @@ import { join } from "node:path";
 import { PUBLIC_DIR } from "./lib/paths.js";
 import { migrate, flushFileEffects } from "./db/index.js";
 import { job } from "./routes/job.js";
+import { challenges } from "./routes/challenges.js";
+import { ensureChallengeProjects } from "./lib/challenges.js";
+import { ensureChannels } from "./routes/chat.js";
 import { lane } from "./routes/lane.js";
 import { board, root } from "./routes/board.js";
 import { chat } from "./routes/chat.js";
@@ -91,6 +94,8 @@ app.use(oauthRoutes);
 app.get("/auth/github", githubStart);
 app.get("/auth/github/callback", githubCallback);
 app.post("/auth/logout", logout);
+// A record challenge answers its own pages and API first; every other project passes straight through (src/routes/challenges.ts).
+app.use("/projects/:slug", challenges);
 app.use("/projects/:slug", job);
 app.use("/projects/:slug", lane);
 app.use("/projects/:slug", board);
@@ -135,7 +140,7 @@ Code: MIT. Results and traces: CC BY 4.0.
 `);
 });
 
-app.use(notFound([job, lane, board, papers, sequences, chat, asks, trust, announcements, docs, visualizations]));
+app.use(notFound([challenges, job, lane, board, papers, sequences, chat, asks, trust, announcements, docs, visualizations]));
 // A browser or crawler that misses gets the site's own not-found page with a real 404, never Express's bare "Cannot GET".
 app.use((req, res) => { res.status(404).type("text/html").send(notFoundPage(`Nothing at ${String(req.originalUrl ?? req.url).split("?")[0].slice(0, 200)}.`)); });
 
@@ -148,6 +153,8 @@ app.use((err: any, req: any, res: any, _next: any) => {
 });
 migrate().then(async () => {
   await flushFileEffects();
+  // A challenge project has no seed run or mirror: its problem row and track lanes are made from project.json at start.
+  await ensureChallengeProjects(listProjectConfigs(), ensureChannels);
   await recordAllPublications();
   setInterval(() => { flushFileEffects().catch(error => console.error("publication retry:", error)); }, 30000).unref();
   // Announcements (#sah-discord-announcer): scan and send once a minute; off unless a project turns it on, ANNOUNCE_ENABLED=0 stops it.

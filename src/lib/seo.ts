@@ -1,3 +1,4 @@
+import { isListed } from "./projects.js";
 /**
  * What a search engine reads (Sep 25 2026, #sah-seo-optimize): structured data, the not-found page, plain-text descriptions.
  * robots.txt and sitemap.xml are in src/routes/seo.ts. The site stays the record: nothing here changes what a page says,
@@ -10,8 +11,10 @@ export const abs = (path: string) => /^https?:/.test(path) ? path : `${BASE()}${
 /** Working files that are never a search result (Oct 2 2026, #mba-gsc-issues-fix: Search Console showed most impressions on them):
  * uploaded files at /files/<sha> (raw text has no <meta>, so the header is the only way) and the frozen seed edition. Not in
  * robots.txt, so a crawler can still fetch them and read the noindex. */
-export const noindexPath = (path: string) => /^\/files\/./.test(path) || /^\/projects\/[^/]+\/seed(?:\/|$)/.test(path) || workingDoc(path);
+export const noindexPath = (path: string) => /^\/files\/./.test(path) || hiddenProjectPath(path) || /^\/projects\/[^/]+\/seed(?:\/|$)/.test(path) || workingDoc(path);
 
+/** Every page of a hidden project (listed: false) is noindex, whatever it is (Oct 9 2026, the MD5 challenge beta). */
+const hiddenProjectPath = (path: string) => { const m = /^\/projects\/([^/]+)/.exec(path); try { return !!m && !isListed(decodeURIComponent(m[1])); } catch { return false; } };
 /** The documents under /projects/<slug>/docs/ written for a reader; every other file there (research notes, logs, state, staging,
  * paper drafts that have their own /papers/ page, proposals, tool READMEs, agent instructions) is a working file and noindexed
  * (Oct 2 2026, client, #mba-gsc-issues-fix: Google indexed them for junk queries; overrides #sah-seo-optimize's "list every

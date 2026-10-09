@@ -10,6 +10,7 @@ import { q } from "../db/index.js";
 import { ROOT } from "../lib/paths.js";
 import { readPublication, publishedDocument } from "../lib/document-publication.js";
 import { BASE, readerDoc } from "../lib/seo.js";
+import { unlistedSlugs } from "../lib/projects.js";
 
 export const seo = Router();
 const REPOS = process.env.DOCS_DIR ?? join(ROOT, "data", "repos");
@@ -39,7 +40,7 @@ const day = (d: string | Date | null | undefined) => { if (!d) return undefined;
 
 export async function sitemapUrls(): Promise<Url[]> {
   const urls: Url[] = [{ loc: "/" }, { loc: "/terms" }, { loc: "/privacy" }, { loc: "/dumps" }];
-  const projects = await q(`SELECT p.id, p.slug, (SELECT max(r.created_at) FROM returns r WHERE r.problem_id = p.id) AS last FROM problems p ORDER BY p.id`);
+  const projects = await q(`SELECT p.id, p.slug, (SELECT max(r.created_at) FROM returns r WHERE r.problem_id = p.id) AS last FROM problems p WHERE NOT (p.slug = ANY($1::text[])) ORDER BY p.id`, [unlistedSlugs()]);   // a hidden project is not in the sitemap
   for (const p of projects) {
     const P = `/projects/${p.slug}`;
     urls.push({ loc: P, lastmod: p.last }, { loc: `${P}/trust` }, { loc: `${P}/research-routes` }, { loc: `${P}/docs` });

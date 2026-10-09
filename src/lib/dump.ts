@@ -1,3 +1,4 @@
+import { unlistedSlugs } from "./projects.js";
 /**
  * Open dataset dump (scope Q16, Q26): data/dumps/<YYYY-MM-DD>/ holds one JSONL file per table plus manifest.json
  * (row counts, sha256 per file, license, attribution). Idempotent per day.
@@ -20,6 +21,11 @@ import { findHarnessId, redactHarnessIds } from "./files.js";
 import { needsSourceReview } from "./document-publication.js";
 
 export const DUMP_TABLES: Record<string, string> = {
+  // Record challenges (src/lib/challenges.ts): live receipts and their corrections; demo submissions and session ids stay out.
+  challenge_submissions: `SELECT s.id, p.slug AS project, s.challenge_id, u.handle, s.model, s.job_id, s.inputs, s.digest, s.score, s.byte_length, s.a_bytes, s.b_bytes, s.total_bytes, s.identity_sha256, s.duplicate_of, s.known_result, s.attribution, s.method_md, s.ai_involvement, s.runtime_s, s.hardware, s.verifier_version, s.checks, s.received_at, s.verified_at FROM challenge_submissions s JOIN problems p ON p.id = s.problem_id JOIN users u ON u.id = s.user_id WHERE s.namespace = 'live' ORDER BY s.id`,
+  challenge_events: `SELECT e.id, p.slug AS project, e.challenge_id, e.kind, e.value, e.submission_id, e.note, e.created_at FROM challenge_events e JOIN problems p ON p.id = e.problem_id WHERE e.namespace = 'live' ORDER BY e.id`,
+  challenge_corrections: `SELECT c.id, p.slug AS project, c.submission_id, c.kind, c.note, c.attribution, u.handle AS by, c.created_at FROM challenge_corrections c JOIN challenge_submissions s ON s.id = c.submission_id JOIN problems p ON p.id = s.problem_id LEFT JOIN users u ON u.id = c.user_id WHERE s.namespace = 'live' ORDER BY c.id`,
+  challenge_reports: `SELECT r.id, p.slug AS project, r.job_id, u.handle, r.model, r.report_md, r.created_at FROM challenge_reports r JOIN problems p ON p.id = r.problem_id JOIN users u ON u.id = r.user_id ORDER BY r.id`,
   job_correction_prerequisites: `SELECT p.job_id,p.finding_id,u.handle AS recorded_by,p.reason_md,p.created_at FROM job_correction_prerequisites p LEFT JOIN users u ON u.id=p.created_by ORDER BY p.job_id,p.finding_id`,
   departments: `SELECT d.id,u.handle,d.created_at FROM departments d JOIN users u ON u.id=d.user_id ORDER BY d.id`,
   runs: `SELECT s.run_id,s.department_id,p.slug AS project,u.handle,s.model,s.started_at,s.ended_at FROM sessions s JOIN users u ON u.id=s.user_id JOIN problems p ON p.id=s.problem_id WHERE s.run_id IS NOT NULL ORDER BY s.started_at`,
@@ -54,6 +60,10 @@ export const DUMP_TABLES: Record<string, string> = {
 // Public prose is screened row by row for copied sources; a hit withholds the whole day (nothing has reached the day's directory yet).
 const PROSE = new Set(["reason_md","status_md", "brief_md", "step_check_notes_md", "report_md", "patch", "transcript", "notes_md", "body_md", "question", "verdict", "contribution_md", "prior_art_md", "uncertainty_md", "evidence_md", "observed", "verification_sufficiency_md", "verification_conflict_resolution_md", "announce_md"]);
 const STRUCTURED_PROSE = new Set(["payload", "research", "verification_plan", "lean_statement_review", "lean_execution_review", "execution_attestation", "next_step", "obstacle", "detail", "details", "review"]);
+const hiddenRow = (table: string, row: Record<string, unknown>): boolean => {
+  const slug = table === "problems" ? row.slug : row.project;
+  return typeof slug === "string" && unlistedSlugs().includes(slug);
+};
 export function sourceReviewHit(table: string, row: Record<string, unknown>): string | null {
   for (const [field, value] of Object.entries(row)) {
     if ((PROSE.has(field) && typeof value === "string" && needsSourceReview(value)) || (STRUCTURED_PROSE.has(field) && value != null && needsSourceReview(JSON.stringify(value)))) {
@@ -85,6 +95,8 @@ export async function writeDump(opts: { day: string; dumpDir: string; rows: RowS
       let count = 0, bytes = 0;
       try {
         for await (const row of rows(sql)) {
+          // A hidden project's rows wait until it is listed (Oct 9 2026): the dump is a public listing too.
+          if (hiddenRow(name, row)) continue;
           const hit = sourceReviewHit(name, row);
           if (hit) throw new Error(hit);
           const line = Buffer.from(redactHarnessIds(JSON.stringify(row)).text + "\n");

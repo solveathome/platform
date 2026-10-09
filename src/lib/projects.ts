@@ -15,6 +15,11 @@ export type DocsRedirect = { match: string; flags?: string; to: string; why?: st
 export type ProjectConfig = {
   lean_main_theorems?: import('./lean-display.js').MainTheoremDesignation[]; // maintainer-reviewed exact designations; never proof authority
   scheduler?: { discovery_share?: number; review_pressure?: number; review_triage?: { min_tier?: number; budget_hours?: number } | false; research_allocation?: { discover: number; pursue: number; rescue: number; consolidate: number } };
+  // false: a hidden project (Chris, Oct 9 2026, the MD5 challenge beta): served at its direct URL to anyone, run by agents as usual,
+  // but never featured, listed, put in the sitemap, the dump, a progress email or an announcement, and served noindex. Publishing is
+  // removing the flag (or setting it true) and deploying.
+  listed?: boolean;
+  challenge?: import('./challenges.js').ChallengeConfig;   // a record challenge: submissions verified by the server, no review (src/lib/challenges.ts)
   slug: string; name: string; repo_url: string; featured?: boolean; tagline?: string; summary?: string; status_md?: string;
   researcher?: string; lanes?: Lane[]; docs_redirects?: DocsRedirect[]; mirror?: { source_note?: string };
   share?: { title?: string; description?: string; image?: string; question?: string; line?: string; line2?: string; footer?: string };
@@ -48,13 +53,24 @@ export function docsRedirect(slug: string, rel: string): string | null {
   return null;
 }
 
+/** Slugs of the hidden projects (listed: false). Project files change only with a deploy, so the set is read once a minute at most. */
+let unlistedCache: { at: number; dir: string; slugs: string[] } = { at: 0, dir: "", slugs: [] };
+export function unlistedSlugs(): string[] {
+  if (Date.now() - unlistedCache.at > 60_000 || unlistedCache.dir !== PROJECTS_DIR)
+    unlistedCache = { at: Date.now(), dir: PROJECTS_DIR, slugs: listProjectConfigs().filter((c) => c.listed === false).map((c) => c.slug) };
+  return unlistedCache.slugs;
+}
+export const isListed = (slug: string): boolean => !unlistedSlugs().includes(slug);
+export function forgetUnlisted(): void { unlistedCache.at = 0; }
+
 export type Featured = { slug: string; name: string; summary: string; tagline: string };
 /** The featured project: FEATURED_PROJECT in the environment, else the problem flagged featured, else the oldest. Null on an empty instance. */
 export async function featuredProject(): Promise<Featured | null> {
   const env = (process.env.FEATURED_PROJECT ?? "").trim();
-  const row = env
+  // A hidden project is never featured, whatever FEATURED_PROJECT or its row says.
+  const row = env && isListed(env)
     ? await one<{ slug: string; name: string; summary: string }>(`SELECT slug, name, summary FROM problems WHERE slug = $1`, [env])
-    : await one<{ slug: string; name: string; summary: string }>(`SELECT slug, name, summary FROM problems ORDER BY featured DESC, id LIMIT 1`);
+    : await one<{ slug: string; name: string; summary: string }>(`SELECT slug, name, summary FROM problems WHERE NOT (slug = ANY($1::text[])) ORDER BY featured DESC, id LIMIT 1`, [unlistedSlugs()]);
   if (!row) return null;
   const cfg = readProjectConfig(row.slug);
   return { slug: row.slug, name: row.name, summary: row.summary ?? "", tagline: cfg?.tagline ?? row.summary ?? "" };

@@ -1541,3 +1541,77 @@ CREATE OR REPLACE FUNCTION lean_execution_current(p_run_id bigint, p_subject_id 
         SELECT 1 FROM files f JOIN file_refs ref ON ref.file_sha=f.sha256
         WHERE f.sha256=artifact.sha AND f.deleted_at IS NULL AND ref.ref_type='return' AND ref.ref_id=r.id)));
 $$;
+
+-- Record challenges (Oct 9 2026, the MD5 Research Challenge; src/lib/challenges.ts). A submission's id is its receipt sequence:
+-- it is written under the project lock, so id order is arrival order. Rows are never rewritten; corrections are rows of their own.
+CREATE TABLE IF NOT EXISTS challenge_submissions (
+  id               BIGSERIAL PRIMARY KEY,
+  problem_id       BIGINT NOT NULL REFERENCES problems(id),
+  challenge_id     TEXT NOT NULL,
+  namespace        TEXT NOT NULL DEFAULT 'live' CHECK (namespace IN ('live','demo')),   -- demo: test data, never on the records, deletable by its submitter
+  user_id          BIGINT NOT NULL REFERENCES users(id),
+  session_id       TEXT,
+  job_id           BIGINT REFERENCES jobs(id),
+  model            TEXT,
+  idempotency_key  TEXT NOT NULL,
+  request_sha256   TEXT NOT NULL,
+  identity_sha256  TEXT NOT NULL,       -- domain-separated SHA-256 of the exact inputs, never their MD5
+  inputs           JSONB NOT NULL,      -- canonical transport form: candidate, input_hex, or a_hex and b_hex sorted by bytes
+  digest           TEXT NOT NULL,
+  score            INT,
+  byte_length      INT,
+  a_bytes          INT,
+  b_bytes          INT,
+  total_bytes      INT,
+  duplicate_of     BIGINT REFERENCES challenge_submissions(id),
+  known_result     BOOLEAN NOT NULL DEFAULT false,   -- reproduces a published result: its discoverer keeps the discovery credit
+  attribution      TEXT,
+  method_md        TEXT,
+  ai_involvement   TEXT,                -- self-reported, shown as such
+  runtime_s        NUMERIC,
+  hardware         TEXT,
+  verifier_version TEXT NOT NULL,
+  checks           JSONB NOT NULL,      -- the digest from each independent implementation
+  response         JSONB,
+  received_at      TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp(),
+  verified_at      TIMESTAMPTZ,
+  UNIQUE (user_id, idempotency_key)
+);
+CREATE INDEX IF NOT EXISTS challenge_submissions_track_idx ON challenge_submissions (problem_id, challenge_id, namespace, id);
+CREATE INDEX IF NOT EXISTS challenge_submissions_identity_idx ON challenge_submissions (identity_sha256);
+CREATE INDEX IF NOT EXISTS challenge_submissions_user_idx ON challenge_submissions (user_id, received_at);
+-- What a receipt earned when it arrived: milestones, records, reaching the published target. One winner per value, by the unique index.
+CREATE TABLE IF NOT EXISTS challenge_events (
+  id            BIGSERIAL PRIMARY KEY,
+  problem_id    BIGINT NOT NULL REFERENCES problems(id),
+  challenge_id  TEXT NOT NULL,
+  namespace     TEXT NOT NULL DEFAULT 'live',
+  kind          TEXT NOT NULL CHECK (kind IN ('milestone','record','target')),
+  value         INT NOT NULL,
+  submission_id BIGINT NOT NULL REFERENCES challenge_submissions(id),
+  note          TEXT,
+  created_at    TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp()
+);
+CREATE UNIQUE INDEX IF NOT EXISTS challenge_events_one_winner ON challenge_events (problem_id, challenge_id, namespace, kind, value);
+-- Verifier defects and attribution corrections: dated, append-only; the current view applies the latest.
+CREATE TABLE IF NOT EXISTS challenge_corrections (
+  id            BIGSERIAL PRIMARY KEY,
+  submission_id BIGINT NOT NULL REFERENCES challenge_submissions(id),
+  kind          TEXT NOT NULL CHECK (kind IN ('void','restore','attribution')),
+  note          TEXT NOT NULL,
+  attribution   TEXT,
+  user_id       BIGINT REFERENCES users(id),
+  created_at    TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp()
+);
+CREATE INDEX IF NOT EXISTS challenge_corrections_submission_idx ON challenge_corrections (submission_id, id);
+-- The report that closes a track assignment.
+CREATE TABLE IF NOT EXISTS challenge_reports (
+  id          BIGSERIAL PRIMARY KEY,
+  problem_id  BIGINT NOT NULL REFERENCES problems(id),
+  job_id      BIGINT NOT NULL REFERENCES jobs(id),
+  user_id     BIGINT NOT NULL REFERENCES users(id),
+  session_id  TEXT,
+  model       TEXT,
+  report_md   TEXT NOT NULL,
+  created_at  TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp()
+);

@@ -1,0 +1,112 @@
+import assert from 'node:assert/strict';
+import {test} from 'node:test';
+import {createHash, randomBytes} from 'node:crypto';
+import {execFileSync} from 'node:child_process';
+import {readFileSync} from 'node:fs';
+import {join} from 'node:path';
+
+// The MD5 challenge verifiers (Oct 9 2026): every fixture of the proposal, the boundary and malformed-input cases of its acceptance
+// tests 1 and 2, the independent RFC 1321 implementation against OpenSSL, and parity with the published Python reference.
+const {verifyMirror, verifyZero, verifyCollision, verify, identity, prefix, ChallengeError} = await import('../src/lib/challenges.ts');
+const {md5Rfc1321} = await import('../src/lib/md5.ts');
+const ROOT = new URL('..', import.meta.url).pathname;
+const config = JSON.parse(readFileSync(join(ROOT, 'projects/md5/project.json'), 'utf8'));
+const refused = (fn, re) => assert.throws(fn, (e) => e instanceof ChallengeError && e.status === 400 && (!re || re.test(e.message)));
+
+test('self-match fixtures: literal ASCII bytes, prefix score', () => {
+  for (const [c, d, s] of [
+    ['00000000000000000000000000000000', 'cd9e459ea708a948d5c2f5a6ca8838cf', 0],
+    ['0000000000000000000000000000000e', '0f5ecbfde00848fb349b3ad99d1a302d', 1],
+    ['000000000000000000000000000000e6', '003d6287c0965a231a872922657ee7dd', 2],
+    ['00000000000000000000000000001efd', '0005b7062c52fc4ee9762f633adb35fa', 3],
+    ['54db1011d76dc70a0a9df3ff3e0b390f', '54db1011d76d137956603122ad86d762', 12],
+  ]) { const r = verifyMirror(c); assert.equal(r.digest, d, c); assert.equal(r.score, s, c); assert.equal(r.checks['rfc1321-ts-1'][0], d); }
+  // Hashed as written, never decoded as hex.
+  assert.notEqual(verifyMirror('00000000000000000000000000000000').digest, createHash('md5').update(Buffer.alloc(16)).digest('hex'));
+});
+
+test('self-match refuses anything but 32 lowercase hex characters', () => {
+  for (const bad of ['0000000000000000000000000000000E', '0000000000000000000000000000000', '000000000000000000000000000000000', ' 0000000000000000000000000000000', '0000000000000000000000000000000\n',
+    '0x000000000000000000000000000000', '000000000000000000000000000000é0', '', 12, null, ['00000000000000000000000000000000'], {}]) refused(() => verifyMirror(bad));
+});
+
+test('all-zero fixtures: decoded bytes, leading-zero score', () => {
+  for (const [h, d, s] of [
+    ['', 'd41d8cd98f00b204e9800998ecf8427e', 0],
+    ['616263', '900150983cd24fb0d6963f7d28e17f72', 0],
+    ['06', '06eca1b437c7904cc3ce6546c8110110', 1],
+    ['6231303064343734656231303064363064303432653836336331653061646565', '00000000000008d71ef80eb3849237d2', 13],
+  ]) { const r = verifyZero(h); assert.equal(r.digest, d, h); assert.equal(r.score, s, h); assert.equal(r.byte_length, h.length / 2); }
+  assert.equal(verifyZero('616263').byte_length, 3, '616263 is three bytes, not six characters');
+});
+
+test('all-zero boundaries: 1,024 bytes accepted, 1,025 refused; malformed transport refused, never repaired', () => {
+  assert.equal(verifyZero('00'.repeat(1024)).byte_length, 1024);
+  refused(() => verifyZero('00'.repeat(1025)), /1025 bytes/);
+  for (const bad of ['0', 'ABCD', 'aBcd', '0x00', ' 00', '00 ', '00\n', 'zz', '０٠', 'ü0', 6, null, undefined, ['00'], {hex: '00'}]) refused(() => verifyZero(bad));
+});
+
+test('collision fixture: Stevens pair, swapped order equal, identical and non-colliding refused', () => {
+  const A = '4dc968ff0ee35c209572d4777b721587d36fa7b21bdc56b74a3dc0783e7b9518afbfa200a8284bf36e8e4b55b35f427593d849676da0d1555d8360fb5f07fea2';
+  const B = '4dc968ff0ee35c209572d4777b721587d36fa7b21bdc56b74a3dc0783e7b9518afbfa202a8284bf36e8e4b55b35f427593d849676da0d1d55d8360fb5f07fea2';
+  const r = verifyCollision(A, B);
+  assert.equal(r.digest, '008ee33a9d58b51cfeb425b0959121c9');
+  assert.deepEqual([r.a_bytes, r.b_bytes, r.total_bytes], [64, 64, 128]);
+  assert.deepEqual(verifyCollision(B, A).inputs, r.inputs, 'the pair is unordered');
+  assert.equal(identity(r.challenge_id, verifyCollision(B, A).bytes), identity(r.challenge_id, r.bytes));
+  refused(() => verifyCollision(A, A), /identical/);
+  refused(() => verifyCollision('', '00'), /not a collision/);   // unequal lengths and an empty member are allowed, and still must collide
+  refused(() => verifyCollision(A, '00'.repeat(1025)), /1025 bytes/);
+  refused(() => verifyCollision(A.toUpperCase(), B));
+});
+
+test('every published target in project.json verifies at its stated value', () => {
+  for (const t of config.challenge.tracks) for (const target of t.targets) {
+    const v = verify(t.id, target.inputs);
+    assert.equal(t.better === 'lower' ? v.total_bytes : v.score, target.value, `${t.id} ${target.credit}`);
+  }
+});
+
+test('scores 0 through 32 synthetically, without fabricated exact solutions', () => {
+  for (let k = 0; k <= 32; k++) {
+    const d = 'a'.repeat(k) + 'b'.repeat(32 - k);
+    assert.equal(prefix('a'.repeat(32), d), k);
+    assert.equal(prefix('0'.repeat(32), '0'.repeat(k) + (k < 32 ? '1' : '') + '0'.repeat(Math.max(0, 31 - k))), k, 'later zeros never count');
+  }
+});
+
+test('the RFC 1321 implementation equals OpenSSL on every length 0..300 and at the cap, binary round trip exact', () => {
+  for (let n = 0; n <= 300; n++) { const b = randomBytes(n); assert.equal(md5Rfc1321(b), createHash('md5').update(b).digest('hex'), `length ${n}`); }
+  for (const n of [1023, 1024, 1025, 4096]) { const b = randomBytes(n); assert.equal(md5Rfc1321(b), createHash('md5').update(b).digest('hex')); }
+  const b = randomBytes(257); assert.ok(verifyZero(b.toString('hex')).bytes[0].equals(b));
+});
+
+test('identity is domain-separated SHA-256 of the exact inputs, never the digest', () => {
+  assert.notEqual(identity('md5-zero-bytes1024-v1', [Buffer.from('ab')]), identity('md5-zero-bytes1024-v1', [Buffer.from('a'), Buffer.from('b')]));
+  assert.notEqual(identity('md5-zero-bytes1024-v1', [Buffer.from('ab')]), identity('md5-mirror-ascii32-v1', [Buffer.from('ab')]));
+});
+
+test('parity with the Python reference verifier on fixtures, random and malformed inputs', (t) => {
+  let python = 'python3';
+  try { execFileSync(python, ['-c', 'import hashlib']); } catch { t.skip('python3 is not installed'); return; }
+  const ref = join(ROOT, 'projects/md5/verifier/reference.py');
+  const run = (...args) => JSON.parse(execFileSync(python, ['-I', ref, ...args], {encoding: 'utf8'}));
+  const ours = (fn) => { try { return fn(); } catch (e) { if (e instanceof ChallengeError) return {error: true}; throw e; } };
+  const cases = [
+    ['md5-mirror-ascii32-v1', ['54db1011d76dc70a0a9df3ff3e0b390f'], (c) => verifyMirror(c)],
+    ['md5-mirror-ascii32-v1', [randomBytes(16).toString('hex')], (c) => verifyMirror(c)],
+    ['md5-mirror-ascii32-v1', ['0000000000000000000000000000000E'], (c) => verifyMirror(c)],
+    ['md5-zero-bytes1024-v1', [''], (h) => verifyZero(h)],
+    ['md5-zero-bytes1024-v1', [randomBytes(200).toString('hex')], (h) => verifyZero(h)],
+    ['md5-zero-bytes1024-v1', ['00'.repeat(1025)], (h) => verifyZero(h)],
+    ['md5-zero-bytes1024-v1', ['abc'], (h) => verifyZero(h)],
+    ['md5-collision-totalbytes1024-v1', [config.challenge.tracks[2].targets[0].inputs.b_hex, config.challenge.tracks[2].targets[0].inputs.a_hex], (a, b) => verifyCollision(a, b)],
+    ['md5-collision-totalbytes1024-v1', ['00', '01'], (a, b) => verifyCollision(a, b)],
+  ];
+  for (const [id, args, fn] of cases) {
+    const py = run(id, ...args), js = ours(() => fn(...args));
+    if (py.error || js.error) { assert.ok(py.error && js.error, `${id} ${args.join(' ').slice(0, 40)}: both refuse`); continue; }
+    assert.equal(js.digest, py.digest); assert.equal(js.score ?? null, py.score ?? null);
+    if (py.total_bytes !== undefined) { assert.equal(js.total_bytes, py.total_bytes); assert.deepEqual([js.inputs.a_hex, js.inputs.b_hex], [py.a_hex, py.b_hex]); }
+  }
+});
