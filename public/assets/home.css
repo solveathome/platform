@@ -64,6 +64,15 @@
 .mf-bar s { position: absolute; top: -4px; bottom: -4px; width: 0; border-left: 2px dashed var(--mut); }
 .mf-legend { font: .6875rem/1.6 var(--mono); color: var(--mut); margin: .75rem 0 0; }
 .mf-bar-note { grid-column: 1 / -1; font: .6875rem/1.5 var(--mono); color: var(--mut); }
+/* Smaller is better: the published record is the goal line, the zone past it is overshoot (Chris, Oct 9 2026). */
+.mf-bar-goal b { position: absolute; top: 0; bottom: 0; right: 0; background: repeating-linear-gradient(135deg, var(--soft) 0 4px, var(--line) 4px 6px); }
+.mf-bar-goal u { position: absolute; top: 0; bottom: 0; background: var(--brass, #d3ad3a); text-decoration: none; }
+.mf-bar-goal s.goal { border-left: 2px solid var(--fg); }
+.mf-bar-scale { grid-column: 1 / -1; position: relative; height: 1.1rem; font: .625rem/1.1rem var(--mono); color: var(--mut); }
+.mf-bar-scale span { position: absolute; top: 0; white-space: nowrap; }
+.mf-bar-scale span:first-child { left: 0; }
+.mf-bar-scale span:nth-child(2) { transform: translateX(-50%); color: var(--fg); }
+.mf-bar-scale span:last-child { right: 0; }
 .mf-board ol { list-style: none; margin: 0; padding: 0; }
 .mf-board li { display: grid; grid-template-columns: 1.75rem minmax(0, 1fr) auto; gap: .5rem; padding: .45rem 0; border-bottom: 1px solid var(--line); font-size: .875rem; }
 .mf-board li span:first-child { font: .75rem/1.9 var(--mono); color: var(--mut); }
