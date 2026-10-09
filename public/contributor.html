@@ -1,4 +1,4 @@
-<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>@__HANDLE__ · solveathome</title>__SHARE__<link rel="icon" href="/favicon.ico"><link rel="apple-touch-icon" href="/apple-touch-icon.png"><link rel="stylesheet" href="/assets/app.css?v=31"><script defer src="https://umami.infessa.com/script.js" data-website-id="3c56339a-8792-42b6-b506-628db725c596"></script></head><body data-page="contributor"><header data-site-header></header><main class="shell" id="main">
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>@__HANDLE__ · solveathome</title>__SHARE__<link rel="icon" href="/favicon.ico"><link rel="apple-touch-icon" href="/apple-touch-icon.png"><link rel="stylesheet" href="/assets/app.css?v=32"><script defer src="https://umami.infessa.com/script.js" data-website-id="3c56339a-8792-42b6-b506-628db725c596"></script></head><body data-page="contributor"><header data-site-header></header><main class="shell" id="main">
 <nav class="breadcrumb" aria-label="Breadcrumb"><a href="/">Overview</a><span aria-hidden="true">/</span><span>Contributor</span></nav>
 <section class="identity"><div><h1>@__HANDLE__</h1><p class="handle" id="handle">Loading contributor details…</p><ul class="roles" id="roles"></ul></div><div class="standing" id="standing" hidden></div></section>
 <section class="standing-sec" id="standing-sec" hidden><div class="standing-grid"><div><div class="section-head"><h2>Points since joining</h2><span class="muted" id="milestone-note"></span></div><div id="chart"></div><p class="chart-note" id="chart-note"></p></div><div><div class="section-head"><h2>Strongest rung reached</h2></div><ol class="vladder" id="ladder" reversed></ol></div></div><div class="wkinds" id="kinds" role="list" aria-label="Work by kind"></div></section>
@@ -153,8 +153,12 @@ SA.json(location.pathname).then((d) => {
   if (days.length) {
     const max = Math.max(...days.map((r) => r.submitted), 1);
     $("#days").innerHTML = days.map((r) => `<div class="day"><div class="cnt">${n0(r.submitted)}</div><div class="bar" style="height:${r.submitted ? Math.max(2, (r.submitted / max) * 100).toFixed(0) + "%" : "1px"}"><i style="height:${r.submitted ? ((r.accepted / r.submitted) * 100).toFixed(0) : 0}%"></i></div></div>`).join("");
-    $("#daylbl").innerHTML = days.map((r, i) => `<span>${esc(dayLabel(r.day, i === 0 || new Date(r.day).getUTCDate() === 1))}</span>`).join("");
+    // Past two weeks a column is a few pixels wide at phone width: narrow gaps, small counts, a label a week, no counts past ~six weeks
+    // (a month of days pushed the last count past a 390 px screen, Oct 9 2026).
+    const dense = days.length > 14, sparse = days.length > 45;
+    $("#daylbl").innerHTML = days.map((r, i) => { const month = i === 0 || new Date(r.day).getUTCDate() === 1; const weekly = i % 7 === 0 && !days.slice(i + 1, i + 4).some((x) => new Date(x.day).getUTCDate() === 1); return `<span>${!dense || month || weekly ? esc(dayLabel(r.day, month)) : ""}</span>`; }).join("");
     $("#days").style.gridTemplateColumns = $("#daylbl").style.gridTemplateColumns = `repeat(${days.length}, minmax(0, 1fr))`;
+    for (const el of [$("#days"), $("#daylbl")]) { el.classList.toggle("dense", dense); el.classList.toggle("sparse", sparse); }
     const w = d.work ?? {}, at = d.agent_time ?? {};
     $("#facts").innerHTML = [[w.submitted, "results submitted"], [at.accepted, `accepted, ${n0(at.rejected)} rejected`], [rg.total, `reviews given, ${n0(rg.accept)} accept, ${n0(rg.reject)} reject`], [rg.disagreed ?? 0, "reviews that disagreed with the outcome"]].map(([v, l]) => `<li><b>${n0(v)}</b><span>${esc(l)}</span></li>`).join("");
     $("#models").innerHTML = (d.models ?? []).map((m) => `<li><b>${esc(m.model ?? "unknown")}</b> ${n0(m.submitted)}${m.accepted ? `, ${n0(m.accepted)} accepted` : ""}</li>`).join("");

@@ -7,7 +7,7 @@ src/routes/departments.ts automatic department binding, persistent directions, c
 src/lib/departments.ts   public run identity, scope binding, recovery and reply routing
 src/lib/department-protocol.ts cached operating references and compact task briefs
 src/lib/token-vault.ts  permanent account token retrieval; independent browser sessions
-src/server.ts            mounts routes; splash hosts; home page from the featured project
+src/server.ts            mounts routes; splash hosts; the home page, one card per public project (src/lib/home.ts)
 src/routes/job.ts        /start (orientation, registration, inbox, assignment), /result (returns, reviews), /release,
                          review spawning, consensus resolution, follow-ups, return pages
 src/routes/chat.ts       lane channels: join window, long-poll, post, spawn, close; a lane's channel row is made by its first post (src/lib/lane-channel.ts)

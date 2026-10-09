@@ -10,7 +10,7 @@ import { bearer, optionalAuth, cookieToken, issueToken, recoverToken, invalidate
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { PUBLIC_DIR } from "../lib/paths.js";
-import { projectPartial, readProjectConfig, featuredProject, isListed } from "../lib/projects.js";
+import { projectPartial, readProjectConfig, featuredProject, isListed, unlistedSlugs } from "../lib/projects.js";
 import { challengeChartsSection } from "./challenges.js";
 import { leaderboard, type Window } from "../lib/credit.js";
 import { projectActivity, runningWork } from "../lib/project-activity.js";
@@ -238,48 +238,52 @@ root.get("/@:handle", async (req, res) => {
   const u = await one(`SELECT u.id, u.handle, u.display_name, u.website, u.created_at, rp.score, rp.accepted, rp.rejected, rp.review_agree, rp.review_disagree, rp.cpu_hours, rp.directions_accepted
     FROM users u LEFT JOIN reputation rp ON rp.user_id = u.id WHERE lower(u.handle) = lower($1)`, [req.params.handle]);
   if (!u) { res.status(404).json({ error: "no such contributor" }); return; }
-  const recent = await q(`SELECT r.id, p.slug AS project, r.type, r.status, r.provisional, r.final_rung, r.tokens, r.created_at FROM returns r JOIN problems p ON p.id = r.problem_id WHERE r.user_id = $1 ORDER BY r.id DESC LIMIT 50`, [u.id]);
+  // A hidden project (listed: false) is on no public profile, page or JSON: its credit, slugs, returns and runs wait until it is
+  // listed, the rule of /leaderboard, /projects, the sitemap, the dump and the front page (Oct 9 2026, MD5 before launch).
+  const H = unlistedSlugs();
+  const shown = (col: string, n: number) => `NOT EXISTS (SELECT 1 FROM problems hp WHERE hp.id = ${col} AND hp.slug = ANY($${n}::text[]))`;
+  const recent = await q(`SELECT r.id, p.slug AS project, r.type, r.status, r.provisional, r.final_rung, r.tokens, r.created_at FROM returns r JOIN problems p ON p.id = r.problem_id WHERE r.user_id = $1 AND NOT (p.slug = ANY($2::text[])) ORDER BY r.id DESC LIMIT 50`, [u.id, H]);
   const work = await one(`SELECT count(*)::int AS submitted,
       count(*) FILTER (WHERE status IN ('pending','contested') OR provisional)::int AS awaiting_review,
       count(*) FILTER (WHERE status = 'recorded')::int AS recorded,
       count(*) FILTER (WHERE tokens->>'log' IN ('antigravity','custom') AND tokens->>'source' = 'none' AND tokens->'already_counted' IS NULL AND tokens->'mismatch' IS NULL)::int AS usage_missing
-    FROM returns WHERE user_id = $1`, [u.id]);
+    FROM returns WHERE user_id = $1 AND ${shown("problem_id", 2)}`, [u.id, H]);
   const released = await q(`SELECT DISTINCT ON (m.job_id) m.job_id, j.title, j.type, j.research_stage, j.status, j.follow_up_of, p.slug AS project, m.body_md AS note, m.created_at
     FROM messages m JOIN jobs j ON j.id = m.job_id JOIN problems p ON p.id = j.problem_id
     WHERE m.user_id = $1 AND m.kind = 'done' AND m.body_md LIKE 'Released job #%'
-      AND NOT EXISTS (SELECT 1 FROM returns r WHERE r.job_id = m.job_id AND r.user_id = $1)
-    ORDER BY m.job_id DESC, m.id DESC LIMIT 20`, [u.id]);
-  const lanes = await q(`SELECT p.slug AS project, l.slug, l.title FROM lanes l JOIN problems p ON p.id = l.problem_id WHERE l.origin_user_id = $1 ORDER BY l.id`, [u.id]);
+      AND NOT EXISTS (SELECT 1 FROM returns r WHERE r.job_id = m.job_id AND r.user_id = $1) AND NOT (p.slug = ANY($2::text[]))
+    ORDER BY m.job_id DESC, m.id DESC LIMIT 20`, [u.id, H]);
+  const lanes = await q(`SELECT p.slug AS project, l.slug, l.title FROM lanes l JOIN problems p ON p.id = l.problem_id WHERE l.origin_user_id = $1 AND NOT (p.slug = ANY($2::text[])) ORDER BY l.id`, [u.id, H]);
   const ledger = await q(`SELECT c.kind, c.points, c.model, c.source_type, c.source_id, c.note, c.created_at, p.slug AS project,
       -- A review credit's source is the review job's id, or 'r<return id>' when the review was self-assigned (no job): never cast blind (a 500 on every profile with one such row, Sep 11).
       CASE WHEN c.source_type = 'review' AND c.source_id ~ '^[0-9]+$' THEN (SELECT j.parent_return_id FROM jobs j WHERE j.id = c.source_id::bigint)
            WHEN c.source_type = 'review' AND c.source_id ~ '^r[0-9]+$' THEN substring(c.source_id from 2)::bigint END AS review_of
-    FROM credits c LEFT JOIN problems p ON p.id = c.problem_id WHERE c.user_id = $1 ORDER BY c.id DESC LIMIT 100`, [u.id]);
+    FROM credits c LEFT JOIN problems p ON p.id = c.problem_id WHERE c.user_id = $1 AND NOT coalesce(p.slug = ANY($2::text[]), false) ORDER BY c.id DESC LIMIT 100`, [u.id, H]);
   const provenance = await q(`SELECT p.slug AS project, max(c.origin_role) AS role, max(c.origin_model) AS model, max(c.origin_model_role) AS model_role, count(*) AS claims, count(*) FILTER (WHERE c.kind = 'note') AS notes, count(*) FILTER (WHERE c.kind = 'script') AS scripts, count(*) FILTER (WHERE c.corpus) AS corpus_claims, min(c.first_commit) AS first, max(c.last_commit) AS last, sum(c.commits) AS commits
-    FROM claims c JOIN problems p ON p.id = c.problem_id WHERE lower(c.origin_handle) = lower($1) GROUP BY p.slug`, [u.handle]);
-  const totals = await q(`SELECT kind, sum(points) AS points, count(*)::int AS n FROM credits WHERE user_id = $1 GROUP BY kind`, [u.id]);
-  const researcher_of = await q(`SELECT slug, name, researcher_role FROM problems WHERE researcher_user_id = $1`, [u.id]);
+    FROM claims c JOIN problems p ON p.id = c.problem_id WHERE lower(c.origin_handle) = lower($1) AND NOT (p.slug = ANY($2::text[])) GROUP BY p.slug`, [u.handle, H]);
+  const totals = await q(`SELECT kind, sum(points) AS points, count(*)::int AS n FROM credits WHERE user_id = $1 AND ${shown("problem_id", 2)} GROUP BY kind`, [u.id, H]);
+  const researcher_of = await q(`SELECT slug, name, researcher_role FROM problems WHERE researcher_user_id = $1 AND NOT (slug = ANY($2::text[]))`, [u.id, H]);
   // Roles as the trust page defines them: project_roles rows, plus the implicit owners (a project's researcher and OWNER_HANDLES).
-  const roleRows = await q(`SELECT p.slug, p.name, pr.role FROM project_roles pr JOIN problems p ON p.id = pr.problem_id WHERE pr.user_id = $1 AND pr.revoked_at IS NULL ORDER BY pr.role, p.slug`, [u.id]);
+  const roleRows = await q(`SELECT p.slug, p.name, pr.role FROM project_roles pr JOIN problems p ON p.id = pr.problem_id WHERE pr.user_id = $1 AND pr.revoked_at IS NULL AND NOT (p.slug = ANY($2::text[])) ORDER BY pr.role, p.slug`, [u.id, H]);
   const roles = [...roleRows, ...researcher_of.filter((r: any) => !roleRows.some((x: any) => x.slug === r.slug && x.role === "owner")).map((r: any) => ({ slug: r.slug, name: r.name, role: "owner" }))];
   if (OWNER_SET.has(String(u.handle).toLowerCase()) && !roles.some((r: any) => r.role === "owner")) roles.push({ slug: null, name: null, role: "owner" });
   const departments=await q(`SELECT d.id AS department_id,d.created_at,
-    coalesce(json_agg(json_build_object('run_id',s.run_id,'project',p.slug,'model',s.model,'ended_at',s.ended_at,'last_seen',s.last_seen)) FILTER(WHERE s.id IS NOT NULL),'[]') AS runs
-    FROM departments d LEFT JOIN sessions s ON s.department_id=d.id LEFT JOIN problems p ON p.id=s.problem_id WHERE d.user_id=$1 GROUP BY d.id ORDER BY d.created_at`,[u.id]);
+    coalesce(json_agg(json_build_object('run_id',s.run_id,'project',p.slug,'model',s.model,'ended_at',s.ended_at,'last_seen',s.last_seen)) FILTER(WHERE s.id IS NOT NULL AND NOT coalesce(p.slug = ANY($2::text[]), false)),'[]') AS runs
+    FROM departments d LEFT JOIN sessions s ON s.department_id=d.id LEFT JOIN problems p ON p.id=s.problem_id WHERE d.user_id=$1 GROUP BY d.id ORDER BY d.created_at`,[u.id, H]);
   // The record as a person reads it (Sep 15 2026): standing among contributors, credit per day, the calibration rung of every
   // accepted result, work by kind, reviews given, the breakthroughs with their titles, and what each computer's agents are doing.
   // What the work awaiting review is worth if it gets in, by the same definition the board uses: base result points only,
   // no bonuses, nothing paid until a trusted verdict. Shown beside the total because a contributor whose returns are queued
   // has earned nothing yet and is not idle, and the difference between those two is the whole story of a slow review queue.
-  const pending = await one<{ pending_points: string }>(`SELECT ${PENDING_POINTS_SQL} FROM returns WHERE user_id = $1`, [u.id]);
-  const standing = await one(`WITH lifetime AS (SELECT user_id, sum(points) AS points FROM credits GROUP BY user_id)
+  const pending = await one<{ pending_points: string }>(`SELECT ${PENDING_POINTS_SQL} FROM returns WHERE user_id = $1 AND ${shown("problem_id", 2)}`, [u.id, H]);
+  const standing = await one(`WITH lifetime AS (SELECT user_id, sum(points) AS points FROM credits WHERE ${shown("problem_id", 2)} GROUP BY user_id)
     SELECT (SELECT count(*) FROM lifetime)::int AS contributors,
            (SELECT count(*) + 1 FROM lifetime WHERE points > coalesce((SELECT points FROM lifetime WHERE user_id = $1), 0))::int AS rank,
-           coalesce((SELECT points FROM lifetime WHERE user_id = $1), 0) AS points`, [u.id]);
+           coalesce((SELECT points FROM lifetime WHERE user_id = $1), 0) AS points`, [u.id, H]);
   const by_day = await q(`SELECT to_char(created_at::date, 'YYYY-MM-DD') AS day, sum(points) AS points, sum(sum(points)) OVER (ORDER BY created_at::date) AS cumulative
-    FROM credits WHERE user_id = $1 GROUP BY created_at::date ORDER BY created_at::date`, [u.id]);
-  const rungRows = await q(`SELECT final_rung AS rung, count(*)::int AS n FROM returns WHERE user_id = $1 AND status = 'accepted' AND final_rung IS NOT NULL GROUP BY final_rung`, [u.id]);
-  const reachedRows = await q(`SELECT final_rung AS rung, count(DISTINCT user_id)::int AS n FROM returns WHERE status = 'accepted' AND final_rung IS NOT NULL GROUP BY final_rung`);
+    FROM credits WHERE user_id = $1 AND ${shown("problem_id", 2)} GROUP BY created_at::date ORDER BY created_at::date`, [u.id, H]);
+  const rungRows = await q(`SELECT final_rung AS rung, count(*)::int AS n FROM returns WHERE user_id = $1 AND status = 'accepted' AND final_rung IS NOT NULL AND ${shown("problem_id", 2)} GROUP BY final_rung`, [u.id, H]);
+  const reachedRows = await q(`SELECT final_rung AS rung, count(DISTINCT user_id)::int AS n FROM returns WHERE status = 'accepted' AND final_rung IS NOT NULL AND ${shown("problem_id", 1)} GROUP BY final_rung`, [H]);
   const kinds = await q(`SELECT type, count(*)::int AS submitted, count(*) FILTER (WHERE status = 'accepted')::int AS accepted,
       count(*) FILTER (WHERE status = 'rejected')::int AS rejected, count(*) FILTER (WHERE status = 'recorded')::int AS recorded,
       coalesce(json_object_agg(final_rung, n) FILTER (WHERE final_rung IS NOT NULL), '{}') AS rungs,
@@ -287,15 +291,32 @@ root.get("/@:handle", async (req, res) => {
     FROM (SELECT type, status, final_rung, verification,
             count(*) FILTER (WHERE status = 'accepted') OVER (PARTITION BY type, final_rung) AS n,
             count(*) FILTER (WHERE status = 'accepted') OVER (PARTITION BY type, verification) AS v
-          FROM returns WHERE user_id = $1) x
-    GROUP BY type ORDER BY accepted DESC, submitted DESC`, [u.id]);
+          FROM returns WHERE user_id = $1 AND ${shown("problem_id", 2)}) x
+    GROUP BY type ORDER BY accepted DESC, submitted DESC`, [u.id, H]);
   const reviews_given = await one(`SELECT count(*)::int AS total, count(*) FILTER (WHERE verdict = 'accept')::int AS accept, count(*) FILTER (WHERE verdict = 'reject')::int AS reject,
       count(*) FILTER (WHERE agreed_with_outcome = false)::int AS disagreed, count(*) FILTER (WHERE agreed_with_outcome)::int AS agreed,
       count(*) FILTER (WHERE coalesce(verification, 'read') = 'rerun')::int AS rerun, count(*) FILTER (WHERE verification = 'spot')::int AS spot, count(*) FILTER (WHERE coalesce(verification, 'read') = 'read')::int AS read
-    FROM reviews WHERE user_id = $1`, [u.id]);
-  const models = await q(`SELECT model, count(*)::int AS submitted, count(*) FILTER (WHERE status = 'accepted')::int AS accepted FROM returns WHERE user_id = $1 GROUP BY model ORDER BY submitted DESC, model`, [u.id]);
+    FROM reviews WHERE user_id = $1 AND ${shown("(SELECT rr.problem_id FROM returns rr WHERE rr.id = reviews.return_id)", 2)}`, [u.id, H]);
+  const models = await q(`SELECT model, count(*)::int AS submitted, count(*) FILTER (WHERE status = 'accepted')::int AS accepted FROM returns WHERE user_id = $1 AND ${shown("problem_id", 2)} GROUP BY model ORDER BY submitted DESC, model`, [u.id, H]);
   const days = await q(`SELECT to_char(created_at::date, 'YYYY-MM-DD') AS day, count(*)::int AS submitted, count(*) FILTER (WHERE status = 'accepted')::int AS accepted
-    FROM returns WHERE user_id = $1 GROUP BY created_at::date ORDER BY created_at::date`, [u.id]);
+    FROM returns WHERE user_id = $1 AND ${shown("problem_id", 2)} GROUP BY created_at::date ORDER BY created_at::date`, [u.id, H]);
+  // The reputation counters are one row per person across every project, with no project column, and work on a hidden project
+  // bumps them like any other (src/lib/reputation.ts). The profile shows them less the hidden projects' share, rebuilt from the
+  // record by the rules that bump them, so a listed project's figures stay what they were; the counters themselves, and the review
+  // weight they drive, are not touched (#sah-profile-overflow-reputation, Oct 9 2026).
+  const hid = H.length ? await one(`SELECT
+      (SELECT count(*) FILTER (WHERE fd.status = 'accepted')::int FROM returns r JOIN problems p ON p.id = r.problem_id
+         JOIN LATERAL (SELECT d.status FROM return_decisions d WHERE d.return_id = r.id AND NOT d.provisional AND d.status IN ('accepted','rejected') ORDER BY d.id LIMIT 1) fd ON true
+         WHERE r.user_id = $1 AND p.slug = ANY($2::text[])) AS accepted,
+      (SELECT count(*) FILTER (WHERE fd.status = 'rejected' AND NOT (EXISTS (SELECT 1 FROM reviews v WHERE v.return_id = r.id AND v.verdict = 'reject') AND NOT EXISTS (SELECT 1 FROM reviews v WHERE v.return_id = r.id AND v.verdict = 'reject' AND NOT v.unverifiable)))::int
+         FROM returns r JOIN problems p ON p.id = r.problem_id
+         JOIN LATERAL (SELECT d.status FROM return_decisions d WHERE d.return_id = r.id AND NOT d.provisional AND d.status IN ('accepted','rejected') ORDER BY d.id LIMIT 1) fd ON true
+         WHERE r.user_id = $1 AND p.slug = ANY($2::text[])) AS rejected,
+      (SELECT count(*) FILTER (WHERE v.agreed_with_outcome)::int FROM reviews v JOIN returns r ON r.id = v.return_id JOIN problems p ON p.id = r.problem_id WHERE v.user_id = $1 AND v.scored_at IS NOT NULL AND p.slug = ANY($2::text[])) AS review_agree,
+      (SELECT count(*) FILTER (WHERE NOT v.agreed_with_outcome)::int FROM reviews v JOIN returns r ON r.id = v.return_id JOIN problems p ON p.id = r.problem_id WHERE v.user_id = $1 AND v.scored_at IS NOT NULL AND p.slug = ANY($2::text[])) AS review_disagree,
+      (SELECT coalesce(sum(r.cpu_hours), 0) FROM returns r JOIN problems p ON p.id = r.problem_id WHERE r.user_id = $1 AND r.status <> 'superseded' AND p.slug = ANY($2::text[])) AS cpu_hours,
+      (SELECT count(*)::int FROM lanes l JOIN problems p ON p.id = l.problem_id WHERE l.origin_user_id = $1 AND l.variant = 'direction' AND p.slug = ANY($2::text[])) AS directions_accepted`, [u.id, H]) : null;
+  const less = (k: string) => u[k] == null ? u[k] : Math.max(0, Number(u[k]) - Number(hid?.[k] ?? 0));
   const titleOf = (r: any) => r.job_title ?? withoutKindPrefix(String(r.report_md ?? "").split("\n").find((l: string) => l.trim())?.replace(/^#+\s*/, "").trim() ?? `${r.type} #${r.id}`);
   const summaryOf = (md: string) => { const blocks = String(md ?? "").split(/\n\s*\n/).map((b) => b.trim()).filter(Boolean); const body = blocks.find((b) => !b.startsWith("#") && !/^calibration ladder/i.test(b)) ?? ""; const t = body.replace(/^[-*]\s+/gm, "").replace(/\*\*|__|`/g, "").replace(/\[([^\]]+)\]\([^)]*\)/g, "$1").replace(/\s+/g, " "); return t.length > 320 ? t.slice(0, 317).replace(/\s+\S*$/, "") + "…" : t; };
   // A route job's title is its stage and the route it worked on; what it produced is the outcome it reported (#sah-route-triage-title).
@@ -305,38 +326,38 @@ root.get("/@:handle", async (req, res) => {
   const hlRows = await q(`SELECT r.id, p.slug AS project, r.type, r.model, r.verification, r.final_rung, r.created_at, r.revision_path, j.title AS job_title, j.type AS job_type, j.follow_up_of, j.research_stage, r.research_route_id, r.research->>'outcome' AS research_outcome, left(r.report_md, 4000) AS report_md, c.points, c.note,
       (SELECT count(*) FROM credits i WHERE i.kind = 'insight' AND i.source_type = 'return' AND i.source_id = r.id::text)::int AS cited
     FROM credits c JOIN returns r ON r.id = c.source_id::bigint JOIN problems p ON p.id = r.problem_id LEFT JOIN jobs j ON j.id = r.job_id
-    WHERE c.user_id = $1 AND c.kind = 'breakthrough' AND c.source_type = 'return' AND c.source_id ~ '^[0-9]+$' ORDER BY c.points DESC, r.id LIMIT 6`, [u.id]);
+    WHERE c.user_id = $1 AND c.kind = 'breakthrough' AND c.source_type = 'return' AND c.source_id ~ '^[0-9]+$' AND NOT (p.slug = ANY($2::text[])) ORDER BY c.points DESC, r.id LIMIT 6`, [u.id, H]);
   const highlights = hlRows.map((r: any) => ({ id: r.id, project: r.project, type: r.type, model: r.model, verification: r.verification, final_rung: r.final_rung, created_at: r.created_at, path: r.revision_path, points: Number(r.points), reason: r.note, cited: r.cited, title: titleOf(r), label: labelOf(r), summary: summaryOf(r.report_md), route: routeOf(r) }));
   const strongest = highlights.length ? [] : (await q(`SELECT r.id, p.slug AS project, r.type, r.model, r.verification, r.final_rung, r.created_at, r.revision_path, j.title AS job_title, j.type AS job_type, j.follow_up_of, j.research_stage, r.research_route_id, r.research->>'outcome' AS research_outcome, left(r.report_md, 4000) AS report_md,
       (SELECT count(*) FROM credits i WHERE i.kind = 'insight' AND i.source_type = 'return' AND i.source_id = r.id::text)::int AS cited
-    FROM returns r JOIN problems p ON p.id = r.problem_id LEFT JOIN jobs j ON j.id = r.job_id WHERE r.user_id = $1 AND r.status = 'accepted' AND NOT r.provisional
-    ORDER BY array_position(ARRAY['proven','verified','measured','heuristic','conjectured','refuted'], r.final_rung), array_position(ARRAY['rerun','spot','read'], coalesce(r.verification, 'read')), r.id DESC LIMIT 3`, [u.id]))
+    FROM returns r JOIN problems p ON p.id = r.problem_id LEFT JOIN jobs j ON j.id = r.job_id WHERE r.user_id = $1 AND r.status = 'accepted' AND NOT r.provisional AND NOT (p.slug = ANY($2::text[]))
+    ORDER BY array_position(ARRAY['proven','verified','measured','heuristic','conjectured','refuted'], r.final_rung), array_position(ARRAY['rerun','spot','read'], coalesce(r.verification, 'read')), r.id DESC LIMIT 3`, [u.id, H]))
     .map((r: any) => ({ id: r.id, project: r.project, type: r.type, model: r.model, verification: r.verification, final_rung: r.final_rung, created_at: r.created_at, path: r.revision_path, points: 0, reason: null, cited: r.cited, title: titleOf(r), label: labelOf(r), summary: summaryOf(r.report_md), route: routeOf(r) }));
   // The results behind the "proven" rung, listed further down the profile so the rung links to them (#sah-profile-proven-link).
   // Same filter as the rung count above, so the list and the count always agree.
   const provenRows = await q(`SELECT r.id, p.slug AS project, r.type, r.model, r.verification, r.provisional, r.created_at, j.title AS job_title, j.type AS job_type, j.follow_up_of, j.research_stage, left(r.report_md, 600) AS report_md
-    FROM returns r JOIN problems p ON p.id = r.problem_id LEFT JOIN jobs j ON j.id = r.job_id WHERE r.user_id = $1 AND r.status = 'accepted' AND r.final_rung = 'proven' ORDER BY r.id DESC`, [u.id]);
+    FROM returns r JOIN problems p ON p.id = r.problem_id LEFT JOIN jobs j ON j.id = r.job_id WHERE r.user_id = $1 AND r.status = 'accepted' AND r.final_rung = 'proven' AND NOT (p.slug = ANY($2::text[])) ORDER BY r.id DESC`, [u.id, H]);
   const proven = provenRows.map((r: any) => ({ id: r.id, project: r.project, type: r.type, model: r.model, verification: r.verification, provisional: r.provisional, created_at: r.created_at, title: titleOf(r), label: labelOf(r) }));
-  const integratedPaths = await q(`SELECT DISTINCT r.revision_path AS path FROM credits c JOIN returns r ON r.id = c.source_id::bigint WHERE c.user_id = $1 AND c.kind = 'integrated' AND c.source_type = 'return' AND c.source_id ~ '^[0-9]+$' AND r.revision_path IS NOT NULL ORDER BY 1`, [u.id]);
-  const cited = await one(`SELECT count(*)::int AS n, (SELECT source_id FROM credits WHERE user_id = $1 AND kind = 'insight' AND source_type = 'return' GROUP BY source_id ORDER BY count(*) DESC, source_id LIMIT 1) AS most FROM credits WHERE user_id = $1 AND kind = 'insight'`, [u.id]);
-  const recentTitled = await q(`SELECT r.id, j.title AS job_title, j.type AS job_type, j.research_stage, j.follow_up_of, left(r.report_md, 600) AS report_md, r.type, r.model FROM returns r LEFT JOIN jobs j ON j.id = r.job_id WHERE r.user_id = $1 ORDER BY r.id DESC LIMIT 50`, [u.id]);
+  const integratedPaths = await q(`SELECT DISTINCT r.revision_path AS path FROM credits c JOIN returns r ON r.id = c.source_id::bigint WHERE c.user_id = $1 AND c.kind = 'integrated' AND c.source_type = 'return' AND c.source_id ~ '^[0-9]+$' AND r.revision_path IS NOT NULL AND ${shown("c.problem_id", 2)} ORDER BY 1`, [u.id, H]);
+  const cited = await one(`SELECT count(*)::int AS n, (SELECT source_id FROM credits WHERE user_id = $1 AND kind = 'insight' AND source_type = 'return' AND ${shown("problem_id", 2)} GROUP BY source_id ORDER BY count(*) DESC, source_id LIMIT 1) AS most FROM credits WHERE user_id = $1 AND kind = 'insight' AND ${shown("problem_id", 2)}`, [u.id, H]);
+  const recentTitled = await q(`SELECT r.id, j.title AS job_title, j.type AS job_type, j.research_stage, j.follow_up_of, left(r.report_md, 600) AS report_md, r.type, r.model FROM returns r LEFT JOIN jobs j ON j.id = r.job_id WHERE r.user_id = $1 AND ${shown("r.problem_id", 2)} ORDER BY r.id DESC LIMIT 50`, [u.id, H]);
   const titles = new Map(recentTitled.map((r: any) => [String(r.id), { title: titleOf(r), label: labelOf(r), model: r.model }]));
   const recentOut = recent.map((r: any) => ({ ...r, ...(titles.get(String(r.id)) ?? {}) }));
   const deptOut = await Promise.all(departments.map(async (d: any) => {
     const runs = d.runs ?? [];
     const live = runs.filter((r: any) => !r.ended_at && r.last_seen && Date.now() - new Date(r.last_seen).getTime() < 3600_000);
-    const job = await one(`SELECT j.title, p.slug AS project FROM jobs j JOIN sessions s ON s.id = j.assigned_session JOIN problems p ON p.id = j.problem_id WHERE s.department_id = $1 AND j.status = 'assigned' ORDER BY j.assigned_at DESC NULLS LAST LIMIT 1`, [d.department_id]);
+    const job = await one(`SELECT j.title, p.slug AS project FROM jobs j JOIN sessions s ON s.id = j.assigned_session JOIN problems p ON p.id = j.problem_id WHERE s.department_id = $1 AND j.status = 'assigned' AND NOT (p.slug = ANY($2::text[])) ORDER BY j.assigned_at DESC NULLS LAST LIMIT 1`, [d.department_id, H]);
     return { ...d, runs_count: runs.length, models: [...new Set(runs.map((r: any) => r.model).filter(Boolean))], last_seen: runs.reduce((m: string | null, r: any) => (!m || (r.last_seen && r.last_seen > m)) ? r.last_seen : m, null), live: live.length, current_job: job ?? null };
   }));
-  const { id: _omit, ...pub } = u;
+  const { id: _omit, accepted: _a, rejected: _r, review_agree: _ra, review_disagree: _rd, cpu_hours: _c, directions_accepted: _d, ...pub } = u;
   res.json({ departments: deptOut, contributor: pub, researcher_of, roles, provenance,
              credit: { total: totals.reduce((s: number, t: any) => s + Number(t.points), 0), by_kind: Object.fromEntries(totals.map((t: any) => [t.kind, Number(t.points)])), count_by_kind: Object.fromEntries(totals.map((t: any) => [t.kind, Number(t.n)])), by_day, ledger },
              standing: { rank: standing?.rank ?? null, contributors: standing?.contributors ?? 0, points: Number(standing?.points ?? 0), pending_points: Number(pending?.pending_points ?? 0) },
              rungs: { accepted: Object.fromEntries(rungRows.map((r: any) => [r.rung, r.n])), contributors_reached: Object.fromEntries(reachedRows.map((r: any) => [r.rung, r.n])) },
              proven, kinds, reviews_given, days, models, highlights: highlights.length ? highlights : strongest, highlights_kind: highlights.length ? "breakthrough" : "strongest",
              integrated_paths: integratedPaths.map((r: any) => r.path), cited: { count: cited?.n ?? 0, most: cited?.most ?? null },
-             agent_time: { accepted: u.accepted, rejected: u.rejected, review_agree: u.review_agree, review_disagree: u.review_disagree },
-             compute: { cpu_hours: u.cpu_hours }, research_input: { directions_accepted: u.directions_accepted, lanes }, work, released: released.map((r: any) => ({ ...r, label: jobLabel(r) })), recent: recentOut });
+             agent_time: { accepted: less("accepted"), rejected: less("rejected"), review_agree: less("review_agree"), review_disagree: less("review_disagree") },
+             compute: { cpu_hours: less("cpu_hours") }, research_input: { directions_accepted: less("directions_accepted"), lanes }, work, released: released.map((r: any) => ({ ...r, label: jobLabel(r) })), recent: recentOut });
 });
 
 root.get("/my/jobs", bearer, async (req, res) => {

@@ -135,3 +135,14 @@ test('new dump manifests hash sanitized diagnostic prose while original rows and
     assert.equal(readFileSync(join(dir,'2026-10-02','returns.jsonl'),'utf8'),'historical bytes\n');assert.equal(readFileSync(join(dir,'2026-10-02','manifest.json'),'utf8'),'historical manifest\n');
   }finally{rmSync(dir,{recursive:true,force:true});}
 });
+
+test('a hidden project\'s credit rows wait in the dump like its other rows', async () => {
+  // md5 is listed: false in projects/md5/project.json; without the project column its credit rows were exported (Oct 9 2026).
+  assert.match(DUMP_TABLES.credits, /p\.slug AS project/);
+  const dir = scratch();
+  try {
+    await writeDump({day: '2026-10-09', dumpDir: dir, tables: {credits: DUMP_TABLES.credits}, rows: source({[DUMP_TABLES.credits]: [{id: 1, project: 'twin-primes', handle: 'a', points: 5}, {id: 2, project: 'md5', handle: 'b', points: 7}, {id: 3, project: null, handle: 'c', points: 1}]})});
+    const ids = readFileSync(join(dir, '2026-10-09', 'credits.jsonl'), 'utf8').trim().split('\n').map(l => JSON.parse(l).id);
+    assert.deepEqual(ids, [1, 3]);
+  } finally { rmSync(dir, {recursive: true, force: true}); }
+});

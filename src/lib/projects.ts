@@ -20,6 +20,7 @@ export type ProjectConfig = {
   // removing the flag (or setting it true) and deploying.
   listed?: boolean;
   challenge?: import('./challenges.js').ChallengeConfig;   // a record challenge: submissions verified by the server, no review (src/lib/challenges.ts)
+  home?: { field?: string; why?: string; standing?: string };   // the front-page card (src/lib/home.ts): field line, why it matters, a fixed status line
   slug: string; name: string; repo_url: string; featured?: boolean; tagline?: string; summary?: string; status_md?: string;
   researcher?: string; lanes?: Lane[]; docs_redirects?: DocsRedirect[]; mirror?: { source_note?: string };
   share?: { title?: string; description?: string; image?: string; question?: string; line?: string; line2?: string; footer?: string };
