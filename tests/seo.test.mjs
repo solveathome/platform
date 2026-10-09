@@ -16,6 +16,21 @@ test("a page without a path gets no canonical and no og:url, never the home page
   assert.match(shareMeta({ title: "x", path: "/x", robots: "noindex, follow" }), /<meta name="robots" content="noindex, follow">/);
 });
 
+test("every page under a project that has its own card shares that card; other pages share the site card", async () => {
+  const { listProjectConfigs } = await import("../src/lib/projects.ts");
+  const img = (html) => /<meta property="og:image" content="([^"]+)">/.exec(html)?.[1];
+  const withCard = listProjectConfigs().filter((c) => c.share?.image);
+  assert.ok(withCard.length > 0);
+  for (const c of withCard) for (const path of [`/projects/${c.slug}`, `/projects/${c.slug}/docs/README.md`, `/projects/${c.slug}/tracks/x?y=1`]) {
+    const html = shareMeta({ title: "x", path });
+    assert.equal(img(html), `https://example.org${c.share.image}`, path);
+    assert.ok(html.includes(`<meta name="twitter:image" content="https://example.org${c.share.image}">`));
+  }
+  assert.equal(img(shareMeta({ title: "x", path: "/terms" })), "https://example.org/assets/og.png?v=2");
+  assert.equal(img(shareMeta({ title: "x", path: "/projects/no-such-project/docs" })), "https://example.org/assets/og.png?v=2");
+  assert.equal(img(shareMeta({ title: "x", path: "/projects/a", image: "/assets/x.png" })), "https://example.org/assets/x.png");
+});
+
 test("page(): one h1, a title that leads with the heading, robots and breadcrumbs", () => {
   const html = page({ title: "Return #7", heading: "Test the $G_2$ bound", path: "/projects/p/return/7", robots: "noindex", crumbs: `<a href="/projects/p">P</a><span>/ results /</span>#7`, body: "<h1>Report</h1><h2>Step</h2>" });
   assert.match(html, /<title>Test the G₂ bound · Return #7 · solveathome<\/title>/);

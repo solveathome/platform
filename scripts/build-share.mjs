@@ -111,7 +111,15 @@ function photoCard(W, H) {
 }
 // A photographic card is a JPEG (a PNG of a photo is five times the weight); rsvg renders PNG, ImageMagick encodes.
 const render = (svgText, out, W, H) => { const tmp = out + ".svg.tmp", png = out + ".png.tmp"; writeFileSync(tmp, svgText); execFileSync("rsvg-convert", ["-w", String(W), "-h", String(H), "-o", png, tmp]); execFileSync("magick", [png, "-strip", "-quality", "88", out]); execFileSync("rm", [tmp, png]); console.log(`wrote ${out}`); };
-if (hasCard) {
+// Drawn artwork (projects/<slug>/brand/share-card.svg, the whole card with its title) is rendered as is: the real wordmark and the
+// project URL are filled into its __LOGO__ and __URL__ placeholders, nothing else is drawn on it.
+const svgCardPath = join(root, "projects", slug === "--site" ? "none" : slug, "brand", "share-card.svg");
+const svgCard = (W, H) => readFileSync(svgCardPath, "utf8").replaceAll("__LOGO__", `data:image/png;base64,${logo}`).replaceAll("__URL__", `solveathome.org/projects/${esc(slug)}`).replace(/^<svg ([^>]*?)width="\d+" height="\d+"/, `<svg $1width="${W}" height="${H}"`);
+if (slug !== "--site" && existsSync(svgCardPath)) {
+  render(svgCard(1200, 630), join(root, "public", "assets", `og-${slug}.jpg`), 1200, 630);
+  const hi = process.argv.indexOf("--header");
+  if (hi > 0 && process.argv[hi + 1]) render(svgCard(1456, 816), process.argv[hi + 1], 1456, 816);
+} else if (hasCard) {
   crop(join(root, "public", "assets", `og-${slug}.jpg`), 1200, 630);
   const hi = process.argv.indexOf("--header");
   if (hi > 0 && process.argv[hi + 1]) crop(process.argv[hi + 1], 1456, 816);

@@ -16,7 +16,7 @@ import { challengesFor, challengeBanner } from "../lib/tangent.js";
 import { one, q } from "../db/index.js";
 import { ROOT } from "../lib/paths.js";
 import { readPublication, publishedDocument, sha256 as contentHash } from "../lib/document-publication.js";
-import { docsRedirect } from "../lib/projects.js";
+import { docsRedirect, readProjectConfig } from "../lib/projects.js";
 import { protectMath } from "../lib/math.js";
 import { linkPeople } from "../lib/people.js";
 import { linkPaths, paperPages } from "../lib/paths-link.js";
@@ -55,11 +55,16 @@ function safePath(root: string, rel: string): string | null {
 
 /** `seo`: the document's own description, a robots rule (the seed edition repeats the living documents, so it stays out of the
  *  index), and schema.org data; the breadcrumb trail is read from the crumbs. */
+/** The shared title names the project once ("Documents · MD5 Research Challenge"); the edition root reads "Documents", not "root". */
+function shareTitle(slug: string, title: string): string {
+  const name = readProjectConfig(slug)?.name ?? slug, t = title === "root" || title === "seed" ? "Documents" : title;
+  return t.includes(name) ? t : `${t} · ${name}`;
+}
 function chrome(slug: string, title: string, crumbs: string, body: string, extra = "", path = "", seo: { description?: string; robots?: string; ld?: object[] } = {}): string {
   title = plainDescription(title, 120);
   const trail = path ? crumbsFromHtml(crumbs.replace(/>(root|seed)<\/a>/, ">documents</a>"), { name: title, path }) : null;
   const ld = [...(seo.ld ?? []), ...(trail ? [trail] : [])];
-  return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>${esc(title)} · ${esc(slug)} · solveathome</title>${shareMeta({ title: `${title} · ${slug}`, description: seo.description || `A research document served by solveathome, with accepted revisions in place and the record one click away.`, path: path || `/projects/${slug}/docs`, type: "article", robots: seo.robots ?? (noindexPath(path) ? "noindex, follow" : undefined) })}${ld.length ? jsonLd({ "@context": "https://schema.org", "@graph": ld }) : ""}<link rel="icon" href="/favicon.ico"><link rel="stylesheet" href="/assets/app.css?v=33"><script defer src="https://umami.infessa.com/script.js" data-website-id="3c56339a-8792-42b6-b506-628db725c596"></script></head><body data-page="docs"><header data-site-header></header><main class="shell document-main" id="main"><nav class="breadcrumb" aria-label="Breadcrumb"><a href="/projects/${esc(slug)}">${esc(slug)}</a><span>/ documents /</span>${crumbs}</nav>${extra ? `<p class="panel-note">${extra}</p>` : ""}<article class="document">${body}</article></main><footer data-site-footer></footer><script src="/assets/ui.js?v=21"></script><script src="/assets/who.js?v=6"></script><script src="/assets/math.js?v=3"></script><script>loadWho(document.querySelector("#who"));</script></body></html>`;
+  return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>${esc(title)} · ${esc(slug)} · solveathome</title>${shareMeta({ title: shareTitle(slug, title), description: seo.description || `A research document served by solveathome, with accepted revisions in place and the record one click away.`, path: path || `/projects/${slug}/docs`, type: "article", robots: seo.robots ?? (noindexPath(path) ? "noindex, follow" : undefined) })}${ld.length ? jsonLd({ "@context": "https://schema.org", "@graph": ld }) : ""}<link rel="icon" href="/favicon.ico"><link rel="stylesheet" href="/assets/app.css?v=33"><script defer src="https://umami.infessa.com/script.js" data-website-id="3c56339a-8792-42b6-b506-628db725c596"></script></head><body data-page="docs"><header data-site-header></header><main class="shell document-main" id="main"><nav class="breadcrumb" aria-label="Breadcrumb"><a href="/projects/${esc(slug)}">${esc(slug)}</a><span>/ documents /</span>${crumbs}</nav>${extra ? `<p class="panel-note">${extra}</p>` : ""}<article class="document">${body}</article></main><footer data-site-footer></footer><script src="/assets/ui.js?v=21"></script><script src="/assets/who.js?v=6"></script><script src="/assets/math.js?v=3"></script><script>loadWho(document.querySelector("#who"));</script></body></html>`;
 }
 
 function crumbsFor(slug: string, rel: string, edition: Edition = "docs"): string {

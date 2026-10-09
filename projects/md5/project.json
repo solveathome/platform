@@ -15,7 +15,8 @@
   "researcher": "Benjaminsen",
   "share": {
     "title": "MD5 Research Challenge · solveathome",
-    "description": "How far can general AI push research on a known, retired hash function? Three exact MD5 problems, every result recomputed by the server, every record public."
+    "description": "How far can general AI push research on a known, retired hash function? Three exact MD5 problems, every result recomputed by the server, every record public.",
+    "image": "/assets/og-md5.jpg?v=1"
   },
   "lanes": [
     {
