@@ -89,7 +89,7 @@ test('identity is domain-separated SHA-256 of the exact inputs, never the digest
 test('parity with the Python reference verifier on fixtures, random and malformed inputs', (t) => {
   let python = 'python3';
   try { execFileSync(python, ['-c', 'import hashlib']); } catch { t.skip('python3 is not installed'); return; }
-  const ref = join(ROOT, 'projects/md5/verifier/reference.py');
+  const ref = join(ROOT, 'projects/md5/docs/verifier/reference.py');
   const run = (...args) => JSON.parse(execFileSync(python, ['-I', ref, ...args], {encoding: 'utf8'}));
   const ours = (fn) => { try { return fn(); } catch (e) { if (e instanceof ChallengeError) return {error: true}; throw e; } };
   const cases = [

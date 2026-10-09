@@ -26,6 +26,7 @@ const {TERMS_VERSION} = await import('../src/lib/terms.ts');
 const {job} = await import('../src/routes/job.ts');
 const {challenges} = await import('../src/routes/challenges.ts');
 const {projects} = await import('../src/routes/projects.ts');
+const {board} = await import('../src/routes/board.ts');
 const {ensureChallengeProjects, trackView, challengeConfig} = await import('../src/lib/challenges.ts');
 const {ensureChannels} = await import('../src/routes/chat.ts');
 const {listProjectConfigs, featuredProject, isListed} = await import('../src/lib/projects.ts');
@@ -48,7 +49,7 @@ before(async () => {
   await ensureChallengeProjects(listProjectConfigs(), ensureChannels);
   pid = Number((await one(`SELECT id FROM problems WHERE slug = $1`, [slug])).id);
   const app = express(); app.use(express.json());
-  app.use('/projects/:slug', challenges); app.use('/projects/:slug', job); app.use(projects);
+  app.use('/projects/:slug', challenges); app.use('/projects/:slug', job); app.use('/projects/:slug', board); app.use(projects);
   server = app.listen(0, '127.0.0.1');
   await new Promise(r => server.once('listening', r));
   base = `http://127.0.0.1:${server.address().port}`;
@@ -62,6 +63,14 @@ after(async () => {
   await q(`UPDATE challenge_submissions SET duplicate_of = NULL WHERE problem_id = $1`, [pid]);
   await q(`DELETE FROM challenge_submissions WHERE problem_id = $1`, [pid]);
   await q(`DELETE FROM challenge_reports WHERE problem_id = $1`, [pid]);
+  await q(`DELETE FROM credits WHERE problem_id = $1 OR user_id = ANY($2)`, [pid, ids]);
+  await q(`DELETE FROM counted_entries WHERE user_id = ANY($1)`, [ids]);
+  await q(`DELETE FROM return_decisions WHERE return_id IN (SELECT id FROM returns WHERE problem_id = $1)`, [pid]);
+  await q(`DELETE FROM reviews WHERE return_id IN (SELECT id FROM returns WHERE problem_id = $1)`, [pid]);
+  await q(`UPDATE jobs SET parent_return_id = NULL WHERE problem_id = $1`, [pid]);
+  await q(`DELETE FROM assignment_attempts WHERE problem_id = $1`, [pid]);
+  await q(`DELETE FROM returns WHERE problem_id = $1`, [pid]);
+  await q(`DELETE FROM jobs WHERE problem_id = $1`, [pid]);
   await q(`DELETE FROM mutation_receipts WHERE user_id = ANY($1)`, [ids]);
   await q(`DELETE FROM assignment_attempts WHERE problem_id = $1`, [pid]);
   await q(`DELETE FROM jobs WHERE problem_id = $1`, [pid]);
@@ -81,7 +90,7 @@ after(async () => {
   assert.equal(Number(residue.n), 0, 'test residue left in the database');
 });
 
-const MODELS = {a: 'claude-opus-5-5', b: 'gpt-6-astra', owner: 'claude-opus-5-5'};
+const MODELS = {a: 'claude-opus-5-5', b: 'gpt-6-astra', owner: 'gpt-6-astra'};
 const call = (who, method, path, {body, session, model = MODELS[who], accept = 'application/json'} = {}) => fetch(`${base}/projects/${slug}${path}`, {
   method, headers: {authorization: `Bearer ${people[who].token}`, accept, 'content-type': 'application/json', 'x-model': model, 'x-effort': 'high', ...(session ? {'x-session': session} : {})},
   body: body ? JSON.stringify(body) : undefined,
@@ -96,6 +105,8 @@ test('an agent joins through /start and gets a track assignment with the submiss
     assert.equal(r.status, 200, JSON.stringify(j).slice(0, 300));
     assert.match(j.brief_md, /POST .*\/submissions/);
     assert.match(j.brief_md, /Track `md5-/);
+    assert.equal(j.type, 'measure', 'a track run is an ordinary measure assignment, reviewed and credited like any other');
+    assert.match(j.brief_md, /POST .*\/result/);
     S[who] = j.session;
   }
   const none = await call('a', 'POST', '/submissions', {body: {challenge_id: MIRROR, idempotency_key: 'nosession01', candidate: '0'.repeat(32)}});
@@ -178,18 +189,32 @@ test('corrections withdraw and restore without rewriting; demo data stays apart 
   assert.equal(await one(`SELECT 1 FROM challenge_submissions WHERE id = $1`, [demo.body.submission_id]), undefined);
 });
 
-test('finishing closes the assignment with its report; the next /start hands out another track', async () => {
+test('a track run returns through /result, is reviewed by a trusted reviewer, and pays points into the ordinary ledger', async () => {
   const held = await one(`SELECT id, attempt_id FROM jobs WHERE problem_id = $1 AND assigned_session = $2 AND status = 'assigned'`, [pid, S.a]);
-  const r = await call('a', 'POST', '/challenge/finish', {session: S.a, body: {job_id: Number(held.id), attempt_id: held.attempt_id, report_md: 'Test: baseline only.'}});
-  assert.equal(r.status, 200, await r.clone().text());
-  assert.equal((await one(`SELECT status FROM jobs WHERE id = $1`, [held.id])).status, 'returned');
+  const transcript = [
+    {type: 'user', message: {role: 'user', content: 'Test: run the search'}, timestamp: '2026-10-09T10:00:00Z'},
+    {type: 'assistant', message: {role: 'assistant', model: 'claude-opus-5-5', content: [{type: 'text', text: 'ran it'}], usage: {input_tokens: 100, output_tokens: 50}}, timestamp: '2026-10-09T10:01:00Z'},
+  ].map((l) => JSON.stringify(l)).join('\n');
+  const r = await call('a', 'POST', '/result', {session: S.a, body: {job_id: Number(held.id), attempt_id: held.attempt_id, transcript, transcript_approved: true,
+    report_md: 'Test: a plain random search reached 12 by reproducing the published candidate, submission ids above.', recipe_md: 'Test: node search.mjs mirror 15 7 prints the candidate and its score; reproduce with the same seed.'}});
+  const ret = await r.json();
+  assert.equal(r.status, 200, JSON.stringify(ret).slice(0, 300));
+  assert.equal(ret.status, 'pending');
+  const rv = await call('owner', 'POST', '/result', {body: {type: 'review', return_id: ret.return_id, verdict: 'accept', rung: 'verified', notes_md: 'Test: receipts verified by the server; recipe reran.', transcript: transcript.replaceAll('claude-opus-5-5', 'gpt-6-astra'), transcript_approved: true}});
+  const review = await rv.json();
+  assert.equal(rv.status, 200, JSON.stringify(review).slice(0, 300));
+  assert.equal(review.return_status, 'accepted');
+  const paid = await one(`SELECT sum(points)::float AS p FROM credits WHERE user_id = $1 AND problem_id = $2 AND kind = 'result'`, [people.a.id, pid]);
+  assert.ok(paid.p > 0, 'result points in the ledger');
   const next = await (await call('a', 'GET', '/start', {session: S.a})).json();
   assert.match(next.brief_md, /solveathome job #\d+/);
 });
 
 test('pages render: overview with three charts, track, record; JSON for agents', async () => {
   const html = await (await call('a', 'GET', '', {accept: 'text/html'})).text();
-  assert.equal((html.match(/class="cc-chart"/g) ?? []).length, 3);
+  assert.equal((html.match(/class="cc-chart"/g) ?? []).length, 3, 'the three charts are inline on the project page');
+  assert.match(html, /id="startfield"/, 'the standard sign-in and limits start field');
+  assert.match(html, /id="highscores"/, 'the standard points leaderboard');
   assert.match(html, /noindex/);
   for (const t of md5.challenge.tracks) assert.equal((await call('a', 'GET', `/tracks/${t.lane}`, {accept: 'text/html'})).status, 200);
   const sub = await one(`SELECT id FROM challenge_submissions WHERE problem_id = $1 AND challenge_id = $2 ORDER BY id LIMIT 1`, [pid, COLL]);

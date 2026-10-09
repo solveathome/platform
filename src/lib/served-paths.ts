@@ -14,7 +14,7 @@
 import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { readPublication, type Publication } from "./document-publication.js";
-import { REPOS, overlayPath } from "./revisions.js";
+import { docsRoot, overlayPath } from "./revisions.js";
 import { docsRedirect } from "./projects.js";
 
 /** `outside`: the token is not a path into this snapshot, so the snapshot cannot say anything about it and the brief stays quiet. */
@@ -52,7 +52,7 @@ export function classify(path: string, root: string, publication: Publication | 
 
 /** Paths named in the text that a reader will not find at /docs: empty when the project has no snapshot to check against. */
 export function unservedPaths(text: string, slug: string): PathStatus[] {
-  const root = join(REPOS, slug);
+  const root = docsRoot(slug);
   if (!existsSync(root)) return [];
   const publication = readPublication(root);
   if (!publication) return [];

@@ -10,7 +10,8 @@ import { bearer, optionalAuth, cookieToken, issueToken, recoverToken, invalidate
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { PUBLIC_DIR } from "../lib/paths.js";
-import { projectPartial, readProjectConfig, featuredProject } from "../lib/projects.js";
+import { projectPartial, readProjectConfig, featuredProject, isListed } from "../lib/projects.js";
+import { challengeChartsSection } from "./challenges.js";
 import { leaderboard, type Window } from "../lib/credit.js";
 import { projectActivity, runningWork } from "../lib/project-activity.js";
 import { standings, PENDING_POINTS_SQL } from "../lib/standings.js";
@@ -35,13 +36,15 @@ board.get("/", async (req: any, res) => {
   const readings = projectPartial(p.slug, "prior-readings") ?? "";
   const config = readProjectConfig(p.slug);
   const share = config?.share ?? {};
+  // A record challenge carries its progress charts inline at the top of the overview (src/routes/challenges.ts); every other project nothing.
+  const charts = await challengeChartsSection(Number(p.id), p.slug);
   // Cached HTML carries candidate names only. Every verdict comes from an uncached paper read.
   const candidates = Array.isArray(config?.lean_main_theorems) && config.lean_main_theorems.length <= 100
     ? [...new Set(config.lean_main_theorems.map(x => x?.paper_slug).filter(x => typeof x === 'string' && /^[a-z0-9][a-z0-9-]{0,100}$/.test(x)))] : [];
   const ld = jsonLd({ "@context": "https://schema.org", "@graph": [
     { "@type": "ResearchProject", "@id": abs(`/projects/${p.slug}`), url: abs(`/projects/${p.slug}`), name: p.name, description: share.description ?? p.summary ?? "", parentOrganization: { "@id": abs("/#organization") } },
     ORGANIZATION(), breadcrumbs([{ name: "solveathome", path: "/" }, { name: p.name, path: `/projects/${p.slug}` }]) ] });
-  res.type("text/html").send(page("project.html").replace("__SHARE__", shareMeta({ title: share.title ?? `${p.name} · solveathome`, description: share.description ?? (p.summary || undefined), path: `/projects/${p.slug}`, image: share.image }) + ld).replaceAll("__SLUG__", p.slug).replaceAll("__NAME__", escape(p.name)).replace("__LEAN_CANDIDATES__", escape(JSON.stringify(candidates))).replace("__PROJECT_INTRO__", intro).replace("__PROJECT_PRIOR_WORK__", prior).replace("__PROJECT_PRIOR_READINGS__", readings));
+  res.type("text/html").send(page("project.html").replace("__SHARE__", shareMeta({ title: share.title ?? `${p.name} · solveathome`, description: share.description ?? (p.summary || undefined), path: `/projects/${p.slug}`, image: share.image, robots: isListed(p.slug) ? undefined : "noindex, nofollow" }) + ld).replaceAll("__SLUG__", p.slug).replaceAll("__NAME__", escape(p.name)).replace("__LEAN_CANDIDATES__", escape(JSON.stringify(candidates))).replace("__PROJECT_CHARTS__", () => charts).replace("__PROJECT_INTRO__", intro).replace("__PROJECT_PRIOR_WORK__", prior).replace("__PROJECT_PRIOR_READINGS__", readings));
 });
 
 /** GET /me : who the cookie or bearer token belongs to (for the browser UI). */

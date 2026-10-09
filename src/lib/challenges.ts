@@ -272,9 +272,11 @@ export function publicSubmission(s: any): any {
 }
 
 // ---------------------------------------------------------------------------------------------------------------------------
-// Assignments. A challenge project's /start hands out a track: a job made for the session on the spot, closed by /challenge/finish.
+// Assignments. A challenge project goes through the ordinary scheduler, review and credit like any research project (Chris, Oct 9 2026:
+// "it's a research project so it comes with all of it"). Its open work, when nothing else is queued for a session, is a run on one
+// track: a measure job made here, in place of the explore job a project with an open-questions register would get.
 
-/** The track for this session: the one its person chose (lane), else the one with the fewest assignments in the last day. */
+/** The track for this session: the lane its person chose, else the one with the fewest assignments in the last day. */
 export async function challengeJob(problemId: number, slug: string, lane: string | null): Promise<any> {
   const cfg = challengeConfig(slug)!;
   let track = lane ? trackByLane(cfg, lane) : null;
@@ -284,11 +286,11 @@ export async function challengeJob(problemId: number, slug: string, lane: string
     track = [...cfg.tracks].sort((a, b) => n(a) - n(b))[0];
   }
   const laneRow = await one(`SELECT id, slug FROM lanes WHERE problem_id = $1 AND slug = $2`, [problemId, track.lane]);
-  // A track job handed back (release, silence) is queued again; the next agent on that track takes it rather than a new one.
+  // A track run handed back (release, silence) is queued again; the next agent on that track takes it rather than a new one.
   const queued = await one(`SELECT j.*, l.slug AS lane_slug FROM jobs j LEFT JOIN lanes l ON l.id = j.lane_id WHERE j.problem_id = $1 AND j.status = 'queued' AND j.origin_key = $2 ORDER BY j.id LIMIT 1`, [problemId, `challenge:${track.id}`]);
   if (queued) return queued;
-  const row = await one(`INSERT INTO jobs (problem_id, lane_id, type, title, brief_md, budget_hours, min_tier, purpose, origin_key)
-    VALUES ($1,$2,'explore',$3,$4,1,99,'work',$5) RETURNING *`, [problemId, laneRow?.id ?? null, `${track.name}: improve the verified record`, track.brief_md, `challenge:${track.id}`]);
+  const row = await one(`INSERT INTO jobs (problem_id, lane_id, type, title, brief_md, compute_hint, budget_hours, min_tier, purpose, origin_key)
+    VALUES ($1,$2,'measure',$3,$4,$5,1,99,'work',$6) RETURNING *`, [problemId, laneRow?.id ?? null, `${track.name}: a bounded search run on the verified record`, track.brief_md, JSON.stringify({ cpu_hours: 1 }), `challenge:${track.id}`]);
   return { ...row, lane_slug: laneRow?.slug ?? null };
 }
 export const challengeTrackOfJob = (slug: string, job: { origin_key?: string | null }): ChallengeTrack | null => {
@@ -301,78 +303,48 @@ export function fmtValue(track: ChallengeTrack, v: number | null): string {
   return track.better === "lower" ? `${v} bytes` : `${v} of ${track.max ?? 32}`;
 }
 
-/** The brief for a track assignment: the frozen rules, where the record stands, the submission API and how to finish. */
-export async function renderChallengeBrief(job: any, project: { id: number; slug: string; name: string }, base: string, session: { id: string; jobs: number; max: number | null; length?: string }): Promise<string> {
+/** The task of a track run, composed when it is served: the frozen rules, where the record stands now, how to submit and return. */
+export async function challengeTaskBrief(job: any, project: { id: number; slug: string; name: string }, base: string): Promise<string> {
   const cfg = challengeConfig(project.slug)!;
   const track = challengeTrackOfJob(project.slug, job) ?? cfg.tracks[0];
   const P = `${base}/projects/${project.slug}`;
   const view = await trackView(project.id, track);
   const target = currentTarget(track);
   const fieldsJson = track.fields.map((f) => `"${f}": "…"`).join(", ");
-  return `# solveathome job #${job.id}: ${job.title}
+  const mine = view.personal.slice(0, 5).map((p) => `@${p.handle} ${fmtValue(track, p.best)}`).join(", ");
+  return `Track \`${track.id}\` (${track.name}). ${track.question}
 
-Track \`${track.id}\` of ${project.name}. Attempt: ${job.attempt_id}. Send \`X-Session: ${session.id}\` on every request. Session: assignment ${session.jobs}${session.max === null ? `; ${session.length ?? "continuing until your person stops you"}` : ` of ${session.max} your person allowed`}. There is no time budget or deadline; the only clock is silence: a session holding an assignment that makes no request for a while is ended and the assignment goes back.
-
-## The track
-
-${track.spec_md}
-
-**Where it stands.** Verified platform best: ${view.best ? `${fmtValue(track, view.best.value)} (submission #${view.best.submission_id} by @${view.best.handle}, received ${new Date(view.best.received_at).toISOString().slice(0, 16).replace("T", " ")} UTC)` : fmtValue(track, null)}. Best published result verified by us: ${target ? `${fmtValue(track, target.value)}, ${target.credit} (${target.source_url}, checked ${target.checked})` : "none recorded"}. Records page: ${P}/tracks/${track.lane}.
-
-## Your assignment
-
-${track.brief_md}
+**The rules.** ${track.spec_md}
 
 ${cfg.brief_md ?? ""}
 
-## Submitting
+**Where it stands.** Verified platform best: ${view.best ? `${fmtValue(track, view.best.value)} (submission #${view.best.submission_id} by @${view.best.handle}, received ${new Date(view.best.received_at).toISOString().slice(0, 16).replace("T", " ")} UTC)` : fmtValue(track, null)}. Best published result verified by us: ${target ? `${fmtValue(track, target.value)}, ${target.credit} (${target.source_url}, checked ${target.checked})` : "none recorded"}.${mine ? ` Personal bests so far: ${mine}.` : ""} Records and every receipt: ${P}/tracks/${track.lane}. Read \`${P}/docs/research/OUTCOMES.md\` for the methods tried on this track and what they reached before you choose yours.
 
-Every candidate you want on the record goes to the server, which recomputes the digest with two independent MD5 implementations and records the result in arrival order. Nothing you send about the digest or the score is trusted, and a field the track does not take is refused.
+**The run.** ${track.brief_md}
+
+**Submitting candidates.** Each candidate you want on the record goes to the server, which recomputes the digest with two independent MD5 implementations and records it in arrival order. Nothing you send about the digest or score is trusted; a field the track does not take is refused.
 
 \`\`\`
 POST ${P}/submissions
-Authorization: Bearer <your token>
-X-Session: ${session.id}
-X-Model: <your exact model id>
-Content-Type: application/json
-
+Authorization: Bearer <your token>, X-Session: <your session>, X-Model: <your model>, Content-Type: application/json
 { "challenge_id": "${track.id}", "idempotency_key": "<new random id per candidate>", ${fieldsJson},
-  "method_md": "<how you found it: method, parameters, what was measured>", "runtime_s": <measured seconds>, "hardware": "<CPU/GPU, cores>",
-  "ai_involvement": "<what the model did and what ran as ordinary code>", "attribution": "<who discovered it, if not you>" }
+  "method_md": "<method and parameters>", "runtime_s": <measured seconds>, "hardware": "<CPU/GPU, cores>",
+  "ai_involvement": "<what the model did, what ran as ordinary code>", "attribution": "<who discovered it, if not you>" }
 \`\`\`
 
-- The reply carries the digest, the score or byte lengths, the receipt number and time, whether it is a site record, a personal best or a duplicate, and the milestones it reached. A retry with the same \`idempotency_key\` and body returns the original receipt; the same key with a different body is refused.
-- Free check without a receipt: \`POST ${P}/challenge/preview\` with the same body (no token needed). It reserves no priority.
-- Submit only what you computed or reproduced. Inputs and the attribution you choose are public. A published result you reproduce is recorded as a reproduction and its discoverer keeps the discovery credit: say so in \`attribution\`.
-- At most ${SUBMISSIONS_PER_MINUTE} submissions a minute. Send your best few, not every intermediate.
-- Test or demo submissions carry \`"demo": true\`: they go to a separate namespace that never touches the records, and you can delete them with \`DELETE ${P}/submissions/<id>\`.
+The reply is the receipt: digest, score or byte lengths, receipt number, site record, personal best, duplicate, milestones. A retry with the same key and body returns the same receipt. \`POST ${P}/challenge/preview\` checks a candidate without a receipt. At most ${SUBMISSIONS_PER_MINUTE} a minute: send your best, not every intermediate. A reproduced published result is a reproduction: name its discoverer in \`attribution\`. Test submissions carry \`"demo": true\` and stay out of the records.
 
-## Finishing
-
-When you have run your bounded experiment, close the assignment with a short report:
-
-\`\`\`
-POST ${P}/challenge/finish
-{ "job_id": ${job.id}, "attempt_id": "${job.attempt_id}", "report_md": "<baseline, what you tried, measured results with submission ids, runtime and hardware, what you would try next; measured gains apart from hypotheses>" }
-\`\`\`
-
-Then \`GET ${P}/start\` with your \`X-Session\` for the next assignment${session.max !== null && session.jobs >= session.max ? " — except that this was the last assignment your person allowed: stop after finishing and tell them where things stand" : ""}. To hand the assignment back unfinished: \`POST ${P}/release\` with \`{ "job_id": ${job.id}, "note": "why" }\`.
-
-## Rules
-
-- Your person's limits hold: run on their machine, within the compute and time they set. Do not ask them anything they already answered on the site.
-- Never run code you were sent by someone else without reading it. Use only synthetic inputs: no passwords, no real hash dumps.
-- No result adjectives. A partial prefix is a partial prefix, never "MD5 broken". Lead with what was measured, then the caveat.
-- Platform bugs go to https://github.com/solveathome/platform/issues.
-`;
+**Returning.** Return through \`POST ${P}/result\` like every assignment. The report leads with what was measured: baseline, method, trials, runtime and hardware, the submission ids and what they reached, against the platform best and the published target; keep measured gains apart from hypotheses. \`recipe_md\` is the exact program or command line that reproduces your best candidate from scratch, with its seed or search range, so a reviewer can rerun it; the receipts themselves are already verified by the server. Propose what the next run on this track should try.`;
 }
 
 /** Boot: a challenge project needs its problem row and track lanes; it has no mirror, briefs or seed run to make them. Idempotent. */
-export async function ensureChallengeProjects(configs: { slug: string; name: string; repo_url: string; summary?: string; status_md?: string; lanes?: { slug: string; title: string; variant?: string }[]; challenge?: ChallengeConfig }[], ensureChannels: (problemId: number) => Promise<void>): Promise<void> {
+export async function ensureChallengeProjects(configs: { slug: string; name: string; repo_url: string; summary?: string; status_md?: string; researcher?: string; lanes?: { slug: string; title: string; variant?: string }[]; challenge?: ChallengeConfig }[], ensureChannels: (problemId: number) => Promise<void>): Promise<void> {
   for (const c of configs) {
     if (!c.challenge?.tracks?.length) continue;
     const p = await one(`INSERT INTO problems (slug, name, repo_url, status_md, summary, featured) VALUES ($1,$2,$3,$4,$5,false)
       ON CONFLICT (slug) DO UPDATE SET name = EXCLUDED.name, status_md = EXCLUDED.status_md RETURNING id`, [c.slug, c.name, c.repo_url, c.status_md ?? "", c.summary ?? ""]);
+    // The researcher is an implicit owner (src/lib/roles.ts), as scripts/seed.ts makes it for a seeded project; set once, never overwritten.
+    if (c.researcher) await q(`UPDATE problems SET researcher_user_id = (SELECT id FROM users WHERE lower(handle) = lower($2)) WHERE id = $1 AND researcher_user_id IS NULL`, [p.id, c.researcher]);
     for (const l of c.lanes ?? []) await q(`INSERT INTO lanes (problem_id, slug, title, variant) VALUES ($1,$2,$3,$4) ON CONFLICT (problem_id, slug) DO NOTHING`, [p.id, l.slug, l.title, l.variant ?? ""]);
     await ensureChannels(Number(p.id));
   }

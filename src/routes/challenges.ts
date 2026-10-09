@@ -118,44 +118,31 @@ async function views(problemId: number, cfg: ChallengeConfig, ns: Namespace) {
 // ---------------------------------------------------------------------------------------------------------------------------
 // Pages.
 
-/** GET /projects/:slug : the three charts first (Chris, Oct 9 2026), then the challenge, how to take part and the rules. */
-challenges.get("/", async (req: any, res) => {
-  const p = req.project, cfg: ChallengeConfig = req.challenge, P = `/projects/${p.slug}`, ns = namespaceOf(req);
-  const all = await views(Number(p.id), cfg, ns);
-  if (!wantsHtml(req)) { res.json(await overviewJson(p, cfg, ns)); return; }
-  const name = await crediter();
-  const listed = isListed(p.slug);
-  const share = readProjectConfig(p.slug)?.share ?? {};
+/**
+ * The three progress charts, inline at the top of the project page (Chris, Oct 9 2026: "the graphs should be in-line", on top of the
+ * same points and standings every research project has). Server-rendered SVG, so the cached page carries them with no script.
+ */
+export async function challengeChartsSection(problemId: number, slug: string): Promise<string> {
+  const cfg = challengeConfig(slug); if (!cfg) return "";
+  const P = `/projects/${slug}`, name = await crediter();
+  const all = await views(problemId, cfg, "live");
   const cards = all.map(({ track, view }) => `<section class="cc-card" aria-labelledby="h-${esc(track.lane)}">
-<h2 id="h-${esc(track.lane)}"><a href="${P}/tracks/${esc(track.lane)}">${esc(track.name)}</a></h2>
+<h3 id="h-${esc(track.lane)}"><a href="${P}/tracks/${esc(track.lane)}">${esc(track.name)}</a></h3>
 <p class="cc-note">${esc(track.question)}</p>
 <div class="cc-figures"><span>Platform best: <b>${esc(fmtValue(track, view.best?.value ?? null))}</b></span>${view.target ? `<span>Published: <b>${esc(fmtValue(track, view.target.value))}</b></span>` : ""}</div>
 ${chartSvg(track, view, P)}
 ${legend(track, view, P, name)}
 ${view.target ? `<p class="cc-note">Published target: ${esc(view.target.credit)}, <a href="${esc(safeUrl(view.target.source_url))}" rel="noopener nofollow">${esc(view.target.source_label)}</a> (checked ${esc(view.target.checked)}).</p>` : ""}
 </section>`).join("");
-  const intro = projectPartial(p.slug, "intro") ?? `<p class="lead">${esc(p.summary)}</p>`;
-  const body = `<div class="page-heading"><div>${listed ? "" : `<span class="cc-beta">Hidden beta · not listed</span>`}<p class="eyebrow">Record challenge</p><h1>${esc(p.name)}</h1></div></div>
-${ns === "demo" ? `<p class="cc-beta">Demo namespace: test submissions only, never on the records. <a href="${P}">Back to the records</a></p>` : ""}
-<p class="cc-note">Verified platform submission history: each line steps when a new verified result beats the previous best; the dashed line is the best published result verified by us. Times are server receipt times in UTC.</p>
+  return `${STYLE}<section class="panel cc-charts" aria-labelledby="cc-charts-title">
+<div class="panel-heading"><div>${isListed(slug) ? "" : `<span class="cc-beta">Hidden beta · not listed</span>`}<p class="eyebrow">Verified platform submission history</p><h2 id="cc-charts-title">Where the three records stand.</h2></div><a class="text-link" href="#contributors">Contribution leaderboard →</a></div>
+<p class="cc-note">Each line steps when a verified result beats the previous best; the dashed line is the best published result verified by us. Times are server receipt times in UTC. Points for the work come from the same ledger as every project: see the leaderboard.</p>
 <div class="cc-grid3">${cards}</div>
-<section class="panel cc-prose">${intro}</section>
-<section class="panel" id="contribute"><h2>Run your agent on it</h2><div class="cc-prose"><p class="muted">Any model, any method, AI or plain code: your agent joins, takes one track at a time, searches on your machine within the limits you set, and sends its best candidates. The server recomputes every digest with two independent MD5 implementations and records the result in arrival order. Nothing is reviewed and nothing you send about the score is trusted.</p></div><div id="cc-join"><p class="muted">Loading…</p></div></section>
-<section class="panel cc-prose"><h2>The rules</h2>${cfg.tracks.map((t) => `<h3><a href="${P}/tracks/${esc(t.lane)}">${esc(t.name)}</a> <code>${esc(t.id)}</code></h3>${mdLite(t.spec_md)}`).join("")}
-<p>Inputs and the attribution you choose are public. A reproduced published result is recorded as a reproduction; its discoverer keeps the discovery credit. Verifier ${esc(VERIFIER_VERSION)}: OpenSSL MD5 and an independent RFC 1321 implementation (${esc(RFC1321_IMPLEMENTATION)}), plus the Python reference in the <a href="https://github.com/solveathome/platform/tree/main/projects/${esc(p.slug)}/verifier">project's verifier folder</a>.</p>
-<p><a href="${P}/challenge">Specification and records (JSON)</a> · <a href="${P}/challenge/export.json">Export JSON</a> · <a href="${P}/challenge/export.csv">Export CSV</a></p></section>`;
-  const script = `<script>(async()=>{const el=document.getElementById('cc-join');const S=${JSON.stringify(p.slug)};const esc=t=>String(t??'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
-try{const me=await fetch('/me',{headers:{accept:'application/json'}}).then(r=>r.json());
-if(!me.signed_in){el.innerHTML='<p><a class="button primary" href="/auth/github?next='+encodeURIComponent(location.pathname)+'">Sign in with GitHub to get your agent instruction</a></p>';return;}
-const t=await fetch('/me/token',{method:'POST',headers:{accept:'application/json'}}).then(r=>r.json()).catch(()=>null);
-if(!t||!t.token){el.innerHTML='<p class="muted">Your agent token is not available here. Get it from <a href="/projects/'+esc(S)+'#contribute">any project page</a> or <a href="/settings">your settings</a>, and accept the <a href="/terms">terms</a> first.</p>';return;}
-const url=location.origin+'/projects/'+S+'/start';
-const lim=[['continuous','until you stop it'],['2h','for 2 hours'],['1task','for one assignment']];
-const render=v=>{const q=v==='continuous'?'':'?time='+v;el.innerHTML='<p><label for="cc-time">Time</label> <select id="cc-time">'+lim.map(([k,l])=>'<option value="'+k+'"'+(k===v?' selected':'')+'>'+l+'</option>').join('')+'</select> <button class="button secondary" id="cc-copy" type="button">Copy</button></p><pre class="cc-instr" id="cc-text">'+esc('Join the '+${JSON.stringify(p.name)}+' on solveathome. GET '+url+q+' with headers "Authorization: Bearer '+t.token+'", "X-Model: <your exact model id>" and "X-Effort: <your thinking level as your harness records it, or unmeasured>". Follow the brief it returns, send its X-Session header on every later request, and stop when it says the session is over.')+'</pre><p class="cc-note">Your token is personal: paste this only into your own agent. You accepted the terms on the site; the agent asks you nothing else.</p>';
-document.getElementById('cc-time').onchange=e=>render(e.target.value);document.getElementById('cc-copy').onclick=()=>navigator.clipboard&&navigator.clipboard.writeText(document.getElementById('cc-text').textContent);};render('continuous');
-}catch{el.innerHTML='<p class="muted">Sign-in is unavailable right now. Refresh to try again.</p>';}})();</script>`;
-  res.type("text/html").send(shell({ title: p.name, description: share.description ?? p.summary ?? "", path: P, listed, crumbs: `<a href="/">Overview</a><span aria-hidden="true">/</span><span>${esc(p.name)}</span>`, body, script }));
-});
+<details class="details"><summary>The rules of the three tracks</summary><div class="cc-prose">${cfg.tracks.map((t) => `<h3><a href="${P}/tracks/${esc(t.lane)}">${esc(t.name)}</a> <code>${esc(t.id)}</code></h3>${mdLite(t.spec_md)}`).join("")}
+<p>Inputs and the attribution a submitter chooses are public. A reproduced published result is recorded as a reproduction; its discoverer keeps the discovery credit. Verifier ${esc(VERIFIER_VERSION)}: OpenSSL MD5 and an independent RFC 1321 implementation (${esc(RFC1321_IMPLEMENTATION)}), held equal to the <a href="${P}/docs/verifier/reference.py">Python reference</a>.</p>
+<p><a href="${P}/challenge">Specification and records (JSON)</a> · <a href="${P}/challenge/export.json">Export JSON</a> · <a href="${P}/challenge/export.csv">Export CSV</a></p></div></details>
+</section>`;
+}
 
 /** A small, safe renderer for the spec text in project.json: paragraphs, `code` and **bold**, escaped first. */
 function mdLite(md: string): string {
@@ -308,20 +295,6 @@ challenges.delete("/submissions/:id", bearer, async (req: any, res) => {
   await q(`DELETE FROM challenge_submissions WHERE id = $1`, [s.id]);
   res.json({ ok: true, deleted: Number(s.id) });
 });
-
-/** POST /challenge/finish : the report that closes a track assignment. */
-challenges.post("/challenge/finish", bearer, assignmentMutation(async (req: any, res: any) => {
-  const b = req.body ?? {};
-  const j = await one(`SELECT * FROM jobs WHERE id = $1 AND problem_id = $2`, [Number(b.job_id) || 0, req.project.id]);
-  if (!j || !String(j.origin_key ?? "").startsWith("challenge:")) { res.status(404).json({ error: "job_id must be the track assignment you hold" }); return; }
-  if (Number(j.assigned_to) !== Number(req.user.id) || j.status !== "assigned") { res.status(409).json({ error: `job #${j.id} is ${j.status === "assigned" ? "held by someone else" : j.status}` }); return; }
-  if (typeof b.report_md !== "string" || !b.report_md.trim()) { res.status(400).json({ error: "report_md is required: baseline, what you tried, measured results with submission ids, runtime and hardware, next idea" }); return; }
-  if (b.report_md.length > 20000) { res.status(400).json({ error: "report_md is at most 20000 characters" }); return; }
-  const r = await one(`INSERT INTO challenge_reports (problem_id, job_id, user_id, session_id, model, report_md) VALUES ($1,$2,$3,$4,$5,$6) RETURNING id`, [req.project.id, j.id, req.user.id, j.assigned_session, req.model ?? null, b.report_md]);
-  await q(`UPDATE jobs SET status = 'returned' WHERE id = $1`, [j.id]);
-  const n = await one(`SELECT count(*)::int AS n FROM challenge_submissions WHERE job_id = $1`, [j.id]);
-  res.json({ ok: true, job_id: Number(j.id), report_id: Number(r.id), submissions_during_assignment: n.n, next: `GET /projects/${req.project.slug}/start with your X-Session` });
-}, { completion: true }));
 
 /** POST /challenge/corrections : an owner withdraws, restores or re-attributes a submission, with a dated note. Nothing is rewritten. */
 challenges.post("/challenge/corrections", bearer, async (req: any, res) => {
