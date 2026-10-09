@@ -63,6 +63,7 @@
 .mf-bar i { position: absolute; inset: 0 auto 0 0; background: var(--fg); }
 .mf-bar s { position: absolute; top: -4px; bottom: -4px; width: 0; border-left: 2px dashed var(--mut); }
 .mf-legend { font: .6875rem/1.6 var(--mono); color: var(--mut); margin: .75rem 0 0; }
+.mf-bar-note { grid-column: 1 / -1; font: .6875rem/1.5 var(--mono); color: var(--mut); }
 .mf-board ol { list-style: none; margin: 0; padding: 0; }
 .mf-board li { display: grid; grid-template-columns: 1.75rem minmax(0, 1fr) auto; gap: .5rem; padding: .45rem 0; border-bottom: 1px solid var(--line); font-size: .875rem; }
 .mf-board li span:first-child { font: .75rem/1.9 var(--mono); color: var(--mut); }
