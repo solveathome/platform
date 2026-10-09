@@ -5,10 +5,10 @@ import { notFound } from "./lib/not-found.js";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { PUBLIC_DIR } from "./lib/paths.js";
-import { migrate, flushFileEffects } from "./db/index.js";
-import { job } from "./routes/job.js";
+import { migrate, flushFileEffects, q } from "./db/index.js";
+import { job, settlePendingChallengeRuns } from "./routes/job.js";
 import { challenges } from "./routes/challenges.js";
-import { ensureChallengeProjects } from "./lib/challenges.js";
+import { ensureChallengeProjects, challengeSlugs } from "./lib/challenges.js";
 import { ensureChannels } from "./routes/chat.js";
 import { lane } from "./routes/lane.js";
 import { board, root } from "./routes/board.js";
@@ -161,6 +161,8 @@ migrate().then(async () => {
   await flushFileEffects();
   // A challenge project has no seed run or mirror: its problem row and track lanes are made from project.json at start.
   await ensureChallengeProjects(listProjectConfigs(), ensureChannels);
+  // Runs that returned before their submission settled them (or before the rule existed) are settled now (src/routes/job.ts).
+  for (const p of await q(`SELECT id FROM problems WHERE slug = ANY($1::text[])`, [challengeSlugs()])) await settlePendingChallengeRuns(Number(p.id));
   await recordAllPublications();
   setInterval(() => { flushFileEffects().catch(error => console.error("publication retry:", error)); }, 30000).unref();
   // Announcements (#sah-discord-announcer): scan and send once a minute; off unless a project turns it on, ANNOUNCE_ENABLED=0 stops it.

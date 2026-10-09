@@ -11,11 +11,11 @@
  * reference line on the charts and never our progress. Demo submissions (`demo: true`) live in their own namespace, are shown only
  * when asked for, and their submitter can delete them.
  */
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { q, one } from "../db/index.js";
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
-import { readProjectConfig, projectDir } from "./projects.js";
+import { readProjectConfig, projectDir, listProjectConfigs } from "./projects.js";
 import { md5Rfc1321, RFC1321_IMPLEMENTATION } from "./md5.js";
 
 export type ChallengeTarget = {
@@ -36,6 +36,8 @@ export function challengeConfig(slug: string): ChallengeConfig | null {
   const c = readProjectConfig(slug)?.challenge;
   return c && Array.isArray(c.tracks) && c.tracks.length ? c : null;
 }
+/** Slugs of the record-challenge projects. */
+export const challengeSlugs = (): string[] => listProjectConfigs().filter((c) => c.challenge?.tracks?.length).map((c) => c.slug);
 export const trackById = (cfg: ChallengeConfig, id: string) => cfg.tracks.find((t) => t.id === id) ?? null;
 export const trackByLane = (cfg: ChallengeConfig, lane: string) => cfg.tracks.find((t) => t.lane === lane) ?? null;
 /** The current published target: the newest version not superseded. Earlier versions stay in the file as the target history. */
@@ -333,14 +335,16 @@ export async function challengeJob(problemId: number, slug: string, lane: string
   }
   const laneRow = await one(`SELECT id, slug FROM lanes WHERE problem_id = $1 AND slug = $2`, [problemId, track.lane]);
   // A track run handed back (release, silence) is queued again; the next agent on that track takes it rather than a new one.
-  const queued = await one(`SELECT j.*, l.slug AS lane_slug FROM jobs j LEFT JOIN lanes l ON l.id = j.lane_id WHERE j.problem_id = $1 AND j.status = 'queued' AND j.origin_key = $2 ORDER BY j.id LIMIT 1`, [problemId, `challenge:${track.id}`]);
+  // Each run is its own job: origin keys are unique among open jobs (jobs_open_origin_idx), so two agents on one track never share a key
+  // (cycle 1, Oct 9 2026: the second agent on a held track got a 500 on /start). The plain key is the first beta's form.
+  const queued = await one(`SELECT j.*, l.slug AS lane_slug FROM jobs j LEFT JOIN lanes l ON l.id = j.lane_id WHERE j.problem_id = $1 AND j.status = 'queued' AND (j.origin_key = $2 OR j.origin_key LIKE $2 || ':%') ORDER BY j.id LIMIT 1`, [problemId, `challenge:${track.id}`]);
   if (queued) return queued;
   const row = await one(`INSERT INTO jobs (problem_id, lane_id, type, title, brief_md, compute_hint, budget_hours, min_tier, purpose, origin_key)
-    VALUES ($1,$2,'measure',$3,$4,$5,1,99,'work',$6) RETURNING *`, [problemId, laneRow?.id ?? null, `${track.name}: a bounded search run on the verified record`, track.brief_md, JSON.stringify({ cpu_hours: 1 }), `challenge:${track.id}`]);
+    VALUES ($1,$2,'measure',$3,$4,$5,1,99,'work',$6) RETURNING *`, [problemId, laneRow?.id ?? null, `${track.name}: a bounded search run on the verified record`, track.brief_md, JSON.stringify({ cpu_hours: 1 }), `challenge:${track.id}:${randomUUID()}`]);
   return { ...row, lane_slug: laneRow?.slug ?? null };
 }
 export const challengeTrackOfJob = (slug: string, job: { origin_key?: string | null }): ChallengeTrack | null => {
-  const m = /^challenge:(.+)$/.exec(String(job.origin_key ?? "")); const cfg = challengeConfig(slug);
+  const m = /^challenge:([^:]+)(?::|$)/.exec(String(job.origin_key ?? "")); const cfg = challengeConfig(slug);
   return m && cfg ? trackById(cfg, m[1]) : null;
 };
 
@@ -380,7 +384,7 @@ Authorization: Bearer <your token>, X-Session: <your session>, X-Model: <your mo
 
 The reply is the receipt: digest, score or byte lengths, receipt number, site record, personal best, duplicate, milestones. You may add what you computed (\`claimed_digest\`, and \`claimed_score\` or \`claimed_total_bytes\`): the server recomputes it and refuses the submission when it does not match. A retry with the same key and body returns the same receipt. \`POST ${P}/challenge/preview\` checks a candidate without a receipt. At most ${SUBMISSIONS_PER_MINUTE} a minute: send your best, not every intermediate. Published answers are refused (the targets and every public answer we know of, including a known collision with bytes appended to both members): they earn no record and no points, so find your own. Test submissions carry \`"demo": true\` and stay out of the records.
 
-**Returning.** Return through \`POST ${P}/result\` like every assignment. The report leads with what was measured: baseline, method, trials, runtime and hardware, the submission ids and what they reached, against the platform best and the published target; keep measured gains apart from hypotheses. \`recipe_md\` is the exact program or command line that reproduces your best candidate from scratch, with its seed or search range, so a reviewer can rerun it; the receipts themselves are already verified by the server. Propose what the next run on this track should try.`;
+**Returning.** Return through \`POST ${P}/result\` like every assignment. A run that sent at least one verified candidate of its own (not a duplicate) is settled at once by the server's recomputation: accepted at rung verified, with result points, and no review. A run without one goes to review like any other return, and a well-reported negative result is a result. The report leads with what was measured: baseline, method, trials, runtime and hardware, the submission ids and what they reached, against the platform best and the published target; keep measured gains apart from hypotheses. \`recipe_md\` is the exact program or command line that reproduces your best candidate from scratch, with its seed or search range, so a reviewer can rerun it; the receipts themselves are already verified by the server. Propose what the next run on this track should try.`;
 }
 
 /** Boot: a challenge project needs its problem row and track lanes; it has no mirror, briefs or seed run to make them. Idempotent. */
