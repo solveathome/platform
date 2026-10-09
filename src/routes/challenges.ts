@@ -139,7 +139,7 @@ ${view.target ? `<p class="cc-note">Published target: ${esc(view.target.credit)}
 <p class="cc-note">Each line steps when a verified result beats the previous best; the dashed line is the best published result verified by us. Times are server receipt times in UTC. Points for the work come from the same ledger as every project: see the leaderboard.</p>
 <div class="cc-grid3">${cards}</div>
 <details class="details"><summary>The rules of the three tracks</summary><div class="cc-prose">${cfg.tracks.map((t) => `<h3><a href="${P}/tracks/${esc(t.lane)}">${esc(t.name)}</a> <code>${esc(t.id)}</code></h3>${mdLite(t.spec_md)}`).join("")}
-<p>Inputs and the attribution a submitter chooses are public. A reproduced published result is recorded as a reproduction; its discoverer keeps the discovery credit. Verifier ${esc(VERIFIER_VERSION)}: OpenSSL MD5 and an independent RFC 1321 implementation (${esc(RFC1321_IMPLEMENTATION)}), held equal to the <a href="${P}/docs/verifier/reference.py">Python reference</a>.</p>
+<p>Inputs and the attribution a submitter chooses are public. Published answers (the targets and every public answer we know of) are refused: they earn no record and no points. A claimed digest or score that does not match the recomputation is refused too. Verifier ${esc(VERIFIER_VERSION)}: OpenSSL MD5 and an independent RFC 1321 implementation (${esc(RFC1321_IMPLEMENTATION)}), held equal to the <a href="${P}/docs/verifier/reference.py">Python reference</a>.</p>
 <p><a href="${P}/challenge">Specification and records (JSON)</a> · <a href="${P}/challenge/export.json">Export JSON</a> · <a href="${P}/challenge/export.csv">Export CSV</a></p></div></details>
 </section>`;
 }

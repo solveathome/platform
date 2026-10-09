@@ -7,7 +7,7 @@ import {join} from 'node:path';
 
 // The MD5 challenge verifiers (Oct 9 2026): every fixture of the proposal, the boundary and malformed-input cases of its acceptance
 // tests 1 and 2, the independent RFC 1321 implementation against OpenSSL, and parity with the published Python reference.
-const {verifyMirror, verifyZero, verifyCollision, verify, identity, prefix, ChallengeError} = await import('../src/lib/challenges.ts');
+const {verifyMirror, verifyZero, verifyCollision, verify, identity, prefix, ChallengeError, knownMatch, knownResults} = await import('../src/lib/challenges.ts');
 const {md5Rfc1321} = await import('../src/lib/md5.ts');
 const ROOT = new URL('..', import.meta.url).pathname;
 const config = JSON.parse(readFileSync(join(ROOT, 'projects/md5/project.json'), 'utf8'));
@@ -108,5 +108,32 @@ test('parity with the Python reference verifier on fixtures, random and malforme
     if (py.error || js.error) { assert.ok(py.error && js.error, `${id} ${args.join(' ').slice(0, 40)}: both refuse`); continue; }
     assert.equal(js.digest, py.digest); assert.equal(js.score ?? null, py.score ?? null);
     if (py.total_bytes !== undefined) { assert.equal(js.total_bytes, py.total_bytes); assert.deepEqual([js.inputs.a_hex, js.inputs.b_hex], [py.a_hex, py.b_hex]); }
+  }
+});
+
+test('published answers are recognised: every target, every entry of known-results.json, a swapped pair and a known pair with bytes appended', () => {
+  const tracks = Object.fromEntries(config.challenge.tracks.map((t) => [t.id, t]));
+  const mirror = tracks['md5-mirror-ascii32-v1'], zero = tracks['md5-zero-bytes1024-v1'], coll = tracks['md5-collision-totalbytes1024-v1'];
+  assert.ok(knownMatch('md5', mirror, verifyMirror('54db1011d76dc70a0a9df3ff3e0b390f')), 'Egense');
+  assert.ok(knownMatch('md5', zero, verifyZero('6231303064343734656231303064363064303432653836336331653061646565')), 'Polly, superseded but still published');
+  assert.ok(knownMatch('md5', zero, verifyZero('7b626b674e52354553377d2d307836394245303237433937')), 'Beneri #209');
+  const {a_hex: A, b_hex: B} = coll.targets[0].inputs;
+  assert.ok(knownMatch('md5', coll, verifyCollision(A, B)));
+  assert.ok(knownMatch('md5', coll, verifyCollision(B, A)), 'swapped');
+  assert.ok(knownMatch('md5', coll, verifyCollision(A + 'ab'.repeat(64), B + 'ab'.repeat(64))), 'a common suffix keeps a known collision known');
+  assert.equal(knownMatch('md5', mirror, verifyMirror('72690dc972013c32bce5e984a6681b99')), null, 'a new candidate is not known');
+  assert.equal(knownMatch('md5', zero, verifyZero('06')), null);
+  // Every listed entry is a real answer at its stated value: the list never refuses something it misdescribes.
+  const file = JSON.parse(readFileSync(join(ROOT, 'projects/md5/known-results.json'), 'utf8'));
+  for (const [id, entries] of Object.entries(file)) {
+    assert.ok(tracks[id], id);
+    for (const e of entries) {
+      const {credit, source_url, score, total_bytes, ...inputs} = e;
+      const v = verify(id, inputs);
+      assert.ok(credit && /^https:\/\//.test(source_url), `${id} entry has credit and source`);
+      if (score !== undefined) assert.equal(v.score, score, `${id} ${credit}`);
+      if (total_bytes !== undefined) assert.equal(v.total_bytes, total_bytes, `${id} ${credit}`);
+    }
+    assert.equal(knownResults('md5', tracks[id]).length >= entries.length, true);
   }
 });

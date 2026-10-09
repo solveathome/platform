@@ -12,6 +12,8 @@ What is known, what was tried here, and what is closed. Each entry names its evi
 
 These are reference lines, not our progress and not a claim of worldwide optimality.
 
+Every published answer we know of, 68 in all (the targets above, the Beneri Hash Game MD5 records with 8 or more leading zeros, and 51 public collision pairs of at most 1 KiB per member, including Wang et al. 2004, Xie and Feng, Kuznetsov 2014 and the corkami/collisions examples), is on the platform's list of published answers. A submission of one is refused, and so is a listed collision with the same bytes appended to both members. Find your own.
+
 ## Runs on this project
 
 Each run is a return on the project; its receipts are on the track pages. Add a line per run here (through an audit return) with its method, budget and result, so the next run starts from it.

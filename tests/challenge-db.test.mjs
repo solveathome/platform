@@ -18,7 +18,11 @@ const projectsDir = mkdtempSync(join(tmpdir(), 'challenge-projects-'));
 process.env.PROJECTS_DIR = projectsDir;
 mkdirSync(join(projectsDir, slug));
 const md5 = JSON.parse(readFileSync(new URL('../projects/md5/project.json', import.meta.url), 'utf8'));
-writeFileSync(join(projectsDir, slug, 'project.json'), JSON.stringify({...md5, slug, name: 'Challenge test'}));
+// The collision target's bytes are left out here, so the record mechanics can use the one collision a test can carry; the last test
+// lists it as published and checks it is refused.
+const testConfig = structuredClone(md5);
+testConfig.challenge.tracks[2].targets = testConfig.challenge.tracks[2].targets.map(({inputs, ...t}) => t);
+writeFileSync(join(projectsDir, slug, 'project.json'), JSON.stringify({...testConfig, slug, name: 'Challenge test'}));
 
 const {migrate, q, one, pool} = await import('../src/db/index.ts');
 const {issueToken} = await import('../src/lib/auth.ts');
@@ -27,7 +31,7 @@ const {job} = await import('../src/routes/job.ts');
 const {challenges} = await import('../src/routes/challenges.ts');
 const {projects} = await import('../src/routes/projects.ts');
 const {board} = await import('../src/routes/board.ts');
-const {ensureChallengeProjects, trackView, challengeConfig} = await import('../src/lib/challenges.ts');
+const {ensureChallengeProjects, trackView, challengeConfig, forgetKnown} = await import('../src/lib/challenges.ts');
 const {ensureChannels} = await import('../src/routes/chat.ts');
 const {listProjectConfigs, featuredProject, isListed} = await import('../src/lib/projects.ts');
 const {noindexPath} = await import('../src/lib/seo.ts');
@@ -119,14 +123,13 @@ test('receipts: score jump awards every milestone to one submission, ties and du
   assert.equal(s1.status, 201); assert.equal(s1.body.score, 2); assert.deepEqual(s1.body.achievements.filter(x => x.kind === 'milestone').map(x => x.value), [1, 2]);
   const zero = await submit('b', {challenge_id: MIRROR, candidate: '00000000000000000000000000000000'});
   assert.equal(zero.body.score, 0); assert.equal(zero.body.achievements.length, 0, 'score 0 earns no milestone');
-  const jump = await submit('b', {challenge_id: MIRROR, candidate: '54db1011d76dc70a0a9df3ff3e0b390f', attribution: 'Thomas Egense'});
-  assert.deepEqual(jump.body.achievements.filter(x => x.kind === 'milestone').map(x => x.value), [3, 4, 5, 6, 7, 8, 9, 10, 11, 12]);
-  assert.equal(jump.body.known_result, true); assert.ok(jump.body.achievements.some(x => x.kind === 'target' && !x.exceeded));
-  const dup = await submit('a', {challenge_id: MIRROR, candidate: '54db1011d76dc70a0a9df3ff3e0b390f'});
+  const jump = await submit('b', {challenge_id: MIRROR, candidate: '72690dc972013c32bce5e984a6681b99'});   // 5, found by a plain random search
+  assert.deepEqual(jump.body.achievements.filter(x => x.kind === 'milestone').map(x => x.value), [3, 4, 5]);
+  const dup = await submit('a', {challenge_id: MIRROR, candidate: '72690dc972013c32bce5e984a6681b99'});
   assert.equal(dup.body.duplicate, true); assert.equal(dup.body.duplicate_of, jump.body.submission_id); assert.equal(dup.body.site_record, false); assert.equal(dup.body.personal_best, true);
   const view = await trackView(pid, challengeConfig(slug).tracks[0]);
   assert.equal(view.best.submission_id, jump.body.submission_id);
-  assert.equal(view.milestones.find(m => m.value === 12).handle, people.b.handle);
+  assert.equal(view.milestones.find(m => m.value === 5).handle, people.b.handle);
   // Idempotency: same key and body returns the original; same key, other body is refused.
   const key = `idem-${tag}`;
   const r1 = await call('a', 'POST', '/submissions', {session: S.a, body: {challenge_id: ZERO, idempotency_key: key, input_hex: '06'}});
@@ -141,7 +144,7 @@ test('receipts: score jump awards every milestone to one submission, ties and du
 });
 
 test('concurrent submissions get distinct ordered receipts and exactly one winner per milestone', async () => {
-  const many = await Promise.all(Array.from({length: 8}, (_, i) => submit(i % 2 ? 'a' : 'b', {challenge_id: ZERO, input_hex: '6231303064343734656231303064363064303432653836336331653061646565'})));
+  const many = await Promise.all(Array.from({length: 8}, (_, i) => submit(i % 2 ? 'a' : 'b', {challenge_id: ZERO, input_hex: '9b37e36766f0622f34777adbc78a4ab0'})));   // 6 leading zeros, found by a plain random search
   assert.ok(many.every(m => m.status === 201));
   const ids = many.map(m => m.body.submission_id);
   assert.equal(new Set(ids).size, 8);
@@ -149,7 +152,7 @@ test('concurrent submissions get distinct ordered receipts and exactly one winne
   assert.equal(firsts.length, 1, 'one original, seven duplicates');
   assert.equal(firsts[0].body.submission_id, Math.min(...ids), 'the earliest receipt holds the priority');
   const winners = await q(`SELECT value, count(*)::int AS c FROM challenge_events WHERE problem_id = $1 AND challenge_id = $2 AND kind = 'milestone' GROUP BY value`, [pid, ZERO]);
-  assert.ok(winners.every(w => w.c === 1)); assert.equal(winners.length, 13);
+  assert.ok(winners.every(w => w.c === 1)); assert.equal(winners.length, 6);
   const order = await q(`SELECT id, received_at FROM challenge_submissions WHERE problem_id = $1 ORDER BY id`, [pid]);
   for (let i = 1; i < order.length; i++) assert.ok(new Date(order[i].received_at) >= new Date(order[i - 1].received_at), 'receipt order and time agree');
 });
@@ -235,4 +238,29 @@ test('a hidden project is reachable but never listed, featured or indexed', asyn
   assert.notEqual((await featuredProject())?.slug, slug);
   assert.equal(noindexPath(`/projects/${slug}`), true);
   assert.equal(noindexPath(`/projects/${slug}/tracks/self-match`), true);
+});
+
+test('published answers are refused with the reason, a known collision with bytes appended too; a claimed result must match the recomputation', async () => {
+  const before = Number((await one(`SELECT count(*) AS c FROM challenge_submissions WHERE problem_id = $1`, [pid])).c);
+  writeFileSync(join(projectsDir, slug, 'known-results.json'), JSON.stringify({[COLL]: [{a_hex: A, b_hex: B, total_bytes: 128, credit: 'Marc Stevens', source_url: 'https://marc-stevens.nl/research/md5-1block-collision/'}]}));
+  forgetKnown();
+  for (const body of [
+    {challenge_id: MIRROR, candidate: '54db1011d76dc70a0a9df3ff3e0b390f'},
+    {challenge_id: ZERO, input_hex: '7b626b674e52354553377d2d307836394245303237433937'},
+    {challenge_id: COLL, a_hex: B, b_hex: A},
+    {challenge_id: COLL, a_hex: A + 'cd'.repeat(10), b_hex: B + 'cd'.repeat(10)},
+  ]) {
+    const r = await submit('a', body);
+    assert.equal(r.status, 422, JSON.stringify(r.body).slice(0, 200));
+    assert.match(r.body.error, /published answer/);
+    assert.ok(r.body.published.credit);
+  }
+  const wrong = await submit('a', {challenge_id: ZERO, input_hex: '06', claimed_score: 3});
+  assert.equal(wrong.status, 422); assert.match(wrong.body.error, /does not match/); assert.equal(wrong.body.recomputed.score, 1);
+  const wrongDigest = await submit('a', {challenge_id: MIRROR, candidate: '00000000000000000000000000001efd', claimed_digest: '0'.repeat(32)});
+  assert.equal(wrongDigest.status, 422);
+  assert.equal((await submit('a', {challenge_id: COLL, a_hex: '00', b_hex: '01', claimed_score: 1})).status, 400, 'a collision is claimed in bytes, never as a score');
+  assert.equal(Number((await one(`SELECT count(*) AS c FROM challenge_submissions WHERE problem_id = $1`, [pid])).c), before, 'nothing refused was recorded');
+  const right = await submit('a', {challenge_id: MIRROR, candidate: '00000000000000000000000000001efd', claimed_digest: '0005b7062c52fc4ee9762f633adb35fa', claimed_score: 3});
+  assert.equal(right.status, 201);
 });
