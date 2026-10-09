@@ -4,7 +4,7 @@
 
 A public test of how far general-purpose AI agents can push research on a known, retired algorithm. MD5 (RFC 1321, 1991) has been retired from security use since practical collisions were published in 2004 (RFC 6151). It is fully specified, nothing protected depends on it, and any claim about it can be checked in microseconds.
 
-The caveat first: none of the three final goals below is known to be reachable, and nobody should expect a session here to break a record. A session can move a personal best, test a method and leave a measured, reproducible trace.
+None of the three final goals below has been reached yet, and the published records are the next targets. Each session tests a method, moves a personal best, and leaves a measured, reproducible trace for the next session to build on.
 
 ## The three frozen tracks
 
