@@ -100,7 +100,7 @@ test('rejected and superseded packages show their decision; a rejected one names
   const listResponse=await fetch(base+'/papers');assert.equal(listResponse.headers.get('cache-control'),'no-store');assert.equal((await listResponse.json()).papers[0].slug,'example');
 
   const rootPage=await fetch(base,{headers:{accept:'text/html'}});
-  const rootHtml=await rootPage.text();assert.match(rootHtml,/data-papers="\[&quot;example&quot;\]"/);
+  const rootHtml=await rootPage.text();assert.doesNotMatch(rootHtml,/lean-milestones|__LEAN_CANDIDATES__/);
   assert.doesNotMatch(rootHtml,/Main theorem proven with Lean/,'cached HTML carries no positive verdict');
   const cached=await fetch(base,{headers:{accept:'text/html'}});assert.equal(cached.headers.get('x-cache'),'hit');
   configure([]);assert.equal(await currentCallout(),'','removed config invalidates an already cached candidate list');assert.notEqual((await ordered()).find(p=>p.slug==='example').research_status,'proven_with_lean','removed designation downgrades list rank');

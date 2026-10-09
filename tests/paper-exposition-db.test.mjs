@@ -2,19 +2,19 @@
 import {test,before,after} from 'node:test';
 import assert from 'node:assert/strict';
 import {randomUUID,createHash} from 'node:crypto';
-import {mkdtempSync,rmSync} from 'node:fs';
+import {mkdtempSync,mkdirSync,writeFileSync,rmSync} from 'node:fs';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import express from 'express';
 if(!process.env.TEST_DATABASE_URL) throw new Error('Use a disposable TEST_DATABASE_URL');
 process.env.DATABASE_URL=process.env.TEST_DATABASE_URL;
-const tmp=mkdtempSync(join(tmpdir(),'sah-exposition-'));process.env.FILES_DIR=join(tmp,'files');process.env.DOCS_DIR=join(tmp,'repos');process.env.OVERLAY_DIR=join(tmp,'overlay');
+const tmp=mkdtempSync(join(tmpdir(),'sah-exposition-'));process.env.FILES_DIR=join(tmp,'files');process.env.DOCS_DIR=join(tmp,'repos');process.env.OVERLAY_DIR=join(tmp,'overlay');process.env.PROJECTS_DIR=join(tmp,'projects');
 const {one,q,pool,migrate}=await import('../src/db/index.ts');
 const files=await import('../src/lib/files.ts');
 const {TERMS_VERSION}=await import('../src/lib/terms.ts');
 const {issueToken,modelTier}=await import('../src/lib/auth.ts');
 const {job,composeReviewBrief,resolveReturn}=await import('../src/routes/job.ts');
-const {papers}=await import('../src/routes/papers.ts');
+const {papers,listPapers}=await import('../src/routes/papers.ts');
 const {queuePaperExposition,reconcilePaperExpositions,expositionSource}=await import('../src/lib/paper-exposition.ts');
 const {leanFixture}=await import('./fixtures/lean.mjs');
 const {leanExecutionFixture}=await import('./fixtures/lean-execution.mjs');
@@ -31,6 +31,7 @@ before(async()=>{
   for(const [path,content] of artifacts) await files.store(uid,'gpt-6.1-sol',path.split('/').at(-1)+'.txt','txt',content);
   const paper=artifacts.find(a=>a[0]==='paper.md');await q(`INSERT INTO papers(problem_id,slug,title,current_file_sha,kind,status) VALUES($1,'example','Fixture',$2,'draft','reviewed')`,[pid,hash(paper[1])]);
   const insert=async p=>one(`INSERT INTO returns(problem_id,type,user_id,model,provider,report_md,transcript,status,effort,verification_plan,verification_fingerprint) VALUES($1,'formalize',$2,'gpt-6.1-sol','openai','Fixture only','t','accepted','high',$3,$4) RETURNING *`,[pid,uid,JSON.stringify(p),hash(JSON.stringify(p))]);
+  const configRoot=join(process.env.PROJECTS_DIR,slug);mkdirSync(configRoot,{recursive:true});writeFileSync(join(configRoot,'project.json'),JSON.stringify({slug,name:'Synthetic fixture',lean_main_theorems:[{paper_slug:'example',manuscript_sha256:plan.lean.manuscript_sha256,statement_binding:leanStatementBinding(plan.lean),required_claim_ids:['claim1'],unproved_claims:[]}]}));
   const proposal=await insert(plan);
   statementReview=await one(`INSERT INTO reviews(return_id,user_id,model,provider,verdict,rung,notes_md,trusted,effort,lean_statement_review) VALUES($1,$2,'claude-opus-5-5','anthropic','accept','proven','Synthetic fixture',true,'high',$3) RETURNING id`,[proposal.id,uid,JSON.stringify({binding_sha256:leanStatementBinding(plan.lean),meaning_md:'Synthetic mapping'})]);
   plan.lean.statement_review_id=Number(statementReview.id);proof=await insert(plan);
@@ -99,9 +100,20 @@ test('ordinary accepting review must bind this version; downloads preserve bytes
   const good=await call({...body,paper_exposition_review:binding},'claude-opus-5-5');const result=await good.json();assert.equal(good.status,200,JSON.stringify(result));
   assert.equal((await one(`SELECT status FROM returns WHERE id=$1`,[submission])).status,'accepted');
   let view=await (await fetch(base+'/papers/example',{headers:{accept:'application/json'}})).json();assert.equal(view.expositions[0].evidence.current,true);
+  const current=async()=>({list:(await listPapers(pid,slug))[0],page:await(await fetch(base+'/papers/example',{headers:{accept:'application/json'}})).json()});
+  const eligible=await current();for(const paper of [eligible.list,eligible.page.paper])assert.equal(paper.reviewed_pdf.return_id,submission);
+  const html=await fetch(base+'/papers/example',{headers:{accept:'text/html'}});assert.equal(html.headers.get('cache-control'),'no-store');assert.match(await html.text(),new RegExp(`href="/projects/${slug}/papers/example/expositions/${submission}/pdf">View PDF`));
+  // A higher-id pending revision never inherits the old edition's fidelity vote.
+  const newer=await one(`INSERT INTO returns(problem_id,type,user_id,model,provider,report_md,transcript,status,effort,paper_slug,paper_exposition) VALUES($1,'paper',$2,'gpt-6.1-sol','openai','Synthetic newer edition','t','pending','high','example',$3) RETURNING id`,[pid,uid,JSON.stringify(e)]);
+  for(const file of attached)await q(`INSERT INTO file_refs(file_sha,ref_type,ref_id) VALUES($1,'return',$2)`,[file,newer.id]);
+  assert.equal((await current()).list.reviewed_pdf.return_id,submission);
+  await q(`UPDATE returns SET status='rejected' WHERE id=$1`,[newer.id]);assert.equal((await current()).page.paper.reviewed_pdf.return_id,submission);
+  await q(`UPDATE reviews SET needs_reassessment=true WHERE return_id=$1`,[submission]);for(const paper of [(await current()).list,(await current()).page.paper])assert.equal(paper.reviewed_pdf,null);
+  await q(`UPDATE reviews SET needs_reassessment=false WHERE return_id=$1`,[submission]);
+
   const download=await fetch(base+`/papers/example/expositions/${submission}/pdf`);assert.equal(download.status,200);assert.match(download.headers.get('content-disposition'),/^attachment/);assert.equal(download.headers.get('x-content-type-options'),'nosniff');assert.equal(hash(Buffer.from(await download.arrayBuffer())),JSON.parse(files.read(pdf)).sha256);
   assert.equal((await fetch(base+`/papers/example/expositions/${submission}/source`)).status,200);
-  await q(`UPDATE returns SET status='pending' WHERE id=$1`,[proof.id]);view=await (await fetch(base+'/papers/example',{headers:{accept:'application/json'}})).json();assert.equal(view.expositions[0].evidence.current,false);
+  await q(`UPDATE returns SET status='pending' WHERE id=$1`,[proof.id]);view=await (await fetch(base+'/papers/example',{headers:{accept:'application/json'}})).json();assert.equal(view.expositions[0].evidence.current,false);assert.equal(view.paper.reviewed_pdf,null);assert.equal((await current()).list.reviewed_pdf,null);
   await q(`UPDATE returns SET status='accepted' WHERE id=$1`,[proof.id]);
-  await files.remove(pdf,uid,'Synthetic artifact removal');assert.equal((await fetch(base+`/papers/example/expositions/${submission}/pdf`)).status,410);
+  await files.remove(pdf,uid,'Synthetic artifact removal');assert.equal((await fetch(base+`/papers/example/expositions/${submission}/pdf`)).status,410);for(const paper of [(await current()).list,(await current()).page.paper])assert.equal(paper.reviewed_pdf,null);
 });

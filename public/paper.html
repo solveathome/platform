@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>__TITLE__ · __PROJECT__ · solveathome</title>__SHARE__<link rel="icon" href="/favicon.ico"><link rel="stylesheet" href="/assets/app.css?v=31"><script defer src="https://umami.infessa.com/script.js" data-website-id="3c56339a-8792-42b6-b506-628db725c596"></script>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>__TITLE__ · __PROJECT__ · solveathome</title>__SHARE__<link rel="icon" href="/favicon.ico"><link rel="stylesheet" href="/assets/app.css?v=32"><script defer src="https://umami.infessa.com/script.js" data-website-id="3c56339a-8792-42b6-b506-628db725c596"></script>
 <style>
   .paper-main { max-width: 62rem !important; }
   .paper-meta { display: flex; flex-wrap: wrap; gap: .4rem 1.2rem; font-size: .8125rem; color: var(--mut); margin: 0 0 1.5rem; }
@@ -17,7 +17,7 @@
 <header data-site-header></header>
 <main class="shell paper-main" id="main">
   <p class="breadcrumb"><a href="/projects/__SLUG__">__PROJECT__</a> / <a href="/projects/__SLUG__#papers">Proposed papers</a></p>
-  <div class="page-heading"><div><p class="eyebrow">Proposed paper</p><h1>__TITLE__</h1></div></div>
+  <div class="page-heading"><div><p class="eyebrow">Proposed paper</p><h1>__TITLE__</h1></div><div class="page-actions" id="paper-pdf">__PDF_ACTION__</div></div>
   __META__
   <p class="paper-summary">__SUMMARY__</p>
   <div class="paper-side">
@@ -29,4 +29,27 @@
 </main>
 <footer data-site-footer></footer>
 <script src="/assets/ui.js?v=21"></script><script src="/assets/who.js?v=6"></script><script src="/assets/math.js?v=3"></script><script>loadWho(document.querySelector('#who'));</script>
+<script id="paper-pdf-refresh">
+(function () {
+  const root = document.querySelector('#paper-pdf'), base = '/projects/__SLUG__/papers/__PAPER__';
+  let generation = 0;
+  function clear() { ++generation; root.replaceChildren(); }
+  async function refresh() {
+    clear();
+    if (document.hidden) return;
+    const current = generation, request = crypto.randomUUID();
+    try {
+      const result = await SA.json(`${base}?lean_request=${request}`, {cache:'no-store',signal:AbortSignal.timeout(12000)});
+      if (current !== generation || document.hidden || result.lean_milestone_request !== request) return;
+      const pdf = result.paper?.reviewed_pdf, prefix = `${base}/expositions/`;
+      if (!pdf || typeof pdf.url !== 'string' || !pdf.url.startsWith(prefix) || !/^[1-9][0-9]*\/pdf$/.test(pdf.url.slice(prefix.length))) return;
+      const link = document.createElement('a'); link.className = 'button'; link.href = pdf.url; link.textContent = 'View PDF'; root.append(link);
+    } catch { /* A failed current read leaves no positive PDF action. */ }
+  }
+  document.addEventListener('visibilitychange', () => document.hidden ? clear() : refresh());
+  addEventListener('pagehide', clear);
+  addEventListener('pageshow', refresh);
+  setInterval(refresh, 30000);
+})();
+</script>
 </body></html>

@@ -38,13 +38,11 @@ board.get("/", async (req: any, res) => {
   const share = config?.share ?? {};
   // A record challenge carries its progress charts inline at the top of the overview (src/routes/challenges.ts); every other project nothing.
   const charts = await challengeChartsSection(Number(p.id), p.slug);
-  // Cached HTML carries candidate names only. Every verdict comes from an uncached paper read.
-  const candidates = Array.isArray(config?.lean_main_theorems) && config.lean_main_theorems.length <= 100
-    ? [...new Set(config.lean_main_theorems.map(x => x?.paper_slug).filter(x => typeof x === 'string' && /^[a-z0-9][a-z0-9-]{0,100}$/.test(x)))] : [];
+  // Current proof status and reviewed PDF links live in the uncached Papers list.
   const ld = jsonLd({ "@context": "https://schema.org", "@graph": [
     { "@type": "ResearchProject", "@id": abs(`/projects/${p.slug}`), url: abs(`/projects/${p.slug}`), name: p.name, description: share.description ?? p.summary ?? "", parentOrganization: { "@id": abs("/#organization") } },
     ORGANIZATION(), breadcrumbs([{ name: "solveathome", path: "/" }, { name: p.name, path: `/projects/${p.slug}` }]) ] });
-  res.type("text/html").send(page("project.html").replace("__SHARE__", shareMeta({ title: share.title ?? `${p.name} · solveathome`, description: share.description ?? (p.summary || undefined), path: `/projects/${p.slug}`, image: share.image, robots: isListed(p.slug) ? undefined : "noindex, nofollow" }) + ld).replaceAll("__SLUG__", p.slug).replaceAll("__NAME__", escape(p.name)).replace("__LEAN_CANDIDATES__", escape(JSON.stringify(candidates))).replace("__PROJECT_CHARTS__", () => charts).replace("__PROJECT_INTRO__", intro).replace("__PROJECT_PRIOR_WORK__", prior).replace("__PROJECT_PRIOR_READINGS__", readings));
+  res.type("text/html").send(page("project.html").replace("__SHARE__", shareMeta({ title: share.title ?? `${p.name} · solveathome`, description: share.description ?? (p.summary || undefined), path: `/projects/${p.slug}`, image: share.image, robots: isListed(p.slug) ? undefined : "noindex, nofollow" }) + ld).replaceAll("__SLUG__", p.slug).replaceAll("__NAME__", escape(p.name)).replace("__PROJECT_CHARTS__", () => charts).replace("__PROJECT_INTRO__", intro).replace("__PROJECT_PRIOR_WORK__", prior).replace("__PROJECT_PRIOR_READINGS__", readings));
 });
 
 /** GET /me : who the cookie or bearer token belongs to (for the browser UI). */
