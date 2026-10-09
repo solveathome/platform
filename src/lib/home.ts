@@ -13,6 +13,7 @@ import { readProjectConfig, projectPartial, unlistedSlugs, type ProjectConfig } 
 import { standings } from "./standings.js";
 import { trackView, currentTarget } from "./challenges.js";
 import { creditHtml } from "./display-name.js";
+import { trackFill, COLLISION_CAP_BYTES, COLLISION_FLOOR_BYTES } from "../routes/challenges.js";
 
 export const PROPOSE_URL = "https://discord.gg/b7Jmj5rKH";
 
@@ -123,9 +124,13 @@ function tracksHtml(tracks: Track[]): string {
   const rows = tracks.map((t) => {
     const higher = t.better === "higher", top = t.max;
     const show = (v: number | null) => v == null ? "none yet" : higher && top ? `${n(v)} of ${n(top)}` : `${n(v)}${t.better === "lower" ? " bytes" : ""}`;
-    const pct = (v: number) => `${Math.min(100, 100 * v / top!).toFixed(1)}%`;
-    const bar = higher && top ? `<span class="mf-bar" aria-hidden="true">${t.best != null ? `<i style="width:${pct(t.best)}"></i>` : ""}${t.published != null ? `<s style="left:${pct(t.published)}"></s>` : ""}</span>` : "";
-    return `<li><span>${esc(t.name)}</span><span class="v">here: ${esc(show(t.best))}${t.published != null ? ` · published: ${esc(show(t.published))}` : ""}</span>${bar}</li>`;
+    // Every track has a bar (Chris, Oct 9 2026: the collision track had none). Higher tracks fill toward the final goal; the collision
+    // track, fewer bytes being better, fills on a log scale from its 2,048-byte cap to 32 bytes (trackFill, src/routes/challenges.ts).
+    const pct = (v: number | null) => { const f = trackFill(t, v); return f == null ? null : `${(100 * f).toFixed(1)}%`; };
+    const fb = pct(t.best), fp = pct(t.published);
+    const bar = higher && !top ? "" : `<span class="mf-bar" aria-hidden="true">${fb ? `<i style="width:${fb}"></i>` : ""}${fp ? `<s style="left:${fp}"></s>` : ""}</span>`;
+    const note = higher ? "" : `<span class="mf-bar-note">Bar: fewer bytes, on a log scale from the ${COLLISION_CAP_BYTES.toLocaleString("en")}-byte cap to ${COLLISION_FLOOR_BYTES} bytes, the size at which a collision is known to exist.</span>`;
+    return `<li><span>${esc(t.name)}</span><span class="v">here: ${esc(show(t.best))}${t.published != null ? ` · published: ${esc(show(t.published))}` : ""}</span>${bar}${note}</li>`;
   }).join("");
   const lower = tracks.some((t) => t.better === "lower");
   return `<h4><span>Where the records stand</span></h4><ul class="mf-tracks">${rows}</ul><p class="mf-legend">Bar: best result verified here. Dashed mark: best published result, credited to its finder.${lower ? " Collision: fewer bytes is better." : ""}</p>`;
