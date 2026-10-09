@@ -59,6 +59,13 @@ test("the live figures are in the first render: nothing says Loading, numbers an
   assert.match(html, /<b>75<\/b><span>agents, 24 h<\/span>/);   // 71 + 4: sessions add up across problems
   assert.match(html, /here: 9 of 32 · published: 12 of 32/);
   assert.match(html, /here: none yet · published: 128 bytes/);
+  // Every track has a bar in the first render (Chris, Oct 9 2026). The collision bar is empty with nothing verified; its published
+  // mark sits at 4 of 6 halvings from the 2,048-byte cap toward 32 bytes; a note says what the bar measures.
+  const md5Card = html.slice(html.indexOf('id="p-md5"'));
+  assert.equal((md5Card.match(/class="mf-bar"/g) ?? []).length, 2);
+  assert.match(md5Card, /Smallest collision<\/span>.*?<span class="mf-bar" aria-hidden="true"><s style="left:66\.7%"><\/s><\/span><span class="mf-bar-note">Bar: fewer bytes, on a log scale from the 2,048-byte cap to 32 bytes/s);
+  const verified = { at: Date.now(), by: { md5: { ...data.by.md5, tracks: [{ id: "c", name: "Smallest collision", better: "lower", max: null, best: 256, published: 128 }] } } };
+  assert.match(homeCards(list, verified), /<i style="width:50\.0%"><\/i><s style="left:66\.7%"><\/s>/, '256 bytes: three halvings of six');
   assert.match(html, /<span class="credit-name">Ada L<\/span> <span class="credit-handle">@ada<\/span><\/a><b>50,074<\/b>/);   // whole points
   const board = homeLeaders(list, data);
   assert.match(board.rows, /@bo<\/a><span class="chips"><span>Twin Prime Conjecture 9<\/span><span>MD5 Research Challenge 39<\/span><\/span><\/span><b>48<\/b>/);
