@@ -77,6 +77,16 @@ ${steps.length ? `<path d="${path}" class="cc-line"/>${dots}` : `<text x="${L + 
 </svg>`;
 }
 
+/** The platform best, linked to the record page of the receipt that holds it (Chris, Oct 9 2026). Derived per render, so a new best moves the link. */
+function bestLink(track: ChallengeTrack, view: TrackView, P: string): string {
+  const v = `<b>${esc(fmtValue(track, view.best?.value ?? null))}</b>`;
+  return view.best ? `<a href="${P}/submissions/${view.best.submission_id}" title="Submission #${view.best.submission_id} by @${esc(view.best.handle)}">${v}</a>` : v;
+}
+/** The published value, linked to the source it comes from (project.json target source_url, https only). */
+function targetLink(track: ChallengeTrack, t: { value: number; source_url: string; credit: string }): string {
+  const v = `<b>${esc(fmtValue(track, t.value))}</b>`;
+  return /^https:\/\//.test(t.source_url) ? `<a href="${esc(t.source_url)}" rel="noopener nofollow" title="${esc(t.credit)}">${v}</a>` : v;
+}
 function legend(track: ChallengeTrack, view: TrackView, P: string, name: (h: string) => string, max = 6): string {
   if (!view.steps.length) return `<p class="cc-note">${track.better === "lower" ? "No verified pair yet: only full collisions appear here, never partial matches." : "No verified submission yet. The first verified result starts the line."}</p>`;
   const rows = [...view.steps].reverse().slice(0, max);
@@ -129,7 +139,7 @@ export async function challengeChartsSection(problemId: number, slug: string): P
   const cards = all.map(({ track, view }) => `<section class="cc-card" aria-labelledby="h-${esc(track.lane)}">
 <h3 id="h-${esc(track.lane)}"><a href="${P}/tracks/${esc(track.lane)}">${esc(track.name)}</a></h3>
 <p class="cc-note">${esc(track.question)}</p>
-<div class="cc-figures"><span>Platform best: <b>${esc(fmtValue(track, view.best?.value ?? null))}</b></span>${view.target ? `<span>Published: <b>${esc(fmtValue(track, view.target.value))}</b></span>` : ""}</div>
+<div class="cc-figures"><span>Platform best: ${bestLink(track, view, P)}</span>${view.target ? `<span>Published: ${targetLink(track, view.target)}</span>` : ""}</div>
 ${chartSvg(track, view, P)}
 ${legend(track, view, P, name)}
 ${view.target ? `<p class="cc-note">Published target: ${esc(view.target.credit)}, <a href="${esc(safeUrl(view.target.source_url))}" rel="noopener nofollow">${esc(view.target.source_label)}</a> (checked ${esc(view.target.checked)}).</p>` : ""}
@@ -171,7 +181,7 @@ challenges.get("/tracks/:lane", async (req: any, res) => {
   const body = `<div class="page-heading"><div>${isListed(p.slug) ? "" : `<span class="cc-beta">Hidden beta · not listed</span>`}<p class="eyebrow">${esc(p.name)} · <code>${esc(track.id)}</code></p><h1>${esc(track.name)}</h1></div></div>
 <div class="cc-prose">${mdLite(track.spec_md)}</div>
 <section class="panel"><h2>Verified platform submission history</h2>
-<div class="cc-figures"><span>Platform best: <b>${esc(fmtValue(track, view.best?.value ?? null))}</b></span><span>Submissions: <b>${view.submissions}</b></span>${view.target ? `<span>Best published result verified by us: <b>${esc(fmtValue(track, view.target.value))}</b></span>` : ""}</div>
+<div class="cc-figures"><span>Platform best: ${bestLink(track, view, P)}</span><span>Submissions: <b>${view.submissions}</b></span>${view.target ? `<span>Best published result verified by us: ${targetLink(track, view.target)}</span>` : ""}</div>
 ${chartSvg(track, view, P)}${legend(track, view, P, name, 100)}</section>
 ${track.better === "higher" ? `<section class="panel"><h2>Site milestones</h2>${view.milestones.length ? `<div class="cc-wrap"><table class="cc-table"><thead><tr><th>Milestone</th><th>Reached by</th><th>Submission</th><th>Received</th></tr></thead><tbody>${view.milestones.map((m) => `<tr><td>${m.value}</td><td>${name(m.handle)}</td><td><a href="${P}/submissions/${m.submission_id}">#${m.submission_id}</a></td><td>${esc(utc(m.received_at))}</td></tr>`).join("")}</tbody></table></div>` : `<p class="cc-note">No milestone reached yet. A score of 0 is valid and earns none; a jump from 8 to 12 awards 9 through 12 to the same submission.</p>`}</section>` : ""}
 <section class="panel"><h2>Personal bests</h2>${view.personal.length ? `<div class="cc-wrap"><table class="cc-table"><thead><tr><th>Contributor</th><th>Best</th><th>Submission</th><th>Submissions</th></tr></thead><tbody>${view.personal.map((r) => `<tr><td>${name(r.handle)}</td><td>${esc(fmtValue(track, r.best))}</td><td><a href="${P}/submissions/${r.submission_id}">#${r.submission_id}</a></td><td>${r.submissions}</td></tr>`).join("")}</tbody></table></div>` : `<p class="cc-note">Nobody yet.</p>`}</section>
