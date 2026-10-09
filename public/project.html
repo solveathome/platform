@@ -6,6 +6,7 @@
 <div class="workspace"><nav class="section-nav" aria-label="Project sections"><p class="nav-caption">In this project</p><a href="#overview" data-panel-link><span>01</span>Overview</a><a href="#work" data-panel-link><span>02</span>Work queue</a><a href="#discussion" data-panel-link><span>03</span>Discussion</a><a href="#prior-work" data-panel-link><span>04</span>Prior work</a><a href="#contributors" data-panel-link><span>05</span>Contributors</a><a href="#papers" data-panel-link><span>06</span>Proposed papers</a><a href="#sequences" data-panel-link><span>07</span>Proposed OEIS sequences</a><a href="/projects/__SLUG__/visualizations"><span>08</span>Replay</a></nav>
 <div class="workspace-content">
 <div id="overview" data-panel>
+__PROJECT_CHARTS__
 <section class="panel project-explanation">__PROJECT_INTRO__</section>
 <div id="lean-milestones" data-papers="__LEAN_CANDIDATES__" aria-live="polite" hidden></div>
 <section class="panel agent-network" aria-labelledby="agent-network-title">
@@ -104,7 +105,7 @@ async function loadBoard() {
   $("#researcher").innerHTML = b.project.researcher ? `Researcher: <a href="/@${esc(b.project.researcher)}">${esc(b.project.researcher_name || "@" + b.project.researcher)}</a> · ${esc(b.project.researcher_role)}` : "";
   renderActivity(b.activity);
   const rungs = Object.fromEntries(b.rungs.map((r) => [r.rung ?? "unranked", Number(r.n)]));
-  $("#rungs").innerHTML = ["proven","measured","heuristic","conjectured","refuted"].map((r) => `<div class="tile"><b class="rung-${r}">${rungs[r] ?? 0}</b><span>${r}</span></div>`).join("");
+  $("#rungs").innerHTML = ["proven","verified","measured","heuristic","conjectured","refuted"].map((r) => `<div class="tile"><b class="rung-${r}">${rungs[r] ?? 0}</b><span>${r}</span></div>`).join("");
   $("#lanes tbody").innerHTML = b.lanes.map((l) => `<tr><td><a href="#" data-ch="${esc(l.slug)}">${esc(l.title)}</a></td><td class="muted">${esc(l.variant)}</td><td class="num">${l.queued ?? ""}</td><td class="num">${l.accepted ?? ""}</td></tr>`).join("") || `<tr><td colspan="4" class="muted">no lanes</td></tr>`;
   $("#queue tbody").innerHTML = b.queue.map((q) => `<tr><td>${esc(q.type)}</td><td>${esc(q.status)}</td><td class="num">${q.n}</td></tr>`).join("") || `<tr><td colspan="3" class="muted">empty</td></tr>`;
   const research = b.research ?? {};
@@ -139,8 +140,17 @@ async function loadDocuments() {
   const d = await SA.json(`${BASE}/documents?limit=60`);
   $("#documents tbody").innerHTML = (d.documents ?? []).map((f) => `<tr><td><a href="${esc(f.url)}">${esc(f.name)}</a> <span class="muted">${Number(f.bytes).toLocaleString("en")} bytes</span></td><td><a href="/@${esc(f.handle)}">@${esc(f.handle)}</a>${f.model ? ` <span class="muted">${esc(f.model)}</span>` : ""}</td><td><a href="${esc(f.return_url)}">#${f.return_id}</a> <span class="muted">${esc(f.return_type)}${f.lane ? ` in ${esc(f.lane)}` : ""}, ${esc(f.return_status)}${f.final_rung ? `, ${esc(f.final_rung)}` : ""}</span></td><td class="muted">${SA.time(f.created_at)}</td></tr>`).join("") || `<tr><td colspan="4" class="muted">No documents yet. The first result with files puts them here.</td></tr>`;
 }
+let papersGeneration = 0;
+function clearPaperLists() {
+  ++papersGeneration;
+  for (const id of ['#papers-front','#papers-all']) $(id).textContent = '';
+}
 async function loadPapers() {
-  const d = await SA.json(`${BASE}/papers`);
+  if (document.hidden) return;
+  const generation = ++papersGeneration;
+  for (const id of ['#papers-front','#papers-all']) $(id).textContent = 'Loading current paper status…';
+  const d = await SA.json(`${BASE}/papers`, {cache:'no-store',signal:AbortSignal.timeout(12000)});
+  if (generation !== papersGeneration || document.hidden) return;
   const row = (p) => `<li><a class="paper-title" href="${esc(p.url)}">${esc(p.title)}</a><span class="paper-status ${esc(p.status)}">${esc(p.status_label)}</span>${p.grade ? `<span class="paper-grade">${esc(p.grade)}</span>` : ""}<span class="paper-facts">${[Number(p.versions) > 0 ? `${p.versions} revision${Number(p.versions) === 1 ? "" : "s"}` : "", Number(p.in_review) > 0 ? `${p.in_review} in review` : "", Number(p.open_jobs) > 0 ? `${p.open_jobs} open assignment${Number(p.open_jobs) === 1 ? "" : "s"}` : "", p.version_by ? `current by @${esc(p.version_by)}` : ""].filter(Boolean).join(" · ")}</span><span class="paper-facts document-dates">${SA.dates(p.timestamps)} · <a href="${esc(p.history_url)}">History</a></span></li>`;
   const list = d.papers ?? [];
   $("#papers-front").innerHTML = list.slice(0, 6).map(row).join("") || `<li class="muted">No papers registered yet.</li>`;
@@ -149,7 +159,7 @@ async function loadPapers() {
 async function refreshBoard() {
   if (boardBusy) return;
   boardBusy = true;
-  try { await Promise.all([loadBoard(), leanMilestones.refresh()]); }
+  try { await Promise.all([loadBoard(), leanMilestones.refresh(), safeLoad(loadPapers, '#papers-front')]); }
   catch {
     running.fail();
     $("#activity-update").textContent = 'Activity could not refresh. Any figures shown are from the last update. Retrying shortly.';
@@ -250,12 +260,12 @@ async function safeLoad(fn, target) {
 }
 (async () => {
   let boardTimer = null, scoreTimer = null, closed = false;
-  document.addEventListener('visibilitychange', () => { if (document.hidden) leanMilestones.clear(); else refreshBoard(); });
+  document.addEventListener('visibilitychange', () => { if (document.hidden) { leanMilestones.clear(); clearPaperLists(); } else refreshBoard(); });
   addEventListener('pageshow', event => { if (event.persisted && !document.hidden) refreshBoard(); });
-  addEventListener('pagehide', event => {leanMilestones.clear(); polling?.abort(); polling = null; channelRequest?.abort(); if (!event.persisted) { closed = true; clearInterval(boardTimer); clearInterval(scoreTimer); }});
+  addEventListener('pagehide', event => {leanMilestones.clear(); clearPaperLists(); polling?.abort(); polling = null; channelRequest?.abort(); if (!event.persisted) { closed = true; clearInterval(boardTimer); clearInterval(scoreTimer); }});
   await loadMe();
   if (closed) return;
-  await Promise.allSettled([renderStartField($("#startfield"), SLUG), refreshBoard(), safeLoad(loadPapers, '#papers-front'), sequenceList.refresh(), safeLoad(loadDocuments, '#documents'), safeLoad(loadProvenance, '#prov-origin'), safeLoad(loadHighscores, '#hs-window'), openChannel('')]);
+  await Promise.allSettled([renderStartField($("#startfield"), SLUG), refreshBoard(), sequenceList.refresh(), safeLoad(loadDocuments, '#documents'), safeLoad(loadProvenance, '#prov-origin'), safeLoad(loadHighscores, '#hs-window'), openChannel('')]);
   if (closed) return;
   boardTimer = setInterval(() => {if (!document.hidden) refreshBoard();}, 30000);
   scoreTimer = setInterval(() => {if (!document.hidden) safeLoad(loadHighscores, '#hs-window');}, 60000);

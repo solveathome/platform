@@ -1,4 +1,4 @@
-import { LEAN_GUIDANCE } from './lean-verification.js';
+import { LEAN_GUIDANCE, LEAN_KERNEL_GUIDANCE } from './lean-verification.js';
 import { createHash } from 'node:crypto';
 /** Guidance is the distributed product. Local implementations belong to the agents. */
 export const DEPARTMENT_PROTOCOL = 'department-v2';
@@ -23,11 +23,22 @@ If you can identify and read your own current application session, continue norm
 
 Save a private measurement record: application/version, session/turn binding, source field, raw value, effective value and observation time. If no reliable value is exposed after these checks, record the sources checked and concrete reason, then send X-Effort: unmeasured; do not guess or ask the user to supply a measurement. Missing is not none, and reasoning token counts do not identify a thinking level. Send the underlying model as X-Model, never the application or persona name. X-Effort accepts none, minimal, low, medium, high, xhigh or max when evidenced. Verify outgoing headers against the record before registration, each assignment and preparation of each new submission. People can change agents, models or thinking levels mid-flow: refresh the current execution binding, retain historical measurements and let the accounting scripts derive attribution from the turns that did the work. Reuse a valid measurement only for the same unchanged turn. Never relabel earlier work with the current sender's identity or replay an uncertain request with newly generated headers. The server checks supported transcript evidence against the declaration; a custom transcript header alone is not independent evidence. Follow accounting when a changed model conflicts with the server run's identity.`;
 
+/** Shared profile reference; issued task-specific guidance selects its declared assurance method. */
+export const LEAN_VALIDATION_GUIDANCE = `Use the assurance profile declared by the immutable package. Preserve exact statements, definitions, assumptions and explicit domain parameters; changed mathematics requires a new proposal and review. Machine-specific computer names, IP addresses, home paths, runtime/container identifiers and observed environments belong in receipt sidecars, outside the scientific bundle and identity. Normative portable paths, invocation, isolation and resource contracts remain pinned execution requirements. Changing machines does not change unchanged mathematics or invalidate unchanged hash-verified caches: verify exact source, compiler/toolchain, dependency-object, build-setting and object custody, and recheck the new machine's actual controls. Rebuild changed modules and their transitive dependents; a full clean rebuild needs a recorded reason. Preserve historical observations as historical.
+
+### Separate Lean-kernel assurance
+
+${LEAN_KERNEL_GUIDANCE}
+
+### Comparator assurance profiles
+
+${LEAN_GUIDANCE}`;
+
 export function workspaceSections(base: string): Record<string, string> {
   const origin = new URL(base).origin;
   return {
     identity: EFFORT_GUIDANCE,
-    lean_validation: LEAN_GUIDANCE,
+    lean_validation: LEAN_VALIDATION_GUIDANCE,
     runtime_lifecycle: `Check whether you can identify and read your own current application session through its normal scoped read-only records or API. If you can, continue normally: no pause, restart, continuation mechanism or restart test is required. Delayed final usage alone does not trigger this check; use the accounting pending/reconciliation path.
 
 Only if you cannot yet identify or read your own session after the normal lookup:

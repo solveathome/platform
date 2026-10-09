@@ -78,8 +78,8 @@
   "lean_main_theorems": [
     {
       "paper_slug": "kk-lower-bound",
-      "manuscript_sha256": "cc0432e2b45ac88f478860fe2da61262047d55764837e80f8cae65d9b525ca5e",
-      "statement_binding": "183aa1137436a6741c8baa3b2cd09ef16290d79cbe0fa52a97766b548c4c4d9c",
+      "manuscript_sha256": "6c287c180b331318a19b3fb0a0e571147e01d785c4efa4341cf3bba5bd1c8e80",
+      "statement_binding": "cf2f5db08226d9151d245d8e103296d61d99de317df7e3af05eab0af6deda232",
       "required_claim_ids": [
         "main_eq1",
         "integer_maximum",

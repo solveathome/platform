@@ -13,7 +13,9 @@
  */
 import { createHash } from "node:crypto";
 import { q, one } from "../db/index.js";
-import { readProjectConfig } from "./projects.js";
+import { existsSync, readFileSync } from "node:fs";
+import { join } from "node:path";
+import { readProjectConfig, projectDir } from "./projects.js";
 import { md5Rfc1321, RFC1321_IMPLEMENTATION } from "./md5.js";
 
 export type ChallengeTarget = {
@@ -115,16 +117,51 @@ export function identity(challengeId: string, bytes: Buffer[]): string {
   for (const b of bytes) { const l = Buffer.alloc(4); l.writeUInt32BE(b.length); h.update(l).update(b); }
   return h.digest("hex");
 }
-const targetIdentity = (track: ChallengeTrack, t: ChallengeTarget): string | null => {
-  if (!t.inputs) return null;
-  try { const v = verify(track.id, t.inputs); return identity(track.id, v.bytes); } catch { return null; }
-};
 
 // ---------------------------------------------------------------------------------------------------------------------------
 // Submissions.
 
 const META = { attribution: 200, method_md: 4000, ai_involvement: 500, hardware: 200 } as const;
-const ALLOWED = new Set(["challenge_id", "idempotency_key", "demo", "runtime_s", ...Object.keys(META)]);
+// A submitter may state what it computed; the server recomputes and refuses a claim that does not match (Chris, Oct 9 2026).
+const CLAIMS = ["claimed_digest", "claimed_score", "claimed_total_bytes"] as const;
+const ALLOWED = new Set(["challenge_id", "idempotency_key", "demo", "runtime_s", ...Object.keys(META), ...CLAIMS]);
+
+// ---------------------------------------------------------------------------------------------------------------------------
+// Published answers are refused (Chris, Oct 9 2026: "nobody can paste a known answer and score points"). The list is the targets'
+// inputs plus projects/<slug>/known-results.json, every entry recomputed when it was added. A collision is also refused when it is
+// a known pair with the same bytes appended to both members, which keeps any MD5 collision a collision.
+
+export type KnownEntry = { inputs: Record<string, string>; credit: string; source_url: string };
+const knownCache = new Map<string, { at: number; list: { entry: KnownEntry; bytes: Buffer[]; id: string }[] }>();
+export function knownResults(slug: string, track: ChallengeTrack): { entry: KnownEntry; bytes: Buffer[]; id: string }[] {
+  const key = `${slug}:${track.id}`, hit = knownCache.get(key);
+  if (hit && Date.now() - hit.at < 60_000) return hit.list;
+  const entries: KnownEntry[] = track.targets.filter((t) => t.inputs).map((t) => ({ inputs: t.inputs!, credit: t.credit, source_url: t.source_url }));
+  const dir = projectDir(slug), file = dir ? join(dir, "known-results.json") : null;
+  if (file && existsSync(file)) {
+    try {
+      const all = JSON.parse(readFileSync(file, "utf8"))?.[track.id];
+      if (Array.isArray(all)) for (const e of all) { const { credit, source_url, score: _s, total_bytes: _t, ...inputs } = e ?? {}; entries.push({ inputs, credit: String(credit ?? ""), source_url: String(source_url ?? "") }); }
+    } catch { /* a malformed list refuses nothing extra; the tests hold it well-formed */ }
+  }
+  const list = entries.flatMap((entry) => { try { const v = verify(track.id, entry.inputs); return [{ entry, bytes: v.bytes, id: identity(track.id, v.bytes) }]; } catch { return []; } });
+  knownCache.set(key, { at: Date.now(), list });
+  return list;
+}
+export function forgetKnown(): void { knownCache.clear(); }
+/** The published answer a verified candidate is, or derives from by a common suffix (collisions), or null. */
+export function knownMatch(slug: string, track: ChallengeTrack, v: Verified): KnownEntry | null {
+  const id = identity(track.id, v.bytes);
+  for (const k of knownResults(slug, track)) {
+    if (k.id === id) return k.entry;
+    if (v.bytes.length !== 2 || k.bytes.length !== 2) continue;
+    for (const [ka, kb] of [[k.bytes[0], k.bytes[1]], [k.bytes[1], k.bytes[0]]]) {
+      const [a, b] = v.bytes, sa = a.length - ka.length, sb = b.length - kb.length;
+      if (sa >= 0 && sa === sb && a.subarray(0, ka.length).equals(ka) && b.subarray(0, kb.length).equals(kb) && a.subarray(ka.length).equals(b.subarray(kb.length))) return k.entry;
+    }
+  }
+  return null;
+}
 export const SUBMISSIONS_PER_MINUTE = 60;
 const canonical = (v: unknown): string => JSON.stringify(v, (_k, x) => x && typeof x === "object" && !Array.isArray(x) ? Object.fromEntries(Object.entries(x).sort(([a], [b]) => a < b ? -1 : 1)) : x);
 
@@ -171,18 +208,27 @@ export async function submit(ctx: SubmitContext, body: any): Promise<{ status: n
   const recent = await one<{ c: string }>(`SELECT count(*) AS c FROM challenge_submissions WHERE user_id = $1 AND received_at > now() - interval '1 minute'`, [ctx.userId]);
   if (Number(recent?.c ?? 0) >= SUBMISSIONS_PER_MINUTE) throw new ChallengeError(`rate limit: ${SUBMISSIONS_PER_MINUTE} submissions a minute per person. This request was not received and reserves no priority; send your best candidate again in a minute`, 429);
 
+  for (const f of CLAIMS) if (body[f] !== undefined && body[f] !== null) {
+    if (f === "claimed_digest" ? typeof body[f] !== "string" || !/^[0-9a-f]{32}$/.test(body[f]) : !Number.isInteger(body[f])) throw new ChallengeError(f === "claimed_digest" ? "claimed_digest must be 32 lowercase hex characters" : `${f} must be an integer`);
+    if (f === "claimed_score" && track.better === "lower") throw new ChallengeError(`${track.id} has no score; claim claimed_total_bytes`);
+    if (f === "claimed_total_bytes" && track.better === "higher") throw new ChallengeError(`${track.id} is scored, not measured in bytes; claim claimed_score`);
+  }
   const v = verify(track.id, body);
+  // The claim is checked against the recomputation; a mismatch records nothing.
+  const wrong = [["claimed_digest", v.digest], ["claimed_score", v.score], ["claimed_total_bytes", v.total_bytes]].filter(([f, actual]) => body[f as string] !== undefined && body[f as string] !== null && body[f as string] !== actual);
+  if (wrong.length) throw new ChallengeError(`the claimed result does not match the server's recomputation (${wrong.map(([f, actual]) => `${f} ${JSON.stringify(body[f as string])}, recomputed ${JSON.stringify(actual)}`).join("; ")}). Nothing was recorded`, 422, { recomputed: { digest: v.digest, score: v.score, total_bytes: v.total_bytes } });
+  const published = knownMatch(ctx.slug, track, v);
+  if (published) throw new ChallengeError(`this is a published answer${v.bytes.length === 2 && identity(track.id, v.bytes) !== identity(track.id, verify(track.id, published.inputs).bytes) ? " with the same bytes appended to both members" : ""} (${published.credit}${published.source_url ? `, ${published.source_url}` : ""}), so it is refused: published answers earn no record and no points. The published best is already the target line on the chart. Nothing was recorded`, 422, { published: { credit: published.credit, source_url: published.source_url } });
   const id = identity(track.id, v.bytes);
   const metric = metricOf(track, v);
   const before = await trackState(ctx.problemId, track, ns);
   const mine = await personalBest(ctx.problemId, track, ns, ctx.userId);
   const dup = await one(`SELECT id FROM challenge_submissions WHERE problem_id = $1 AND challenge_id = $2 AND namespace = $3 AND identity_sha256 = $4 ORDER BY id LIMIT 1`, [ctx.problemId, track.id, ns, id]);
-  const known = track.targets.find((t) => targetIdentity(track, t) === id) ?? null;
   const row = await one(`INSERT INTO challenge_submissions (problem_id, challenge_id, namespace, user_id, session_id, job_id, model, idempotency_key, request_sha256, identity_sha256,
       inputs, digest, score, byte_length, a_bytes, b_bytes, total_bytes, duplicate_of, known_result, attribution, method_md, ai_involvement, runtime_s, hardware, verifier_version, checks, received_at, verified_at)
     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,clock_timestamp(),clock_timestamp()) RETURNING id, received_at, verified_at`,
     [ctx.problemId, track.id, ns, ctx.userId, ctx.sessionId, ctx.jobId, ctx.model, key, requestSha, id, JSON.stringify(v.inputs), v.digest, v.score, v.byte_length, v.a_bytes, v.b_bytes, v.total_bytes,
-      dup?.id ?? null, !!known, meta.attribution, meta.method_md, meta.ai_involvement, runtime, meta.hardware, VERIFIER_VERSION, JSON.stringify(v.checks)]);
+      dup?.id ?? null, false, meta.attribution, meta.method_md, meta.ai_involvement, runtime, meta.hardware, VERIFIER_VERSION, JSON.stringify(v.checks)]);
   const sid = Number(row.id);
   // What this receipt earned. A duplicate keeps its submitter's credit but never the priority, which stays with the first receipt.
   const achievements: any[] = [];
@@ -202,7 +248,7 @@ export async function submit(ctx: SubmitContext, body: any): Promise<{ status: n
     ok: true, submission_id: sid, receipt_sequence: sid, received_at: row.received_at, verified_at: row.verified_at, status: "verified", namespace: ns,
     challenge_id: track.id, digest: v.digest, ...(track.better === "higher" ? { score: v.score } : { a_bytes: v.a_bytes, b_bytes: v.b_bytes, total_bytes: v.total_bytes }),
     ...(v.byte_length !== null ? { byte_length: v.byte_length } : {}), inputs: v.inputs,
-    duplicate: !!dup, duplicate_of: dup ? Number(dup.id) : null, known_result: !!known, ...(known ? { discovery_credit: known.credit, source: known.source_url } : {}),
+    duplicate: !!dup, duplicate_of: dup ? Number(dup.id) : null,
     site_best_before: before.best, site_record: !dup && beats(track, metric, before.best), personal_best: personal, personal_best_before: mine,
     achievements, published_target: target ? { value: target.value, credit: target.credit } : null,
     exceptional, checks: v.checks, verifier_version: VERIFIER_VERSION, record_url: `${P}/submissions/${sid}`,
@@ -272,9 +318,11 @@ export function publicSubmission(s: any): any {
 }
 
 // ---------------------------------------------------------------------------------------------------------------------------
-// Assignments. A challenge project's /start hands out a track: a job made for the session on the spot, closed by /challenge/finish.
+// Assignments. A challenge project goes through the ordinary scheduler, review and credit like any research project (Chris, Oct 9 2026:
+// "it's a research project so it comes with all of it"). Its open work, when nothing else is queued for a session, is a run on one
+// track: a measure job made here, in place of the explore job a project with an open-questions register would get.
 
-/** The track for this session: the one its person chose (lane), else the one with the fewest assignments in the last day. */
+/** The track for this session: the lane its person chose, else the one with the fewest assignments in the last day. */
 export async function challengeJob(problemId: number, slug: string, lane: string | null): Promise<any> {
   const cfg = challengeConfig(slug)!;
   let track = lane ? trackByLane(cfg, lane) : null;
@@ -284,11 +332,11 @@ export async function challengeJob(problemId: number, slug: string, lane: string
     track = [...cfg.tracks].sort((a, b) => n(a) - n(b))[0];
   }
   const laneRow = await one(`SELECT id, slug FROM lanes WHERE problem_id = $1 AND slug = $2`, [problemId, track.lane]);
-  // A track job handed back (release, silence) is queued again; the next agent on that track takes it rather than a new one.
+  // A track run handed back (release, silence) is queued again; the next agent on that track takes it rather than a new one.
   const queued = await one(`SELECT j.*, l.slug AS lane_slug FROM jobs j LEFT JOIN lanes l ON l.id = j.lane_id WHERE j.problem_id = $1 AND j.status = 'queued' AND j.origin_key = $2 ORDER BY j.id LIMIT 1`, [problemId, `challenge:${track.id}`]);
   if (queued) return queued;
-  const row = await one(`INSERT INTO jobs (problem_id, lane_id, type, title, brief_md, budget_hours, min_tier, purpose, origin_key)
-    VALUES ($1,$2,'explore',$3,$4,1,99,'work',$5) RETURNING *`, [problemId, laneRow?.id ?? null, `${track.name}: improve the verified record`, track.brief_md, `challenge:${track.id}`]);
+  const row = await one(`INSERT INTO jobs (problem_id, lane_id, type, title, brief_md, compute_hint, budget_hours, min_tier, purpose, origin_key)
+    VALUES ($1,$2,'measure',$3,$4,$5,1,99,'work',$6) RETURNING *`, [problemId, laneRow?.id ?? null, `${track.name}: a bounded search run on the verified record`, track.brief_md, JSON.stringify({ cpu_hours: 1 }), `challenge:${track.id}`]);
   return { ...row, lane_slug: laneRow?.slug ?? null };
 }
 export const challengeTrackOfJob = (slug: string, job: { origin_key?: string | null }): ChallengeTrack | null => {
@@ -301,78 +349,48 @@ export function fmtValue(track: ChallengeTrack, v: number | null): string {
   return track.better === "lower" ? `${v} bytes` : `${v} of ${track.max ?? 32}`;
 }
 
-/** The brief for a track assignment: the frozen rules, where the record stands, the submission API and how to finish. */
-export async function renderChallengeBrief(job: any, project: { id: number; slug: string; name: string }, base: string, session: { id: string; jobs: number; max: number | null; length?: string }): Promise<string> {
+/** The task of a track run, composed when it is served: the frozen rules, where the record stands now, how to submit and return. */
+export async function challengeTaskBrief(job: any, project: { id: number; slug: string; name: string }, base: string): Promise<string> {
   const cfg = challengeConfig(project.slug)!;
   const track = challengeTrackOfJob(project.slug, job) ?? cfg.tracks[0];
   const P = `${base}/projects/${project.slug}`;
   const view = await trackView(project.id, track);
   const target = currentTarget(track);
   const fieldsJson = track.fields.map((f) => `"${f}": "…"`).join(", ");
-  return `# solveathome job #${job.id}: ${job.title}
+  const mine = view.personal.slice(0, 5).map((p) => `@${p.handle} ${fmtValue(track, p.best)}`).join(", ");
+  return `Track \`${track.id}\` (${track.name}). ${track.question}
 
-Track \`${track.id}\` of ${project.name}. Attempt: ${job.attempt_id}. Send \`X-Session: ${session.id}\` on every request. Session: assignment ${session.jobs}${session.max === null ? `; ${session.length ?? "continuing until your person stops you"}` : ` of ${session.max} your person allowed`}. There is no time budget or deadline; the only clock is silence: a session holding an assignment that makes no request for a while is ended and the assignment goes back.
-
-## The track
-
-${track.spec_md}
-
-**Where it stands.** Verified platform best: ${view.best ? `${fmtValue(track, view.best.value)} (submission #${view.best.submission_id} by @${view.best.handle}, received ${new Date(view.best.received_at).toISOString().slice(0, 16).replace("T", " ")} UTC)` : fmtValue(track, null)}. Best published result verified by us: ${target ? `${fmtValue(track, target.value)}, ${target.credit} (${target.source_url}, checked ${target.checked})` : "none recorded"}. Records page: ${P}/tracks/${track.lane}.
-
-## Your assignment
-
-${track.brief_md}
+**The rules.** ${track.spec_md}
 
 ${cfg.brief_md ?? ""}
 
-## Submitting
+**Where it stands.** Verified platform best: ${view.best ? `${fmtValue(track, view.best.value)} (submission #${view.best.submission_id} by @${view.best.handle}, received ${new Date(view.best.received_at).toISOString().slice(0, 16).replace("T", " ")} UTC)` : fmtValue(track, null)}. Best published result verified by us: ${target ? `${fmtValue(track, target.value)}, ${target.credit} (${target.source_url}, checked ${target.checked})` : "none recorded"}.${mine ? ` Personal bests so far: ${mine}.` : ""} Records and every receipt: ${P}/tracks/${track.lane}. Read \`${P}/docs/research/OUTCOMES.md\` for the methods tried on this track and what they reached before you choose yours.
 
-Every candidate you want on the record goes to the server, which recomputes the digest with two independent MD5 implementations and records the result in arrival order. Nothing you send about the digest or the score is trusted, and a field the track does not take is refused.
+**The run.** ${track.brief_md}
+
+**Submitting candidates.** Each candidate you want on the record goes to the server, which recomputes the digest with two independent MD5 implementations and records it in arrival order. Nothing you send about the digest or score is trusted; a field the track does not take is refused.
 
 \`\`\`
 POST ${P}/submissions
-Authorization: Bearer <your token>
-X-Session: ${session.id}
-X-Model: <your exact model id>
-Content-Type: application/json
-
+Authorization: Bearer <your token>, X-Session: <your session>, X-Model: <your model>, Content-Type: application/json
 { "challenge_id": "${track.id}", "idempotency_key": "<new random id per candidate>", ${fieldsJson},
-  "method_md": "<how you found it: method, parameters, what was measured>", "runtime_s": <measured seconds>, "hardware": "<CPU/GPU, cores>",
-  "ai_involvement": "<what the model did and what ran as ordinary code>", "attribution": "<who discovered it, if not you>" }
+  "method_md": "<method and parameters>", "runtime_s": <measured seconds>, "hardware": "<CPU/GPU, cores>",
+  "ai_involvement": "<what the model did, what ran as ordinary code>", "attribution": "<who discovered it, if not you>" }
 \`\`\`
 
-- The reply carries the digest, the score or byte lengths, the receipt number and time, whether it is a site record, a personal best or a duplicate, and the milestones it reached. A retry with the same \`idempotency_key\` and body returns the original receipt; the same key with a different body is refused.
-- Free check without a receipt: \`POST ${P}/challenge/preview\` with the same body (no token needed). It reserves no priority.
-- Submit only what you computed or reproduced. Inputs and the attribution you choose are public. A published result you reproduce is recorded as a reproduction and its discoverer keeps the discovery credit: say so in \`attribution\`.
-- At most ${SUBMISSIONS_PER_MINUTE} submissions a minute. Send your best few, not every intermediate.
-- Test or demo submissions carry \`"demo": true\`: they go to a separate namespace that never touches the records, and you can delete them with \`DELETE ${P}/submissions/<id>\`.
+The reply is the receipt: digest, score or byte lengths, receipt number, site record, personal best, duplicate, milestones. You may add what you computed (\`claimed_digest\`, and \`claimed_score\` or \`claimed_total_bytes\`): the server recomputes it and refuses the submission when it does not match. A retry with the same key and body returns the same receipt. \`POST ${P}/challenge/preview\` checks a candidate without a receipt. At most ${SUBMISSIONS_PER_MINUTE} a minute: send your best, not every intermediate. Published answers are refused (the targets and every public answer we know of, including a known collision with bytes appended to both members): they earn no record and no points, so find your own. Test submissions carry \`"demo": true\` and stay out of the records.
 
-## Finishing
-
-When you have run your bounded experiment, close the assignment with a short report:
-
-\`\`\`
-POST ${P}/challenge/finish
-{ "job_id": ${job.id}, "attempt_id": "${job.attempt_id}", "report_md": "<baseline, what you tried, measured results with submission ids, runtime and hardware, what you would try next; measured gains apart from hypotheses>" }
-\`\`\`
-
-Then \`GET ${P}/start\` with your \`X-Session\` for the next assignment${session.max !== null && session.jobs >= session.max ? " — except that this was the last assignment your person allowed: stop after finishing and tell them where things stand" : ""}. To hand the assignment back unfinished: \`POST ${P}/release\` with \`{ "job_id": ${job.id}, "note": "why" }\`.
-
-## Rules
-
-- Your person's limits hold: run on their machine, within the compute and time they set. Do not ask them anything they already answered on the site.
-- Never run code you were sent by someone else without reading it. Use only synthetic inputs: no passwords, no real hash dumps.
-- No result adjectives. A partial prefix is a partial prefix, never "MD5 broken". Lead with what was measured, then the caveat.
-- Platform bugs go to https://github.com/solveathome/platform/issues.
-`;
+**Returning.** Return through \`POST ${P}/result\` like every assignment. The report leads with what was measured: baseline, method, trials, runtime and hardware, the submission ids and what they reached, against the platform best and the published target; keep measured gains apart from hypotheses. \`recipe_md\` is the exact program or command line that reproduces your best candidate from scratch, with its seed or search range, so a reviewer can rerun it; the receipts themselves are already verified by the server. Propose what the next run on this track should try.`;
 }
 
 /** Boot: a challenge project needs its problem row and track lanes; it has no mirror, briefs or seed run to make them. Idempotent. */
-export async function ensureChallengeProjects(configs: { slug: string; name: string; repo_url: string; summary?: string; status_md?: string; lanes?: { slug: string; title: string; variant?: string }[]; challenge?: ChallengeConfig }[], ensureChannels: (problemId: number) => Promise<void>): Promise<void> {
+export async function ensureChallengeProjects(configs: { slug: string; name: string; repo_url: string; summary?: string; status_md?: string; researcher?: string; lanes?: { slug: string; title: string; variant?: string }[]; challenge?: ChallengeConfig }[], ensureChannels: (problemId: number) => Promise<void>): Promise<void> {
   for (const c of configs) {
     if (!c.challenge?.tracks?.length) continue;
     const p = await one(`INSERT INTO problems (slug, name, repo_url, status_md, summary, featured) VALUES ($1,$2,$3,$4,$5,false)
       ON CONFLICT (slug) DO UPDATE SET name = EXCLUDED.name, status_md = EXCLUDED.status_md RETURNING id`, [c.slug, c.name, c.repo_url, c.status_md ?? "", c.summary ?? ""]);
+    // The researcher is an implicit owner (src/lib/roles.ts), as scripts/seed.ts makes it for a seeded project; set once, never overwritten.
+    if (c.researcher) await q(`UPDATE problems SET researcher_user_id = (SELECT id FROM users WHERE lower(handle) = lower($2)) WHERE id = $1 AND researcher_user_id IS NULL`, [p.id, c.researcher]);
     for (const l of c.lanes ?? []) await q(`INSERT INTO lanes (problem_id, slug, title, variant) VALUES ($1,$2,$3,$4) ON CONFLICT (problem_id, slug) DO NOTHING`, [p.id, l.slug, l.title, l.variant ?? ""]);
     await ensureChannels(Number(p.id));
   }

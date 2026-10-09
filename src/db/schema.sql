@@ -1419,8 +1419,8 @@ CREATE OR REPLACE FUNCTION lean_statement_review_current(subject_id bigint) RETU
       AND lean_independent(proof.problem_id, rv.user_id, rv.model, rv.effort, proof.user_id, proof.model)
       AND lean_independent(proof.problem_id, rv.user_id, rv.model, rv.effort, source.user_id, source.model)
       AND rv.lean_statement_review->>'binding_sha256' ~ '^[a-f0-9]{64}$'
-      AND CASE WHEN proof.verification_plan->'lean'->>'policy'='lean-comparator-v2' THEN
-        source.verification_plan->'lean'->>'policy'='lean-comparator-v2'
+      AND CASE WHEN proof.verification_plan->'lean'->>'policy' IN ('lean-comparator-v2','lean-kernel-v1') THEN
+        source.verification_plan->'lean'->>'policy' IN ('lean-comparator-v2','lean-kernel-v1')
         AND jsonb_typeof(proof.verification_plan->'lean'->'scientific_identity')='object'
         AND proof.verification_plan->'lean'->'scientific_identity'->>'schema'='solveathome-lean-scientific-v2'
         AND rv.lean_statement_review->>'binding_sha256'=lean_identity_binding('solveathome-lean-meaning-v2',
@@ -1518,14 +1518,45 @@ CREATE OR REPLACE FUNCTION lean_v2_proof_files_current(profile jsonb, evidence j
         WHERE f.sha256=transport.artifact->>'sha256' AND f.bytes::text=transport.artifact->>'bytes'
           AND f.deleted_at IS NULL AND ref.ref_type='return' AND ref.ref_id=result_id)),false);
 $$;
+-- A separate kernel profile never accepts comparator/export evidence as object replay evidence.
+-- Exact scientific/execution pins accompany the authenticated current assignment, not historical backfill.
+CREATE OR REPLACE FUNCTION lean_kernel_evidence_current(profile jsonb, evidence jsonb) RETURNS boolean LANGUAGE sql IMMUTABLE AS $$
+  SELECT coalesce(profile->>'policy'='lean-kernel-v1' AND evidence->>'policy'='lean-kernel-v1'
+    AND jsonb_typeof(evidence)='object' AND jsonb_typeof(evidence->'claims')='array'
+    AND evidence->>'audit_sha256' ~ '^[a-f0-9]{64}$' AND evidence->>'axioms_sha256' ~ '^[a-f0-9]{64}$'
+    AND evidence->>'custody_sha256' ~ '^[a-f0-9]{64}$'
+    AND NOT EXISTS(SELECT 1 FROM unnest(ARRAY['sandbox','offline','clean_environment','pinned_inputs','outside_sandbox','kernel_checked','source_objects_verified']) flag
+      WHERE jsonb_typeof(evidence->flag) IS DISTINCT FROM 'boolean')
+    AND NOT EXISTS(SELECT 1 FROM jsonb_object_keys(CASE WHEN jsonb_typeof(evidence)='object' THEN evidence ELSE '{}'::jsonb END) key WHERE key NOT IN
+      ('policy','statement_binding','scientific_identity','execution_identity','toolchain','validator_sha256','audit_sha256','axioms_sha256','custody_sha256',
+       'sandbox','offline','clean_environment','pinned_inputs','outside_sandbox','kernel_checked','source_objects_verified','claims'))
+    AND evidence->>'statement_binding'=lean_identity_binding('solveathome-lean-meaning-v2',(profile->'scientific_identity')-'proof_artifacts')
+    AND evidence->>'scientific_identity'=lean_identity_binding('solveathome-lean-scientific-v2',profile->'scientific_identity')
+    AND evidence->>'execution_identity'=lean_identity_binding('solveathome-lean-execution-contract-v2',profile->'execution_identity')
+    AND evidence->>'toolchain'=profile->>'toolchain' AND evidence->>'validator_sha256'=profile->>'validator_sha256'
+    AND (SELECT count(*)=count(DISTINCT claim->>'id') FROM lean_identity_items(evidence->'claims') claim)
+    AND NOT EXISTS(SELECT 1 FROM lean_identity_items(evidence->'claims') claim WHERE
+      jsonb_typeof(claim) IS DISTINCT FROM 'object' OR claim->>'result' IS NULL OR claim->>'result' NOT IN ('checked','failed','missing')
+      OR NOT EXISTS(SELECT 1 FROM lean_identity_items(profile->'claims') expected
+        WHERE expected->>'id'=claim->>'id' AND expected->>'declaration'=claim->>'declaration')
+      OR jsonb_typeof(claim->'statement_matches') IS DISTINCT FROM 'boolean' OR jsonb_typeof(claim->'axioms') IS DISTINCT FROM 'array'
+      OR NOT (claim ? 'object_sha256')
+      OR EXISTS(SELECT 1 FROM jsonb_object_keys(CASE WHEN jsonb_typeof(claim)='object' THEN claim ELSE '{}'::jsonb END) key WHERE key NOT IN ('id','declaration','result','statement_matches','axioms','object_sha256'))
+      OR (claim->>'result'='checked' AND claim->>'object_sha256' IS NULL)
+      OR (claim->>'object_sha256' IS NOT NULL AND NOT EXISTS(SELECT 1 FROM lean_identity_items(profile->'kernel_objects') object
+        WHERE object->'claim_ids' ? (claim->>'id') AND object->'artifact'->>'sha256'=claim->>'object_sha256'))),false);
+$$;
 CREATE OR REPLACE FUNCTION lean_execution_current(p_run_id bigint, p_subject_id bigint) RETURNS boolean LANGUAGE sql STABLE AS $$
   SELECT EXISTS(SELECT 1 FROM verification_runs v JOIN returns r ON r.id=v.result_return_id
     JOIN returns subject ON subject.id=p_subject_id AND subject.problem_id=r.problem_id
       AND subject.verification_fingerprint=v.fingerprint
     WHERE v.id=p_run_id AND lean_tier1(subject.model,subject.effort)
       AND lean_execution_eligible(subject.problem_id,r.user_id,r.model,r.effort,subject.user_id)
-      AND (subject.verification_plan->'lean'->>'policy'<>'lean-comparator-v2'
-        OR (lean_statement_review_current(subject.id) AND lean_execution_review_current(subject.id)))
+      AND CASE subject.verification_plan->'lean'->>'policy'
+        WHEN 'lean-comparator-v2' THEN lean_statement_review_current(subject.id) AND lean_execution_review_current(subject.id)
+        WHEN 'lean-kernel-v1' THEN lean_statement_review_current(subject.id)
+          AND subject.verification_fingerprint=lean_identity_binding('solveathome-verification-v1',subject.verification_plan-'cost')
+        ELSE true END
       AND v.execution_attestation->>'version'='authenticated-contributor-v1'
       AND v.details->>'execution_policy'='authenticated-contributor-v1'
       AND length(trim(v.details->>'attestation_md'))>=40
@@ -1533,10 +1564,13 @@ CREATE OR REPLACE FUNCTION lean_execution_current(p_run_id bigint, p_subject_id 
       AND v.execution_attestation->'receipt'=lean_execution_snapshot(v.id)
       AND (subject.verification_plan->'lean'->>'policy'<>'lean-comparator-v2' OR v.details->'lean' IS NULL
         OR lean_v2_proof_files_current((subject.verification_plan->'lean')||jsonb_build_object('manifest',subject.verification_plan->'manifest'),v.details->'lean',r.id))
+      AND (subject.verification_plan->'lean'->>'policy'<>'lean-kernel-v1' OR
+        (v.outcome='unable' AND v.details->'lean' IS NULL) OR lean_kernel_evidence_current(subject.verification_plan->'lean',v.details->'lean'))
       AND NOT EXISTS(SELECT 1 FROM (
-        SELECT unnest(ARRAY[v.details->>'stdout_sha256',v.details->'lean'->>'audit_sha256',v.details->'lean'->>'axioms_sha256']) AS sha
+        SELECT unnest(ARRAY[v.details->>'stdout_sha256',v.details->'lean'->>'audit_sha256',v.details->'lean'->>'axioms_sha256',
+          CASE WHEN subject.verification_plan->'lean'->>'policy'='lean-kernel-v1' THEN v.details->'lean'->>'custody_sha256' END]) AS sha
         UNION SELECT claim->>'proof_sha256' FROM jsonb_array_elements(coalesce(v.details->'lean'->'claims','[]'::jsonb)) claim
-          WHERE subject.verification_plan->'lean'->>'policy'<>'lean-comparator-v2'
+          WHERE subject.verification_plan->'lean'->>'policy' NOT IN ('lean-comparator-v2','lean-kernel-v1')
       ) artifact WHERE artifact.sha IS NOT NULL AND NOT EXISTS(
         SELECT 1 FROM files f JOIN file_refs ref ON ref.file_sha=f.sha256
         WHERE f.sha256=artifact.sha AND f.deleted_at IS NULL AND ref.ref_type='return' AND ref.ref_id=r.id)));

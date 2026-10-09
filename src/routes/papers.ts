@@ -1,4 +1,5 @@
-import { leanEvidencePanel, mainTheoremDesignation, mainTheoremEvidence, mainTheoremCallout } from '../lib/lean-display.js';
+import {paperResearchStatus,comparePaperResearchStatus} from '../lib/paper-list-status.js';
+import { MAIN_THEOREM_LEAN_LABEL, leanEvidencePanel, mainTheoremDesignation, mainTheoremEvidence, mainTheoremCallout } from '../lib/lean-display.js';
 import { readProjectConfig } from '../lib/projects.js';
 import { paperLeanVerification } from '../lib/verification.js';
 import {documentRecords, documentDates, recordHtml} from "../lib/document-record.js";
@@ -49,22 +50,25 @@ export async function listPapers(problemId: number, slug: string) {
     ORDER BY p.updated_at DESC`, [problemId]);
   // Status is what the review says about the served text (src/lib/paper-state.ts), never the stored registry value alone.
   const reviews = new Map<string, PaperReview>();
-  for (const p of rows) reviews.set(p.slug, await paperReview(problemId, p));
-  const rank: Record<string, number> = { reviewed: 0, under_review: 1, draft: 2 };
+  for (const p of rows) reviews.set(p.slug, await paperReview(problemId, p, paperSource(p,slug).sha));
+  const designations=readProjectConfig(slug)?.lean_main_theorems;
   const inline = (t: string) => { const m = protectMath(String(t ?? "")); return m.restore(marked.parseInline(m.text.replace(/</g, "&lt;").replace(/>/g, "&gt;"), { gfm: true, renderer: documentRenderer() }) as string); };
   const records = await documentRecords(problemId);
   const root = join(REPOS, slug), publication = readPublication(root);
-  return rows.map((p) => {
+  return (await Promise.all(rows.map(async (p) => {
     const review = reviews.get(p.slug)!;
     const status = coarseStatus(review, p, Number(p.in_review));
+    const designation=mainTheoremDesignation(designations,p.slug,paperSource(p,slug).sha);
+    const main=designation ? mainTheoremEvidence(await paperLeanVerification(problemId,p.slug,designation.manuscript_sha256),designation) : null;
+    const research_status=paperResearchStatus(review,status,!!main);
     const path = p.path ?? `paper/${p.slug}.md`;
     const admitted = p.path && publishedDocument(root, p.path, publication);
     const timestamps = documentDates(admitted ? publication : null, path, records.get(path), p.current_file_sha);
     if (!p.path) { timestamps.created_at = isoTime(p.created_at); timestamps.created_basis = "registered proposal"; }
     if (!timestamps.modified_at && p.version_at) { timestamps.modified_at = isoTime(p.version_at); timestamps.modified_basis = "submitted revision"; }
     if (!p.path && !timestamps.first_recorded_at) timestamps.first_recorded_at = isoTime(p.created_at);
-    return ({ ...p, timestamps, history_url: `/projects/${slug}/history/${path.split("/").map(encodeURIComponent).join("/")}`, summary_html: inline(p.summary), registry_status: p.status, status, review, status_label: SHORT[review.state] ?? STATUS[status] ?? status, url: `/projects/${slug}/papers/${p.slug}`, read: p.current_file_sha ? `/files/${p.current_file_sha}` : (p.path ? `/projects/${slug}/docs/${p.path}` : null) }); })
-    .sort((a, b) => (rank[a.status] ?? 3) - (rank[b.status] ?? 3));
+    return ({ ...p, timestamps, history_url: `/projects/${slug}/history/${path.split("/").map(encodeURIComponent).join("/")}`, summary_html: inline(p.summary), registry_status: p.status, status, review, research_status, status_label: main ? MAIN_THEOREM_LEAN_LABEL : SHORT[review.state] ?? STATUS[status] ?? status, url: `/projects/${slug}/papers/${p.slug}`, read: p.current_file_sha ? `/files/${p.current_file_sha}` : (p.path ? `/projects/${slug}/docs/${p.path}` : null) }); })))
+    .sort(comparePaperResearchStatus);
 }
 const SHORT: Record<string, string> = { reviewed: "reviewed", corrections_required: "reviewed, corrections required", corrections_recorded: "reviewed, corrections recorded", under_reassessment: "under reassessment", earlier_version_reviewed: "earlier version reviewed" };
 
@@ -98,7 +102,7 @@ papers.get("/papers", async (req: any, res) => {
   const p = await one(`SELECT id, slug FROM problems WHERE slug = $1`, [req.params.slug]);
   if (!p) { res.status(404).json({ error: "unknown project" }); return; }
   if (wantsHtml(req)) { res.redirect(`/projects/${p.slug}#papers`); return; }
-  res.json({ papers: await listPapers(Number(p.id), p.slug), how: `Papers are written and revised through jobs of type 'paper' (GET /projects/${p.slug}/start). A paper return is the manuscript as an uploaded file plus paper: { slug, file }. Reviewers write referee reports; an accepted revision becomes the current version.` });
+  res.set('Cache-Control','no-store').json({ papers: await listPapers(Number(p.id), p.slug), how: `Papers are written and revised through jobs of type 'paper' (GET /projects/${p.slug}/start). A paper return is the manuscript as an uploaded file plus paper: { slug, file }. Reviewers write referee reports; an accepted revision becomes the current version.` });
 });
 
 /** GET /projects/:slug/findings?path=<document> : open corrections required in served documents, with the job carrying each (Sep 24 2026). */

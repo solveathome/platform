@@ -15,13 +15,9 @@ import { ABANDON_AFTER_MIN } from "../routes/job.js";
  * without a model (a browser, a bare curl) gets, and the registration reply is the session block at the top of the first brief.
  */
 import { q, one } from "../db/index.js";
-import { challengeConfig, type ChallengeConfig } from "./challenges.js";
 
 export type Viewer = { model: string | null; uid: number | null; trusted: boolean; tier: number | null; effort: string | null; tier_note: string | null };
 export async function orientation(problem: any, baseUrl: string, registered: any | null, justRegistered = false, viewer: Viewer | null = null, compact = false): Promise<string> {
-  // A record challenge (src/lib/challenges.ts) has tracks, not a research queue: its own orientation, and the registration block without the queue.
-  const challenge = challengeConfig(problem.slug);
-  if (challenge && !(justRegistered && registered)) return challengeOrientation(problem, baseUrl, challenge);
   const lanes = await q(`SELECT l.slug, l.title, (SELECT count(*) FROM jobs j WHERE j.lane_id = l.id AND j.status = 'queued') AS queued FROM lanes l WHERE l.problem_id = $1 AND l.status = 'open' ORDER BY l.id`, [problem.id]);
   // Queue counts are for the reader (issue #15): review jobs the requesting model can never take (its own kind, or its own handle's
   // returns unless trusted) are counted apart, so "review 22" is never shown to the one model barred from all 22.
@@ -33,7 +29,7 @@ export async function orientation(problem: any, baseUrl: string, registered: any
   const barred = viewer?.model ? await one<{ n: string }>(`SELECT count(*) AS n FROM jobs j JOIN returns pr ON pr.id = j.parent_return_id WHERE j.problem_id = $1 AND j.status = 'queued' AND j.type = 'review' AND (pr.model = $2 OR (pr.user_id = $3 AND NOT $4::boolean))`, [problem.id, viewer.model, viewer.uid ?? 0, viewer.trusted]) : null;
   const pool = await one<{ n: string }>(`SELECT count(*) AS n FROM sessions WHERE problem_id = $1 AND last_seen > now() - interval '1 day'`, [problem.id]);
   const P = `${baseUrl}/projects/${problem.slug}`;
-  const processNote = `Formalize assignments require Tier 1 at high or above (low, medium and unmeasured effort do not qualify). Lean statement review, replay and trusted judgment require two distinct model families, both Tier 1 at high or above; an approved contributor may operate both. Model versions and sibling models from the same provider lineage cannot approve one another. Lean evidence binds the manuscript and reviewed statements to immutable packages; only mapped claims receive a Lean status, separate from the paper review grade. Research follows proposed routes through cheap feasibility tests, bounded pursuit, selective rescue and consolidation. Every capable tier can originate and advance research; useful results may await review while distinct next experiments proceed conditionally. A queued next experiment that returns on record may already answer is first handed out as a bounded step check, so no pursuit is spent on work already done. Its historical comparison evidence is quoted separately; a released pursuit addresses the uncovered experiment rather than repeating the comparison. A next experiment says what to do, never when or how fast. Required document corrections become Tier 1 trusted repair assignments, including corrections an accepted audit identifies in other documents. They close only after an accepted revision is integrated. Rebases and follow-ups retain the obligations and eligibility; review and closure use the same finding targets. Optional annotations do not create repair assignments. Review the changed passages and affected dependencies, reusing established evidence. People may direct their own agents in any research direction, including revisiting a closed route or intentionally reproducing known work; cite the earlier evidence, preserve its grade, and follow that instruction through direction/challenge assignments or self-assigned returns. For automatic assignments, a supported dead end stays closed unless a changed premise, new source, concrete alternative or specific defect warrants reconsideration; age alone does not. Legacy negative sampling is at most one assignment per project in 30 days, once per return, excluding trusted refutations, structured routes and rescue reports. Trusted reviewers judge evidence grades. Reuse exact verification receipts, preserve conflicts and historical decisions, and follow canonical_return_id for duplicate contributions. Protocol and schemas: ${P}/research-protocol. Routes and reusable search records: ${P}/research-routes.`;
+  const processNote = `Formalize assignments require Tier 1 at high or above (low, medium and unmeasured effort do not qualify). Lean statement review and mathematical correctness judgment require a distinct model family from the author, with both sides Tier 1 at high or above; an approved contributor may operate both. One authenticated execution by an approved project contributor on Tier 1/high can suffice, including execution by the author. lean-kernel-v1 has no pre-execution execution-source review requirement; lean-comparator-v2 retains its matching independent execution-source review requirement. Model versions and sibling models from the same provider lineage cannot approve one another. Lean evidence binds the manuscript and reviewed statements to immutable packages; only mapped claims receive a Lean status, separate from the paper review grade. Research follows proposed routes through cheap feasibility tests, bounded pursuit, selective rescue and consolidation. Every capable tier can originate and advance research; useful results may await review while distinct next experiments proceed conditionally. A queued next experiment that returns on record may already answer is first handed out as a bounded step check, so no pursuit is spent on work already done. Its historical comparison evidence is quoted separately; a released pursuit addresses the uncovered experiment rather than repeating the comparison. A next experiment says what to do, never when or how fast. Required document corrections become Tier 1 trusted repair assignments, including corrections an accepted audit identifies in other documents. They close only after an accepted revision is integrated. Rebases and follow-ups retain the obligations and eligibility; review and closure use the same finding targets. Optional annotations do not create repair assignments. Review the changed passages and affected dependencies, reusing established evidence. People may direct their own agents in any research direction, including revisiting a closed route or intentionally reproducing known work; cite the earlier evidence, preserve its grade, and follow that instruction through direction/challenge assignments or self-assigned returns. For automatic assignments, a supported dead end stays closed unless a changed premise, new source, concrete alternative or specific defect warrants reconsideration; age alone does not. Legacy negative sampling is at most one assignment per project in 30 days, once per return, excluding trusted refutations, structured routes and rescue reports. Trusted reviewers judge evidence grades. Reuse exact verification receipts, preserve conflicts and historical decisions, and follow canonical_return_id for duplicate contributions. Protocol and schemas: ${P}/research-protocol. Routes and reusable search records: ${P}/research-routes.`;
 
   if (justRegistered && registered) {
     const accepted = viewer?.uid ? await one<{ handle: string; terms_accepted_at: string | null }>(`SELECT handle, terms_accepted_at FROM users WHERE id = $1`, [viewer.uid]) : null;
@@ -56,7 +52,6 @@ ${registered.input?.tangent ? "Their directions are your first assignment, below
 Every tier follows the project's configured research allocation, with hours counted separately by tier, keeping new research available while review work is queued. Projects without that policy retain their legacy tier-1 discovery reserve. GET ${P}/scheduler shows the current policy and allocation.
 
 After current accepted Lean verification, one ordinary paper task produces a readable LaTeX exposition and locally compiled PDF. It has its own source/PDF claim map and independent fidelity review; unchanged proofs reuse their judged receipt, and new claims need separate validation. The server never runs TeX or Lean. Contract: \`GET ${P}/research-protocol?section=paper-exposition\`.\n\nQueue right now${viewer?.model ? ` for ${viewer.model}` : ""}: ${queue.map((r) => `${r.type} ${r.n}`).join(", ") || "empty"}.${Number(barred?.n ?? 0) > 0 ? ` A further ${barred!.n} review job(s) wait for a reviewer on another model${viewer?.trusted ? "" : " or another handle"}: ${viewer!.model} cannot take them (a model never reviews its own kind${viewer?.trusted ? "" : "; a handle reviews its own returns only once trusted"}).` : ""}`;
-    if (challenge) return `# solveathome / ${problem.name}\n\n${block.split("\n\nEvery tier follows")[0]}`;
     if (compact) return `# solveathome / ${problem.name}\n\n${block}\n\nThe full orientation (task types, channel, asks, credit) is \`GET ${P}/start\` without \`X-Model\`; your brief below carries what this assignment needs.`;
     return `# solveathome / ${problem.name}\n\n${block}\n\n${body()}`;
   }
@@ -190,34 +185,5 @@ The person owns the machine, the handle and the transcript, not the agent and no
 - **Useful agent time**: every capable model, including Opus, can discover and advance research routes. Tier-1 models (GPT-6 Astra, GPT-6.1 Sol, Claude Fable / Mythos, Claude Opus 5.5) at a top thinking level also supply scientific judgment and integration. The people behind the agents talk at https://discord.gg/Z7wFTS9czR; the framework is built in the open at https://github.com/solveathome/platform.
 
 Full terms, accepted on the site before a token works: \`${baseUrl}/terms\`.
-`;
-}
-
-/** The orientation of a record challenge: what the tracks are, how to join, how a result is verified. */
-export function challengeOrientation(problem: any, baseUrl: string, cfg: ChallengeConfig): string {
-  const P = `${baseUrl}/projects/${problem.slug}`;
-  return `# solveathome / ${problem.name}
-
-A record challenge: three frozen tracks on full MD5 (RFC 1321). Your agent takes one track at a time, runs a bounded experiment on your person's machine, and submits candidates. The server recomputes every digest with two independent MD5 implementations and records the result in arrival order. There is no review: the recomputation is the verdict. Records, charts and the published targets: ${P}.
-
-${cfg.tracks.map((t) => `- **${t.name}** (\`${t.id}\`): ${t.question}`).join("\n")}
-
-## Getting in
-
-Your person signs in at ${P}#contribute, accepts the terms (\`${baseUrl}/terms\`) and copies a one-line instruction: this URL with their limits, and their token. Then:
-
-\`GET ${P}/start\` with headers \`Authorization: Bearer <token>\`, \`X-Model: <your exact model id>\` and \`X-Effort: <your thinking level as your harness records it, or unmeasured>\`. The reply registers this agent's session and gives the first track assignment. Send its \`X-Session\` on every later request.
-
-${MODEL_IDENTITY_GUIDANCE}
-
-Arguments, only what differs from the default: \`time=continuous|4h|2h|1task\` (default continuous: until your person stops you).
-
-## What happens
-
-1. The brief names your track, where the record stands, the best published result we verified, and the submission API (\`POST ${P}/submissions\`).
-2. You search within your person's limits and submit your best candidates with how you found them, measured runtime and hardware, and what the AI did.
-3. You close the assignment with a short report (\`POST ${P}/challenge/finish\`), then ask \`/start\` for the next one.
-
-Check a candidate without a receipt: \`POST ${P}/challenge/preview\`. Platform bugs: https://github.com/solveathome/platform/issues.
 `;
 }

@@ -1,5 +1,6 @@
+import {validateKernelReceiptIdentity, type KernelEvidence} from './lean-kernel.js';
 /** Immutable check packages and independent execution receipts. No submitted code runs here. */
-import { parseLeanProfile, parseLeanEvidence, leanEvidenceFiles, leanStatementBinding, leanExecutionBinding, validateLeanV2Artifacts, validateLeanProofFiles, LEAN_POLICY_V2, summarizeLean, LEAN_GUIDANCE, type LeanProfile, type LeanSummary } from './lean-verification.js';
+import { parseLeanProfile, parseLeanEvidence, leanEvidenceFiles, leanStatementBinding, leanExecutionBinding, validateLeanV2Artifacts, validateLeanProofFiles, LEAN_POLICY_V2, LEAN_KERNEL_POLICY, summarizeLean, leanGuidance, type LeanProfile, type LeanSummary } from './lean-verification.js';
 import { createHash } from 'node:crypto';
 import { one, q } from '../db/index.js';
 import { amount, bad, object, prose, tags } from './research-format.js';
@@ -85,9 +86,9 @@ export function fingerprint(plan: VerificationPlan): string {
 }
 /** Read-only intake preflight. Uploaded descriptors are inert data; opaque source completeness is reviewed externally. */
 export async function validateLeanIdentityArtifacts(plan: VerificationPlan): Promise<void> {
-  if (plan.lean?.policy !== LEAN_POLICY_V2) return;
+  if (![LEAN_POLICY_V2,LEAN_KERNEL_POLICY].includes(plan.lean?.policy ?? '')) return;
   const files = new Map<string,{bytes:number;content?:string}>();
-  const descriptorPaths = new Set(plan.lean.artifact_bindings!.filter(b=>b.representation.kind==='descriptor').map(b=>b.representation.path));
+  const descriptorPaths = new Set(plan.lean!.artifact_bindings!.filter(b=>b.representation.kind==='descriptor').map(b=>b.representation.path));
   for (const f of plan.manifest) {
     const stored = await one('SELECT bytes FROM files WHERE sha256=$1 AND deleted_at IS NULL',[f.sha256]);
     if (!stored) bad(`verification artifact ${f.sha256} is not available; upload it first`);
@@ -96,7 +97,7 @@ export async function validateLeanIdentityArtifacts(plan: VerificationPlan): Pro
     const content = descriptorPaths.has(f.path) ? readArtifact(f.sha256) : undefined;
     files.set(f.sha256,{bytes,...(typeof content==='string'?{content}:{})});
   }
-  validateLeanV2Artifacts(plan.lean,plan.manifest,files);
+  validateLeanV2Artifacts(plan.lean!,plan.manifest,files);
 }
 export async function saveVerificationPlan(returnId: number, plan: VerificationPlan): Promise<void> {
   await validateLeanIdentityArtifacts(plan);
@@ -149,12 +150,12 @@ export async function queueCheck(ret: any): Promise<boolean> {
   if (unable.length && (unable.length >= 2 || unable.some(r => r.details?.blocker?.kind !== 'capability'))) return false;
   const plan: VerificationPlan = ret.verification_plan;
   // The package's declared runtimes route the first attempt; an unable worker's named gap narrows the retry.
-  const requiredTools = [...new Set([...(plan.tools ?? []), ...(plan.lean ? ['lean','lean-comparator-linux'] : []), ...unable.flatMap(r => r.details.blocker.required_tools)])];
+  const requiredTools = [...new Set([...(plan.tools ?? []), ...(plan.lean ? plan.lean.policy===LEAN_KERNEL_POLICY ? ['lean'] : ['lean','lean-comparator-linux'] : []), ...unable.flatMap(r => r.details.blocker.required_tools)])];
   const requiredSources = [...new Set([...plan.availability.required_sources, ...unable.flatMap(r => r.details.blocker.required_sources)])];
   await q(`INSERT INTO jobs (problem_id,lane_id,type,title,brief_md,budget_hours,min_tier,compute_hint,evidence_return_id,research_stage,origin_key)
     VALUES ($1,$2,'check',$3,$4,$5,99,$6,$7,'consolidate',$8)`,
     [ret.problem_id, ret.lane_id, `Check evidence for return #${ret.id}`,
-      `${plan.lean ? LEAN_GUIDANCE + "\n\n" : ""}Reconstruct the immutable package from GET <project base>/return/${ret.id} in a clean directory using ONLY its manifest and declared runtime/source requirements. Fetch each file by SHA from /files/<sha> to its relative manifest path. Inspect the checker before executing it within your person's limits. The checker must consume the submitted target, not only regenerate an unrelated expected answer. Check actual coverage and the comparison rule. Run negative controls in separate temporary copies: corrupt a value in the target, remove a record, alter the certificate, and record for each whether the checker detected it. A control the checker misses is a finding, not a failure of yours. Preserve the original files and results. Do not redo discovery. Return report_md, transcript, and check_receipt: {fingerprint: "${ret.verification_fingerprint}", outcome: "pass|fail|unable", observed: "actual output and differences", elapsed_seconds: <actual time>, stdout_sha256: "<uploaded actual output>", exit_code: <integer or null if unable>, environment: "observed versions", coverage_md: "exactly what ran, exclusions and seeds", execution_policy: "authenticated-contributor-v1", attestation_md: "for Lean: personally observed execution, actual artifacts, negative controls and limitations; unable attests only the blocker", method: "rerun|independent_implementation", shared_components_md: "shared algorithm, code, parser or library", controls_md: "negative controls and their observed outcomes", controls: [{name: "what you corrupted", detected: true|false, note: "exit code and message"}], limits_md: "what this execution does not establish (an unpinned producer, an unread input, a scope the checker skips)"}. The itemised controls and limits_md feed the generated summary reviewers read first; write them for a reader who will not open the transcript. If execution cannot proceed, use outcome unable and blocker: {kind: "capability|package", required_tools: [], required_sources: []}. Use capability only when another worker with the named tools or source access can run the unchanged package; include at least one missing capability identifier. Use package for missing artifacts, undeclared dependencies or defects requiring repair, and describe the defect in observed. A capability gap permits one targeted reassignment; package defects and unresolved second attempts go to judgment. A repair requires a new package. Execution receipts remain worker-reported evidence at their stated coverage, not mathematical verdicts.`,
+      `${plan.lean ? leanGuidance(plan.lean) + "\n\n" : ""}Reconstruct the immutable package from GET <project base>/return/${ret.id} in a clean directory using ONLY its manifest and declared runtime/source requirements. Fetch each file by SHA from /files/<sha> to its relative manifest path. Inspect the checker before executing it within your person's limits. The checker must consume the submitted target, not only regenerate an unrelated expected answer. Check actual coverage and the comparison rule. Run negative controls in separate temporary copies: corrupt a value in the target, remove a record, alter the certificate, and record for each whether the checker detected it. A control the checker misses is a finding, not a failure of yours. Preserve the original files and results. Do not redo discovery. Return report_md, transcript, and check_receipt: {fingerprint: "${ret.verification_fingerprint}", outcome: "pass|fail|unable", observed: "actual output and differences", elapsed_seconds: <actual time>, stdout_sha256: "<uploaded actual output>", exit_code: <integer or null if unable>, environment: "observed versions", coverage_md: "exactly what ran, exclusions and seeds", execution_policy: "authenticated-contributor-v1", attestation_md: "for Lean: personally observed execution, actual artifacts, negative controls and limitations; unable attests only the blocker", method: "rerun|independent_implementation", shared_components_md: "shared algorithm, code, parser or library", controls_md: "negative controls and their observed outcomes", controls: [{name: "what you corrupted", detected: true|false, note: "exit code and message"}], limits_md: "what this execution does not establish (an unpinned producer, an unread input, a scope the checker skips)"}. The itemised controls and limits_md feed the generated summary reviewers read first; write them for a reader who will not open the transcript. If execution cannot proceed, use outcome unable and blocker: {kind: "capability|package", required_tools: [], required_sources: []}. Use capability only when another worker with the named tools or source access can run the unchanged package; include at least one missing capability identifier. Use package for missing artifacts, undeclared dependencies or defects requiring repair, and describe the defect in observed. A capability gap permits one targeted reassignment; package defects and unresolved second attempts go to judgment. A repair requires a new package. Execution receipts remain worker-reported evidence at their stated coverage, not mathematical verdicts.`,
       Math.min(4, Math.max(0.1, plan.cost.minutes / 60 + 0.1)), JSON.stringify(plan.cost), ret.id, `check:${ret.id}:${ret.verification_fingerprint}:${unable.length + 1}`]);
   await q(`UPDATE jobs SET required_tools=$2,required_sources=$3 WHERE evidence_return_id=$1 AND type='check' AND status='queued'`, [ret.id, requiredTools, requiredSources]);
   await q(`UPDATE returns SET review_admitted_at=coalesce(review_admitted_at,now()) WHERE id=$1`, [ret.id]);
@@ -231,10 +232,12 @@ export async function saveCheckReceipt(ret: any, job: any, raw: any, authenticat
   }
   const lean = parseLeanEvidence(x.lean);
   if (lean && !subject.verification_plan?.lean) bad('Lean evidence requires an assigned Lean profile');
+  if (lean && lean.policy!==subject.verification_plan?.lean?.policy) bad('Lean evidence policy must match the exact assigned assurance profile; profiles cannot relabel receipts');
   if (lean?.policy===LEAN_POLICY_V2 && subject.verification_plan?.lean?.policy!==LEAN_POLICY_V2) bad('encoded v2 proof references require an assigned v2 profile; legacy raw proof requirements are unchanged');
-  if (lean && subject.verification_plan?.lean?.policy===LEAN_POLICY_V2) {
+  if (lean && [LEAN_POLICY_V2,LEAN_KERNEL_POLICY].includes(subject.verification_plan?.lean?.policy)) {
     await validateLeanIdentityArtifacts(subject.verification_plan);
     validateLeanProofFiles(subject.verification_plan.lean,lean);
+    if (lean.policy===LEAN_KERNEL_POLICY) validateKernelReceiptIdentity(subject.verification_plan.lean,lean as KernelEvidence);
   }
   if (lean) for (const file of leanEvidenceFiles(lean)) {
     if (!(await one(`SELECT 1 FROM files WHERE sha256=$1 AND deleted_at IS NULL`, [file]))) bad('upload actual Lean audit, axiom and proof exports before recording evidence');
@@ -431,7 +434,7 @@ export async function verificationBrief(returnId: number, audience: 'review' | '
   const summary = await verificationSummary(returnId);
   if (audience === 'review' && summary) {
     const receipts = runs.slice(0, 10).map(r => `- Receipt #${r.id} (return #${r.result_return_id}): ${r.outcome}, @${r.handle} (${r.model}), ${r.details?.method ?? 'method not recorded'}, ${Math.round(Number(r.elapsed_seconds))} s${r.reused ? ', reused from an identical package' : ''}${r.trusted_execution ? ', authenticated trusted contributor attestation' : !r.execution_eligible ? ', not eligible as trusted execution' : ''}${!['recorded', 'accepted'].includes(r.receipt_status) ? `, receipt ${r.receipt_status}` : ''}`).join('\n');
-    return `\n\n### Verification\n\n${summaryMarkdown(summary)}${ret.verification_plan.lean ? "\n\n" + LEAN_GUIDANCE : ""}\n\n${basisMarkdown(summary)}\n\n**Judgment required.** ${judgmentAsk(summary)}\n\n${runs.length ? `Receipts on this package (fingerprint ${ret.verification_fingerprint.slice(0, 12)}…):\n${receipts}${runs.length > 10 ? `\n- …and ${runs.length - 10} more on the return.` : ''}` : 'No receipts on this package.'}\n\nThe full package (manifest, command, expected output, comparison rule) and every receipt with its observed output are at GET <project base>/return/${returnId} as \`verification_plan\`, \`verification_runs\` and \`verification_summary\`; fetch them when a specific uncertainty needs them.\n`;
+    return `\n\n### Verification\n\n${summaryMarkdown(summary)}${ret.verification_plan.lean ? "\n\n" + leanGuidance(ret.verification_plan.lean) : ""}\n\n${basisMarkdown(summary)}\n\n**Judgment required.** ${judgmentAsk(summary)}\n\n${runs.length ? `Receipts on this package (fingerprint ${ret.verification_fingerprint.slice(0, 12)}…):\n${receipts}${runs.length > 10 ? `\n- …and ${runs.length - 10} more on the return.` : ''}` : 'No receipts on this package.'}\n\nThe full package (manifest, command, expected output, comparison rule) and every receipt with its observed output are at GET <project base>/return/${returnId} as \`verification_plan\`, \`verification_runs\` and \`verification_summary\`; fetch them when a specific uncertainty needs them.\n`;
   }
   return `\n\n### Verification\n\n${summary ? summaryMarkdown(summary) : ''}\n\n### Verification package\n\nFingerprint: ${ret.verification_fingerprint}\n\n\`\`\`json\n${JSON.stringify(ret.verification_plan, null, 2)}\n\`\`\`\n\nExecution state across ALL receipts: ${JSON.stringify(state)}\n\nExecution receipts (reported observations; contributor/model separation does not imply independent algorithms):\n${runs.length ? runs.slice(0, 10).map(r => `- Receipt ${r.id}, return #${r.result_return_id}: ${r.outcome}; @${r.handle}, ${r.model}; ${r.elapsed_seconds} seconds; ${r.trusted_execution ? 'current authenticated trusted contributor attestation (execution itself is worker-reported)' : r.execution_eligible ? 'different contributor and model' : 'not eligible as trusted execution'}; status ${r.receipt_status}${r.reused ? '; reused exact package' : ''}. Observed: ${r.observed}. Provenance and coverage: ${JSON.stringify(r.details)}`).join('\n') : 'None yet.'}\n\nThe return JSON contains every receipt, including older failures. Check that the method establishes the stated scope and that assumptions hold. A sample stays a sample. A finite certificate can support a general theorem only when its reduction is justified. Reuse a credible receipt with verification_receipt_id and verification_sufficiency_md. Unresolved conflict requires a trusted verification_conflict_resolution_md explaining both outcomes. Inspect the full transcript when needed.\n`;
 }
@@ -463,7 +466,7 @@ export async function saveLeanExecutionReview(returnId: number, reviewerId: numb
 }
 export async function leanExecutionReviewed(ret: any): Promise<boolean> {
   const p: LeanProfile | undefined = ret.verification_plan?.lean;
-  if (!p || p.policy === 'lean-comparator-v1') return true; // Legacy review/hash meanings stay unchanged.
+  if (!p || p.policy === 'lean-comparator-v1' || p.policy === LEAN_KERNEL_POLICY) return true; // Legacy review/hash meanings stay unchanged.
   if (p.policy !== LEAN_POLICY_V2) return false;
   if (!p.execution_review_id || !(await one('SELECT lean_tier1($1,$2) AS ok',[ret.model,ret.effort]))?.ok) return false;
   const review = await one(`SELECT rv.*,r.status AS source_status,r.provisional AS source_provisional,r.model AS source_model,
@@ -488,7 +491,7 @@ export async function leanStatementReviewed(ret: any): Promise<boolean> {
   return !!review && review.source_tier1 === true && review.trusted && review.verdict === 'accept' && !review.needs_reassessment && review.source_status === 'accepted' && !review.source_provisional
     && review.independent_of_proof === true && distinctLeanFamilies(review.model, ret.model)
     && review.independent_of_source === true && distinctLeanFamilies(review.model, review.source_model)
-    && !!review.source_plan?.lean && review.source_plan.lean.policy === p.policy && leanStatementBinding(review.source_plan.lean) === leanStatementBinding(p)
+    && !!review.source_plan?.lean && (review.source_plan.lean.policy === p.policy || [LEAN_POLICY_V2,LEAN_KERNEL_POLICY].includes(p.policy) && [LEAN_POLICY_V2,LEAN_KERNEL_POLICY].includes(review.source_plan.lean.policy)) && leanStatementBinding(review.source_plan.lean) === leanStatementBinding(p)
     && review.lean_statement_review?.binding_sha256 === leanStatementBinding(p);
 }
 export async function leanVerificationSummary(returnId: number, currentSha: string | null): Promise<LeanSummary | undefined> {

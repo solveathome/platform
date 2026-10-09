@@ -20,26 +20,27 @@ test('only a canonical exact designation plus accepted current reviewed executio
   const {r,p,mapping}=fixture();const d=mainTheoremDesignation([mapping],'example',p.manuscript_sha256);
   assert.equal(mainTheoremEvidence([r],d),r);
   const panel=leanEvidencePanel([r],'example-project',d);
-  assert.match(panel,/Main theorem verified in Lean/);
+  assert.match(panel,/Main theorem proven with Lean/);
   for(const path of ['return/40','return/30','review/10','review/50'])assert.match(panel,new RegExp(path));
   assert.match(panel,/currently checked/);assert.match(panel,/Other claims remain unproved/);assert.match(panel,/open-a/);
   assert.match(panel,/Package fingerprint/);assert.match(panel,/does not authenticate physical computation/);
   const callout=mainTheoremCallout(r,d,'example-project','example','Example');
   assert.match(callout,/papers\/example#lean-evidence/);assert.match(callout,/not a proof of the project/);
+  for(const path of ['return/40','return/30','review/50'])assert.match(callout,new RegExp(path));
 });
 
 test('checked helpers alone never establish the designated main theorem',()=>{
   const {r,mapping}=fixture({claim:'helper'});assert.equal(r.status,'checked');
   assert.equal(mainTheoremEvidence([r],mapping),null);
   assert.equal(mainTheoremCallout(r,mapping,'project','example','Example'),'');
-  assert.doesNotMatch(leanEvidencePanel([r],'project',mapping),/Main theorem verified in Lean/);
+  assert.doesNotMatch(leanEvidencePanel([r],'project',mapping),/Main theorem proven with Lean/);
 });
 
 test('partial, conditional, pending, provisional, revoked, stale and unreviewed evidence cannot celebrate',()=>{
   for(const options of [{coverage:'partial'},{assumptions:['Unproved input']},{status:'pending'},{provisional:true},{trusted:false},{current:false},{reviewed:false},{outcome:'fail'},{status:'rejected'},{status:'superseded'}]){
     const {r,mapping}=fixture(options);assert.equal(mainTheoremEvidence([r],mapping),null,JSON.stringify(options));
     assert.equal(mainTheoremCallout(r,mapping,'project','example','Example'),'');
-    assert.doesNotMatch(leanEvidencePanel([r],'project',mapping),/Main theorem verified in Lean/);
+    assert.doesNotMatch(leanEvidencePanel([r],'project',mapping),/Main theorem proven with Lean/);
   }
 });
 
@@ -64,4 +65,62 @@ test('stale checked-claim arrays are visibly unverified, and metadata is escaped
   const panel=leanEvidencePanel([stale],'project',{...mapping,unproved_claims:[{id:'<script>',locator:'<img onerror="bad">'}]});
   assert.match(panel,/not currently verified/);assert.doesNotMatch(panel,/; currently checked/);
   assert.match(panel,/&lt;script&gt;/);assert.doesNotMatch(panel,/<script>|<img/);
+});
+
+test('kernel profile names its narrower method on scoped evidence and milestone without claiming Nanoda checking',()=>{
+  // Renderer-only synthetic summary: this does not authenticate a kernel receipt.
+  const {r,mapping}=fixture();r.policy='lean-kernel-v1';
+  const panel=leanEvidencePanel([r],'project',mapping);
+  assert.match(panel,/<b>Lean kernel verification<\/b>/);
+  assert.match(panel,/Independent export comparison and Nanoda checking are not claimed/);
+  assert.doesNotMatch(panel,/claims checked against an independently regenerated export/);
+  assert.match(mainTheoremCallout(r,mapping,'project','example','Example'),/Lean kernel verification/);
+  assert.match(panel,/open-a/);assert.match(panel,/not verification of the main theorem or the entire paper/);
+});
+
+test('comparator profiles retain their independent export and external kernel checking scope',()=>{
+  for(const policy of ['lean-comparator-v1','lean-comparator-v2']){
+    const {r,mapping}=fixture();r.policy=policy;
+    const panel=leanEvidencePanel([r],'project',mapping);
+    assert.match(panel,/<b>Independent export and external kernel checking<\/b>/);
+    assert.match(panel,/independently regenerated export with the Lean kernel and a pinned external checker/);
+    assert.doesNotMatch(panel,/not claimed by this profile|<b>Lean kernel verification<\/b>/);
+    assert.equal(r.label,'All mapped Lean claims checked');
+  }
+});
+
+test('accepted kernel and comparator methods share the highest scoped research tier',()=>{
+  for(const policy of ['lean-kernel-v1','lean-comparator-v1','lean-comparator-v2']){
+    const {r,mapping}=fixture();r.policy=policy;
+    const callout=mainTheoremCallout(r,mapping,'project','example','Main result');
+    assert.match(callout,/Main theorem proven with Lean/);
+    assert.match(callout,/Proven with Lean is the highest research-verification tier/);
+    assert.match(callout,/Other claims remain unproved/);
+    assert.match(callout,/not a proof of the project/);
+  }
+});
+
+test('kernel label cannot upgrade pending, helper-only, revoked or stale evidence; unknown policy claims no checking method',()=>{
+  for(const options of [{status:'pending'},{claim:'helper'},{trusted:false},{current:false},{reviewed:false},{coverage:'partial'}]){
+    const {r,mapping}=fixture(options);r.policy='lean-kernel-v1';
+    assert.equal(mainTheoremEvidence([r],mapping),null);
+    assert.doesNotMatch(leanEvidencePanel([r],'project',mapping),/Main theorem proven with Lean/);
+  }
+  const {r,mapping}=fixture();delete r.policy;
+  const panel=leanEvidencePanel([r],'project',mapping);
+  assert.match(panel,/Lean verification profile not specified/);
+  assert.doesNotMatch(panel,/claims checked against an independently regenerated export|<b>Lean kernel verification<\/b>/);
+});
+
+test('three finite mapped claims do not verify the original seven open obligations',()=>{
+  const {r,mapping}=fixture();r.policy='lean-kernel-v1';
+  const ids=['main_eq1','integer_maximum','integer_main_eq1'];
+  r.claims=ids.map(id=>({...r.claims[0],id,declaration:`Example.${id}`}));r.checked_claims=ids;r.total_claims=3;
+  mapping.required_claim_ids=ids;
+  mapping.unproved_claims=Array.from({length:7},(_,i)=>({id:`O${i+1}`,locator:`Original manuscript obligation ${i+1}`}));
+  const panel=leanEvidencePanel([r],'project',mapping);
+  for(const id of ids)assert.match(panel,new RegExp(`${id}.*currently checked`));
+  for(let i=1;i<=7;i++)assert.match(panel,new RegExp(`O${i}: Original manuscript obligation`));
+  assert.match(panel,/Other claims remain unproved/);
+  assert.match(mainTheoremCallout(r,mapping,'project','example','Finite claims'),/not a proof of the project/);
 });

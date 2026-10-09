@@ -20,7 +20,7 @@ import { docsRedirect } from "../lib/projects.js";
 import { protectMath } from "../lib/math.js";
 import { linkPeople } from "../lib/people.js";
 import { linkPaths, paperPages } from "../lib/paths-link.js";
-import { OVERLAY, revisedPaths, currentText } from "../lib/revisions.js";
+import { OVERLAY, revisedPaths, currentText, docsRoot } from "../lib/revisions.js";
 import { sha256 } from "../lib/files.js";
 import { SLUG } from "../lib/guards.js";
 import { shareMeta } from "../lib/share.js";
@@ -104,7 +104,7 @@ async function serve(req: any, res: any, edition: Edition): Promise<void> {
   if (!SLUG.test(slug)) { res.status(404).type("text/plain").send("not found\n"); return; }
   const rel = Array.isArray(req.params.path) ? req.params.path.join("/") : String(req.params.path ?? "");
   const seed = edition === "seed";
-  const root = join(seed ? SEED : REPOS, slug);
+  const root = seed ? join(SEED, slug) : docsRoot(slug);
   if (!existsSync(root)) { res.status(404).type("text/plain").send(seed ? "no seed edition for this project\n" : "no documents for this project yet\n"); return; }
   // Per-project redirects (projects/<slug>/project.json docs_redirects): e.g. book scans resolve to the publisher, never to local bytes.
   const to = docsRedirect(slug, rel);

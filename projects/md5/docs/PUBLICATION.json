@@ -1,0 +1,126 @@
+{
+  "version": 1,
+  "generated_at": "2026-10-09T13:48:16.985Z",
+  "files": {
+    "README.md": {
+      "sha256": "2d73ff925ac671bd184574b3054e4814a889cbb67fd09c717b9b3b2c17947ac3",
+      "mode": "project",
+      "source": {
+        "created_at": "2026-10-09T13:35:31.000Z",
+        "modified_at": "2026-10-09T13:35:31.000Z",
+        "author_created_at": "2026-10-09T13:35:31.000Z",
+        "author_modified_at": "2026-10-09T13:35:31.000Z",
+        "first_commit": "41844edff2c47e27f0763b6b78583cf64aa510a0",
+        "last_commit": "41844edff2c47e27f0763b6b78583cf64aa510a0",
+        "state": "committed",
+        "public_edition": true
+      }
+    },
+    "research/OUTCOMES.md": {
+      "sha256": "b0a972728080bc04d7cf61fc35067976c83c1ba17fbc2a5d42209f863aab4dde",
+      "mode": "project",
+      "source": {
+        "created_at": "2026-10-09T13:35:31.000Z",
+        "modified_at": "2026-10-09T13:48:16.000Z",
+        "author_created_at": "2026-10-09T13:35:31.000Z",
+        "author_modified_at": "2026-10-09T13:48:16.000Z",
+        "first_commit": "41844edff2c47e27f0763b6b78583cf64aa510a0",
+        "last_commit": "4820b23dfbd79247e8124b34fe4c09c30f7cb625",
+        "state": "committed",
+        "public_edition": false
+      }
+    },
+    "research/QUESTIONS.md": {
+      "sha256": "aa92743ac6c524cc798e66d894f04f908270a04f038ad5fb9a6b2f31b194d7cd",
+      "mode": "project",
+      "source": {
+        "created_at": "2026-10-09T13:35:31.000Z",
+        "modified_at": "2026-10-09T13:35:31.000Z",
+        "author_created_at": "2026-10-09T13:35:31.000Z",
+        "author_modified_at": "2026-10-09T13:35:31.000Z",
+        "first_commit": "41844edff2c47e27f0763b6b78583cf64aa510a0",
+        "last_commit": "41844edff2c47e27f0763b6b78583cf64aa510a0",
+        "state": "committed",
+        "public_edition": false
+      }
+    },
+    "research/README.md": {
+      "sha256": "7d93e28c8d1b60ee246bd5f6eb8861d247b7daeb0038bf6cfa317da8681af530",
+      "mode": "project",
+      "source": {
+        "created_at": "2026-10-09T13:35:31.000Z",
+        "modified_at": "2026-10-09T13:35:31.000Z",
+        "author_created_at": "2026-10-09T13:35:31.000Z",
+        "author_modified_at": "2026-10-09T13:35:31.000Z",
+        "first_commit": "41844edff2c47e27f0763b6b78583cf64aa510a0",
+        "last_commit": "41844edff2c47e27f0763b6b78583cf64aa510a0",
+        "state": "committed",
+        "public_edition": false
+      }
+    },
+    "research/SPEC.md": {
+      "sha256": "adbc12ddd09c1eb00771633b35cea8ce85c3ae4334982c92a3715a29288e8f7f",
+      "mode": "project",
+      "source": {
+        "created_at": "2026-10-09T13:35:31.000Z",
+        "modified_at": "2026-10-09T13:35:31.000Z",
+        "author_created_at": "2026-10-09T13:35:31.000Z",
+        "author_modified_at": "2026-10-09T13:35:31.000Z",
+        "first_commit": "41844edff2c47e27f0763b6b78583cf64aa510a0",
+        "last_commit": "41844edff2c47e27f0763b6b78583cf64aa510a0",
+        "state": "committed",
+        "public_edition": false
+      }
+    },
+    "verifier/reference.py": {
+      "sha256": "8e38d5c1ca8d62c9d863e63142aa593b043e90b3d31bf546e45f9bb4d8dcc227",
+      "mode": "project",
+      "source": {
+        "created_at": "2026-10-09T13:35:31.000Z",
+        "modified_at": "2026-10-09T13:35:31.000Z",
+        "author_created_at": "2026-10-09T13:35:31.000Z",
+        "author_modified_at": "2026-10-09T13:35:31.000Z",
+        "first_commit": "41844edff2c47e27f0763b6b78583cf64aa510a0",
+        "last_commit": "41844edff2c47e27f0763b6b78583cf64aa510a0",
+        "state": "committed",
+        "public_edition": false
+      }
+    },
+    "attestation/EXTERNAL-SOURCES.md": {
+      "sha256": "b840c2228eb0f805dbed07b8dc1782cd2a904cd8c0175ac7c502416ecbd639f7",
+      "mode": "project",
+      "source": {
+        "created_at": null,
+        "modified_at": null,
+        "first_commit": null,
+        "last_commit": null,
+        "state": "generated",
+        "public_edition": false
+      }
+    },
+    "LICENSE": {
+      "sha256": "9ba9550ad48438d0836ddab3da480b3b69ffa0aac7b7878b5a0039e7ab429411",
+      "mode": "project",
+      "source": {
+        "created_at": null,
+        "modified_at": null,
+        "first_commit": null,
+        "last_commit": null,
+        "state": "generated",
+        "public_edition": false
+      }
+    },
+    "PUBLICATION-POLICY.md": {
+      "sha256": "ef971628c842543267effe6a357e22ba98ba8accb297f20c24d07131ea16267a",
+      "mode": "project",
+      "source": {
+        "created_at": null,
+        "modified_at": null,
+        "first_commit": null,
+        "last_commit": null,
+        "state": "generated",
+        "public_edition": false
+      }
+    }
+  }
+}
