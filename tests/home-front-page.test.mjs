@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 
 // The front page holds every public problem and never a hidden one (Oct 9 2026): the same rule as /projects and the sitemap,
 // so publishing a project puts it on the front page with no code change. The last entry always invites the next problem.
-const { publicProjects, homeIndex, homeCards, PROPOSE_URL } = await import("../src/lib/home.ts");
+const { publicProjects, homeIndex, homeCards, homeSwarm, homeLeaders, PROPOSE_URL } = await import("../src/lib/home.ts");
 
 const rows = [{ slug: "twin-primes", name: "Twin Prime Conjecture" }, { slug: "md5", name: "MD5 Research Challenge" }];
 
@@ -18,7 +18,7 @@ test("MD5 is public (Oct 9 2026): the second card, a record challenge, before Pr
   assert.deepEqual(list.map((p) => p.slug), ["twin-primes", "md5"]);
   const cards = homeCards(list), index = homeIndex(list);
   assert.match(cards, /Problem 002 · Cryptography · hash functions/);
-  assert.match(cards, /data-project="md5" data-challenge=/);
+  assert.match(cards, /data-project="md5" data-challenge /);
   assert.match(cards, /href="\/projects\/md5#contribute"/);
   assert.match(index, /<span class="n">003<\/span><span><b>Propose a problem<\/b>/);
 });
@@ -43,4 +43,26 @@ test("an unknown project still renders from its row, escaped", () => {
   const html = homeCards(list);
   assert.match(html, /&lt;Demo&gt; &amp; co/);
   assert.match(html, /<p class="question">Is it\?<\/p>/);
+});
+
+test("the live figures are in the first render: nothing says Loading, numbers and names come from the data", () => {
+  // Client, Oct 2026: "agent stats ... just loaded as the page loaded": the server renders them, the page fetches nothing after load.
+  const list = publicProjects(rows, []);
+  const data = { at: Date.now(), by: {
+    "twin-primes": { totals: { returns_accepted: "592", returns_pending: "53", agents_24h: "71", reviews: "691" }, people: [{ handle: "ada", display_name: "Ada L", points: "50073.8" }, { handle: "bo", points: "9.4" }], active: 17, tracks: null },
+    md5: { totals: { returns_accepted: "0", returns_pending: "3", agents_24h: "4", reviews: "2" }, people: [{ handle: "bo", points: "38.9" }], active: 1,
+      tracks: [{ id: "a", name: "Self match", better: "higher", max: 32, best: 9, published: 12 }, { id: "c", name: "Smallest collision", better: "lower", max: null, best: null, published: 128 }] } } };
+  const html = homeIndex(list, data) + homeCards(list, data) + homeSwarm(list, data);
+  assert.doesNotMatch(html, /Loading/);
+  assert.match(html, /<dd>592<\/dd>/);
+  assert.match(html, /71 agents/);
+  assert.match(html, /<b>75<\/b><span>agents, 24 h<\/span>/);   // 71 + 4: sessions add up across problems
+  assert.match(html, /here: 9 of 32 · published: 12 of 32/);
+  assert.match(html, /here: none yet · published: 128 bytes/);
+  assert.match(html, /<span class="credit-name">Ada L<\/span> <span class="credit-handle">@ada<\/span><\/a><b>50,074<\/b>/);   // whole points
+  const board = homeLeaders(list, data);
+  assert.match(board.rows, /@bo<\/a><span class="chips"><span>Twin Prime Conjecture 9<\/span><span>MD5 Research Challenge 39<\/span><\/span><\/span><b>48<\/b>/);
+  assert.equal(board.state, "Top 5 across 2 problems");
+  // A project whose figures failed says so; it never shows a stale "Loading".
+  assert.match(homeCards(list, { at: 0, by: {} }), /Live figures are unavailable right now\./);
 });
