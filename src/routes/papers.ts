@@ -88,6 +88,14 @@ papers.get('/papers/:paper/expositions/:id/:kind', async (req:any,res) => {
     WHERE p.slug=$1 AND r.paper_slug=$2 AND r.id=$3 AND r.paper_exposition IS NOT NULL`, [req.params.slug,req.params.paper,/^[1-9][0-9]*$/.test(req.params.id) ? req.params.id : 0]);
   if (!row) { res.status(404).json({error:'No such exposition version'}); return; }
   const e = row.paper_exposition, kind = req.params.kind;
+  if (kind === 'pdf' && req.query.current === '1') {
+    // Current-action links recheck on click; unflagged version links remain historical artifacts.
+    const project = await one(`SELECT id FROM problems WHERE slug=$1`, [req.params.slug]);
+    const current = project && (await listPapers(Number(project.id),req.params.slug)).find(p => p.slug === req.params.paper)?.reviewed_pdf;
+    if (!current || current.return_id !== Number(req.params.id)) {
+      res.set('Cache-Control','no-store').status(409).json({error:'The current reviewed PDF has changed or is no longer eligible. Reload the paper page for current evidence.'}); return;
+    }
+  }
   const hashes: Record<string,string> = {source:e.tex_sha256,pdf:e.pdf_sha256,map:e.claim_map_sha256,compilation:e.compilation_sha256};
   if (!hashes[kind]) { res.status(404).json({error:'No such exposition artifact'}); return; }
   const file = await one(`SELECT deleted_at FROM files WHERE sha256=$1`, [hashes[kind]]);
@@ -95,7 +103,7 @@ papers.get('/papers/:paper/expositions/:id/:kind', async (req:any,res) => {
   if (!text || files.sha256(text) !== hashes[kind]) { res.status(410).json({error:'Exposition artifact missing or removed; its historical record is retained'}); return; }
   const pdf = kind === 'pdf' ? decodeExpositionPdf(text) : null;
   const ext = kind === 'source' ? 'tex' : kind === 'pdf' ? 'pdf' : 'json';
-  res.set({'Content-Type':kind === 'pdf' ? 'application/pdf' : 'text/plain; charset=utf-8','Content-Disposition':`attachment; filename="exposition-${req.params.id}-${kind}.${ext}"`,
+  res.set({'Content-Type':kind === 'pdf' ? 'application/pdf' : 'text/plain; charset=utf-8','Content-Disposition':`${kind === 'pdf' ? 'inline' : 'attachment'}; filename="exposition-${req.params.id}-${kind}.${ext}"`,
     'Content-Security-Policy':"default-src 'none'; sandbox",'X-Content-Type-Options':'nosniff','X-Content-SHA256':pdf?.sha256 ?? hashes[kind],'Cache-Control':'no-store'}).send(pdf?.bytes ?? text);
 });
 

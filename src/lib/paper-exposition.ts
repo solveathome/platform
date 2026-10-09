@@ -178,7 +178,7 @@ export async function latestReviewedExposition(problemId: number, projectSlug: s
     try {
       // Reuse publication validation: missing/revoked artifacts, stale bindings or invalid PDF envelopes cannot produce a button.
       await validatePaperExposition(v.paper_exposition,v.paper_exposition.tex_sha256,paperSlug,problemId,v.files ?? [],null);
-      return {return_id:v.return_id,version:v.version,url:`/projects/${encodeURIComponent(projectSlug)}/papers/${encodeURIComponent(paperSlug)}/expositions/${v.return_id}/pdf`};
+      return {return_id:v.return_id,version:v.version,url:`/projects/${encodeURIComponent(projectSlug)}/papers/${encodeURIComponent(paperSlug)}/expositions/${v.return_id}/pdf?current=1`};
     } catch (e: any) { if (e.status !== 400) throw e; }
   }
   return null;

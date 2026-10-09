@@ -102,18 +102,26 @@ test('ordinary accepting review must bind this version; downloads preserve bytes
   let view=await (await fetch(base+'/papers/example',{headers:{accept:'application/json'}})).json();assert.equal(view.expositions[0].evidence.current,true);
   const current=async()=>({list:(await listPapers(pid,slug))[0],page:await(await fetch(base+'/papers/example',{headers:{accept:'application/json'}})).json()});
   const eligible=await current();for(const paper of [eligible.list,eligible.page.paper])assert.equal(paper.reviewed_pdf.return_id,submission);
-  const html=await fetch(base+'/papers/example',{headers:{accept:'text/html'}});assert.equal(html.headers.get('cache-control'),'no-store');assert.match(await html.text(),new RegExp(`href="/projects/${slug}/papers/example/expositions/${submission}/pdf">View PDF`));
+  const currentPdf=base+`/papers/example/expositions/${submission}/pdf?current=1`;
+  assert.equal(eligible.page.paper.reviewed_pdf.url.endsWith('/pdf?current=1'),true);
+  assert.equal((await fetch(currentPdf)).status,200);
+  const html=await fetch(base+'/papers/example',{headers:{accept:'text/html'}});assert.equal(html.headers.get('cache-control'),'no-store');assert.match(await html.text(),new RegExp(`href="/projects/${slug}/papers/example/expositions/${submission}/pdf\\?current=1">View PDF`));
   // A higher-id pending revision never inherits the old edition's fidelity vote.
   const newer=await one(`INSERT INTO returns(problem_id,type,user_id,model,provider,report_md,transcript,status,effort,paper_slug,paper_exposition) VALUES($1,'paper',$2,'gpt-6.1-sol','openai','Synthetic newer edition','t','pending','high','example',$3) RETURNING id`,[pid,uid,JSON.stringify(e)]);
   for(const file of attached)await q(`INSERT INTO file_refs(file_sha,ref_type,ref_id) VALUES($1,'return',$2)`,[file,newer.id]);
   assert.equal((await current()).list.reviewed_pdf.return_id,submission);
   await q(`UPDATE returns SET status='rejected' WHERE id=$1`,[newer.id]);assert.equal((await current()).page.paper.reviewed_pdf.return_id,submission);
   await q(`UPDATE reviews SET needs_reassessment=true WHERE return_id=$1`,[submission]);for(const paper of [(await current()).list,(await current()).page.paper])assert.equal(paper.reviewed_pdf,null);
+  const reassessed=await fetch(currentPdf);assert.equal(reassessed.status,409);assert.equal(reassessed.headers.get('cache-control'),'no-store');
+  assert.equal((await fetch(base+`/papers/example/expositions/${submission}/pdf`)).status,200,'Historical version is still accessible');
   await q(`UPDATE reviews SET needs_reassessment=false WHERE return_id=$1`,[submission]);
 
-  const download=await fetch(base+`/papers/example/expositions/${submission}/pdf`);assert.equal(download.status,200);assert.match(download.headers.get('content-disposition'),/^attachment/);assert.equal(download.headers.get('x-content-type-options'),'nosniff');assert.equal(hash(Buffer.from(await download.arrayBuffer())),JSON.parse(files.read(pdf)).sha256);
-  assert.equal((await fetch(base+`/papers/example/expositions/${submission}/source`)).status,200);
+  const download=await fetch(base+`/papers/example/expositions/${submission}/pdf`);assert.equal(download.status,200);assert.equal(download.headers.get('content-type'),'application/pdf');assert.match(download.headers.get('content-disposition'),/^inline; filename="exposition-[0-9]+-pdf\.pdf"$/);assert.equal(download.headers.get('x-content-type-options'),'nosniff');assert.equal(hash(Buffer.from(await download.arrayBuffer())),JSON.parse(files.read(pdf)).sha256);
+  const sourceDownload=await fetch(base+`/papers/example/expositions/${submission}/source`);assert.equal(sourceDownload.status,200);assert.match(sourceDownload.headers.get('content-disposition'),/^attachment/);assert.equal(sourceDownload.headers.get('x-content-type-options'),'nosniff');
   await q(`UPDATE returns SET status='pending' WHERE id=$1`,[proof.id]);view=await (await fetch(base+'/papers/example',{headers:{accept:'application/json'}})).json();assert.equal(view.expositions[0].evidence.current,false);assert.equal(view.paper.reviewed_pdf,null);assert.equal((await current()).list.reviewed_pdf,null);
+  assert.equal((await fetch(currentPdf)).status,409,'A stale page cannot open its PDF as a currently eligible selection');
+  const staleHtml=await(await fetch(base+'/papers/example',{headers:{accept:'text/html'}})).text();assert.doesNotMatch(staleHtml,/>View PDF<\/a>/);
+  assert.equal((await fetch(base+`/papers/example/expositions/${submission}/pdf`)).status,200,'Stale evidence preserves historical bytes');
   await q(`UPDATE returns SET status='accepted' WHERE id=$1`,[proof.id]);
   await files.remove(pdf,uid,'Synthetic artifact removal');assert.equal((await fetch(base+`/papers/example/expositions/${submission}/pdf`)).status,410);for(const paper of [(await current()).list,(await current()).page.paper])assert.equal(paper.reviewed_pdf,null);
 });

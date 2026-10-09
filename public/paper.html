@@ -30,27 +30,4 @@
 </main>
 <footer data-site-footer></footer>
 <script src="/assets/ui.js?v=21"></script><script src="/assets/who.js?v=6"></script><script src="/assets/math.js?v=3"></script><script>loadWho(document.querySelector('#who'));</script>
-<script id="paper-pdf-refresh">
-(function () {
-  const root = document.querySelector('#paper-pdf'), base = '/projects/__SLUG__/papers/__PAPER__';
-  let generation = 0;
-  function clear() { ++generation; root.replaceChildren(); }
-  async function refresh() {
-    clear();
-    if (document.hidden) return;
-    const current = generation, request = crypto.randomUUID();
-    try {
-      const result = await SA.json(`${base}?lean_request=${request}`, {cache:'no-store',signal:AbortSignal.timeout(12000)});
-      if (current !== generation || document.hidden || result.lean_milestone_request !== request) return;
-      const pdf = result.paper?.reviewed_pdf, prefix = `${base}/expositions/`;
-      if (!pdf || typeof pdf.url !== 'string' || !pdf.url.startsWith(prefix) || !/^[1-9][0-9]*\/pdf$/.test(pdf.url.slice(prefix.length))) return;
-      const link = document.createElement('a'); link.className = 'button'; link.href = pdf.url; link.textContent = 'View PDF'; root.append(link);
-    } catch { /* A failed current read leaves no positive PDF action. */ }
-  }
-  document.addEventListener('visibilitychange', () => document.hidden ? clear() : refresh());
-  addEventListener('pagehide', clear);
-  addEventListener('pageshow', refresh);
-  setInterval(refresh, 30000);
-})();
-</script>
 </body></html>

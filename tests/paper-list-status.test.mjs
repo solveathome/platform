@@ -44,26 +44,6 @@ test('actual pagehide and visibility-hidden handlers invalidate pending paper re
 });
 
 const paperPage=readFileSync(new URL('../public/paper.html',import.meta.url),'utf8');
-function pdfClient(json) {
- const root={children:[],replaceChildren(){this.children=[];},append(link){this.children.push(link);}},document=new EventTarget(),window=new EventTarget();document.hidden=false;document.querySelector=()=>root;document.createElement=()=>({});
- const source=paperPage.match(/<script id="paper-pdf-refresh">([\s\S]*?)<\/script>/)[1].replaceAll('__SLUG__','fixture').replaceAll('__PAPER__','main');
- runInNewContext(source,{document,SA:{json},crypto:{randomUUID:()=> 'request-fixture'},AbortSignal,addEventListener:window.addEventListener.bind(window),setInterval(){}});
- return {root,document,window,show:async()=>{window.dispatchEvent(new Event('pageshow'));await new Promise(resolve=>setImmediate(resolve));}};
-}
-test('paper PDF action uses uncached exact current evidence and clears on failures, hidden pages and cached navigation',async()=>{
- let current=true,fail=false;const c=pdfClient(async(url,options)=>{assert.equal(options.cache,'no-store');assert(url.endsWith('?lean_request=request-fixture'));if(fail)throw new Error('offline');return{lean_milestone_request:'request-fixture',paper:{reviewed_pdf:current?{url:'/projects/fixture/papers/main/expositions/7/pdf'}:null}};});
- await c.show();assert.equal(c.root.children[0].textContent,'View PDF');assert.equal(c.root.children[0].href,'/projects/fixture/papers/main/expositions/7/pdf');
- current=false;await c.show();assert.equal(c.root.children.length,0);
- current=true;await c.show();c.document.hidden=true;c.document.dispatchEvent(new Event('visibilitychange'));assert.equal(c.root.children.length,0);c.document.hidden=false;
- await c.show();c.window.dispatchEvent(new Event('pagehide'));assert.equal(c.root.children.length,0);
- await c.show();fail=true;await c.show();assert.equal(c.root.children.length,0);
-});
-test('old responses, invalid URLs and wrong current request echoes cannot restore a PDF action',async()=>{
- let pending,calls=0;const c=pdfClient(()=>++calls===1?new Promise(resolve=>pending=resolve):Promise.resolve({lean_milestone_request:'request-fixture',paper:{reviewed_pdf:null}}));
- await c.show();await c.show();pending({lean_milestone_request:'request-fixture',paper:{reviewed_pdf:{url:'/projects/fixture/papers/main/expositions/7/pdf'}}});await new Promise(resolve=>setImmediate(resolve));assert.equal(c.root.children.length,0);
- for(const reply of [{lean_milestone_request:'wrong',paper:{reviewed_pdf:{url:'/projects/fixture/papers/main/expositions/7/pdf'}}},{lean_milestone_request:'request-fixture',paper:{reviewed_pdf:{url:'https://elsewhere.invalid/file'}}}]){const x=pdfClient(async()=>reply);await x.show();assert.equal(x.root.children.length,0);}
-});
-
 test('actual project initialization invalidates its first pending Papers read before starting polling',{timeout:1000},async()=>{
  let pending,markStarted;const started=new Promise(resolve=>markStarted=resolve),c=client(()=>new Promise(resolve=>{pending=resolve;markStarted();})),window=new EventTarget(),noop=async()=>{};let timers=0;
  const start=page.lastIndexOf('(async () => {'),end=page.indexOf('})();',start)+5;
@@ -71,4 +51,11 @@ test('actual project initialization invalidates its first pending Papers read be
  await started;const hide=new Event('pagehide');hide.persisted=false;window.dispatchEvent(hide);
  pending({papers:[{url:'/main',title:'Old proof',status:'reviewed',status_label:'Main theorem proven with Lean',reviewed_pdf:{url:'/projects/fixture/papers/main/expositions/7/pdf'}}]});await initialization;
  for(const el of Object.values(c.elements))assert.equal(el.innerHTML,'');assert.equal(timers,0,'departed initial pages start no polling timers');
+});
+
+test('paper PDF action is server-rendered with no client refresh or DOM replacement',()=>{
+ assert.match(paperPage,/<div class="page-heading">[\s\S]*?<h1>__TITLE__<\/h1>[\s\S]*?id="paper-pdf">__PDF_ACTION__<\/div><\/div>/);
+ assert.doesNotMatch(paperPage,/download=/);
+ const scripts=[...paperPage.matchAll(/<script([^>]*)>([\s\S]*?)<\/script>/g)].filter(([,attrs])=>!attrs.includes('src=')&&!attrs.includes('application/ld+json')).map(([,attrs,source])=>source).join('\n');
+ assert.doesNotMatch(scripts,/paper-pdf|lean_request|setInterval|pageshow|pagehide/);
 });
