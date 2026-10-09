@@ -128,12 +128,19 @@ function tracksHtml(tracks: Track[]): string {
     // track, fewer bytes being better, fills on a log scale from its 2,048-byte cap to 32 bytes (trackFill, src/routes/challenges.ts).
     const pct = (v: number | null) => { const f = trackFill(t, v); return f == null ? null : `${(100 * f).toFixed(1)}%`; };
     const fb = pct(t.best), fp = pct(t.published);
-    const bar = higher && !top ? "" : `<span class="mf-bar" aria-hidden="true">${fb ? `<i style="width:${fb}"></i>` : ""}${fp ? `<s style="left:${fp}"></s>` : ""}</span>`;
-    const note = higher ? "" : `<span class="mf-bar-note">Bar: fewer bytes, on a log scale from the ${COLLISION_CAP_BYTES.toLocaleString("en")}-byte cap to ${COLLISION_FLOOR_BYTES} bytes, the size at which a collision is known to exist.</span>`;
+    // Smaller is better (Chris, Oct 9 2026: "showing overshoot as smaller is better"): the published record is the goal line, the
+    // fill runs toward it as the best size here shrinks, and the zone past it is overshoot, a collision smaller than the record,
+    // drawn as its own segment. Same log scale as before: the goal sits where 128 bytes falls between the cap and 32 bytes.
+    const goal = !higher && fp ? fp : null;
+    const overshoot = goal && t.best != null && t.published != null && t.best < t.published;
+    const bar = higher ? (!top ? "" : `<span class="mf-bar" aria-hidden="true">${fb ? `<i style="width:${fb}"></i>` : ""}${fp ? `<s style="left:${fp}"></s>` : ""}</span>`)
+      : `<span class="mf-bar mf-bar-goal" aria-hidden="true">${goal ? `<b style="left:${goal}"></b>` : ""}${fb ? `<i style="width:${overshoot ? goal : fb}"></i>` : ""}${overshoot ? `<u style="left:${goal};width:calc(${fb} - ${goal})"></u>` : ""}${goal ? `<s class="goal" style="left:${goal}"></s>` : ""}</span>`
+        + (goal ? `<span class="mf-bar-scale" aria-hidden="true"><span>${COLLISION_CAP_BYTES.toLocaleString("en")} B</span><span style="left:${goal}">goal ${n(t.published)} B</span><span>${COLLISION_FLOOR_BYTES} B</span></span>` : "");
+    const note = higher ? "" : `<span class="mf-bar-note">Smaller is better. The bar fills toward the goal, the best published collision (${t.published != null ? `${n(t.published)} bytes` : "none yet"}), as the best collision here shrinks, on a log scale from the ${COLLISION_CAP_BYTES.toLocaleString("en")}-byte cap. Past the goal line is overshoot: a collision smaller than the published record, down to ${COLLISION_FLOOR_BYTES} bytes, where one is known to exist.${overshoot ? ` This one is past the record.` : ""}</span>`;
     return `<li><span>${esc(t.name)}</span><span class="v">here: ${esc(show(t.best))}${t.published != null ? ` · published: ${esc(show(t.published))}` : ""}</span>${bar}${note}</li>`;
   }).join("");
   const lower = tracks.some((t) => t.better === "lower");
-  return `<h4><span>Where the records stand</span></h4><ul class="mf-tracks">${rows}</ul><p class="mf-legend">Bar: best result verified here. Dashed mark: best published result, credited to its finder.${lower ? " Collision: fewer bytes is better." : ""}</p>`;
+  return `<h4><span>Where the records stand</span></h4><ul class="mf-tracks">${rows}</ul><p class="mf-legend">Bar: best result verified here. Dashed mark: best published result, credited to its finder.${lower ? " Collision: smaller is better; the solid line is the published record as the goal, and past it is overshoot." : ""}</p>`;
 }
 const standingHtml = (f: Figures | null | undefined) => !f ? `<p class="community-fine">Live figures are unavailable right now.</p>` : f.tracks ? tracksHtml(f.tracks) : factsHtml(f.totals);
 const leadersHtml = (f: Figures | null | undefined) => !f ? `<li class="empty">Contributors are unavailable right now.</li>`
