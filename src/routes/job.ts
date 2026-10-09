@@ -95,8 +95,9 @@ export { ABANDON_AFTER_MIN } from "../lib/liveness.js";
 import { ABANDON_AFTER_MIN } from "../lib/liveness.js";
 import { plainDescription, notFoundPage, abs } from "../lib/seo.js";
 import { noticeChannel } from "../lib/lane-channel.js";
-import { challengeConfig, challengeJob, challengeTaskBrief, challengeTrackOfJob } from "../lib/challenges.js";
+import { challengeConfig, challengeJob, challengeTaskBrief, challengeTrackOfJob, challengeSlugs } from "../lib/challenges.js";
 async function sweepExpired(problemId: number): Promise<void> {
+  if (await one(`SELECT 1 FROM problems WHERE id = $1 AND slug = ANY($2::text[])`, [problemId, challengeSlugs()])) await settlePendingChallengeRuns(problemId);
   await expireUntrustedLeanChecks(problemId);
   await reconcilePaperExpositions(problemId);
   // Abandonment: the session is ended and its assignment goes back to the queue at once, instead of at the job's expiry hours later.
@@ -1573,7 +1574,7 @@ job.post("/result", bearer, project, assignmentMutation(async (req: any, res) =>
     researchProgress.state = (await one(`SELECT state FROM research_routes WHERE id=$1`, [researchProgress.route_id])).state;
     researchProgress.next_job_id = null;
   }
-  let requestedReviews = 0, checking = false, triaging = false;
+  let requestedReviews = 0, checking = false, triaging = false, settled = false;
   if (rtype === 'check') {
     const subjectId = await saveCheckReceipt(await one(`SELECT * FROM returns WHERE id=$1`, [ret!.id]), jobRow, b.check_receipt, { userId: uid, sessionId: xs });
     if ((await verificationState(subjectId)).unresolved_conflict) {
@@ -1589,6 +1590,8 @@ job.post("/result", bearer, project, assignmentMutation(async (req: any, res) =>
     for (const subject of pending) {
       if (!(await queueCheck(subject)) && !(await one(`SELECT 1 FROM jobs WHERE parent_return_id=$1 AND type='review' AND status IN ('queued','assigned')`, [subject.id]))) await spawnReviews(Number(subject.id), Number(problem.id), subject.lane_id, 1);
     }
+  } else if (!recordedExploration && !canonicalClaim && (settled = await settleChallengeRun(Number(ret!.id)))) {
+    // settled by the server's recomputation of the run's own submissions: no check, triage or review is queued
   } else if (!recordedExploration && !canonicalClaim) {
     checking = await queueCheck(await one(`SELECT * FROM returns WHERE id=$1`, [ret!.id]));
     if (!checking) { requestedReviews = exposition || verificationPlan || researchReport ? 1 : MIN_REVIEWS; triaging = await admitToReview(await one(`SELECT * FROM returns WHERE id=$1`, [ret!.id]), problem.slug, requestedReviews); }
@@ -1636,12 +1639,49 @@ job.post("/result", bearer, project, assignmentMutation(async (req: any, res) =>
       note: `Exploration is recorded without review. Elevate a claim when it deserves verification: POST ${BASE()}/projects/${problem.slug}/return/${ret!.id}/request-review { "note": "<what deserves verification>" }.` });
     return;
   }
+  if (settled) {
+    res.json({ ok: true, return_id: Number(ret!.id), status: "accepted", final_rung: "verified", settled_by: "server verification", research: researchProgress, reviews_requested: 0, files: attached, tokens, warnings,
+      note: "A run on a record challenge with a verified submission of its own is settled by the server's recomputation (both MD5 implementations agreed): accepted at rung verified, result points paid. No review is needed for the values." });
+    return;
+  }
   res.json({ ok: true, return_id: Number(ret!.id), status: canonicalClaim?.status ?? "pending", canonical_return_id: canonicalClaim?.id, research: researchProgress, check_requested: checking, triage_requested: triaging, reviews_requested: triaging ? 0 : requestedReviews, review_deferred: false, files: attached, tokens, warnings, note: canonicalClaim ? `Exact duplicate: shares return #${canonicalClaim.id}'s decision and earns no duplicate result credit. Attribution and route progress are preserved.` : triaging ? `Triage first: before any trusted reviewer spends time on it, an agent that is not a trusted reviewer, on another handle and model than yours, reads it and says whether a trusted verdict would change the record. Yes: it goes before reviewers with that note. No: it is recorded as it stands, on the record and citable, with your token credit; anyone with a stake can elevate it again.` : undefined });
 }, { completion: true }));
 
 /** Recover claims stranded by the retired admission limit, in bounded batches.
  * Caller holds the project transaction. Never reissue an expired/completed job
  * or promote recorded exploration without a request. */
+/**
+ * Record challenges only (Chris, Oct 9 2026: "validation of the 3 values are so cheap that it's ok that we do server validation as simple
+ * server validation for input > result as code on the server"). A track run whose job holds at least one verified, live, non-duplicate,
+ * unwithdrawn submission is settled when it returns: accepted at rung verified, result points paid once, nothing queued for review.
+ * The server's recomputation is the referee. A run without such a submission, and every return on any other project, goes to review.
+ * Returns true when it settled the return.
+ */
+export async function settleChallengeRun(returnId: number): Promise<boolean> {
+  const ret = await one(`SELECT r.*, p.slug FROM returns r JOIN problems p ON p.id = r.problem_id WHERE r.id = $1`, [returnId]);
+  if (!ret || ret.status !== "pending" || ret.type !== "measure" || !ret.job_id || !challengeConfig(ret.slug)) return false;
+  const job = await one(`SELECT origin_key FROM jobs WHERE id = $1`, [ret.job_id]);
+  if (!challengeTrackOfJob(ret.slug, job ?? {})) return false;
+  const sub = await one(`SELECT s.id, s.challenge_id, s.score, s.total_bytes FROM challenge_submissions s WHERE s.job_id = $1 AND s.user_id = $2 AND s.namespace = 'live' AND s.duplicate_of IS NULL
+    AND NOT EXISTS (SELECT 1 FROM challenge_corrections c WHERE c.submission_id = s.id AND c.kind = 'void' AND NOT EXISTS (SELECT 1 FROM challenge_corrections x WHERE x.submission_id = s.id AND x.kind = 'restore' AND x.id > c.id))
+    ORDER BY s.id LIMIT 1`, [ret.job_id, ret.user_id]);
+  if (!sub) return false;
+  const note = `settled by the server's verification of submission #${sub.id} (${sub.challenge_id}, ${sub.total_bytes ?? sub.score}): the recomputation is the check on a record challenge`;
+  await q(`UPDATE returns SET status = 'accepted', final_rung = 'verified', provisional = false, effects_applied_at = now() WHERE id = $1 AND status = 'pending'`, [returnId]);
+  await q(`INSERT INTO return_decisions (return_id, status, final_rung, provisional, by, note) VALUES ($1,'accepted','verified',false,'verifier',$2)`, [returnId, note]);
+  await q(`UPDATE jobs SET status = 'expired', last_release_note = $2 WHERE parent_return_id = $1 AND status IN ('queued','assigned')`, [returnId, `return #${returnId} ${note}`]);
+  await credit.payAcceptedReturn({ ...ret, status: "accepted", final_rung: "verified" }, []);
+  return true;
+}
+
+/** Settle every pending run on a record challenge that qualifies (a return sent before its submission, or before this rule). Idempotent. */
+export async function settlePendingChallengeRuns(problemId: number): Promise<number> {
+  let n = 0;
+  for (const r of await q<{ id: string }>(`SELECT r.id FROM returns r JOIN jobs j ON j.id = r.job_id WHERE r.problem_id = $1 AND r.status = 'pending' AND r.type = 'measure' AND j.origin_key LIKE 'challenge:%' ORDER BY r.id`, [problemId]))
+    if (await settleChallengeRun(Number(r.id))) n++;
+  return n;
+}
+
 export async function resumeDeferredReviews(problemId: number): Promise<number> {
   const waiting = await q(`SELECT r.* FROM returns r
       WHERE r.problem_id=$1 AND r.status='pending' AND NOT r.provisional AND r.duplicate_of IS NULL

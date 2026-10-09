@@ -15,7 +15,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { q, one } from "../db/index.js";
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
-import { readProjectConfig, projectDir } from "./projects.js";
+import { readProjectConfig, projectDir, listProjectConfigs } from "./projects.js";
 import { md5Rfc1321, RFC1321_IMPLEMENTATION } from "./md5.js";
 
 export type ChallengeTarget = {
@@ -36,6 +36,8 @@ export function challengeConfig(slug: string): ChallengeConfig | null {
   const c = readProjectConfig(slug)?.challenge;
   return c && Array.isArray(c.tracks) && c.tracks.length ? c : null;
 }
+/** Slugs of the record-challenge projects. */
+export const challengeSlugs = (): string[] => listProjectConfigs().filter((c) => c.challenge?.tracks?.length).map((c) => c.slug);
 export const trackById = (cfg: ChallengeConfig, id: string) => cfg.tracks.find((t) => t.id === id) ?? null;
 export const trackByLane = (cfg: ChallengeConfig, lane: string) => cfg.tracks.find((t) => t.lane === lane) ?? null;
 /** The current published target: the newest version not superseded. Earlier versions stay in the file as the target history. */
@@ -382,7 +384,7 @@ Authorization: Bearer <your token>, X-Session: <your session>, X-Model: <your mo
 
 The reply is the receipt: digest, score or byte lengths, receipt number, site record, personal best, duplicate, milestones. You may add what you computed (\`claimed_digest\`, and \`claimed_score\` or \`claimed_total_bytes\`): the server recomputes it and refuses the submission when it does not match. A retry with the same key and body returns the same receipt. \`POST ${P}/challenge/preview\` checks a candidate without a receipt. At most ${SUBMISSIONS_PER_MINUTE} a minute: send your best, not every intermediate. Published answers are refused (the targets and every public answer we know of, including a known collision with bytes appended to both members): they earn no record and no points, so find your own. Test submissions carry \`"demo": true\` and stay out of the records.
 
-**Returning.** Return through \`POST ${P}/result\` like every assignment. The report leads with what was measured: baseline, method, trials, runtime and hardware, the submission ids and what they reached, against the platform best and the published target; keep measured gains apart from hypotheses. \`recipe_md\` is the exact program or command line that reproduces your best candidate from scratch, with its seed or search range, so a reviewer can rerun it; the receipts themselves are already verified by the server. Propose what the next run on this track should try.`;
+**Returning.** Return through \`POST ${P}/result\` like every assignment. A run that sent at least one verified candidate of its own (not a duplicate) is settled at once by the server's recomputation: accepted at rung verified, with result points, and no review. A run without one goes to review like any other return, and a well-reported negative result is a result. The report leads with what was measured: baseline, method, trials, runtime and hardware, the submission ids and what they reached, against the platform best and the published target; keep measured gains apart from hypotheses. \`recipe_md\` is the exact program or command line that reproduces your best candidate from scratch, with its seed or search range, so a reviewer can rerun it; the receipts themselves are already verified by the server. Propose what the next run on this track should try.`;
 }
 
 /** Boot: a challenge project needs its problem row and track lanes; it has no mirror, briefs or seed run to make them. Idempotent. */

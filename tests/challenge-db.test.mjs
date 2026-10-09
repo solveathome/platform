@@ -27,7 +27,7 @@ writeFileSync(join(projectsDir, slug, 'project.json'), JSON.stringify({...testCo
 const {migrate, q, one, pool} = await import('../src/db/index.ts');
 const {issueToken} = await import('../src/lib/auth.ts');
 const {TERMS_VERSION} = await import('../src/lib/terms.ts');
-const {job} = await import('../src/routes/job.ts');
+const {job, settleChallengeRun, settlePendingChallengeRuns} = await import('../src/routes/job.ts');
 const {challenges} = await import('../src/routes/challenges.ts');
 const {projects} = await import('../src/routes/projects.ts');
 const {board} = await import('../src/routes/board.ts');
@@ -100,6 +100,10 @@ const call = (who, method, path, {body, session, model = MODELS[who], accept = '
   body: body ? JSON.stringify(body) : undefined,
 });
 let n = 0;
+const transcriptOf = (model) => [
+  {type: 'user', message: {role: 'user', content: 'Test: run the search'}, timestamp: '2026-10-09T10:00:00Z'},
+  {type: 'assistant', message: {role: 'assistant', model, content: [{type: 'text', text: 'ran it'}], usage: {input_tokens: 100, output_tokens: 50}}, timestamp: '2026-10-09T10:01:00Z'},
+].map((l) => JSON.stringify(l)).join('\n');
 const submit = async (who, body, extra = {}) => { const r = await call(who, 'POST', '/submissions', {session: S[who], body: {idempotency_key: `k-${tag}-${++n}`, ...body}, ...extra}); return {status: r.status, body: await r.json()}; };
 
 test('an agent joins through /start and gets a track assignment with the submission API; no session, no submission', async () => {
@@ -192,28 +196,48 @@ test('corrections withdraw and restore without rewriting; demo data stays apart 
   assert.equal(await one(`SELECT 1 FROM challenge_submissions WHERE id = $1`, [demo.body.submission_id]), undefined);
 });
 
-test('a track run returns through /result, is reviewed by a trusted reviewer, and pays points into the ordinary ledger', async () => {
+test('a track run with a verified submission of its own settles on return: accepted at verified, result points paid, nothing queued for review', async () => {
   const held = await one(`SELECT id, attempt_id FROM jobs WHERE problem_id = $1 AND assigned_session = $2 AND status = 'assigned'`, [pid, S.a]);
   const long = '5a'.repeat(40);   // a 40-byte input: 80 hex characters, which hold a 64-character run that looks like a sha256
   assert.equal((await submit('a', {challenge_id: ZERO, input_hex: long})).status, 201);
-  const transcript = [
-    {type: 'user', message: {role: 'user', content: 'Test: run the search'}, timestamp: '2026-10-09T10:00:00Z'},
-    {type: 'assistant', message: {role: 'assistant', model: 'claude-opus-5-5', content: [{type: 'text', text: 'ran it'}], usage: {input_tokens: 100, output_tokens: 50}}, timestamp: '2026-10-09T10:01:00Z'},
-  ].map((l) => JSON.stringify(l)).join('\n');
-  const r = await call('a', 'POST', '/result', {session: S.a, body: {job_id: Number(held.id), attempt_id: held.attempt_id, transcript, transcript_approved: true,
-    report_md: 'Test: a plain random search reached 12 by reproducing the published candidate, submission ids above.', recipe_md: `Test: node search.mjs mirror 15 7 prints the candidate and its score; reproduce with the same seed. Best input ${long}.`}});
+  const r = await call('a', 'POST', '/result', {session: S.a, body: {job_id: Number(held.id), attempt_id: held.attempt_id, transcript: transcriptOf('claude-opus-5-5'), transcript_approved: true,
+    report_md: 'Test: a plain random search, receipts above.', recipe_md: `Test: node search.mjs zero 15 7 prints the input and its score; reproduce with the same seed. Best input ${long}.`}});
+  const ret = await r.json();
+  assert.equal(r.status, 200, JSON.stringify(ret).slice(0, 300));
+  assert.equal(ret.status, 'accepted'); assert.equal(ret.final_rung, 'verified'); assert.equal(ret.reviews_requested, 0);
+  assert.ok(!ret.warnings.some((w) => /sha256 value/.test(w)), 'the run\'s own candidate in its recipe is not taken for a file hash');
+  assert.equal((await one(`SELECT by FROM return_decisions WHERE return_id = $1`, [ret.return_id])).by, 'verifier');
+  assert.equal(Number((await one(`SELECT count(*) AS c FROM jobs WHERE parent_return_id = $1 AND status IN ('queued','assigned')`, [ret.return_id])).c), 0);
+  const paid = await one(`SELECT sum(points)::float AS p, count(*)::int AS n FROM credits WHERE source_type = 'return' AND source_id = $1 AND kind = 'result'`, [String(ret.return_id)]);
+  assert.ok(paid.p > 0); assert.equal(paid.n, 1, 'paid once');
+  assert.equal(await settlePendingChallengeRuns(pid), 0, 'settling again changes nothing');
+});
+
+test('a run without a verified submission goes to review; a trusted review accepts it and pays points', async () => {
+  const next = await (await call('a', 'GET', '/start', {session: S.a})).json();
+  assert.match(next.brief_md, /solveathome job #\d+/);
+  const held = await one(`SELECT id, attempt_id FROM jobs WHERE problem_id = $1 AND assigned_session = $2 AND status = 'assigned'`, [pid, S.a]);
+  const r = await call('a', 'POST', '/result', {session: S.a, body: {job_id: Number(held.id), attempt_id: held.attempt_id, transcript: transcriptOf('claude-opus-5-5'), transcript_approved: true,
+    report_md: 'Test: a negative run, nothing submitted.', recipe_md: 'Test: node search.mjs mirror 15 9 found nothing above the platform best; rerun with the same seed.'}});
   const ret = await r.json();
   assert.equal(r.status, 200, JSON.stringify(ret).slice(0, 300));
   assert.equal(ret.status, 'pending');
-  assert.ok(!ret.warnings.some((w) => /sha256 value/.test(w)), 'the run\'s own candidate in its recipe is not taken for a file hash');
-  const rv = await call('owner', 'POST', '/result', {body: {type: 'review', return_id: ret.return_id, verdict: 'accept', rung: 'verified', notes_md: 'Test: receipts verified by the server; recipe reran.', transcript: transcript.replaceAll('claude-opus-5-5', 'gpt-6-astra'), transcript_approved: true}});
+  const rv = await call('owner', 'POST', '/result', {body: {type: 'review', return_id: ret.return_id, verdict: 'accept', rung: 'measured', notes_md: 'Test: the negative result is sound.', transcript: transcriptOf('gpt-6-astra'), transcript_approved: true}});
   const review = await rv.json();
-  assert.equal(rv.status, 200, JSON.stringify(review).slice(0, 300));
-  assert.equal(review.return_status, 'accepted');
-  const paid = await one(`SELECT sum(points)::float AS p FROM credits WHERE user_id = $1 AND problem_id = $2 AND kind = 'result'`, [people.a.id, pid]);
-  assert.ok(paid.p > 0, 'result points in the ledger');
-  const next = await (await call('a', 'GET', '/start', {session: S.a})).json();
-  assert.match(next.brief_md, /solveathome job #\d+/);
+  assert.equal(rv.status, 200, JSON.stringify(review).slice(0, 300)); assert.equal(review.return_status, 'accepted');
+});
+
+test('settlement never applies outside a record challenge: a project without challenge tracks keeps its review', async () => {
+  const other = await one(`INSERT INTO problems (slug, name, repo_url) VALUES ($1,'Plain test','https://example.org/r') RETURNING id`, [`${tag}-plain`]);
+  const j = await one(`INSERT INTO jobs (problem_id, type, title, brief_md, origin_key, status) VALUES ($1,'measure','Test: plain','x',$2,'returned') RETURNING id`, [other.id, `challenge:${MIRROR}:test`]);
+  const r = await one(`INSERT INTO returns (problem_id, job_id, type, user_id, model, provider, report_md, transcript, status) VALUES ($1,$2,'measure',$3,'claude-opus-5-5','anthropic','Test','t','pending') RETURNING id`, [other.id, j.id, people.a.id]);
+  await q(`INSERT INTO challenge_submissions (problem_id, challenge_id, user_id, job_id, idempotency_key, request_sha256, identity_sha256, inputs, digest, score, verifier_version, checks) VALUES ($1,$2,$3,$4,$5,'x','x','{}','x',3,'v','{}')`, [other.id, MIRROR, people.a.id, j.id, `plain-${tag}`]);
+  assert.equal(await settleChallengeRun(Number(r.id)), false);
+  assert.equal((await one(`SELECT status FROM returns WHERE id = $1`, [r.id])).status, 'pending');
+  await q(`DELETE FROM challenge_submissions WHERE problem_id = $1`, [other.id]);
+  await q(`DELETE FROM returns WHERE id = $1`, [r.id]);
+  await q(`DELETE FROM jobs WHERE id = $1`, [j.id]);
+  await q(`DELETE FROM problems WHERE id = $1`, [other.id]);
 });
 
 test('pages render: overview with three charts, track, record; JSON for agents', async () => {
