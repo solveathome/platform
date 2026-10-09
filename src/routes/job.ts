@@ -93,7 +93,7 @@ export { ABANDON_AFTER_MIN } from "../lib/liveness.js";
 import { ABANDON_AFTER_MIN } from "../lib/liveness.js";
 import { plainDescription, notFoundPage, abs } from "../lib/seo.js";
 import { noticeChannel } from "../lib/lane-channel.js";
-import { challengeConfig, challengeJob, renderChallengeBrief } from "../lib/challenges.js";
+import { challengeConfig, challengeJob, challengeTaskBrief, challengeTrackOfJob } from "../lib/challenges.js";
 async function sweepExpired(problemId: number): Promise<void> {
   await expireUntrustedLeanChecks(problemId);
   // Abandonment: the session is ended and its assignment goes back to the queue at once, instead of at the job's expiry hours later.
@@ -286,13 +286,10 @@ ${ENDED_LAUNCH_GUIDANCE}
   const portfolio = researchPolicy(req.project.slug, req.project.research_allocation);
   const portfolioUsed = portfolio ? await researchAllocation(Number(req.project.id), tier) : null;
   let row: any = tangentFirst;
-  // A record challenge (src/lib/challenges.ts) hands out a track, nothing else: no reviews, triage or research portfolio exist there.
-  const challengeRow = !row && !recovery && !session.direction_id && challengeConfig(req.project.slug) ? await challengeJob(Number(req.project.id), req.project.slug, lane) : null;
-  row ??= challengeRow;
   // A job asked for by id (#mba-sah-held-feedback-items, item 11; release notes: "three consecutive `next` calls delivered #… [not]
   // #4300"): issued when it is queued and this session may take it under the ordinary eligibility, else refused with the reason.
   let directed = false;
-  if (req.query.job !== undefined && !recovery && !tangentFirst && !challengeRow) {
+  if (req.query.job !== undefined && !recovery && !tangentFirst) {
     const id = Number(req.query.job);
     const refuse = (status: number, error: string, extra: Record<string, unknown> = {}) => { if (wantsJson) res.status(status).json({ error, job_id: Number.isInteger(id) ? id : null, ...extra }); else res.status(status).type("text/markdown").send(`# Job #${String(req.query.job).slice(0, 20)} is not yours to take\n\n${error}\n${extra.reasons ? `\n${(extra.reasons as string[]).map((r) => `- ${r}`).join("\n")}\n` : ""}\nCall /start without job= for the next assignment.\n`); };
     if (!Number.isInteger(id) || id <= 0) { refuse(400, "job must be a job id (a positive integer)."); return; }
@@ -387,13 +384,13 @@ ${ENDED_LAUNCH_GUIDANCE}
     }
   }
   row ??= await selectJob(agent, preferResearch);
-  const reserveDiscovery = !challengeRow && !directed && !recovery && !requiredCorrection && !session.direction_id && !portfolio && !tangentFirst && tier === 1 && discoveryDue(share, used, Math.min(agent.maxHours, Number(row?.budget_hours ?? agent.maxHours)));
+  const reserveDiscovery = !directed && !recovery && !requiredCorrection && !session.direction_id && !portfolio && !tangentFirst && tier === 1 && discoveryDue(share, used, Math.min(agent.maxHours, Number(row?.budget_hours ?? agent.maxHours)));
   if (reserveDiscovery) row = await selectJob(agent, preferResearch, true)
     ?? await synthesizeExplore(req, session, lane, maxHours, null, true);
   if (!row) row = await synthesizeExplore(req, session, lane, maxHours, await computeBlocked(agent));
   // A pursuit is compared with the returns on record before it goes out (#sah-stale-next-step-check): #1838, #1845 and #1847
   // each spent a full pursuit on a step already answered. The same session takes the bounded check in its place.
-  const stepCheck = !challengeRow && !recovery && !directed && !session.direction_id && !tangentFirst && !chat ? await holdForStepCheck(row) : null;
+  const stepCheck = !recovery && !directed && !session.direction_id && !tangentFirst && !chat ? await holdForStepCheck(row) : null;
   if (stepCheck) row = stepCheck;
   const unmet = row.type === 'check' ? { tools: [], sources: [] } : unmetRequirements(row, agent.capabilities);
   const reason = { policy: directed ? "requested job" : session.direction_id ? "agent direction" : tangentFirst ? "person's tangent" : triageSkipped ? "reviews only: triage skipped, trusted reviewer" : reviewsOnly ? "reviews only" : requiredCorrection ? "required correction" : trustedJudgment ? "trusted judgment" : pressed ? "review pressure" : triaged ? "review triage" : portfolio ? "research portfolio" : reserveDiscovery ? "reserved tier-1 discovery" : "eligible work by need and capability",
@@ -415,6 +412,8 @@ ${ENDED_LAUNCH_GUIDANCE}
     await q(`UPDATE sessions SET recovery_attempt_id=NULL WHERE id=$1`,[session.id]);
   }
   row.repo_url = req.project.repo_url;
+  // A record challenge's track assignment says where the record stands now, not when the job was made (src/lib/challenges.ts).
+  if (challengeTrackOfJob(req.project.slug, row)) row.brief_md = await challengeTaskBrief(row, req.project, BASE());
   const sess = { id: String(session.id), jobs: Number(session.jobs), max: session.max_jobs === null ? null : Number(session.max_jobs), length: lengthWords(session), disk, abandonAfterMin: ABANDON_AFTER_MIN, maxHours: agent.maxHours, compute: describeOffer(offer), transcriptPreapproved: settings.ai?.transcript_preapproved === true, subagents: settings.ai?.subagents?.allowed === false ? "not allowed" : settings.ai?.subagents?.max_parallel ? `allowed, up to ${settings.ai.subagents.max_parallel} at a time` : "allowed", files: await files.quota(uid).then((f) => ({ left: f.files_left, bytes_left: f.bytes_left, per_day: f.files_per_day })) };
   row.operational_deferrals = await deferralHistory(Number(row.id),session.id);
   row.handoffs = await handoffHistory(Number(row.id));
@@ -430,9 +429,8 @@ ${ENDED_LAUNCH_GUIDANCE}
   // A triage brief is composed when served: the series waiting beside the return (covers) is whatever waits now, not what waited when the job was made.
   if (row.type === 'triage' && row.parent_return_id && triageCfg) { row.brief_md = await composeTriageBrief(Number(row.parent_return_id), triageCfg, { uid, model: req.model ?? null }); await q(`UPDATE jobs SET brief_md = $2 WHERE id = $1`, [row.id, row.brief_md]); }
   if (row.evidence_return_id || row.parent_return_id) row.brief_md += await verificationBrief(Number(row.evidence_return_id ?? row.parent_return_id), row.parent_return_id && row.type === 'review' ? 'review' : 'record');
-  let md = challengeRow ? await renderChallengeBrief(row, req.project, BASE(), sess) : chat ? renderChatBrief(row, `${BASE()}/projects/${req.project.slug}`, { id: String(session.id), host: String(req.oauth?.host ?? "other"), handle: req.user!.handle }) : renderBrief(row, `${BASE()}/projects/${req.project.slug}`, sess);
-  if (challengeRow && req.justRegistered) md = (await orientation(req.project, BASE(), { ...member, ...settings, capabilities: session.capabilities, contact_id: session.contact_id, session: session.id, session_max_jobs: session.max_jobs, length: lengthWords(session), disk }, true, { model: req.model ?? null, uid, trusted, tier, effort: req.effort ?? null, tier_note: tf.note }, true)) + "\n\n---\n\n" + md;
-  if (!chat && !challengeRow) {
+  let md = chat ? renderChatBrief(row, `${BASE()}/projects/${req.project.slug}`, { id: String(session.id), host: String(req.oauth?.host ?? "other"), handle: req.user!.handle }) : renderBrief(row, `${BASE()}/projects/${req.project.slug}`, sess);
+  if (!chat) {
   { const note = unservedNote(String(row.brief_md ?? ""), req.project.slug, `${BASE()}/projects/${req.project.slug}`); if (note) md = md.replace(/\n## /, () => `\n${note}## `); }
   // The handle's own returns waiting for a verdict: who can decide them, what is settled, and where the work goes meanwhile (`ownReturnsWaitingNote`).
   const ownNote = row.type !== "review" ? await ownReturnsWaitingNote(Number(req.project.id), `${BASE()}/projects/${req.project.slug}`, uid, req.user!.handle, req.model ?? null, granted) : "";
@@ -577,6 +575,8 @@ const LEAD_KINDS = ["elevate", "prior-art", "break", "registry", "synthesis", "r
  *  session and came back "already scored"); when every open question is in hand, a lead hunt from a rotating menu, so an agent with
  *  nothing typed to do goes looking for new leads instead of re-treading the list. */
 async function synthesizeExplore(req: any, session: any, laneSlug: string | null, _maxHours: number, blocked: { n: number; types: string; ram: number; hours: number } | null = null, discovery = false): Promise<any> {
+  // A record challenge has no open-questions register to explore: its open work is always a run on one of its tracks.
+  if (challengeConfig(req.project.slug)) return challengeJob(Number(req.project.id), req.project.slug, laneSlug);
   const hours = Math.max(0.5, Math.min(24, Number(session.ai?.max_hours_per_assignment ?? 2)));
   const lane = laneSlug
     ? await one(`SELECT l.id, l.slug, l.title FROM lanes l WHERE l.problem_id = $1 AND l.slug = $2 AND l.status = 'open'`, [req.project.id, laneSlug])
@@ -1574,7 +1574,7 @@ job.post("/result", bearer, project, assignmentMutation(async (req: any, res) =>
   const known = new Set<string>([...attached, ...(Array.isArray(b.files) ? b.files.map((x: any) => String(x).toLowerCase()) : []), ...(Array.isArray(cites.files) ? cites.files.map((x: any) => String(x).toLowerCase()) : []), ...JSON.stringify(b.hashes ?? {}).match(/[0-9a-f]{64}/g) ?? []]);
   const found = (recipe.match(/[0-9a-f]{64}/g) ?? []) as string[];
   const candidates = Array.from(new Set(found.map((x) => x.toLowerCase()))).filter((x) => !known.has(x));
-  const portfolio = candidates.length ? new Set(Object.values(readPublication(join(revisions.REPOS, problem.slug))?.files ?? {}).map((f: any) => String(f?.sha256 ?? "").toLowerCase())) : new Set<string>();
+  const portfolio = candidates.length ? new Set(Object.values(readPublication(revisions.docsRoot(problem.slug))?.files ?? {}).map((f: any) => String(f?.sha256 ?? "").toLowerCase())) : new Set<string>();
   const patchWarning = b.patch ? [patchGuidance(String(b.patch), readProjectConfig(req.project.slug)?.review_notes?.patch)] : [];
   const stray: string[] = [];
   for (const x of candidates) { if (portfolio.has(x)) continue; if (await one(`SELECT 1 FROM files WHERE sha256 = $1 AND deleted_at IS NULL`, [x])) continue; stray.push(x); }

@@ -10,6 +10,7 @@ import { join, posix } from "node:path";
 import { createTwoFilesPatch } from "diff";
 import { q, one, queueFileEffect, pendingFileText, projectTransaction } from "../db/index.js";
 import { ROOT } from "./paths.js";
+import { projectDir } from "./projects.js";
 import * as files from "./files.js";
 import { reopenRegressed } from "./findings.js";
 
@@ -25,7 +26,18 @@ export function safeRel(path: string): string | null {
   return n;
 }
 export function overlayPath(slug: string, rel: string): string { return join(OVERLAY, slug, rel); }
-export function mirrorPath(slug: string, rel: string): string { return join(REPOS, slug, rel); }
+/**
+ * Where a project's published documents live: its mirror cut (data/repos/<slug>, from scripts/mirror-project.sh), or, for a project
+ * whose corpus is public in this repository and has no mirror, projects/<slug>/docs with its own PUBLICATION.json (Oct 9 2026, the
+ * MD5 challenge). Accepted revisions go to the overlay either way.
+ */
+export function docsRoot(slug: string): string {
+  const mirror = join(REPOS, slug);
+  if (existsSync(mirror)) return mirror;
+  const own = projectDir(slug);
+  return own && existsSync(join(own, "docs", "PUBLICATION.json")) ? join(own, "docs") : mirror;
+}
+export function mirrorPath(slug: string, rel: string): string { return join(docsRoot(slug), rel); }
 /** The text the site serves for a document now: the overlay if the swarm revised it, else the mirror, else (agent-proposed paper) its current file. */
 export async function currentText(slug: string, rel: string, problemId?: number): Promise<{ text: string; from: "overlay" | "mirror" | "paper" } | null> {
   const pending = await pendingFileText(overlayPath(slug, rel));

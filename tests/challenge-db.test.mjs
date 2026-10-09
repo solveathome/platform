@@ -18,7 +18,11 @@ const projectsDir = mkdtempSync(join(tmpdir(), 'challenge-projects-'));
 process.env.PROJECTS_DIR = projectsDir;
 mkdirSync(join(projectsDir, slug));
 const md5 = JSON.parse(readFileSync(new URL('../projects/md5/project.json', import.meta.url), 'utf8'));
-writeFileSync(join(projectsDir, slug, 'project.json'), JSON.stringify({...md5, slug, name: 'Challenge test'}));
+// The collision target's bytes are left out here, so the record mechanics can use the one collision a test can carry; the last test
+// lists it as published and checks it is refused.
+const testConfig = structuredClone(md5);
+testConfig.challenge.tracks[2].targets = testConfig.challenge.tracks[2].targets.map(({inputs, ...t}) => t);
+writeFileSync(join(projectsDir, slug, 'project.json'), JSON.stringify({...testConfig, slug, name: 'Challenge test'}));
 
 const {migrate, q, one, pool} = await import('../src/db/index.ts');
 const {issueToken} = await import('../src/lib/auth.ts');
@@ -26,7 +30,8 @@ const {TERMS_VERSION} = await import('../src/lib/terms.ts');
 const {job} = await import('../src/routes/job.ts');
 const {challenges} = await import('../src/routes/challenges.ts');
 const {projects} = await import('../src/routes/projects.ts');
-const {ensureChallengeProjects, trackView, challengeConfig} = await import('../src/lib/challenges.ts');
+const {board} = await import('../src/routes/board.ts');
+const {ensureChallengeProjects, trackView, challengeConfig, forgetKnown} = await import('../src/lib/challenges.ts');
 const {ensureChannels} = await import('../src/routes/chat.ts');
 const {listProjectConfigs, featuredProject, isListed} = await import('../src/lib/projects.ts');
 const {noindexPath} = await import('../src/lib/seo.ts');
@@ -48,7 +53,7 @@ before(async () => {
   await ensureChallengeProjects(listProjectConfigs(), ensureChannels);
   pid = Number((await one(`SELECT id FROM problems WHERE slug = $1`, [slug])).id);
   const app = express(); app.use(express.json());
-  app.use('/projects/:slug', challenges); app.use('/projects/:slug', job); app.use(projects);
+  app.use('/projects/:slug', challenges); app.use('/projects/:slug', job); app.use('/projects/:slug', board); app.use(projects);
   server = app.listen(0, '127.0.0.1');
   await new Promise(r => server.once('listening', r));
   base = `http://127.0.0.1:${server.address().port}`;
@@ -62,6 +67,14 @@ after(async () => {
   await q(`UPDATE challenge_submissions SET duplicate_of = NULL WHERE problem_id = $1`, [pid]);
   await q(`DELETE FROM challenge_submissions WHERE problem_id = $1`, [pid]);
   await q(`DELETE FROM challenge_reports WHERE problem_id = $1`, [pid]);
+  await q(`DELETE FROM credits WHERE problem_id = $1 OR user_id = ANY($2)`, [pid, ids]);
+  await q(`DELETE FROM counted_entries WHERE user_id = ANY($1)`, [ids]);
+  await q(`DELETE FROM return_decisions WHERE return_id IN (SELECT id FROM returns WHERE problem_id = $1)`, [pid]);
+  await q(`DELETE FROM reviews WHERE return_id IN (SELECT id FROM returns WHERE problem_id = $1)`, [pid]);
+  await q(`UPDATE jobs SET parent_return_id = NULL WHERE problem_id = $1`, [pid]);
+  await q(`DELETE FROM assignment_attempts WHERE problem_id = $1`, [pid]);
+  await q(`DELETE FROM returns WHERE problem_id = $1`, [pid]);
+  await q(`DELETE FROM jobs WHERE problem_id = $1`, [pid]);
   await q(`DELETE FROM mutation_receipts WHERE user_id = ANY($1)`, [ids]);
   await q(`DELETE FROM assignment_attempts WHERE problem_id = $1`, [pid]);
   await q(`DELETE FROM jobs WHERE problem_id = $1`, [pid]);
@@ -81,7 +94,7 @@ after(async () => {
   assert.equal(Number(residue.n), 0, 'test residue left in the database');
 });
 
-const MODELS = {a: 'claude-opus-5-5', b: 'gpt-6-astra', owner: 'claude-opus-5-5'};
+const MODELS = {a: 'claude-opus-5-5', b: 'gpt-6-astra', owner: 'gpt-6-astra'};
 const call = (who, method, path, {body, session, model = MODELS[who], accept = 'application/json'} = {}) => fetch(`${base}/projects/${slug}${path}`, {
   method, headers: {authorization: `Bearer ${people[who].token}`, accept, 'content-type': 'application/json', 'x-model': model, 'x-effort': 'high', ...(session ? {'x-session': session} : {})},
   body: body ? JSON.stringify(body) : undefined,
@@ -96,6 +109,8 @@ test('an agent joins through /start and gets a track assignment with the submiss
     assert.equal(r.status, 200, JSON.stringify(j).slice(0, 300));
     assert.match(j.brief_md, /POST .*\/submissions/);
     assert.match(j.brief_md, /Track `md5-/);
+    assert.equal(j.type, 'measure', 'a track run is an ordinary measure assignment, reviewed and credited like any other');
+    assert.match(j.brief_md, /POST .*\/result/);
     S[who] = j.session;
   }
   const none = await call('a', 'POST', '/submissions', {body: {challenge_id: MIRROR, idempotency_key: 'nosession01', candidate: '0'.repeat(32)}});
@@ -108,14 +123,13 @@ test('receipts: score jump awards every milestone to one submission, ties and du
   assert.equal(s1.status, 201); assert.equal(s1.body.score, 2); assert.deepEqual(s1.body.achievements.filter(x => x.kind === 'milestone').map(x => x.value), [1, 2]);
   const zero = await submit('b', {challenge_id: MIRROR, candidate: '00000000000000000000000000000000'});
   assert.equal(zero.body.score, 0); assert.equal(zero.body.achievements.length, 0, 'score 0 earns no milestone');
-  const jump = await submit('b', {challenge_id: MIRROR, candidate: '54db1011d76dc70a0a9df3ff3e0b390f', attribution: 'Thomas Egense'});
-  assert.deepEqual(jump.body.achievements.filter(x => x.kind === 'milestone').map(x => x.value), [3, 4, 5, 6, 7, 8, 9, 10, 11, 12]);
-  assert.equal(jump.body.known_result, true); assert.ok(jump.body.achievements.some(x => x.kind === 'target' && !x.exceeded));
-  const dup = await submit('a', {challenge_id: MIRROR, candidate: '54db1011d76dc70a0a9df3ff3e0b390f'});
+  const jump = await submit('b', {challenge_id: MIRROR, candidate: '72690dc972013c32bce5e984a6681b99'});   // 5, found by a plain random search
+  assert.deepEqual(jump.body.achievements.filter(x => x.kind === 'milestone').map(x => x.value), [3, 4, 5]);
+  const dup = await submit('a', {challenge_id: MIRROR, candidate: '72690dc972013c32bce5e984a6681b99'});
   assert.equal(dup.body.duplicate, true); assert.equal(dup.body.duplicate_of, jump.body.submission_id); assert.equal(dup.body.site_record, false); assert.equal(dup.body.personal_best, true);
   const view = await trackView(pid, challengeConfig(slug).tracks[0]);
   assert.equal(view.best.submission_id, jump.body.submission_id);
-  assert.equal(view.milestones.find(m => m.value === 12).handle, people.b.handle);
+  assert.equal(view.milestones.find(m => m.value === 5).handle, people.b.handle);
   // Idempotency: same key and body returns the original; same key, other body is refused.
   const key = `idem-${tag}`;
   const r1 = await call('a', 'POST', '/submissions', {session: S.a, body: {challenge_id: ZERO, idempotency_key: key, input_hex: '06'}});
@@ -130,7 +144,7 @@ test('receipts: score jump awards every milestone to one submission, ties and du
 });
 
 test('concurrent submissions get distinct ordered receipts and exactly one winner per milestone', async () => {
-  const many = await Promise.all(Array.from({length: 8}, (_, i) => submit(i % 2 ? 'a' : 'b', {challenge_id: ZERO, input_hex: '6231303064343734656231303064363064303432653836336331653061646565'})));
+  const many = await Promise.all(Array.from({length: 8}, (_, i) => submit(i % 2 ? 'a' : 'b', {challenge_id: ZERO, input_hex: '9b37e36766f0622f34777adbc78a4ab0'})));   // 6 leading zeros, found by a plain random search
   assert.ok(many.every(m => m.status === 201));
   const ids = many.map(m => m.body.submission_id);
   assert.equal(new Set(ids).size, 8);
@@ -138,7 +152,7 @@ test('concurrent submissions get distinct ordered receipts and exactly one winne
   assert.equal(firsts.length, 1, 'one original, seven duplicates');
   assert.equal(firsts[0].body.submission_id, Math.min(...ids), 'the earliest receipt holds the priority');
   const winners = await q(`SELECT value, count(*)::int AS c FROM challenge_events WHERE problem_id = $1 AND challenge_id = $2 AND kind = 'milestone' GROUP BY value`, [pid, ZERO]);
-  assert.ok(winners.every(w => w.c === 1)); assert.equal(winners.length, 13);
+  assert.ok(winners.every(w => w.c === 1)); assert.equal(winners.length, 6);
   const order = await q(`SELECT id, received_at FROM challenge_submissions WHERE problem_id = $1 ORDER BY id`, [pid]);
   for (let i = 1; i < order.length; i++) assert.ok(new Date(order[i].received_at) >= new Date(order[i - 1].received_at), 'receipt order and time agree');
 });
@@ -178,18 +192,32 @@ test('corrections withdraw and restore without rewriting; demo data stays apart 
   assert.equal(await one(`SELECT 1 FROM challenge_submissions WHERE id = $1`, [demo.body.submission_id]), undefined);
 });
 
-test('finishing closes the assignment with its report; the next /start hands out another track', async () => {
+test('a track run returns through /result, is reviewed by a trusted reviewer, and pays points into the ordinary ledger', async () => {
   const held = await one(`SELECT id, attempt_id FROM jobs WHERE problem_id = $1 AND assigned_session = $2 AND status = 'assigned'`, [pid, S.a]);
-  const r = await call('a', 'POST', '/challenge/finish', {session: S.a, body: {job_id: Number(held.id), attempt_id: held.attempt_id, report_md: 'Test: baseline only.'}});
-  assert.equal(r.status, 200, await r.clone().text());
-  assert.equal((await one(`SELECT status FROM jobs WHERE id = $1`, [held.id])).status, 'returned');
+  const transcript = [
+    {type: 'user', message: {role: 'user', content: 'Test: run the search'}, timestamp: '2026-10-09T10:00:00Z'},
+    {type: 'assistant', message: {role: 'assistant', model: 'claude-opus-5-5', content: [{type: 'text', text: 'ran it'}], usage: {input_tokens: 100, output_tokens: 50}}, timestamp: '2026-10-09T10:01:00Z'},
+  ].map((l) => JSON.stringify(l)).join('\n');
+  const r = await call('a', 'POST', '/result', {session: S.a, body: {job_id: Number(held.id), attempt_id: held.attempt_id, transcript, transcript_approved: true,
+    report_md: 'Test: a plain random search reached 12 by reproducing the published candidate, submission ids above.', recipe_md: 'Test: node search.mjs mirror 15 7 prints the candidate and its score; reproduce with the same seed.'}});
+  const ret = await r.json();
+  assert.equal(r.status, 200, JSON.stringify(ret).slice(0, 300));
+  assert.equal(ret.status, 'pending');
+  const rv = await call('owner', 'POST', '/result', {body: {type: 'review', return_id: ret.return_id, verdict: 'accept', rung: 'verified', notes_md: 'Test: receipts verified by the server; recipe reran.', transcript: transcript.replaceAll('claude-opus-5-5', 'gpt-6-astra'), transcript_approved: true}});
+  const review = await rv.json();
+  assert.equal(rv.status, 200, JSON.stringify(review).slice(0, 300));
+  assert.equal(review.return_status, 'accepted');
+  const paid = await one(`SELECT sum(points)::float AS p FROM credits WHERE user_id = $1 AND problem_id = $2 AND kind = 'result'`, [people.a.id, pid]);
+  assert.ok(paid.p > 0, 'result points in the ledger');
   const next = await (await call('a', 'GET', '/start', {session: S.a})).json();
   assert.match(next.brief_md, /solveathome job #\d+/);
 });
 
 test('pages render: overview with three charts, track, record; JSON for agents', async () => {
   const html = await (await call('a', 'GET', '', {accept: 'text/html'})).text();
-  assert.equal((html.match(/class="cc-chart"/g) ?? []).length, 3);
+  assert.equal((html.match(/class="cc-chart"/g) ?? []).length, 3, 'the three charts are inline on the project page');
+  assert.match(html, /id="startfield"/, 'the standard sign-in and limits start field');
+  assert.match(html, /id="highscores"/, 'the standard points leaderboard');
   assert.match(html, /noindex/);
   for (const t of md5.challenge.tracks) assert.equal((await call('a', 'GET', `/tracks/${t.lane}`, {accept: 'text/html'})).status, 200);
   const sub = await one(`SELECT id FROM challenge_submissions WHERE problem_id = $1 AND challenge_id = $2 ORDER BY id LIMIT 1`, [pid, COLL]);
@@ -210,4 +238,29 @@ test('a hidden project is reachable but never listed, featured or indexed', asyn
   assert.notEqual((await featuredProject())?.slug, slug);
   assert.equal(noindexPath(`/projects/${slug}`), true);
   assert.equal(noindexPath(`/projects/${slug}/tracks/self-match`), true);
+});
+
+test('published answers are refused with the reason, a known collision with bytes appended too; a claimed result must match the recomputation', async () => {
+  const before = Number((await one(`SELECT count(*) AS c FROM challenge_submissions WHERE problem_id = $1`, [pid])).c);
+  writeFileSync(join(projectsDir, slug, 'known-results.json'), JSON.stringify({[COLL]: [{a_hex: A, b_hex: B, total_bytes: 128, credit: 'Marc Stevens', source_url: 'https://marc-stevens.nl/research/md5-1block-collision/'}]}));
+  forgetKnown();
+  for (const body of [
+    {challenge_id: MIRROR, candidate: '54db1011d76dc70a0a9df3ff3e0b390f'},
+    {challenge_id: ZERO, input_hex: '7b626b674e52354553377d2d307836394245303237433937'},
+    {challenge_id: COLL, a_hex: B, b_hex: A},
+    {challenge_id: COLL, a_hex: A + 'cd'.repeat(10), b_hex: B + 'cd'.repeat(10)},
+  ]) {
+    const r = await submit('a', body);
+    assert.equal(r.status, 422, JSON.stringify(r.body).slice(0, 200));
+    assert.match(r.body.error, /published answer/);
+    assert.ok(r.body.published.credit);
+  }
+  const wrong = await submit('a', {challenge_id: ZERO, input_hex: '06', claimed_score: 3});
+  assert.equal(wrong.status, 422); assert.match(wrong.body.error, /does not match/); assert.equal(wrong.body.recomputed.score, 1);
+  const wrongDigest = await submit('a', {challenge_id: MIRROR, candidate: '00000000000000000000000000001efd', claimed_digest: '0'.repeat(32)});
+  assert.equal(wrongDigest.status, 422);
+  assert.equal((await submit('a', {challenge_id: COLL, a_hex: '00', b_hex: '01', claimed_score: 1})).status, 400, 'a collision is claimed in bytes, never as a score');
+  assert.equal(Number((await one(`SELECT count(*) AS c FROM challenge_submissions WHERE problem_id = $1`, [pid])).c), before, 'nothing refused was recorded');
+  const right = await submit('a', {challenge_id: MIRROR, candidate: '00000000000000000000000000001efd', claimed_digest: '0005b7062c52fc4ee9762f633adb35fa', claimed_score: 3});
+  assert.equal(right.status, 201);
 });

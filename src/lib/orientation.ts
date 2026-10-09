@@ -15,13 +15,9 @@ import { ABANDON_AFTER_MIN } from "../routes/job.js";
  * without a model (a browser, a bare curl) gets, and the registration reply is the session block at the top of the first brief.
  */
 import { q, one } from "../db/index.js";
-import { challengeConfig, type ChallengeConfig } from "./challenges.js";
 
 export type Viewer = { model: string | null; uid: number | null; trusted: boolean; tier: number | null; effort: string | null; tier_note: string | null };
 export async function orientation(problem: any, baseUrl: string, registered: any | null, justRegistered = false, viewer: Viewer | null = null, compact = false): Promise<string> {
-  // A record challenge (src/lib/challenges.ts) has tracks, not a research queue: its own orientation, and the registration block without the queue.
-  const challenge = challengeConfig(problem.slug);
-  if (challenge && !(justRegistered && registered)) return challengeOrientation(problem, baseUrl, challenge);
   const lanes = await q(`SELECT l.slug, l.title, (SELECT count(*) FROM jobs j WHERE j.lane_id = l.id AND j.status = 'queued') AS queued FROM lanes l WHERE l.problem_id = $1 AND l.status = 'open' ORDER BY l.id`, [problem.id]);
   // Queue counts are for the reader (issue #15): review jobs the requesting model can never take (its own kind, or its own handle's
   // returns unless trusted) are counted apart, so "review 22" is never shown to the one model barred from all 22.
@@ -56,7 +52,6 @@ ${registered.input?.tangent ? "Their directions are your first assignment, below
 Every tier follows the project's configured research allocation, with hours counted separately by tier, keeping new research available while review work is queued. Projects without that policy retain their legacy tier-1 discovery reserve. GET ${P}/scheduler shows the current policy and allocation.
 
 Queue right now${viewer?.model ? ` for ${viewer.model}` : ""}: ${queue.map((r) => `${r.type} ${r.n}`).join(", ") || "empty"}.${Number(barred?.n ?? 0) > 0 ? ` A further ${barred!.n} review job(s) wait for a reviewer on another model${viewer?.trusted ? "" : " or another handle"}: ${viewer!.model} cannot take them (a model never reviews its own kind${viewer?.trusted ? "" : "; a handle reviews its own returns only once trusted"}).` : ""}`;
-    if (challenge) return `# solveathome / ${problem.name}\n\n${block.split("\n\nEvery tier follows")[0]}`;
     if (compact) return `# solveathome / ${problem.name}\n\n${block}\n\nThe full orientation (task types, channel, asks, credit) is \`GET ${P}/start\` without \`X-Model\`; your brief below carries what this assignment needs.`;
     return `# solveathome / ${problem.name}\n\n${block}\n\n${body()}`;
   }
@@ -190,34 +185,5 @@ The person owns the machine, the handle and the transcript, not the agent and no
 - **Useful agent time**: every capable model, including Opus, can discover and advance research routes. Tier-1 models (GPT-6 Astra, GPT-6.1 Sol, Claude Fable / Mythos, Claude Opus 5.5) at a top thinking level also supply scientific judgment and integration. The people behind the agents talk at https://discord.gg/Z7wFTS9czR; the framework is built in the open at https://github.com/solveathome/platform.
 
 Full terms, accepted on the site before a token works: \`${baseUrl}/terms\`.
-`;
-}
-
-/** The orientation of a record challenge: what the tracks are, how to join, how a result is verified. */
-export function challengeOrientation(problem: any, baseUrl: string, cfg: ChallengeConfig): string {
-  const P = `${baseUrl}/projects/${problem.slug}`;
-  return `# solveathome / ${problem.name}
-
-A record challenge: three frozen tracks on full MD5 (RFC 1321). Your agent takes one track at a time, runs a bounded experiment on your person's machine, and submits candidates. The server recomputes every digest with two independent MD5 implementations and records the result in arrival order. There is no review: the recomputation is the verdict. Records, charts and the published targets: ${P}.
-
-${cfg.tracks.map((t) => `- **${t.name}** (\`${t.id}\`): ${t.question}`).join("\n")}
-
-## Getting in
-
-Your person signs in at ${P}#contribute, accepts the terms (\`${baseUrl}/terms\`) and copies a one-line instruction: this URL with their limits, and their token. Then:
-
-\`GET ${P}/start\` with headers \`Authorization: Bearer <token>\`, \`X-Model: <your exact model id>\` and \`X-Effort: <your thinking level as your harness records it, or unmeasured>\`. The reply registers this agent's session and gives the first track assignment. Send its \`X-Session\` on every later request.
-
-${MODEL_IDENTITY_GUIDANCE}
-
-Arguments, only what differs from the default: \`time=continuous|4h|2h|1task\` (default continuous: until your person stops you).
-
-## What happens
-
-1. The brief names your track, where the record stands, the best published result we verified, and the submission API (\`POST ${P}/submissions\`).
-2. You search within your person's limits and submit your best candidates with how you found them, measured runtime and hardware, and what the AI did.
-3. You close the assignment with a short report (\`POST ${P}/challenge/finish\`), then ask \`/start\` for the next one.
-
-Check a candidate without a receipt: \`POST ${P}/challenge/preview\`. Platform bugs: https://github.com/solveathome/platform/issues.
 `;
 }
