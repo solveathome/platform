@@ -1657,3 +1657,8 @@ ALTER TABLE jobs ADD COLUMN IF NOT EXISTS exposition_source_return_id BIGINT REF
 ALTER TABLE jobs ADD COLUMN IF NOT EXISTS exposition_key TEXT;
 CREATE UNIQUE INDEX IF NOT EXISTS jobs_exposition_scope_unique ON jobs(problem_id,exposition_key) WHERE exposition_key IS NOT NULL;
 CREATE INDEX IF NOT EXISTS returns_paper_exposition_idx ON returns(problem_id,paper_slug,id) WHERE paper_exposition IS NOT NULL;
+
+-- Review quorum (Oct 9 2026, src/lib/consensus.ts): on a project with review_quorum above 1 one approved person may give a second verdict
+-- with another tier-1 model family. One review per person per family; the app keeps one per person on every other project.
+CREATE UNIQUE INDEX IF NOT EXISTS reviews_return_user_family_idx ON reviews (return_id, user_id, coalesce(lean_model_family(model), model));
+ALTER TABLE reviews DROP CONSTRAINT IF EXISTS reviews_return_id_user_id_key;

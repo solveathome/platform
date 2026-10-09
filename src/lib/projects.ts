@@ -19,6 +19,7 @@ export type ProjectConfig = {
   // but never featured, listed, put in the sitemap, the dump, a progress email or an announcement, and served noindex. Publishing is
   // removing the flag (or setting it true) and deploying.
   listed?: boolean;
+  review_quorum?: number;   // trusted tier-1 verdicts from different model families that must agree (src/lib/consensus.ts); default 1
   challenge?: import('./challenges.js').ChallengeConfig;   // a record challenge: submissions verified by the server, no review (src/lib/challenges.ts)
   home?: { field?: string; why?: string; standing?: string };   // the front-page card (src/lib/home.ts): field line, why it matters, a fixed status line
   slug: string; name: string; repo_url: string; featured?: boolean; tagline?: string; summary?: string; status_md?: string;
@@ -62,6 +63,8 @@ export function unlistedSlugs(): string[] {
   return unlistedCache.slugs;
 }
 export const isListed = (slug: string): boolean => !unlistedSlugs().includes(slug);
+/** The project's review quorum (project.json review_quorum): 1 unless it asks for more. */
+export const reviewQuorum = (slug: string): number => { const n = Number(readProjectConfig(slug)?.review_quorum ?? 1); return Number.isInteger(n) && n > 1 ? Math.min(n, 5) : 1; };
 export function forgetUnlisted(): void { unlistedCache.at = 0; }
 
 export type Featured = { slug: string; name: string; summary: string; tagline: string };

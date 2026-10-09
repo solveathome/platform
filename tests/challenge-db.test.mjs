@@ -42,8 +42,11 @@ const S = {};
 const A = md5.challenge.tracks[2].targets[0].inputs.a_hex, B = md5.challenge.tracks[2].targets[0].inputs.b_hex;
 const MIRROR = 'md5-mirror-ascii32-v1', ZERO = 'md5-zero-bytes1024-v1', COLL = 'md5-collision-totalbytes1024-v1';
 
+const madeTiers = [];
 before(async () => {
   await migrate();
+  for (const [model, provider] of [['gpt-6-astra', 'openai'], ['claude-fable-5-1', 'anthropic'], ['claude-opus-5-5', 'anthropic']])
+    if (await one(`INSERT INTO model_tiers (model, provider, tier, note) VALUES ($1,$2,1,'challenge test') ON CONFLICT (model) DO NOTHING RETURNING model`, [model, provider])) madeTiers.push(model);
   for (const n of ['a', 'b', 'owner']) {
     const handle = `${tag}-${n}`;
     const u = await one(`INSERT INTO users (github_id, handle, terms_version, terms_accepted_at) VALUES ($1,$2,$3,now()) RETURNING id`, [940_000_000 + Math.floor(Math.random() * 1e8), handle, TERMS_VERSION]);
@@ -52,6 +55,8 @@ before(async () => {
   process.env.OWNER_HANDLES = people.owner.handle;
   await ensureChallengeProjects(listProjectConfigs(), ensureChannels);
   pid = Number((await one(`SELECT id FROM problems WHERE slug = $1`, [slug])).id);
+  // The approved trusted person of the review tests: a grant on this project, as the owner holds one on the real one.
+  await q(`INSERT INTO project_roles (problem_id, user_id, role, note) VALUES ($1,$2,'owner','challenge test')`, [pid, people.owner.id]);
   const app = express(); app.use(express.json());
   app.use('/projects/:slug', challenges); app.use('/projects/:slug', job); app.use('/projects/:slug', board); app.use(projects);
   server = app.listen(0, '127.0.0.1');
@@ -83,11 +88,13 @@ after(async () => {
   await q(`DELETE FROM channel_members WHERE user_id = ANY($1)`, [ids]);
   await q(`DELETE FROM messages WHERE channel_id IN (SELECT id FROM channels WHERE problem_id = $1)`, [pid]);
   await q(`DELETE FROM channels WHERE problem_id = $1`, [pid]);
+  await q(`DELETE FROM project_roles WHERE problem_id = $1`, [pid]);
   await q(`DELETE FROM lanes WHERE problem_id = $1`, [pid]);
   await q(`DELETE FROM problems WHERE id = $1`, [pid]);
   await q(`DELETE FROM tokens WHERE user_id = ANY($1)`, [ids]);
   await q(`DELETE FROM reputation WHERE user_id = ANY($1)`, [ids]);
   await q(`DELETE FROM users WHERE id = ANY($1)`, [ids]);
+  if (madeTiers.length) await q(`DELETE FROM model_tiers WHERE model = ANY($1)`, [madeTiers]);
   const residue = await one(`SELECT (SELECT count(*) FROM users WHERE handle LIKE $1) + (SELECT count(*) FROM problems WHERE slug = $2) + (SELECT count(*) FROM challenge_submissions WHERE problem_id = $3) AS n`, [`${tag}-%`, slug, pid]);
   await pool.end();
   rmSync(projectsDir, {recursive: true, force: true});
@@ -213,18 +220,47 @@ test('a track run with a verified submission of its own settles on return: accep
   assert.equal(await settlePendingChallengeRuns(pid), 0, 'settling again changes nothing');
 });
 
-test('a run without a verified submission goes to review; a trusted review accepts it and pays points', async () => {
+test('a finding needs two trusted tier-1 verdicts of different families that agree: one or a disagreement pays nothing', async () => {
   const next = await (await call('a', 'GET', '/start', {session: S.a})).json();
   assert.match(next.brief_md, /solveathome job #\d+/);
-  const held = await one(`SELECT id, attempt_id FROM jobs WHERE problem_id = $1 AND assigned_session = $2 AND status = 'assigned'`, [pid, S.a]);
-  const r = await call('a', 'POST', '/result', {session: S.a, body: {job_id: Number(held.id), attempt_id: held.attempt_id, transcript: transcriptOf('claude-opus-5-5'), transcript_approved: true,
-    report_md: 'Test: a negative run, nothing submitted.', recipe_md: 'Test: node search.mjs mirror 15 9 found nothing above the platform best; rerun with the same seed.'}});
-  const ret = await r.json();
-  assert.equal(r.status, 200, JSON.stringify(ret).slice(0, 300));
-  assert.equal(ret.status, 'pending');
-  const rv = await call('owner', 'POST', '/result', {body: {type: 'review', return_id: ret.return_id, verdict: 'accept', rung: 'measured', notes_md: 'Test: the negative result is sound.', transcript: transcriptOf('gpt-6-astra'), transcript_approved: true}});
-  const review = await rv.json();
-  assert.equal(rv.status, 200, JSON.stringify(review).slice(0, 300)); assert.equal(review.return_status, 'accepted');
+  const returnOnce = async (report) => {
+    const held = await one(`SELECT id, attempt_id FROM jobs WHERE problem_id = $1 AND assigned_session = $2 AND status = 'assigned'`, [pid, S.a]);
+    const r = await call('a', 'POST', '/result', {session: S.a, body: {job_id: Number(held.id), attempt_id: held.attempt_id, transcript: transcriptOf('claude-opus-5-5'), transcript_approved: true,
+      report_md: report, recipe_md: 'Test: node search.mjs mirror 15 9 measured the dependence of the first output word on each message word; rerun with the same seed.', ...(held ? {} : {})}});
+    const ret = await r.json(); assert.equal(r.status, 200, JSON.stringify(ret).slice(0, 300)); return ret;
+  };
+  const review = async (model, id, verdict) => {
+    const rv = await call('owner', 'POST', '/result', {model, body: {type: 'review', return_id: id, verdict, rung: 'measured', notes_md: `Test: ${verdict}.`, transcript: transcriptOf(model), transcript_approved: true, ...(verdict === 'reject' ? {reject_reason: 'overclaimed'} : {})}});
+    const out = await rv.json(); assert.equal(rv.status, 200, JSON.stringify(out).slice(0, 300)); return out;
+  };
+  const paid = async (id) => Number((await one(`SELECT coalesce(sum(points),0)::float AS p FROM credits WHERE source_type = 'return' AND source_id = $1 AND kind = 'result'`, [String(id)])).p);
+  const finding = await returnOnce('Test: a finding about MD5 structure, no candidate submitted.');
+  assert.equal(finding.status, 'pending');
+  const first = await review('gpt-6-astra', finding.return_id, 'accept');
+  assert.equal(first.return_status, 'pending', 'one trusted tier-1 verdict is not enough on this project');
+  assert.equal(await paid(finding.return_id), 0);
+  const second = await review('claude-fable-5-1', finding.return_id, 'accept');
+  assert.equal(second.return_status, 'accepted', 'the same approved person, a second tier-1 family: two agree');
+  assert.ok(await paid(finding.return_id) > 0, 'result points paid');
+  // A disagreement decides nothing and pays nothing.
+  await (await call('a', 'GET', '/start', {session: S.a})).json();
+  const split = await returnOnce('Test: a second finding.');
+  await review('gpt-6-astra', split.return_id, 'accept');
+  const against = await review('claude-fable-5-1', split.return_id, 'reject');
+  assert.equal(against.return_status, 'pending');
+  assert.equal(await paid(split.return_id), 0);
+});
+
+test('a valid new result ranks at once: platform best, high scores and the page, with no review', async () => {
+  const fresh = 'a19d3b5c2e7f4a6b8c0d1e2f3a4b5c6d';
+  const r = await submit('b', {challenge_id: MIRROR, candidate: fresh});
+  assert.equal(r.status, 201);
+  const view = await trackView(pid, challengeConfig(slug).tracks[0]);
+  assert.ok(view.personal.some((p) => p.handle === people.b.handle), 'in the high scores the moment it is verified');
+  const html = await (await call('a', 'GET', '', {accept: 'text/html'})).text();
+  assert.match(html, /High scores/);
+  assert.ok(html.includes(`/projects/${slug}/submissions/${view.best.submission_id}`));
+  assert.equal(Number((await one(`SELECT count(*) AS c FROM jobs WHERE problem_id = $1 AND type = 'review' AND status = 'queued' AND parent_return_id IS NULL`, [pid])).c), 0, 'no review is queued for a result');
 });
 
 test('settlement never applies outside a record challenge: a project without challenge tracks keeps its review', async () => {

@@ -88,6 +88,11 @@ function targetLink(track: ChallengeTrack, t: { value: number; source_url: strin
   const v = `<b>${esc(fmtValue(track, t.value))}</b>`;
   return /^https:\/\//.test(t.source_url) ? `<a href="${esc(t.source_url)}" rel="noopener nofollow" title="${esc(t.credit)}">${v}</a>` : v;
 }
+/** The high-score list: each contributor's best on the track, ranked at once when the server has checked a result (Chris, Oct 9 2026: no review). */
+function toplist(track: ChallengeTrack, view: TrackView, P: string, name: (h: string) => string, max = 5): string {
+  if (!view.personal.length) return "";
+  return `<h4 class="cc-top-title">High scores</h4><ol class="cc-top">${view.personal.slice(0, max).map((r) => `<li><a href="${P}/submissions/${r.submission_id}"><b>${esc(fmtValue(track, r.best))}</b></a> ${name(r.handle)}</li>`).join("")}</ol>`;
+}
 function legend(track: ChallengeTrack, view: TrackView, P: string, name: (h: string) => string, max = 6): string {
   if (!view.steps.length) return `<p class="cc-note">${track.better === "lower" ? "No verified pair yet: only full collisions appear here, never partial matches." : "No verified submission yet. The first verified result starts the line."}</p>`;
   const rows = [...view.steps].reverse().slice(0, max);
@@ -106,7 +111,7 @@ const STYLE = `<style>
 .cc-empty{fill:var(--mut);font:15px sans-serif}.cc-dir{fill:var(--fg);font:600 13px sans-serif}.cc-better{color:var(--mut);font-size:.8125rem}
 .cc-legend{list-style:none;padding:0;margin:.5rem 0 0;font-size:.8125rem;line-height:1.6}.cc-legend li{overflow-wrap:anywhere}
 .cc-legend a b{font-family:var(--mono)}.cc-model,.cc-when,.cc-tag{color:var(--mut);font-family:var(--mono);font-size:.75rem}.cc-tag{border:1px solid var(--line);border-radius:3px;padding:0 .3rem}
-.cc-note{color:var(--mut);font-size:.8125rem;margin:.5rem 0 0}
+.cc-note{color:var(--mut);font-size:.8125rem;margin:.5rem 0 0}.cc-top-title{font-size:.8125rem;margin:.75rem 0 .25rem}.cc-top{margin:0;padding-left:1.4rem;font-size:.875rem;line-height:1.6}.cc-top li{overflow-wrap:anywhere}.cc-top b{font-family:var(--mono)}
 .cc-beta{display:inline-block;border:1px solid var(--brass,#d3ad3a);color:var(--brass,#d3ad3a);border-radius:3px;padding:0 .5rem;font:.75rem/1.6 var(--mono);margin-bottom:1rem}
 .cc-hex{font-family:var(--mono);font-size:.875rem;overflow-wrap:anywhere;word-break:break-all;user-select:all;background:var(--soft);padding:.5rem .75rem;border-radius:3px;display:block;line-height:1.7}
 .cc-hex mark{background:var(--brass-soft,#3a3113);color:inherit;text-decoration:underline;text-underline-offset:3px}
@@ -142,12 +147,13 @@ export async function challengeChartsSection(problemId: number, slug: string): P
 <p class="cc-note">${esc(track.question)}</p>
 <div class="cc-figures"><span class="cc-better">${track.better === "higher" ? "▲ Higher is better" : "▼ Lower is better"}</span><span>Platform best: ${bestLink(track, view, P)}</span>${view.target ? `<span>Published: ${targetLink(track, view.target)}</span>` : ""}</div>
 ${chartSvg(track, view, P)}
+${toplist(track, view, P, name)}
 ${legend(track, view, P, name)}
 ${view.target ? `<p class="cc-note">Published target: ${esc(view.target.credit)}, <a href="${esc(safeUrl(view.target.source_url))}" rel="noopener nofollow">${esc(view.target.source_label)}</a> (checked ${esc(view.target.checked)}).</p>` : ""}
 </section>`).join("");
   return `${STYLE}<section class="panel cc-charts" aria-labelledby="cc-charts-title">
 <div class="panel-heading"><div>${isListed(slug) ? "" : `<span class="cc-beta">Hidden beta · not listed</span>`}<p class="eyebrow">Verified platform submission history</p><h2 id="cc-charts-title">Where the three records stand.</h2></div><a class="text-link" href="#contributors">Contribution leaderboard →</a></div>
-<p class="cc-note">Each line steps when a verified result beats the previous best: up on self match and all zeros, where more is better, and down on the smallest collision, where fewer bytes is better. The dashed line is the best published result verified by us. Times are server receipt times in UTC. Points for the work come from the same ledger as every project: see the leaderboard.</p>
+<p class="cc-note">Each line steps when a verified result beats the previous best: up on self match and all zeros, where more is better, and down on the smallest collision, where fewer bytes is better. The dashed line is the best published result verified by us. Times are server receipt times in UTC. A result ranks here and in the high scores the moment the server has recomputed it: results need no review. Written findings about MD5's structure are research returns, accepted when two trusted reviewers on tier-1 models of different families agree; their points go to the contribution leaderboard.</p>
 <div class="cc-grid3">${cards}</div>
 <details class="details"><summary>The rules of the three tracks</summary><div class="cc-prose">${cfg.tracks.map((t) => `<h3><a href="${P}/tracks/${esc(t.lane)}">${esc(t.name)}</a> <code>${esc(t.id)}</code></h3>${mdLite(t.spec_md)}`).join("")}
 <p>Inputs and the attribution a submitter chooses are public. Published answers (the targets and every public answer we know of) are refused: they earn no record and no points. A claimed digest or score that does not match the recomputation is refused too. Verifier ${esc(VERIFIER_VERSION)}: OpenSSL MD5 and an independent RFC 1321 implementation (${esc(RFC1321_IMPLEMENTATION)}), held equal to the <a href="${P}/docs/verifier/reference.py">Python reference</a>.</p>

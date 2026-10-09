@@ -51,7 +51,7 @@ import { orientation } from "../lib/orientation.js";
 import { inbox, renderInbox } from "../lib/inbox.js";
 import { parseOffer, describeOffer, shareOffer, diskFor, reviewComputeHint, SHARES, DISKS, SHARE_DEFAULT, DISK_DEFAULT, type ComputeOffer } from "../lib/compute.js";
 import { join } from "node:path";
-import { readProjectConfig } from "../lib/projects.js";
+import { readProjectConfig, reviewQuorum } from "../lib/projects.js";
 import { unservedNote } from "../lib/served-paths.js";
 import { parseTranscript } from "../lib/tokens.js";
 import { needsSourceReview, SOURCE_REVIEW_MESSAGE, sourceReviewHit, readPublication } from "../lib/document-publication.js";
@@ -1187,7 +1187,8 @@ job.post("/result", bearer, project, assignmentMutation(async (req: any, res) =>
       if (!target) { res.status(400).json({ error: "a self-assigned review needs return_id: the return you reviewed, in this project" }); return; }
       if (Number(target.user_id) === uid && !reviewerGranted) { res.status(403).json({ error: "you do not review your own return (a reviewer trusted by grant on the trust page may; a session trusted by its model may not)" }); return; }
       if (!["pending", "accepted", "rejected", "contested", "recorded"].includes(target.status)) { res.status(409).json({ error: `return #${target.id} is ${target.status}` }); return; }
-      const prior = await one<{ id: number; scored_at: string | null }>(`SELECT id, scored_at FROM reviews WHERE return_id = $1 AND user_id = $2`, [target.id, uid]);
+      // On a project with a review quorum one approved person may review with a second model family (consensus.ts); elsewhere one review per person.
+      const prior = await one<{ id: number; scored_at: string | null }>(`SELECT id, scored_at FROM reviews WHERE return_id = $1 AND user_id = $2 AND ($3::int = 1 OR lean_model_family(model) IS NOT DISTINCT FROM lean_model_family($4))`, [target.id, uid, reviewQuorum(req.project.slug), req.model ?? null]);
       if (prior && !(reviewerTrusted && target.status === "pending")) { res.status(409).json({ error: `you already reviewed return #${target.id}` }); return; }
       if (prior) { await archiveReview(Number(prior.id)); priorScoredAt = prior.scored_at; }
       if (!reviewerTrusted && target.status !== "pending" && !(await one(`SELECT 1 FROM returns WHERE id = $1 AND provisional`, [target.id]))) { res.status(409).json({ error: `return #${target.id} is decided (${target.status}); an advisory review changes nothing now. If you think the decision is wrong, submit a challenge.` }); return; }
@@ -2012,10 +2013,11 @@ async function resolveReturnLocked(returnId: number): Promise<string> {
   const ret = await one(`SELECT * FROM returns WHERE id = $1`, [returnId]);
   if (!ret) return "unknown";
   const recordedVotes = await q<{ id: number; verdict: "accept" | "reject"; weight: string; provider: string; rung: string | null; user_id: number; model: string; also_credit: any; unverifiable: boolean; needs_md: string | null; verification: string; trusted: boolean; scored_at: string | null; effort: string | null; reject_reason: string | null; paper_exposition_review: any }>(
-    `SELECT id, verdict, weight, provider, rung, user_id, model, also_credit, unverifiable, needs_md, verification, trusted, scored_at, effort, reject_reason, paper_exposition_review FROM reviews WHERE return_id = $1 AND NOT needs_reassessment`, [returnId]);
+    `SELECT id, verdict, weight, provider, rung, user_id, model, also_credit, unverifiable, needs_md, verification, trusted, scored_at, effort, reject_reason, paper_exposition_review, lean_model_family(model) AS family, lean_tier1(model, effort) AS tier1 FROM reviews WHERE return_id = $1 AND NOT needs_reassessment`, [returnId]);
   // A series verdict or a historical unbound vote cannot review different exposition bytes by inheritance.
   const votes = recordedVotes.filter(v => !ret.paper_exposition || v.verdict !== 'accept' || expositionReviewMatches(ret.paper_exposition,v.paper_exposition_review));
-  const d = decide(votes.map((v) => ({ ...v, weight: Number(v.weight) })));
+  const quorum = reviewQuorum((await one<{ slug: string }>(`SELECT slug FROM problems WHERE id = $1`, [ret.problem_id]))?.slug ?? "");
+  const d = decide(votes.map((v: any) => ({ ...v, weight: Number(v.weight) })), quorum);
   if (ret.paper_exposition && d.status === 'accepted' && !(await expositionEvidence(ret.paper_exposition,Number(ret.problem_id))).current) return 'pending (exposition source evidence is pending, stale or revoked)';
   const isFinal = ret.status !== "pending" && !ret.provisional;
   // A final decision is the current state of the trusted record: only trusted votes move it (advisory ones never do), and only to something different.

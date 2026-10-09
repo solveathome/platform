@@ -4,6 +4,7 @@ import { q, one } from "../db/index.js";
 import { readProjectConfig } from "./projects.js";
 import { matchingTools, type Capabilities } from "./agent-profile.js";
 import { stageOf } from './research-format.js';
+import { reviewQuorum } from "./projects.js";
 
 export const RESEARCH_BUCKETS = ['discover', 'pursue', 'rescue', 'consolidate'] as const;
 export type ResearchBucket = typeof RESEARCH_BUCKETS[number];
@@ -147,7 +148,7 @@ function eligibility(a: SchedulingAgent, omitCompute = false, sameKindOnly = fal
     // waiting selects a triage under the review rules (never its own model's return, its own handle's only by grant) only to
     // turn it into its review: a trusted session never triages (Sep 28 2026, #mba-sah-bot-feedback-fixes-skip-triage).
     ["it is a triage: a trusted session never triages, nobody triages a return twice, and a run of four first reads goes to research", `(j.type <> 'triage' OR ((${fallback}::boolean OR (NOT ${p(a.trusted)}::boolean AND ${p(a.reviewStreak < 4)}::boolean)) AND NOT EXISTS (SELECT 1 FROM triages t WHERE t.return_id = j.parent_return_id AND t.user_id = ${uid})))`],
-    ["you already reviewed this return", `NOT EXISTS (SELECT 1 FROM reviews rv WHERE rv.return_id = j.parent_return_id AND rv.user_id = ${uid} AND NOT rv.needs_reassessment)`],
+    ["you already reviewed this return" + (reviewQuorum(a.slug) > 1 ? " with this model family" : ""), `NOT EXISTS (SELECT 1 FROM reviews rv WHERE rv.return_id = j.parent_return_id AND rv.user_id = ${uid} AND NOT rv.needs_reassessment${reviewQuorum(a.slug) > 1 ? ` AND lean_model_family(rv.model) IS NOT DISTINCT FROM lean_model_family(${p(a.model)})` : ""})`],
     ["you already hold another job on this return", `NOT EXISTS (SELECT 1 FROM jobs j2 WHERE j2.parent_return_id = j.parent_return_id AND j2.id <> j.id AND j2.assigned_to = ${uid} AND j2.status = 'assigned')`],
     [sameKindOnly ? "it is not a return of your model" : "it judges a return of your own model: a model never judges its own kind", sameKindOnly ? `(pr.id IS NOT NULL AND pr.model IS NOT DISTINCT FROM ${model}::text)` : `(pr.id IS NULL OR CASE WHEN pr.verification_plan ? 'lean' THEN coalesce(lean_model_family(pr.model) <> lean_model_family(${model}::text),false) AND lean_tier1(pr.model,pr.effort) AND ${tier}=1 ELSE pr.model IS DISTINCT FROM ${model}::text END)`],
     // A trusted session never triages (Chris, Sep 28 2026, #mba-sah-bot-feedback-fixes-skip-triage): a triage it falls back to becomes

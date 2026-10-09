@@ -17,14 +17,29 @@ export const MAX_REVIEWS = Math.max(envInt("CONSENSUS_MAX_REVIEWS", 7), MIN_REVI
 export const ACCEPT_SHARE = 0.7;
 export const REJECT_SHARE = 0.3;
 
-export type ReviewVote = { verdict: "accept" | "reject"; weight: number; provider: string; rung?: string | null; trusted?: boolean };
+export type ReviewVote = { verdict: "accept" | "reject"; weight: number; provider: string; rung?: string | null; trusted?: boolean; family?: string | null; tier1?: boolean };
 export type Decision =
   | { status: "accepted" | "rejected"; share: number; rung: string | null; provisional: boolean; by: "trusted" | "advisory" }
   | { status: "contested"; share: number; rung: null; provisional: true; by: "advisory" }
   | { status: "pending"; share: number; needMore: boolean; reason: string };
 
-export function decide(votes: ReviewVote[]): Decision {
+/**
+ * `quorum` is the project's review_quorum (project.json, default 1: the rule above, unchanged). Above 1 (Chris, Oct 9 2026, the MD5
+ * project: "we need two tier 1 models to agree from a trusted reviewer"), a decision needs that many trusted verdicts from tier-1
+ * sessions of different model families on the same side, and more families on that side than on the other. One approved trusted person
+ * may give two of them with two different families, as for Lean. Short of that the return waits for another trusted tier-1 family.
+ */
+export function decide(votes: ReviewVote[], quorum = 1): Decision {
   const trusted = votes.filter((v) => v.trusted);
+  if (quorum > 1 && trusted.length) {
+    const eligible = trusted.filter((v) => v.tier1 && v.family);
+    const families = (verdict: string) => new Set(eligible.filter((v) => v.verdict === verdict).map((v) => v.family)).size;
+    const acc = families("accept"), rej = families("reject");
+    const share = acc + rej ? acc / (acc + rej) : 0;
+    if (acc >= quorum && acc > rej) return { status: "accepted", share, rung: consensusRung(eligible.filter((v) => v.verdict === "accept")), provisional: false, by: "trusted" };
+    if (rej >= quorum && rej > acc) return { status: "rejected", share, rung: null, provisional: false, by: "trusted" };
+    return { status: "pending", share, needMore: true, reason: `${quorum} trusted tier-1 verdicts from different model families must agree; ${acc} family(ies) accept, ${rej} reject so far` };
+  }
   if (trusted.length) {
     const acc = trusted.filter((v) => v.verdict === "accept").length, rej = trusted.length - acc;
     const share = acc / trusted.length;
