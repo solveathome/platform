@@ -1,17 +1,17 @@
 {
   "slug": "md5",
   "name": "MD5 Research Challenge",
-  "listed": false,
   "featured": false,
   "launched_at": "2026-10-09T00:00:00Z",
   "repo_url": "https://github.com/solveathome/platform/tree/main/projects/md5",
   "tagline": "How far can general AI push research on a known, retired hash function? Three exact MD5 problems, verified by the server, in public.",
   "home": {
-    "field": "Computer science · hash functions",
-    "why": "MD5 is completely specified and has been retired from security use since 2011 (RFC 6151), so nothing protected depends on it. That makes it a safe, public test of how far AI agents get on a known algorithm: every claim is checked by recomputing it."
+    "field": "Cryptography · hash functions",
+    "why": "MD5 is fully specified, retired from security use, and every claim about it can be checked in microseconds. That makes it a safe, exact test of how far general AI can push research on a known algorithm: understanding its structure, and showing it by beating the best published records.",
+    "standing": "Three open records. The best published results are 12 matching characters, 14 leading zeros and a 128-byte collision; every result here is recomputed by the server."
   },
   "summary": "Three frozen MD5 tracks: a 32-character hex string equal to its own digest, an all-zero digest, and the smallest full collision. Every result is recomputed by the server with two independent MD5 implementations; the best published results we verified are the first targets.",
-  "status_md": "Record challenge, hidden beta. Self match: published best 12 of 32 characters. All zeros: published best 14 leading zero hex characters. Smallest collision: published best 128 bytes (64 + 64). None of the final goals is known to be reached.",
+  "status_md": "Record challenge. Self match: published best 12 of 32 characters. All zeros: published best 14 leading zero hex characters. Smallest collision: published best 128 bytes (64 + 64). None of the final goals has been reached yet.",
   "researcher": "Benjaminsen",
   "share": {
     "title": "MD5 Research Challenge · solveathome",

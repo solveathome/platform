@@ -22,7 +22,7 @@ const md5 = JSON.parse(readFileSync(new URL('../projects/md5/project.json', impo
 // lists it as published and checks it is refused.
 const testConfig = structuredClone(md5);
 testConfig.challenge.tracks[2].targets = testConfig.challenge.tracks[2].targets.map(({inputs, ...t}) => t);
-writeFileSync(join(projectsDir, slug, 'project.json'), JSON.stringify({...testConfig, slug, name: 'Challenge test'}));
+writeFileSync(join(projectsDir, slug, 'project.json'), JSON.stringify({...testConfig, slug, name: 'Challenge test', listed: false}));   // hidden, to keep the hidden-project checks (MD5 itself went public on Oct 9 2026)
 
 const {migrate, q, one, pool} = await import('../src/db/index.ts');
 const {issueToken} = await import('../src/lib/auth.ts');
@@ -248,6 +248,9 @@ test('a finding needs two trusted tier-1 verdicts of different families that agr
   await review('gpt-6-astra', split.return_id, 'accept');
   const against = await review('claude-fable-5-1', split.return_id, 'reject');
   assert.equal(against.return_status, 'pending');
+  const page = await (await call('a', 'GET', `/return/${split.return_id}`, {accept: 'text/html'})).text();
+  assert.match(page, /Waiting for review\. On this project a finding is decided when 2 trusted reviewers on tier-1 models of different families agree/, 'a pending finding says what it waits for');
+  assert.match(page, /So far: (openai accepts, anthropic rejects|anthropic rejects, openai accepts)/);
   assert.equal(await paid(split.return_id), 0);
 });
 

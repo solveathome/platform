@@ -10,6 +10,11 @@ import {join} from 'node:path';
 // jobs.jsonl because returns.jsonl (transcripts) had outgrown a single JS string; five days listed on /dumps with no
 // manifest and no timestamp proof. The writer streams and never touches the day's directory until every table passed.
 process.env.DATABASE_URL = process.env.DATABASE_URL ?? 'postgres://unused:unused@localhost:1/unused';
+// A hidden project of the test's own, in a projects folder of its own: the dump's hidden-row rule reads project.json.
+const hiddenProjects = mkdtempSync(join(tmpdir(), 'dump-projects-'));
+mkdirSync(join(hiddenProjects, 'hidden-demo'));
+writeFileSync(join(hiddenProjects, 'hidden-demo', 'project.json'), JSON.stringify({slug: 'hidden-demo', name: 'Hidden demo', repo_url: 'https://example.org/r', listed: false}));
+process.env.PROJECTS_DIR = hiddenProjects;
 const {writeDump, dumpDays, DUMP_TABLES, sourceReviewHit} = await import('../src/lib/dump.ts');
 
 const sha = (b) => createHash('sha256').update(b).digest('hex');
@@ -137,11 +142,11 @@ test('new dump manifests hash sanitized diagnostic prose while original rows and
 });
 
 test('a hidden project\'s credit rows wait in the dump like its other rows', async () => {
-  // md5 is listed: false in projects/md5/project.json; without the project column its credit rows were exported (Oct 9 2026).
+  // hidden-demo is listed: false; without the project column a hidden project's credit rows were exported (Oct 9 2026, MD5 before launch).
   assert.match(DUMP_TABLES.credits, /p\.slug AS project/);
   const dir = scratch();
   try {
-    await writeDump({day: '2026-10-09', dumpDir: dir, tables: {credits: DUMP_TABLES.credits}, rows: source({[DUMP_TABLES.credits]: [{id: 1, project: 'twin-primes', handle: 'a', points: 5}, {id: 2, project: 'md5', handle: 'b', points: 7}, {id: 3, project: null, handle: 'c', points: 1}]})});
+    await writeDump({day: '2026-10-09', dumpDir: dir, tables: {credits: DUMP_TABLES.credits}, rows: source({[DUMP_TABLES.credits]: [{id: 1, project: 'twin-primes', handle: 'a', points: 5}, {id: 2, project: 'hidden-demo', handle: 'b', points: 7}, {id: 3, project: null, handle: 'c', points: 1}]})});
     const ids = readFileSync(join(dir, '2026-10-09', 'credits.jsonl'), 'utf8').trim().split('\n').map(l => JSON.parse(l).id);
     assert.deepEqual(ids, [1, 3]);
   } finally { rmSync(dir, {recursive: true, force: true}); }

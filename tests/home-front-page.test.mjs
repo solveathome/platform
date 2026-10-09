@@ -8,13 +8,19 @@ const { publicProjects, homeIndex, homeCards, PROPOSE_URL } = await import("../s
 const rows = [{ slug: "twin-primes", name: "Twin Prime Conjecture" }, { slug: "md5", name: "MD5 Research Challenge" }];
 
 test("a hidden project is on neither the index nor the cards", () => {
-  // md5's project.json says listed: false; passing it as hidden too covers the cached slug list.
-  for (const hidden of [[], ["md5"]]) {
-    const list = publicProjects(rows, hidden);
-    assert.deepEqual(list.map((p) => p.slug), ["twin-primes"]);
-    const html = homeIndex(list) + homeCards(list);
-    assert.doesNotMatch(html, /md5/i);
-  }
+  const list = publicProjects(rows, ["md5"]);
+  assert.deepEqual(list.map((p) => p.slug), ["twin-primes"]);
+  assert.doesNotMatch(homeIndex(list) + homeCards(list), /md5/i);
+});
+
+test("MD5 is public (Oct 9 2026): the second card, a record challenge, before Propose a problem", () => {
+  const list = publicProjects(rows, []);
+  assert.deepEqual(list.map((p) => p.slug), ["twin-primes", "md5"]);
+  const cards = homeCards(list), index = homeIndex(list);
+  assert.match(cards, /Problem 002 · Cryptography · hash functions/);
+  assert.match(cards, /data-project="md5" data-challenge=/);
+  assert.match(cards, /href="\/projects\/md5#contribute"/);
+  assert.match(index, /<span class="n">003<\/span><span><b>Propose a problem<\/b>/);
 });
 
 test("a public project gets a numbered card built from its folder, then Propose a problem", () => {
