@@ -95,7 +95,7 @@ papers.get('/papers/:paper/expositions/:id/:kind', async (req:any,res) => {
   if (!text || files.sha256(text) !== hashes[kind]) { res.status(410).json({error:'Exposition artifact missing or removed; its historical record is retained'}); return; }
   const pdf = kind === 'pdf' ? decodeExpositionPdf(text) : null;
   const ext = kind === 'source' ? 'tex' : kind === 'pdf' ? 'pdf' : 'json';
-  res.set({'Content-Type':kind === 'pdf' ? 'application/pdf' : 'text/plain; charset=utf-8','Content-Disposition':`attachment; filename="exposition-${req.params.id}-${kind}.${ext}"`,
+  res.set({'Content-Type':kind === 'pdf' ? 'application/pdf' : 'text/plain; charset=utf-8','Content-Disposition':`${kind === 'pdf' ? 'inline' : 'attachment'}; filename="exposition-${req.params.id}-${kind}.${ext}"`,
     'Content-Security-Policy':"default-src 'none'; sandbox",'X-Content-Type-Options':'nosniff','X-Content-SHA256':pdf?.sha256 ?? hashes[kind],'Cache-Control':'no-store'}).send(pdf?.bytes ?? text);
 });
 

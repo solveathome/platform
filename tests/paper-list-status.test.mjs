@@ -44,11 +44,12 @@ test('actual pagehide and visibility-hidden handlers invalidate pending paper re
 });
 
 const paperPage=readFileSync(new URL('../public/paper.html',import.meta.url),'utf8');
-function pdfClient(json) {
- const root={children:[],replaceChildren(){this.children=[];},append(link){this.children.push(link);}},document=new EventTarget(),window=new EventTarget();document.hidden=false;document.querySelector=()=>root;document.createElement=()=>({});
+function pdfClient(json, initial=[]) {
+ const root={children:initial,replaceChildren(...links){this.children=links;},querySelector(){const a=this.children[0];return a?{getAttribute:()=>a.href}:null;}},document=new EventTarget(),window=new EventTarget();document.hidden=false;document.querySelector=()=>root;document.createElement=()=>({});
+ let contextRefresh;
  const source=paperPage.match(/<script id="paper-pdf-refresh">([\s\S]*?)<\/script>/)[1].replaceAll('__SLUG__','fixture').replaceAll('__PAPER__','main');
- runInNewContext(source,{document,SA:{json},crypto:{randomUUID:()=> 'request-fixture'},AbortSignal,addEventListener:window.addEventListener.bind(window),setInterval(){}});
- return {root,document,window,show:async()=>{window.dispatchEvent(new Event('pageshow'));await new Promise(resolve=>setImmediate(resolve));}};
+ runInNewContext(source,{document,SA:{json},crypto:{randomUUID:()=> 'request-fixture'},AbortSignal,addEventListener:window.addEventListener.bind(window),setInterval(fn){contextRefresh=fn;}});
+ return {root,document,window,refresh:()=>contextRefresh(),show:async(persisted=true)=>{const event=new Event('pageshow');event.persisted=persisted;window.dispatchEvent(event);await new Promise(resolve=>setImmediate(resolve));}};
 }
 test('paper PDF action uses uncached exact current evidence and clears on failures, hidden pages and cached navigation',async()=>{
  let current=true,fail=false;const c=pdfClient(async(url,options)=>{assert.equal(options.cache,'no-store');assert(url.endsWith('?lean_request=request-fixture'));if(fail)throw new Error('offline');return{lean_milestone_request:'request-fixture',paper:{reviewed_pdf:current?{url:'/projects/fixture/papers/main/expositions/7/pdf'}:null}};});
@@ -71,4 +72,16 @@ test('actual project initialization invalidates its first pending Papers read be
  await started;const hide=new Event('pagehide');hide.persisted=false;window.dispatchEvent(hide);
  pending({papers:[{url:'/main',title:'Old proof',status:'reviewed',status_label:'Main theorem proven with Lean',reviewed_pdf:{url:'/projects/fixture/papers/main/expositions/7/pdf'}}]});await initialization;
  for(const el of Object.values(c.elements))assert.equal(el.innerHTML,'');assert.equal(timers,0,'departed initial pages start no polling timers');
+});
+
+test('fresh paper load preserves the usable server-rendered header anchor without client fetching',async()=>{
+ let calls=0;const anchor={href:'/projects/fixture/papers/main/expositions/7/pdf',textContent:'View PDF'},c=pdfClient(async()=>{calls++;throw new Error('Should not fetch');},[anchor]);
+ await c.show(false);assert.equal(calls,0);assert.equal(c.root.children[0],anchor);
+ assert.match(paperPage,/<div class="page-heading">[\s\S]*?<h1>__TITLE__<\/h1>[\s\S]*?id="paper-pdf">__PDF_ACTION__<\/div><\/div>/);
+ assert.doesNotMatch(paperPage,/download=/);
+});
+test('delayed routine refresh never removes or replaces an unchanged anchor, but actual invalidation clears it',async()=>{
+ let finish;const anchor={href:'/projects/fixture/papers/main/expositions/7/pdf',textContent:'View PDF'},c=pdfClient(()=>new Promise(resolve=>finish=resolve),[anchor]);
+ const same=c.refresh();assert.equal(c.root.children[0],anchor);finish({lean_milestone_request:'request-fixture',paper:{reviewed_pdf:{url:anchor.href}}});await same;assert.equal(c.root.children[0],anchor);
+ const revoked=c.refresh();assert.equal(c.root.children[0],anchor);finish({lean_milestone_request:'request-fixture',paper:{reviewed_pdf:null}});await revoked;assert.equal(c.root.children.length,0);
 });
