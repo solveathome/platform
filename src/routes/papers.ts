@@ -32,7 +32,7 @@ import { page as sitePage } from "../lib/page.js";
 import { paperSource, paperReview, coarseStatus, type PaperReview } from "../lib/paper-state.js";
 import { openFindings } from "../lib/findings.js";
 import { posix } from "node:path";
-import { expositionVersions, decodeExpositionPdf } from "../lib/paper-exposition.js";
+import { expositionVersions, decodeExpositionPdf, latestReviewedExposition, reviewedExposition } from "../lib/paper-exposition.js";
 
 export const papers = Router({ mergeParams: true });
 const REPOS = process.env.DOCS_DIR ?? join(ROOT, "data", "repos");
@@ -61,13 +61,14 @@ export async function listPapers(problemId: number, slug: string) {
     const designation=mainTheoremDesignation(designations,p.slug,paperSource(p,slug).sha);
     const main=designation ? mainTheoremEvidence(await paperLeanVerification(problemId,p.slug,designation.manuscript_sha256),designation) : null;
     const research_status=paperResearchStatus(review,status,!!main);
+    const reviewed_pdf=main ? await latestReviewedExposition(problemId,slug,p.slug,main) : null;
     const path = p.path ?? `paper/${p.slug}.md`;
     const admitted = p.path && publishedDocument(root, p.path, publication);
     const timestamps = documentDates(admitted ? publication : null, path, records.get(path), p.current_file_sha);
     if (!p.path) { timestamps.created_at = isoTime(p.created_at); timestamps.created_basis = "registered proposal"; }
     if (!timestamps.modified_at && p.version_at) { timestamps.modified_at = isoTime(p.version_at); timestamps.modified_basis = "submitted revision"; }
     if (!p.path && !timestamps.first_recorded_at) timestamps.first_recorded_at = isoTime(p.created_at);
-    return ({ ...p, timestamps, history_url: `/projects/${slug}/history/${path.split("/").map(encodeURIComponent).join("/")}`, summary_html: inline(p.summary), registry_status: p.status, status, review, research_status, status_label: main ? MAIN_THEOREM_LEAN_LABEL : SHORT[review.state] ?? STATUS[status] ?? status, url: `/projects/${slug}/papers/${p.slug}`, read: p.current_file_sha ? `/files/${p.current_file_sha}` : (p.path ? `/projects/${slug}/docs/${p.path}` : null) }); })))
+    return ({ ...p, timestamps, reviewed_pdf, history_url: `/projects/${slug}/history/${path.split("/").map(encodeURIComponent).join("/")}`, summary_html: inline(p.summary), registry_status: p.status, status, review, research_status, status_label: main ? MAIN_THEOREM_LEAN_LABEL : SHORT[review.state] ?? STATUS[status] ?? status, url: `/projects/${slug}/papers/${p.slug}`, read: p.current_file_sha ? `/files/${p.current_file_sha}` : (p.path ? `/projects/${slug}/docs/${p.path}` : null) }); })))
     .sort(comparePaperResearchStatus);
 }
 const SHORT: Record<string, string> = { reviewed: "reviewed", corrections_required: "reviewed, corrections required", corrections_recorded: "reviewed, corrections recorded", under_reassessment: "under reassessment", earlier_version_reviewed: "earlier version reviewed" };
@@ -76,7 +77,7 @@ function expositionPanel(versions: any[], slug: string, paperSlug: string, credi
   if (!versions.length) return '';
   const base = `/projects/${encodeURIComponent(slug)}/papers/${encodeURIComponent(paperSlug)}/expositions`;
   return `<section class="panel-note"><h2>LaTeX expositions</h2><p>Each version has its own fidelity review and mapped claims. Source proof evidence and unproved original claims remain separate.</p><ol>${versions.map(v => {
-    const label = v.status === 'accepted' && !v.provisional && v.evidence.current ? 'Fidelity reviewed; current mapped proof evidence' : `${v.provisional ? 'provisional ' : ''}${v.status}; ${v.evidence.label}`;
+    const label = reviewedExposition(v) ? 'Fidelity reviewed; current mapped proof evidence' : `${v.provisional ? 'provisional ' : ''}${v.status}; ${v.evidence.label}`;
     return `<li>Exposition version ${v.version}: ${esc(label)}. <a href="/projects/${esc(slug)}/return/${v.return_id}">Submission and review</a> by ${credit(v.handle)} (${esc(v.model)}). <a href="${base}/${v.return_id}/source">LaTeX source</a> · <a href="${base}/${v.return_id}/pdf">PDF</a> · <a href="${base}/${v.return_id}/map">Claim map</a> · <a href="${base}/${v.return_id}/compilation">Compilation evidence</a><p>Maps ${v.paper_exposition.claims.map((c:any)=>esc(c.source_claim_id)).join(', ')} to source <a href="/projects/${esc(slug)}/return/${v.paper_exposition.source_return_id}">#${v.paper_exposition.source_return_id}</a>, receipt #${v.paper_exposition.receipt_id}.</p></li>`;
   }).join('')}</ol></section>`;
 }
@@ -215,8 +216,8 @@ papers.get("/papers/:paper", async (req: any, res) => {
   const ld = jsonLd({ "@context": "https://schema.org", "@graph": [
     { "@type": "ScholarlyArticle", "@id": abs(url), url: abs(url), headline: String(paper.title).slice(0, 110), name: paper.title, ...(paper.summary ? { abstract: plainDescription(paper.summary, 2000) } : {}), description: plainDescription(paper.summary || `A paper written in the open on ${p.name}, refereed by other people's agents.`), datePublished: new Date(paper.created_at).toISOString(), dateModified: new Date(paper.updated_at).toISOString(), creativeWorkStatus: paper.review.label, ...(authors.length ? { author: authors } : {}), publisher: ORGANIZATION(), inLanguage: "en", license: "https://creativecommons.org/licenses/by/4.0/", isAccessibleForFree: true, isPartOf: { "@type": "ResearchProject", name: p.name, url: abs(`/projects/${p.slug}`) } },
     breadcrumbs([{ name: p.name, path: `/projects/${p.slug}` }, { name: paper.title, path: url }]) ] });
-  for (const [k, v] of Object.entries({ __SHARE__: shareMeta({ title: `${paper.title} · ${p.name}`, description: plainDescription(paper.summary || `A paper written in the open on ${p.name}, refereed by other people's agents.`), path: url, type: "article" }) + ld, __SLUG__: esc(p.slug), __PROJECT__: esc(p.name), __TITLE__: esc(paper.title), __META__: meta, __SUMMARY__: await linkPeople(paper.summary_html ?? esc(paper.summary)), __BODY__: body, __VERSIONS__: vlist, __REPORTS__: demoteHeadings(rlist, 2), __PAPER__: esc(paper.slug), __OPEN_JOBS__: String(paper.open_jobs) })) html = fill(html, k, v);
-  res.type("text/html").send(html);
+  for (const [k, v] of Object.entries({ __SHARE__: shareMeta({ title: `${paper.title} · ${p.name}`, description: plainDescription(paper.summary || `A paper written in the open on ${p.name}, refereed by other people's agents.`), path: url, type: "article" }) + ld, __SLUG__: esc(p.slug), __PROJECT__: esc(p.name), __TITLE__: esc(paper.title), __PDF_ACTION__: paper.reviewed_pdf ? `<a class="button" href="${esc(paper.reviewed_pdf.url)}">View PDF</a>` : "", __META__: meta, __SUMMARY__: await linkPeople(paper.summary_html ?? esc(paper.summary)), __BODY__: body, __VERSIONS__: vlist, __REPORTS__: demoteHeadings(rlist, 2), __PAPER__: esc(paper.slug), __OPEN_JOBS__: String(paper.open_jobs) })) html = fill(html, k, v);
+  res.set("Cache-Control","no-store").type("text/html").send(html);
 });
 
 /** The review state above the manuscript: what was reviewed, what is still required, what could not be applied. */

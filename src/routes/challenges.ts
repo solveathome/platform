@@ -108,7 +108,7 @@ const STYLE = `<style>
 </style>`;
 
 function shell(o: { title: string; description: string; path: string; listed: boolean; crumbs: string; body: string; script?: string }): string {
-  return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>${esc(o.title)} · solveathome</title>${shareMeta({ title: `${o.title} · solveathome`, description: o.description, path: o.path, robots: o.listed ? undefined : "noindex, nofollow" })}<link rel="icon" href="/favicon.ico"><link rel="stylesheet" href="/assets/app.css?v=32">${STYLE}</head><body data-page="challenge"><header data-site-header></header><main class="shell" id="main"><nav class="breadcrumb" aria-label="Breadcrumb">${o.crumbs}</nav>${o.body}</main><footer data-site-footer></footer><script src="/assets/ui.js?v=21"></script>${o.script ?? ""}</body></html>`;
+  return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>${esc(o.title)} · solveathome</title>${shareMeta({ title: `${o.title} · solveathome`, description: o.description, path: o.path, robots: o.listed ? undefined : "noindex, nofollow" })}<link rel="icon" href="/favicon.ico"><link rel="stylesheet" href="/assets/app.css?v=33">${STYLE}</head><body data-page="challenge"><header data-site-header></header><main class="shell" id="main"><nav class="breadcrumb" aria-label="Breadcrumb">${o.crumbs}</nav>${o.body}</main><footer data-site-footer></footer><script src="/assets/ui.js?v=21"></script>${o.script ?? ""}</body></html>`;
 }
 
 async function views(problemId: number, cfg: ChallengeConfig, ns: Namespace) {

@@ -2,7 +2,7 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {createHash} from 'node:crypto';
-import {decodeExpositionPdf,acceptedExpositionSource,expositionKey,validateExpositionMapping,expositionReviewMatches} from '../src/lib/paper-exposition.ts';
+import {decodeExpositionPdf,acceptedExpositionSource,expositionKey,validateExpositionMapping,expositionReviewMatches,reviewedExposition} from '../src/lib/paper-exposition.ts';
 const hash=s=>createHash('sha256').update(s).digest('hex');
 const summary={status:'checked',judged_receipt_id:3,manuscript_sha256:'a'.repeat(64),statement_binding:'b'.repeat(64),checked_claims:['main'],claims:[{id:'main',declaration:'Proof.main',target:'Proof.lean',coverage:'full',assumptions:['S is a prime family']}]};
 const source={id:1,status:'accepted',provisional:false,verification_fingerprint:'c'.repeat(64)};
@@ -43,4 +43,13 @@ test('PDF envelope decoding is bounded, canonical and hash-exact, without interp
   assert.deepEqual(decodeExpositionPdf(JSON.stringify(p)).bytes,bytes);
   for(const change of [{bytes:p.bytes+1},{bytes:10**9},{sha256:'0'.repeat(64)},{base64:p.base64+'AA=='},{base64:'!'.repeat(p.base64.length)}]) assert.throws(()=>decodeExpositionPdf(JSON.stringify({...p,...change})));
   assert.throws(()=>decodeExpositionPdf('{}'));
+});
+
+test('View PDF eligibility requires current final acceptance and a trusted exact-version fidelity verdict',()=>{
+ const e={tex_sha256:'d'.repeat(64),claim_map_sha256:'e'.repeat(64),pdf_sha256:'f'.repeat(64),source_fingerprint:source.verification_fingerprint,claims:[{source_claim_id:'main'}]};
+ const mapping={...e,reviewed_claim_ids:['main'],fidelity_md:'An exact artifact-bound independent assessment preserves this accepted source claim and its formal parameters and scope.'};
+ const version={status:'accepted',provisional:false,evidence:{current:true},paper_exposition:e,reviews:[{verdict:'accept',trusted:true,needs_reassessment:false,mapping}]};
+ assert.equal(reviewedExposition(version),true);
+ for(const change of [{status:'pending'},{status:'rejected'},{provisional:true},{evidence:{current:false}},{evidence:undefined},{reviews:[]}])assert.equal(reviewedExposition({...version,...change}),false);
+ for(const change of [{verdict:'reject'},{trusted:false},{needs_reassessment:true},{mapping:null},{mapping:{...mapping,tex_sha256:'a'.repeat(64)}}])assert.equal(reviewedExposition({...version,reviews:[{...version.reviews[0],...change}]}),false);
 });

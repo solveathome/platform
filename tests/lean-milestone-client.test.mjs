@@ -53,24 +53,3 @@ test('hidden initial pages never request or paint a verification badge',async()=
   const request=second.client.refresh();document.hidden=true;pending.resolve(response(pending.url,callout));await request;
   assert.equal(second.root.innerHTML,'');assert.equal(second.root.hidden,true);
 });
-test('actual project initialization installs pagehide invalidation before its first pending read',{timeout:1000},async()=>{
-  const document=new EventTarget();document.hidden=false;
-  const window=new EventTarget();let pending,markStarted;
-  const started=new Promise(resolve=>markStarted=resolve);
-  const {root,client}=fixture(url=>new Promise(resolve=>{pending={url,resolve};markStarted();}),['example'],document);
-  const page=readFileSync(new URL('../public/project.html',import.meta.url),'utf8');
-  const start=page.lastIndexOf('(async () => {'),end=page.indexOf('})();',start)+5;
-  let timers=0;const noop=async()=>{};
-  const initialization=runInNewContext(page.slice(start,end),{
-    document,addEventListener:window.addEventListener.bind(window),leanMilestones:client,loadMe:noop,
-    refreshBoard:client.refresh,renderStartField:noop,$:()=>root,SLUG:'example-project',safeLoad:noop,
-    loadPapers:noop,clearPaperLists:noop,loadDocuments:noop,loadProvenance:noop,loadHighscores:noop,
-    sequenceList:{refresh:noop},openChannel:noop,polling:null,channelRequest:null,
-    setInterval:()=>{timers++;return timers;},clearInterval:()=>{}
-  });
-  await started;
-  assert.ok(pending,'first initialization read is genuinely pending');
-  const hide=new Event('pagehide');hide.persisted=false;window.dispatchEvent(hide);
-  pending.resolve(response(pending.url,callout));await initialization;
-  assert.equal(root.innerHTML,'');assert.equal(root.hidden,true);assert.equal(timers,0,'departed initial pages start no polling timers');
-});

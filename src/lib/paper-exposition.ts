@@ -157,7 +157,29 @@ export async function expositionReviewGuidance(e: PaperExposition, problemId: nu
 
 export async function expositionVersions(problemId: number, paperSlug: string) {
   const rows = await q(`SELECT r.id,r.status,r.provisional,r.created_at,r.model,r.paper_exposition,u.handle,
+    (SELECT array_agg(x.file_sha) FROM file_refs x WHERE x.ref_type='return' AND x.ref_id=r.id) AS files,
     (SELECT jsonb_agg(jsonb_build_object('id',rv.id,'verdict',rv.verdict,'trusted',rv.trusted,'needs_reassessment',rv.needs_reassessment,'mapping',rv.paper_exposition_review) ORDER BY rv.id) FROM reviews rv WHERE rv.return_id=r.id) AS reviews
     FROM returns r JOIN users u ON u.id=r.user_id WHERE r.problem_id=$1 AND r.paper_slug=$2 AND r.paper_exposition IS NOT NULL ORDER BY r.id`, [problemId,paperSlug]);
   return Promise.all(rows.map(async (r,i) => ({...r,version:i+1,return_id:Number(r.id),evidence:await expositionEvidence(r.paper_exposition,problemId)})));
+}
+
+/** The same current source and exact review bindings used at acceptance; historical files stay accessible separately. */
+export function reviewedExposition(version: any): boolean {
+  return version.status === 'accepted' && !version.provisional && version.evidence?.current === true
+    && (version.reviews ?? []).some((r: any) => r.verdict === 'accept' && r.trusted && !r.needs_reassessment
+      && expositionReviewMatches(version.paper_exposition,r.mapping));
+}
+
+export async function latestReviewedExposition(problemId: number, projectSlug: string, paperSlug: string, main: LeanSummary, versions?: any[]) {
+  const candidates = (versions ?? await expositionVersions(problemId,paperSlug)).filter(v => reviewedExposition(v)
+    && v.paper_exposition.statement_binding === main.statement_binding && v.paper_exposition.source_manuscript_sha256 === main.manuscript_sha256
+    && main.checked_claims.every(id => v.paper_exposition.claims.some((c: any) => c.source_claim_id === id))).sort((a,b) => b.return_id-a.return_id);
+  for (const v of candidates) {
+    try {
+      // Reuse publication validation: missing/revoked artifacts, stale bindings or invalid PDF envelopes cannot produce a button.
+      await validatePaperExposition(v.paper_exposition,v.paper_exposition.tex_sha256,paperSlug,problemId,v.files ?? [],null);
+      return {return_id:v.return_id,version:v.version,url:`/projects/${encodeURIComponent(projectSlug)}/papers/${encodeURIComponent(paperSlug)}/expositions/${v.return_id}/pdf`};
+    } catch (e: any) { if (e.status !== 400) throw e; }
+  }
+  return null;
 }
