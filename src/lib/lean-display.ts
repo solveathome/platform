@@ -6,9 +6,22 @@ export type MainTheoremDesignation = {
   paper_slug: string; manuscript_sha256: string; statement_binding: string;
   required_claim_ids: string[]; unproved_claims: { id: string; locator: string }[];
 };
-export type LeanDisplayRecord = LeanSummary & { return_id: number; fingerprint: string };
+export type LeanDisplayRecord = LeanSummary & { return_id: number; fingerprint: string; policy?: string };
 const hash = (x: unknown): x is string => typeof x === 'string' && /^[a-f0-9]{64}$/.test(x);
 const text = (x: unknown): x is string => typeof x === 'string' && x.trim().length > 0 && x.length <= 1000;
+
+/** Name the checked contract, not a stronger verification method the package did not use. */
+function verificationProfile(record: LeanDisplayRecord): { label: string; scope: string } {
+  if (record.policy === 'lean-kernel-v1') return {
+    label: 'Lean kernel verification',
+    scope: 'Lean kernel checks of exact mapped claims. Independent export comparison and Nanoda checking are not claimed by this profile.',
+  };
+  if (record.policy === 'lean-comparator-v1' || record.policy === 'lean-comparator-v2') return {
+    label: 'Independent export and external kernel checking',
+    scope: 'Exact mapped claims checked against an independently regenerated export with the Lean kernel and a pinned external checker.',
+  };
+  return { label: 'Lean verification profile not specified', scope: 'Read the package for its checking method; no additional verification method is claimed here.' };
+}
 
 /** No return flag, approval boolean or claimed reviewer identity can designate a main theorem. */
 export function mainTheoremDesignation(raw: unknown, paperSlug: string, manuscriptSha: string | null): MainTheoremDesignation | null {
@@ -42,7 +55,7 @@ export function mainTheoremEvidence(records: LeanDisplayRecord[], designation: M
 export function mainTheoremCallout(record: LeanDisplayRecord | null, designation: MainTheoremDesignation | null, slug: string, paperSlug: string, title: string): string {
   if (!record || !designation || mainTheoremEvidence([record], designation) !== record) return '';
   const url = `/projects/${encodeURIComponent(slug)}/papers/${encodeURIComponent(paperSlug)}#lean-evidence`;
-  return `<section class="panel" aria-label="Lean milestone"><p><span class="paper-status reviewed">Main theorem verified in Lean</span> · <a href="${esc(url)}">${esc(title)}</a></p><p>The designated main claims are checked for this manuscript. Other claims remain outside this badge’s coverage; this is not a proof of the project’s overall conjecture.</p>${unproved(designation)}</section>`;
+  return `<section class="panel" aria-label="Lean milestone"><p><span class="paper-status reviewed">Main theorem verified in Lean</span> · <a href="${esc(url)}">${esc(title)}</a></p><p><b>${esc(verificationProfile(record).label)}</b>. The designated main claims are checked for this manuscript. Other claims remain outside this badge’s coverage; this is not a proof of the project’s overall conjecture.</p>${unproved(designation)}</section>`;
 }
 
 function unproved(designation: MainTheoremDesignation | null): string {
@@ -56,6 +69,7 @@ export function leanEvidencePanel(records: LeanDisplayRecord[], slug: string, de
   return `<section class="panel" id="lean-evidence"><h2>Lean evidence</h2>${main ? '<p><span class="paper-status reviewed">Main theorem verified in Lean</span></p>' : '<p>No current verification of a designated main theorem is recorded.</p>'}<p>Worker-reported validation of exact mapped claims, assessed by trusted reviewers. A checked helper claim is not verification of the main theorem or the entire paper. The project’s overall conjecture and ordinary review grade remain separate.</p>${unproved(designation)}${records.map(r => {
     const current = r.current_evidence;
     const counted = current && ['checked','partial','conditional'].includes(r.status);
-    return `<article><p><b>${esc(r.label)}</b> — <a href="${P}/return/${Number(r.return_id)}">package return #${Number(r.return_id)}</a>${r.superseded_by ? ` (replaced by <a href="${P}/return/${Number(r.superseded_by)}">return #${Number(r.superseded_by)}</a>)` : ''}</p><p>Manuscript SHA-256: <code>${esc(r.manuscript_sha256)}</code><br>Statement binding: <code>${esc(r.statement_binding)}</code><br>Package fingerprint: <code>${esc(r.fingerprint)}</code></p>${current ? `<p><a href="${P}/return/${current.execution_return_id}">Trusted execution receipt #${current.receipt_id}</a> · <a href="${P}/review/${current.statement_review_id}">Statement and claim-mapping review #${current.statement_review_id}</a> · ${current.semantic_review_ids.map(id => `<a href="${P}/review/${id}">Mathematical correctness and execution judgment #${id}</a>`).join(' · ')}</p><p>The server authenticates account/session attestation and current eligibility; it does not authenticate physical computation or model reasoning.</p>` : '<p>No current accepted trusted execution and independent semantic judgment count for this package. Historical observations remain on its return.</p>'}<ul>${r.claims.map(c => `<li>${esc(c.id)} (${esc(c.locator)}): <code>${esc(c.declaration)}</code>; ${counted && r.checked_claims.includes(c.id) ? 'currently checked' : 'not currently verified'}; ${esc(c.coverage)} coverage; assumptions: ${esc(c.assumptions.join('; ') || 'none declared')}.</li>`).join('')}</ul>${r.issues.length ? `<ul>${r.issues.map(i => `<li>${esc(i)}</li>`).join('')}</ul>` : ''}</article>`;
+    const profile = verificationProfile(r);
+    return `<article><p><b>${esc(r.label)}</b> — <a href="${P}/return/${Number(r.return_id)}">package return #${Number(r.return_id)}</a>${r.superseded_by ? ` (replaced by <a href="${P}/return/${Number(r.superseded_by)}">return #${Number(r.superseded_by)}</a>)` : ''}</p><p><b>${esc(profile.label)}</b>. ${counted ? esc(profile.scope) : 'This checking profile has no current accepted evidence for the mapped claims.'}</p><p>Manuscript SHA-256: <code>${esc(r.manuscript_sha256)}</code><br>Statement binding: <code>${esc(r.statement_binding)}</code><br>Package fingerprint: <code>${esc(r.fingerprint)}</code></p>${current ? `<p><a href="${P}/return/${current.execution_return_id}">Trusted execution receipt #${current.receipt_id}</a> · <a href="${P}/review/${current.statement_review_id}">Statement and claim-mapping review #${current.statement_review_id}</a> · ${current.semantic_review_ids.map(id => `<a href="${P}/review/${id}">Mathematical correctness and execution judgment #${id}</a>`).join(' · ')}</p><p>The server authenticates account/session attestation and current eligibility; it does not authenticate physical computation or model reasoning.</p>` : '<p>No current accepted trusted execution and independent semantic judgment count for this package. Historical observations remain on its return.</p>'}<ul>${r.claims.map(c => `<li>${esc(c.id)} (${esc(c.locator)}): <code>${esc(c.declaration)}</code>; ${counted && r.checked_claims.includes(c.id) ? 'currently checked' : 'not currently verified'}; ${esc(c.coverage)} coverage; assumptions: ${esc(c.assumptions.join('; ') || 'none declared')}.</li>`).join('')}</ul>${r.issues.length ? `<ul>${r.issues.map(i => `<li>${esc(i)}</li>`).join('')}</ul>` : ''}</article>`;
   }).join('')}</section>`;
 }
