@@ -1,6 +1,8 @@
 /* The front page for many problems (Oct 9 2026): an index in the hero and one card per problem, in app.css's charcoal and paper. */
 
-.mf-hero { display: grid; grid-template-columns: minmax(0, 1.4fr) minmax(280px, .8fr); gap: clamp(3rem, 7vw, 7rem); align-items: center; padding-block: 3rem 4.5rem; }
+.mf-hero { display: grid; grid-template-columns: minmax(0, 1.4fr) minmax(280px, .8fr); gap: clamp(3rem, 7vw, 7rem); align-items: start; padding-block: 3rem 4.5rem; }
+/* Top-aligned with a fixed offset, not centred: the HTML can reach the browser in pieces, and a centred column moved up as the
+   rest of it arrived (CLS 0.012 at 1440 px, Oct 2026). Grown from the top, late content only extends it downward. */
 .mf-hero h1 { font-size: clamp(3.4rem, 5.8vw, 5.2rem); letter-spacing: -.065em; line-height: 1.04; margin-bottom: 2rem; }
 .mf-hero h1 span { display: block; }
 .mf-hero .lead { max-width: 33rem; }
@@ -8,7 +10,7 @@
 .mf-hero-actions { display: flex; flex-wrap: wrap; align-items: center; gap: .5rem 0; }
 
 /* The hero's right column: an index of every problem, so the count can grow without moving the headline. */
-.mf-index { border-top: 1px solid var(--fg); padding-top: 1.5rem; min-width: 0; }
+.mf-index { border-top: 1px solid var(--fg); padding-top: 1.5rem; min-width: 0; margin-top: 4rem; }
 .mf-index .panel-heading { font: .8125rem var(--mono); color: var(--mut); }
 .mf-index-list { list-style: none; margin: 0; padding: 0; }
 .mf-index-list li { border-bottom: 1px solid var(--line); }
@@ -104,6 +106,7 @@
 .mf-leaders b { font: .875rem var(--mono); font-weight: 600; }
 
 @media (max-width: 960px) {
+  .mf-index { margin-top: 0; }
   .mf-hero { grid-template-columns: 1fr; gap: 3rem; padding: 1.5rem 0 3rem; }
   .mf-hero h1 { font-size: clamp(3rem, 8vw, 4.5rem); }
   .mf-steps { grid-template-columns: 1fr; gap: 1.25rem; }
