@@ -161,6 +161,33 @@ ${view.target ? `<p class="cc-note">Published target: ${esc(view.target.credit)}
 </section>`;
 }
 
+/**
+ * Where the records stand, for a front-page card (Chris, Oct 9 2026: every track gets a progress bar, in the first server render).
+ * Higher tracks fill toward the final goal (32 of 32). The collision track, fewer bytes being better, fills on a log scale from the
+ * track's cap (two 1,024-byte members, 2,048 bytes) down to 32 bytes: at that size a full collision is known to exist (there are more
+ * byte strings of at most 16 bytes than 2^128 digests), though nobody has found one. Each halving of the total is one step of six.
+ * The dashed mark is the best published result; with nothing verified here the bar stays empty.
+ */
+export const COLLISION_CAP_BYTES = 2048, COLLISION_FLOOR_BYTES = 32;
+export function trackFill(track: ChallengeTrack, value: number | null): number | null {
+  if (value === null) return null;
+  if (track.better === "higher") return Math.max(0, Math.min(1, value / (track.max ?? 32)));
+  const steps = Math.log2(COLLISION_CAP_BYTES / COLLISION_FLOOR_BYTES);
+  return Math.max(0, Math.min(1, Math.log2(COLLISION_CAP_BYTES / Math.max(value, COLLISION_FLOOR_BYTES)) / steps));
+}
+export async function challengeStandingHtml(problemId: number, slug: string): Promise<string> {
+  const cfg = challengeConfig(slug); if (!cfg) return "";
+  const all = await views(problemId, cfg, "live");
+  const pct = (f: number) => `${(100 * f).toFixed(1)}%`;
+  const rows = all.map(({ track, view }) => {
+    const best = view.best?.value ?? null, pub = view.target?.value ?? null;
+    const fb = trackFill(track, best), fp = trackFill(track, pub);
+    const what = track.better === "higher" ? `Bar: matched toward ${track.max ?? 32} of ${track.max ?? 32}.` : `Bar: fewer bytes, on a log scale from the ${COLLISION_CAP_BYTES.toLocaleString("en")}-byte cap to ${COLLISION_FLOOR_BYTES} bytes, the size at which a collision is known to exist.`;
+    return `<li><span>${esc(track.name)}</span><span class="v">here: ${esc(fmtValue(track, best))}${pub !== null ? ` · published: ${esc(fmtValue(track, pub))}` : ""}</span><span class="mf-bar" role="img" aria-label="${esc(`${track.name}: ${best === null ? "nothing verified here yet" : `best here ${fmtValue(track, best)}`}${pub !== null ? `, best published ${fmtValue(track, pub)}` : ""}. ${what}`)}">${fb !== null ? `<i style="width:${pct(fb)}"></i>` : ""}${fp !== null ? `<s style="left:${pct(fp)}"></s>` : ""}</span>${track.better === "lower" ? `<span class="mf-bar-note">${esc(what.replace(/^Bar: /, "Bar: "))}</span>` : ""}</li>`;
+  }).join("");
+  return `<h4><span>Where the records stand</span></h4><ul class="mf-tracks">${rows}</ul><p class="mf-legend">Bar: best result verified here. Dashed mark: best published result, credited to its finder. Collision: fewer bytes is better.</p>`;
+}
+
 /** A small, safe renderer for the spec text in project.json: paragraphs, `code` and **bold**, escaped first. */
 function mdLite(md: string): string {
   return md.split(/\n{2,}/).map((para) => `<p>${esc(para).replace(/`([^`]+)`/g, "<code>$1</code>").replace(/\*\*([^*]+)\*\*/g, "<b>$1</b>").replace(/\n/g, " ")}</p>`).join("");

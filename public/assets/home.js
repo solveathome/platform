@@ -32,10 +32,11 @@
     const [all, recent, ov] = await Promise.allSettled([
       SA.json(`${b}/standings?window=all&limit=10`),
       SA.json(`${b}/standings?window=30d&limit=10&sort=points`),
-      card.hasAttribute('data-challenge') ? SA.json(`${b}/challenge`) : Promise.resolve(null)
+      card.hasAttribute('data-challenge') && !card.querySelector('[data-standing][data-ssr]') ? SA.json(`${b}/challenge`) : Promise.resolve(null)
     ]);
     const stand = card.querySelector('[data-standing]');
-    if (ov.status === 'fulfilled' && ov.value) stand.innerHTML = tracks(ov.value, JSON.parse(card.dataset.challenge || '{}'));
+    if (stand.hasAttribute('data-ssr')) { /* rendered by the server with every bar (src/routes/challenges.ts): no re-render */ }
+    else if (ov.status === 'fulfilled' && ov.value) stand.innerHTML = tracks(ov.value, JSON.parse(card.dataset.challenge || '{}'));
     else if (all.status === 'fulfilled') stand.innerHTML = facts(all.value.totals);
     else stand.innerHTML = '<p class="community-fine">Live figures are unavailable right now.</p>';
     const people = recent.status === 'fulfilled' ? (recent.value.active_people || recent.value.people || []).filter(p => n(p.points) > 0) : null;

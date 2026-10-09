@@ -7,6 +7,7 @@
  */
 import { q } from "../db/index.js";
 import { readProjectConfig, projectPartial, unlistedSlugs, type ProjectConfig } from "./projects.js";
+import { challengeStandingHtml } from "../routes/challenges.js";
 
 export const PROPOSE_URL = "https://discord.gg/b7Jmj5rKH";
 
@@ -37,7 +38,21 @@ export function homeIndex(projects: HomeProject[]): string {
     + `<li class="next"><a href="${PROPOSE_URL}" rel="noopener"><span class="n">${num(projects.length)}</span><span><b>Propose a problem</b><small>Suggest the next one on Discord</small></span><span class="state" aria-hidden="true">↗</span></a></li>`;
 }
 
-export function homeCards(projects: HomeProject[]): string {
+/** The record-challenge cards' standing, rendered on the server so the page's first paint has it (src/routes/challenges.ts). */
+const standingCache = new Map<string, { at: number; html: string }>();
+export async function homeStandings(projects: HomeProject[]): Promise<Record<string, string>> {
+  const out: Record<string, string> = {};
+  // The front page is not in the response cache; its standing is kept 20 s, like the cached project pages (src/lib/cache.ts).
+  const fresh = (slug: string) => { const c = standingCache.get(slug); return c && Date.now() - c.at < 20_000 ? c.html : null; };
+  for (const p of projects) { const c = p.cfg?.challenge ? fresh(p.slug) : null; if (c) out[p.slug] = c; }
+  for (const p of projects) if (p.cfg?.challenge && !out[p.slug]) {
+    const row = await q<{ id: number }>(`SELECT id FROM problems WHERE slug = $1`, [p.slug]);
+    if (row[0]) { out[p.slug] = await challengeStandingHtml(Number(row[0].id), p.slug); standingCache.set(p.slug, { at: Date.now(), html: out[p.slug] }); }
+  }
+  return out;
+}
+
+export function homeCards(projects: HomeProject[], standing: Record<string, string> = {}): string {
   return projects.map((p, i) => {
     const c = p.cfg, s = esc(p.slug), h = c?.home;
     return `<article class="mf-card" id="p-${s}" data-project="${s}"${c?.challenge ? ` data-challenge="${esc(JSON.stringify(Object.fromEntries(c.challenge.tracks.map((t) => [t.id, t.max ?? null]))))}"` : ""} aria-labelledby="t-${s}">
@@ -46,7 +61,7 @@ export function homeCards(projects: HomeProject[]): string {
       <p class="question">${esc(c?.tagline ?? p.summary)}</p>
       ${p.hero ? `<div class="mf-emblem">${p.hero}</div>` : ""}
       ${h?.why ? `<p class="why"><b>Why it matters.</b> ${esc(h.why)}</p>` : ""}
-      <div class="mf-stand">${h?.standing ? `<p class="mf-headline">${esc(h.standing)}</p>` : ""}<div data-standing><p class="community-fine">Loading where it stands…</p></div></div>
+      <div class="mf-stand">${h?.standing ? `<p class="mf-headline">${esc(h.standing)}</p>` : ""}${standing[p.slug] ? `<div data-standing data-ssr>${standing[p.slug]}</div>` : `<div data-standing><p class="community-fine">Loading where it stands…</p></div>`}</div>
       <div class="mf-board"><h4><span>Top contributors, 30 days · points</span><a class="text-link" href="/projects/${s}#contributors">Full board ↗</a></h4><ol data-leaders><li class="empty">Loading contributors…</li></ol></div>
       <div class="mf-actions"><a class="button primary" href="/projects/${s}#contribute">Contribute your agent <span aria-hidden="true">↗</span></a><a class="button secondary" href="/projects/${s}">Explore the problem</a></div>
     </article>`;

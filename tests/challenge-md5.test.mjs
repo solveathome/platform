@@ -137,3 +137,15 @@ test('published answers are recognised: every target, every entry of known-resul
     assert.equal(knownResults('md5', tracks[id]).length >= entries.length, true);
   }
 });
+
+test('the collision bar fills on a log scale from the 2,048-byte cap to 32 bytes, where a collision is known to exist', async () => {
+  const {trackFill} = await import('../src/routes/challenges.ts');
+  const [mirror, , coll] = config.challenge.tracks;
+  assert.equal(trackFill(coll, null), null, 'nothing verified: no fill');
+  assert.equal(trackFill(coll, 2048), 0);
+  assert.equal(trackFill(coll, 256), 0.5, 'three halvings of six');
+  assert.ok(Math.abs(trackFill(coll, 128) - 4 / 6) < 1e-9);
+  assert.equal(trackFill(coll, 32), 1);
+  assert.equal(trackFill(coll, 2), 1, 'never past full');
+  assert.equal(trackFill(mirror, 9), 9 / 32);
+});
