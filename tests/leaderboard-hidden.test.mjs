@@ -35,6 +35,12 @@ before(async () => {
   await pay('both', hidden, 1000, `${tag}-model-hidden`);
   await pay('onlyhid', hidden, 500, `${tag}-model-hidden`);
   for (const [slug, model] of [[shown, `${tag}-model-shown`], [hidden, `${tag}-model-hidden`]]) await q(`INSERT INTO returns (problem_id, type, user_id, model, provider, report_md, transcript, status) VALUES ($1,'explore',$2,$3,'test',$4,'t','pending')`, [ids[slug], ids.both, model, tag]);
+  // The all-project reputation row counts one accepted return on each project, a rejected one on the hidden project, and both projects' CPU hours.
+  await q(`INSERT INTO reputation (user_id, accepted, rejected, cpu_hours) VALUES ($1, 2, 1, 7)`, [ids.both]);
+  for (const [slug, status, cpu] of [[shown, 'accepted', 2], [hidden, 'accepted', 3], [hidden, 'rejected', 2]]) {
+    const r = await one(`INSERT INTO returns (problem_id, type, user_id, model, provider, report_md, transcript, status, cpu_hours) VALUES ($1,'proof',$2,'m','test',$3,'t',$4,$5) RETURNING id`, [ids[slug], ids.both, tag, status, cpu]);
+    await q(`INSERT INTO return_decisions (return_id, status, by, note) VALUES ($1,$2,'trusted',$3)`, [r.id, status, tag]);
+  }
   const app = express();
   app.use('/projects/:slug', async (req, _res, next) => { req.project = await one(`SELECT * FROM problems WHERE slug = $1`, [req.params.slug]); next(); }, board);
   app.use(root);
@@ -44,6 +50,8 @@ before(async () => {
 after(async () => {
   server?.close();
   await q(`DELETE FROM credits WHERE note = $1`, [tag]);
+  await q(`DELETE FROM return_decisions WHERE note = $1`, [tag]);
+  await q(`DELETE FROM reputation WHERE user_id = ANY($1::bigint[])`, [[ids.both, ids.onlyhid].filter(Boolean)]);
   await q(`DELETE FROM returns WHERE report_md = $1`, [tag]);
   await q(`DELETE FROM users WHERE handle LIKE $1`, [`${tag}-%`]);
   await q(`DELETE FROM problems WHERE slug LIKE $1`, [`${tag}-%`]);
@@ -79,10 +87,17 @@ test('a public profile shows no hidden-project credit, slug, return or model', a
   assert.equal(both.credit.total, 10);
   assert.deepEqual(both.credit.ledger.map(c => [c.project, Number(c.points)]), [[shown, 10]]);
   assert.equal(both.standing.points, 10);
-  assert.deepEqual(both.recent.map(r => r.project), [shown]);
-  assert.equal(both.work.submitted, 1);
+  assert.deepEqual([...new Set(both.recent.map(r => r.project))], [shown]);
+  assert.equal(both.work.submitted, 2);
   const only = await get(`/@${tag}-onlyhid`);
   assert.equal(only.credit.total, 0);
   assert.deepEqual(only.credit.ledger, []);
   assert.ok(!JSON.stringify(only).includes(hidden));
+});
+
+test('a public profile\'s reputation figures leave out hidden-project work', async () => {
+  const both = await get(`/@${tag}-both`);
+  assert.deepEqual([both.agent_time.accepted, both.agent_time.rejected], [1, 0]);
+  assert.equal(Number(both.compute.cpu_hours), 2);
+  assert.equal(both.contributor.accepted, undefined, 'raw all-project counters on the profile');
 });

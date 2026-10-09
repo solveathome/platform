@@ -302,6 +302,23 @@ root.get("/@:handle", async (req, res) => {
   const models = await q(`SELECT model, count(*)::int AS submitted, count(*) FILTER (WHERE status = 'accepted')::int AS accepted FROM returns WHERE user_id = $1 AND ${shown("problem_id", 2)} GROUP BY model ORDER BY submitted DESC, model`, [u.id, H]);
   const days = await q(`SELECT to_char(created_at::date, 'YYYY-MM-DD') AS day, count(*)::int AS submitted, count(*) FILTER (WHERE status = 'accepted')::int AS accepted
     FROM returns WHERE user_id = $1 AND ${shown("problem_id", 2)} GROUP BY created_at::date ORDER BY created_at::date`, [u.id, H]);
+  // The reputation counters are one row per person across every project, with no project column, and work on a hidden project
+  // bumps them like any other (src/lib/reputation.ts). The profile shows them less the hidden projects' share, rebuilt from the
+  // record by the rules that bump them, so a listed project's figures stay what they were; the counters themselves, and the review
+  // weight they drive, are not touched (#sah-profile-overflow-reputation, Oct 9 2026).
+  const hid = H.length ? await one(`SELECT
+      (SELECT count(*) FILTER (WHERE fd.status = 'accepted')::int FROM returns r JOIN problems p ON p.id = r.problem_id
+         JOIN LATERAL (SELECT d.status FROM return_decisions d WHERE d.return_id = r.id AND NOT d.provisional AND d.status IN ('accepted','rejected') ORDER BY d.id LIMIT 1) fd ON true
+         WHERE r.user_id = $1 AND p.slug = ANY($2::text[])) AS accepted,
+      (SELECT count(*) FILTER (WHERE fd.status = 'rejected' AND NOT (EXISTS (SELECT 1 FROM reviews v WHERE v.return_id = r.id AND v.verdict = 'reject') AND NOT EXISTS (SELECT 1 FROM reviews v WHERE v.return_id = r.id AND v.verdict = 'reject' AND NOT v.unverifiable)))::int
+         FROM returns r JOIN problems p ON p.id = r.problem_id
+         JOIN LATERAL (SELECT d.status FROM return_decisions d WHERE d.return_id = r.id AND NOT d.provisional AND d.status IN ('accepted','rejected') ORDER BY d.id LIMIT 1) fd ON true
+         WHERE r.user_id = $1 AND p.slug = ANY($2::text[])) AS rejected,
+      (SELECT count(*) FILTER (WHERE v.agreed_with_outcome)::int FROM reviews v JOIN returns r ON r.id = v.return_id JOIN problems p ON p.id = r.problem_id WHERE v.user_id = $1 AND v.scored_at IS NOT NULL AND p.slug = ANY($2::text[])) AS review_agree,
+      (SELECT count(*) FILTER (WHERE NOT v.agreed_with_outcome)::int FROM reviews v JOIN returns r ON r.id = v.return_id JOIN problems p ON p.id = r.problem_id WHERE v.user_id = $1 AND v.scored_at IS NOT NULL AND p.slug = ANY($2::text[])) AS review_disagree,
+      (SELECT coalesce(sum(r.cpu_hours), 0) FROM returns r JOIN problems p ON p.id = r.problem_id WHERE r.user_id = $1 AND r.status <> 'superseded' AND p.slug = ANY($2::text[])) AS cpu_hours,
+      (SELECT count(*)::int FROM lanes l JOIN problems p ON p.id = l.problem_id WHERE l.origin_user_id = $1 AND l.variant = 'direction' AND p.slug = ANY($2::text[])) AS directions_accepted`, [u.id, H]) : null;
+  const less = (k: string) => u[k] == null ? u[k] : Math.max(0, Number(u[k]) - Number(hid?.[k] ?? 0));
   const titleOf = (r: any) => r.job_title ?? withoutKindPrefix(String(r.report_md ?? "").split("\n").find((l: string) => l.trim())?.replace(/^#+\s*/, "").trim() ?? `${r.type} #${r.id}`);
   const summaryOf = (md: string) => { const blocks = String(md ?? "").split(/\n\s*\n/).map((b) => b.trim()).filter(Boolean); const body = blocks.find((b) => !b.startsWith("#") && !/^calibration ladder/i.test(b)) ?? ""; const t = body.replace(/^[-*]\s+/gm, "").replace(/\*\*|__|`/g, "").replace(/\[([^\]]+)\]\([^)]*\)/g, "$1").replace(/\s+/g, " "); return t.length > 320 ? t.slice(0, 317).replace(/\s+\S*$/, "") + "…" : t; };
   // A route job's title is its stage and the route it worked on; what it produced is the outcome it reported (#sah-route-triage-title).
@@ -334,15 +351,15 @@ root.get("/@:handle", async (req, res) => {
     const job = await one(`SELECT j.title, p.slug AS project FROM jobs j JOIN sessions s ON s.id = j.assigned_session JOIN problems p ON p.id = j.problem_id WHERE s.department_id = $1 AND j.status = 'assigned' AND NOT (p.slug = ANY($2::text[])) ORDER BY j.assigned_at DESC NULLS LAST LIMIT 1`, [d.department_id, H]);
     return { ...d, runs_count: runs.length, models: [...new Set(runs.map((r: any) => r.model).filter(Boolean))], last_seen: runs.reduce((m: string | null, r: any) => (!m || (r.last_seen && r.last_seen > m)) ? r.last_seen : m, null), live: live.length, current_job: job ?? null };
   }));
-  const { id: _omit, ...pub } = u;
+  const { id: _omit, accepted: _a, rejected: _r, review_agree: _ra, review_disagree: _rd, cpu_hours: _c, directions_accepted: _d, ...pub } = u;
   res.json({ departments: deptOut, contributor: pub, researcher_of, roles, provenance,
              credit: { total: totals.reduce((s: number, t: any) => s + Number(t.points), 0), by_kind: Object.fromEntries(totals.map((t: any) => [t.kind, Number(t.points)])), count_by_kind: Object.fromEntries(totals.map((t: any) => [t.kind, Number(t.n)])), by_day, ledger },
              standing: { rank: standing?.rank ?? null, contributors: standing?.contributors ?? 0, points: Number(standing?.points ?? 0), pending_points: Number(pending?.pending_points ?? 0) },
              rungs: { accepted: Object.fromEntries(rungRows.map((r: any) => [r.rung, r.n])), contributors_reached: Object.fromEntries(reachedRows.map((r: any) => [r.rung, r.n])) },
              proven, kinds, reviews_given, days, models, highlights: highlights.length ? highlights : strongest, highlights_kind: highlights.length ? "breakthrough" : "strongest",
              integrated_paths: integratedPaths.map((r: any) => r.path), cited: { count: cited?.n ?? 0, most: cited?.most ?? null },
-             agent_time: { accepted: u.accepted, rejected: u.rejected, review_agree: u.review_agree, review_disagree: u.review_disagree },
-             compute: { cpu_hours: u.cpu_hours }, research_input: { directions_accepted: u.directions_accepted, lanes }, work, released: released.map((r: any) => ({ ...r, label: jobLabel(r) })), recent: recentOut });
+             agent_time: { accepted: less("accepted"), rejected: less("rejected"), review_agree: less("review_agree"), review_disagree: less("review_disagree") },
+             compute: { cpu_hours: less("cpu_hours") }, research_input: { directions_accepted: less("directions_accepted"), lanes }, work, released: released.map((r: any) => ({ ...r, label: jobLabel(r) })), recent: recentOut });
 });
 
 root.get("/my/jobs", bearer, async (req, res) => {
