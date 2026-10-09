@@ -16,6 +16,21 @@ const sha = (b) => createHash('sha256').update(b).digest('hex');
 const source = (data) => async function* (sql) { for (const row of data[sql] ?? []) yield row; };
 const scratch = () => mkdtempSync(join(tmpdir(), 'sah-dump-'));
 
+test('exposition provenance and its independent reviewed mapping survive the public dataset export', async () => {
+  assert.match(DUMP_TABLES.jobs, /j\.exposition_source_return_id/);
+  assert.match(DUMP_TABLES.jobs, /j\.exposition_key/);
+  assert.match(DUMP_TABLES.returns, /r\.paper_exposition/);
+  assert.match(DUMP_TABLES.reviews, /rv\.paper_exposition_review/);
+  const dir = scratch();
+  try {
+    const exposition = {source_return_id: 7, receipt_id: 3, tex_sha256: 'a'.repeat(64), claims: [{source_claim_id: 'main', declaration: 'Proof.main', assumptions: []}]};
+    const review = {tex_sha256: exposition.tex_sha256, reviewed_claim_ids: ['main'], fidelity_md: 'Exact mapped source correspondence.'};
+    await writeDump({day: '2026-10-09', dumpDir: dir, tables: {returns: DUMP_TABLES.returns, reviews: DUMP_TABLES.reviews}, rows: source({[DUMP_TABLES.returns]: [{id: 9, paper_exposition: exposition}], [DUMP_TABLES.reviews]: [{id: 4, return_id: 9, paper_exposition_review: review}]})});
+    assert.deepEqual(JSON.parse(readFileSync(join(dir, '2026-10-09', 'returns.jsonl'))).paper_exposition, exposition);
+    assert.deepEqual(JSON.parse(readFileSync(join(dir, '2026-10-09', 'reviews.jsonl'))).paper_exposition_review, review);
+  } finally { rmSync(dir, {recursive: true, force: true}); }
+});
+
 test('separate comparison notes retain public-export source screening',()=>{
   assert.equal(sourceReviewHit('jobs',{id:1,step_check_notes_md:'A bounded comparison of public evidence.'}),null);
   assert.match(sourceReviewHit('jobs',{id:1,step_check_notes_md:'BEGIN THIRD-PARTY SOURCE\ncopied payload'}),/jobs 1 step_check_notes_md/);

@@ -136,7 +136,7 @@ ${job.type === "review" ? `This is a review: return exactly the schema given in 
 
 ` : ""}${job.type === "explore" ? `This is an explore: it is recorded without review unless the body carries \`"request_review": true\` or structured research has outcome \`result\`. Send it when your report makes a claim at a rung others should build on (a certificate, a proof, a measured bound); leave it out for a survey or a register sweep. You can also request review later for a recorded return, including your own: \`POST ${baseUrl}/return/<id>/request-review\` with \`{ "note": "<what deserves verification>" }\`. This preserves the original report and adds the review request to the public record.
 
-` : ""}POST \`${baseUrl}/result\` as JSON with the same Authorization and X-Model headers:
+` : ""}Paper exposition assignments return the separate \`paper.exposition\` artifact schema at \`GET ${baseUrl}/research-protocol?section=paper-exposition\`. Reuse the accepted proof receipt; source/PDF/map fidelity is reviewed independently for this version.\n\nPOST \`${baseUrl}/result\` as JSON with the same Authorization and X-Model headers:
 
 \`\`\`json
 {

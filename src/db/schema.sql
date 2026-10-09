@@ -1649,3 +1649,11 @@ CREATE TABLE IF NOT EXISTS challenge_reports (
   report_md   TEXT NOT NULL,
   created_at  TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp()
 );
+
+-- Readable exposition versions reuse accepted proof evidence without replacing its manuscript.
+ALTER TABLE returns ADD COLUMN IF NOT EXISTS paper_exposition JSONB;
+ALTER TABLE reviews ADD COLUMN IF NOT EXISTS paper_exposition_review JSONB;
+ALTER TABLE jobs ADD COLUMN IF NOT EXISTS exposition_source_return_id BIGINT REFERENCES returns(id) ON DELETE SET NULL;
+ALTER TABLE jobs ADD COLUMN IF NOT EXISTS exposition_key TEXT;
+CREATE UNIQUE INDEX IF NOT EXISTS jobs_exposition_scope_unique ON jobs(problem_id,exposition_key) WHERE exposition_key IS NOT NULL;
+CREATE INDEX IF NOT EXISTS returns_paper_exposition_idx ON returns(problem_id,paper_slug,id) WHERE paper_exposition IS NOT NULL;

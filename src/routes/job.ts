@@ -72,6 +72,8 @@ const MAX_LIVE_SESSIONS = Number(process.env.MAX_LIVE_SESSIONS ?? 16), MAX_HELD_
 export const job = Router({ mergeParams: true });
 job.use(jobHandoffs);
 job.use(departments);
+import { queuePaperExposition, reconcilePaperExpositions, validatePaperExposition, validateExpositionReview, expositionEvidence, expositionReviewGuidance, expositionReviewMatches } from '../lib/paper-exposition.js';
+
 const BASE = () => process.env.BASE_URL ?? "http://localhost:8600";
 
 /** Resolve /projects/:slug to a problem row; 404 otherwise. */
@@ -96,6 +98,7 @@ import { noticeChannel } from "../lib/lane-channel.js";
 import { challengeConfig, challengeJob, challengeTaskBrief, challengeTrackOfJob } from "../lib/challenges.js";
 async function sweepExpired(problemId: number): Promise<void> {
   await expireUntrustedLeanChecks(problemId);
+  await reconcilePaperExpositions(problemId);
   // Abandonment: the session is ended and its assignment goes back to the queue at once, instead of at the job's expiry hours later.
   const silent = await q<{ id: string; user_id: number; model: string | null }>(`SELECT DISTINCT s.id, s.user_id, s.model FROM sessions s JOIN jobs j ON j.assigned_session = s.id AND j.status = 'assigned' WHERE s.problem_id = $1 AND s.ended_at IS NULL AND s.last_seen < now() - ($2::int * interval '1 minute')`, [problemId, ABANDON_AFTER_MIN]);
   for (const s of silent) await endSession(s.id, Number(s.user_id), problemId, s.model, `abandoned: no request from the agent for ${ABANDON_AFTER_MIN} minutes`);
@@ -737,7 +740,8 @@ job.get("/ready", bearer, project, async (req: any, res) => {
 
 /** POST /sessions/:id/end { note? } : end one of this handle's sessions; its held assignment returns to the queue. */
 job.get('/research-protocol', project, (req: any, res) => {
-  res.type('text/markdown').send(readFileSync(join(ROOT, 'docs', 'research-process.md'), 'utf8'));
+  const doc = req.query.section === 'paper-exposition' ? 'paper-exposition.md' : 'research-process.md';
+  res.type('text/markdown').send(readFileSync(join(ROOT, 'docs', doc), 'utf8'));
 });
 job.get('/research-routes', project, async (req: any, res) => {
   // Paged (#mba-sah-bot-feedback-fixes, fix 16: "?page=2, ?offset=100 and ?limit=500 all return the same 100").
@@ -1109,7 +1113,7 @@ job.post("/result", bearer, project, assignmentMutation(async (req: any, res) =>
     if (typeof b[field] === "string" && needsSourceReview(b[field])) { res.status(400).json({ error: `${SOURCE_REVIEW_MESSAGE} The check tripped in "${field}" on this line: "${sourceReviewHit(b[field]) ?? "?"}". Paraphrase with a locator (page, theorem number) instead of transcribing.`, field, at: sourceReviewHit(b[field]) }); return; }
   }
   // Structured public text has the same publication and secret rules as ordinary reports.
-  for (const field of ['research', 'verification_plan', 'check_receipt', 'lean_statement_review', 'lean_execution_review']) if (b[field] !== undefined) {
+  for (const field of ['research', 'verification_plan', 'check_receipt', 'lean_statement_review', 'lean_execution_review', 'paper_exposition_review']) if (b[field] !== undefined) {
     const value = JSON.stringify(b[field]);
     const bad = scrubError(field, value); if (bad) { res.status(400).json(bad); return; }
     if (needsSourceReview(value)) { res.status(400).json({ error: SOURCE_REVIEW_MESSAGE, field }); return; }
@@ -1205,7 +1209,8 @@ job.post("/result", bearer, project, assignmentMutation(async (req: any, res) =>
     const rerunReason = String(b.rerun_reason ?? "").trim().slice(0, 2000);
     if (verification !== "read" && !rerunReason) { res.status(400).json({ error: `verification "${verification}" needs rerun_reason: what made rerunning worth it (an output missing or not matching the code, a bug you found, a claim the captured output does not show). If none, the review is "read".` }); return; }
     await validateReceiptUse(reviewOf, b.verification_receipt_id);
-    const reviewed = await one(`SELECT verification_plan,duplicate_of,type,finding,problem_id,user_id,model,effort FROM returns WHERE id=$1`, [reviewOf]);
+    const reviewed = await one(`SELECT paper_exposition,verification_plan,duplicate_of,type,finding,problem_id,user_id,model,effort FROM returns WHERE id=$1`, [reviewOf]);
+    const expositionReview = reviewed?.paper_exposition && b.verdict === 'accept' ? await validateExpositionReview(reviewed,b.paper_exposition_review) : null;
     if (reviewed?.verification_plan?.lean) {
       const independent = (await one('SELECT lean_independent($1,$2,$3,$4,$5,$6) AND lean_tier1($6,$7) AS ok', [reviewed.problem_id, uid, req.model, effortEff, reviewed.user_id, reviewed.model, reviewed.effort]))?.ok === true;
       reviewerTrusted = reviewerTrusted && independent;
@@ -1220,6 +1225,7 @@ job.post("/result", bearer, project, assignmentMutation(async (req: any, res) =>
     await q(`INSERT INTO reviews (return_id, review_job_id, user_id, model, provider, verdict, rung, notes_md, weight, also_credit, transcript, tokens, unverifiable, needs_md, verification, rerun_reason, trusted, effort, reject_reason)
              VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19)`,
       [reviewOf, jobRow?.id ?? null, uid, req.model ?? "unknown", req.provider ?? "unknown", b.verdict, reviewRung, b.notes_md ?? b.report_md ?? "", w, b.also_credit && typeof b.also_credit === "object" ? JSON.stringify(b.also_credit) : null, String(b.transcript), JSON.stringify(tokens), unverifiable, unverifiable ? String(b.needs_md).slice(0, 4000) : null, verification, verification === "read" ? null : rerunReason, reviewerTrusted, effortEff, rejectReason]);
+    if (expositionReview) await q(`UPDATE reviews SET paper_exposition_review=$3 WHERE return_id=$1 AND user_id=$2`, [reviewOf,uid,JSON.stringify(expositionReview)]);
     await saveLeanStatementReview(reviewOf, uid, b.lean_statement_review);
     await saveLeanExecutionReview(reviewOf, uid, b.lean_execution_review);
     if (priorScoredAt) await q(`UPDATE reviews SET scored_at = $3 WHERE return_id = $1 AND user_id = $2`, [reviewOf, uid, priorScoredAt]);
@@ -1268,6 +1274,7 @@ job.post("/result", bearer, project, assignmentMutation(async (req: any, res) =>
         if (await one(`SELECT 1 FROM reviews WHERE return_id = $1 AND user_id = $2`, [id, uid])) { seriesWarnings.push(`return #${key}: you already reviewed it`); continue; }
         const v = raw && typeof raw === "object" ? raw : { verdict: raw };
         if (!["accept", "reject"].includes(v.verdict)) { seriesWarnings.push(`return #${key}: verdict must be accept or reject; no verdict recorded`); continue; }
+        if (o.paper_exposition && v.verdict === 'accept') { seriesWarnings.push(`return #${key}: an exposition needs its own exact artifact fidelity mapping; no inherited series acceptance recorded, it gets its own reviewer`); continue; }
         const vr = parseRung(v.rung); if (vr === undefined) { seriesWarnings.push(`return #${key}: ${RUNG_ERROR("rung", v.rung)}; no verdict recorded`); continue; }
         const rr = v.verdict === "reject" ? (v.reject_reason !== undefined && v.reject_reason !== null ? String(v.reject_reason) : null) : null;
         if (rr !== null && !REJECT_REASONS.includes(rr as any)) { seriesWarnings.push(`return #${key}: reject_reason must be one of ${REJECT_REASONS.join(", ")}; no verdict recorded`); continue; }
@@ -1351,7 +1358,7 @@ job.post("/result", bearer, project, assignmentMutation(async (req: any, res) =>
     if (subject.status !== "pending" || openTriage) {
       note = `Your triage is on the record. Return #${subject.id} is ${subject.status}${openTriage ? " and another triage of it is open" : ""}: a trusted reviewer or an earlier decision got there first, so this answer changes nothing now.`;
     } else if (b.escalate || isChatModel(subject.model)) {
-      reviewsRequested = subject.verification_plan || subject.research ? 1 : MIN_REVIEWS;
+      reviewsRequested = subject.paper_exposition || subject.verification_plan || subject.research ? 1 : MIN_REVIEWS;
       await q(`INSERT INTO return_decisions (return_id, status, final_rung, provisional, by, note, user_id) VALUES ($1,'pending',NULL,false,'triage',$2,$3)`, [subject.id, `Triage by @${req.user!.handle} (${req.model ?? "unknown"}): ${b.escalate ? "a trusted verdict would change the record." : "a trusted verdict would not change the record, and the return goes to a trusted reviewer anyway: every chat return is decided by one."} ${notes}${covered.length ? ` Read as one series with #${covered.map((o) => o.id).join(", #")}.` : ""}`, uid]);
       for (const o of covered) {
         await q(`UPDATE returns SET triage_lead = $2, review_admitted_at = coalesce(review_admitted_at, now()) WHERE id = $1`, [o.id, subject.id]);
@@ -1423,6 +1430,9 @@ job.post("/result", bearer, project, assignmentMutation(async (req: any, res) =>
   if (authorRung === undefined) { res.status(400).json({ error: RUNG_ERROR("author_rung", b.author_rung), allowed: LADDER.slice().reverse() }); return; }
   // Paper returns are checked before anything is written (platform issue #1: a refused return left orphan rows). Slugs keep their case
   // as seeded ("exact-fold-L") and are matched case-insensitively.
+  let exposition: any = null;
+  if (b.paper?.exposition && (rtype !== "paper" || verificationPlan || b.patch || b.revision)) { res.status(400).json({error:"An exposition is an ordinary paper artifact version; submit new mathematical verification or manuscript changes separately"}); return; }
+  if (jobRow?.exposition_source_return_id && !b.paper?.exposition) { res.status(400).json({error:"This paper assignment requires paper.exposition and its TeX, PDF, claim map and compilation evidence"}); return; }
   let paperPlan: { paperId: number | null; slug: string; fsha: string } | null = null;
   if (rtype === "paper") {
     const raw = String(b.paper?.slug ?? "").trim().replace(/[^A-Za-z0-9-]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 60);
@@ -1431,6 +1441,10 @@ job.post("/result", bearer, project, assignmentMutation(async (req: any, res) =>
     if (!found && !proposes) { res.status(400).json({ error: "a paper return needs paper: { slug, file } where slug is the paper's slug from GET <project>/papers and file is the sha256 of the uploaded manuscript (.md or .tex). To propose a new paper, return without job_id with type 'paper' and paper: { slug: <new>, title, summary, file }. Nothing was recorded." }); return; }
     const fsha = String(b.paper?.file ?? "").toLowerCase();
     if (!/^[0-9a-f]{64}$/.test(fsha) || !(Array.isArray(b.files) && b.files.map((x: any) => String(x).toLowerCase()).includes(fsha))) { res.status(400).json({ error: "paper.file must be the sha256 of the manuscript, and it must be listed in files. Nothing was recorded." }); return; }
+    if (b.paper?.exposition) {
+      if (!found) { res.status(400).json({error:"An exposition needs an existing paper with accepted Lean evidence"}); return; }
+      exposition = await validatePaperExposition(b.paper.exposition,fsha,found.slug,Number(problem.id),b.files,jobRow);
+    }
     paperPlan = { paperId: found ? Number(found.id) : null, slug: found ? String(found.slug) : raw, fsha };
   }
   // Machine time is bounded by the assignment: at most budget hours on 64 cores; nothing for self-assigned work; never NaN.
@@ -1466,11 +1480,15 @@ job.post("/result", bearer, project, assignmentMutation(async (req: any, res) =>
       paperId = Number(created!.id);
     }
     await q(`UPDATE returns SET paper_slug = $2 WHERE id = $1`, [ret!.id, paperPlan.slug]);
+    if (exposition) {
+      await q(`UPDATE returns SET paper_exposition=$2 WHERE id=$1`, [ret!.id,JSON.stringify(exposition)]);
+    } else {
     const ppath = (await one<{ path: string | null }>(`SELECT path FROM papers WHERE id = $1`, [paperId]))?.path ?? `paper/${paperPlan.slug}.md`;
     const stale = await staleRevision(b.paper?.base, problem.slug, ppath, Number(problem.id), "paper");
     if (stale) { res.status(stale.status).json({ error: stale.error, served_sha256: stale.head }); return; }
     await q(`UPDATE returns SET revision_path = $2, revision_sha = $3, revision_base_sha = $4 WHERE id = $1`, [ret!.id, ppath, paperPlan.fsha, await revisionBase(b.paper?.base, problem.slug, ppath, Number(problem.id))]);
     await q(`UPDATE papers SET status = 'under_review', updated_at = now() WHERE id = $1`, [paperId]);
+    }
   }
   // Audit: a change proposal for a served document. revision.path is the document, revision.file the revised text (uploaded, listed in files).
   if (rtype === "audit") {
@@ -1537,6 +1555,12 @@ job.post("/result", bearer, project, assignmentMutation(async (req: any, res) =>
   if (cpuHours > 0) await reputation.addCpuHours(uid, cpuHours);
   // Exploration is recorded, not reviewed: it costs reviewer time only when something builds on it or the author asks for a rung.
   const researchProgress = await recordResearch(await one(`SELECT * FROM returns WHERE id=$1`, [ret!.id]), jobRow, researchReport);
+  if (exposition) {
+    const refs = Array.isArray(cites.returns) ? cites.returns : [];
+    cites.returns = [...new Set([...refs,exposition.source_return_id])];
+    await q(`UPDATE returns SET cites=$2 WHERE id=$1`, [ret!.id,JSON.stringify(cites)]);
+    await q(`INSERT INTO return_dependencies (return_id,depends_on_id) VALUES ($1,$2) ON CONFLICT DO NOTHING`, [ret!.id,exposition.source_return_id]);
+  }
   if (jobRow?.research_source_return_id) {
     const refs = Array.isArray(cites.returns) ? cites.returns : [];
     cites.returns = [...new Set([...refs, Number(jobRow.research_source_return_id)])];
@@ -1567,7 +1591,7 @@ job.post("/result", bearer, project, assignmentMutation(async (req: any, res) =>
     }
   } else if (!recordedExploration && !canonicalClaim) {
     checking = await queueCheck(await one(`SELECT * FROM returns WHERE id=$1`, [ret!.id]));
-    if (!checking) { requestedReviews = verificationPlan || researchReport ? 1 : MIN_REVIEWS; triaging = await admitToReview(await one(`SELECT * FROM returns WHERE id=$1`, [ret!.id]), problem.slug, requestedReviews); }
+    if (!checking) { requestedReviews = exposition || verificationPlan || researchReport ? 1 : MIN_REVIEWS; triaging = await admitToReview(await one(`SELECT * FROM returns WHERE id=$1`, [ret!.id]), problem.slug, requestedReviews); }
   }
   // A sha named in the recipe should be one of the declared hashes or an uploaded file; a typo there costs a reviewer a rerun (agent feedback, Sep 10).
   // Known (issue #7): declared hashes, this return's files, cited files, anything in the file store (a cited return's file, a pinned version), and the served portfolio's own hashes.
@@ -1623,19 +1647,19 @@ export async function resumeDeferredReviews(problemId: number): Promise<number> 
         AND NOT EXISTS (SELECT 1 FROM reviews rv WHERE rv.return_id=r.id)
       ORDER BY r.created_at,r.id LIMIT 10`, [problemId]);
   for (const ret of waiting) {
-    if (!await queueCheck(ret)) await admitToReview(ret, (await one<{ slug: string }>(`SELECT slug FROM problems WHERE id=$1`, [problemId]))?.slug ?? '', ret.verification_plan || ret.research ? 1 : MIN_REVIEWS);
+    if (!await queueCheck(ret)) await admitToReview(ret, (await one<{ slug: string }>(`SELECT slug FROM problems WHERE id=$1`, [problemId]))?.slug ?? '', ret.paper_exposition || ret.verification_plan || ret.research ? 1 : MIN_REVIEWS);
   }
   return waiting.length;
 }
 
 /** Create review jobs for a return. Reviews require tier 1 (scope Q7/Q13). */
 /** Bumped whenever the standard review guidance changes; a queued review from an earlier version is refreshed when served. */
-export const REVIEW_BRIEF_VERSION = 16;   // 16: authenticated trusted execution separate from cross-family correctness review (Oct 8 2026); 15: distinct Lean model families, both Tier 1/high, bounded reconstruction (Oct 7 2026); 14: concrete Lean package artifacts and make-checkable continuation (Oct 6 2026); 13: pinned Lean statement review and trustworthy worker validation (Oct 6 2026); 12: a chat return's transcript is the server's record of its tool calls, model unmeasured (Oct 4 2026, #sah-mcp-real-work-build);   // 11: review targets match integration closure, including explicit empty lists (Oct 2 2026); 10: required document repairs go to Tier 1 trusted agents and reviews reuse established evidence (Oct 2 2026); 9: a series also gathers the same document's later fixes, chain links and no-op revisions (#mba-sah-held-feedback-items, item 15); 8: the return schema names verification_sufficiency_md on a packaged review and the also_fix note cap (#mba-sah-bot-feedback-fixes, fix 7); 7: a reviewer holding a role on the project may mark an accepted finding worth announcing (Chris, Sep 26 2026, #sah-discord-announcer); 6: the reviewer asks whether the return earns credit, a rung or a citation without the work (Chris, Sep 24 2026, #sah-gemma-mvp; the Gemma Challenge's agents caught a gameable gate themselves);5: a revision's review lists the findings it answers, and also_fix takes a scope (Sep 24 2026); 3: no time budget in the review brief (Chris, Sep 19 2026); 4: series verdicts are decisions with their usual effects, from a trusted reviewer only (Sep 23 2026)
+export const REVIEW_BRIEF_VERSION = 17;   // 16: authenticated trusted execution separate from cross-family correctness review (Oct 8 2026); 15: distinct Lean model families, both Tier 1/high, bounded reconstruction (Oct 7 2026); 14: concrete Lean package artifacts and make-checkable continuation (Oct 6 2026); 13: pinned Lean statement review and trustworthy worker validation (Oct 6 2026); 12: a chat return's transcript is the server's record of its tool calls, model unmeasured (Oct 4 2026, #sah-mcp-real-work-build);   // 11: review targets match integration closure, including explicit empty lists (Oct 2 2026); 10: required document repairs go to Tier 1 trusted agents and reviews reuse established evidence (Oct 2 2026); 9: a series also gathers the same document's later fixes, chain links and no-op revisions (#mba-sah-held-feedback-items, item 15); 8: the return schema names verification_sufficiency_md on a packaged review and the also_fix note cap (#mba-sah-bot-feedback-fixes, fix 7); 7: a reviewer holding a role on the project may mark an accepted finding worth announcing (Chris, Sep 26 2026, #sah-discord-announcer); 6: the reviewer asks whether the return earns credit, a rung or a citation without the work (Chris, Sep 24 2026, #sah-gemma-mvp; the Gemma Challenge's agents caught a gameable gate themselves);5: a revision's review lists the findings it answers, and also_fix takes a scope (Sep 24 2026); 3: no time budget in the review brief (Chris, Sep 19 2026); 4: series verdicts are decisions with their usual effects, from a trusted reviewer only (Sep 23 2026)
 const REASSESSMENT_NOTE = '\n\nEvidence needs reassessment or execution could not find capacity within 24 hours. Assess the specific missing or changed evidence from the record; execution is not included. Preserve existing observations. Do not report that a check ran. If new execution is necessary, name the smallest check and missing capability in needs_md; a repaired package is a new return.';
 /** The standard review brief for a return as it stands now, with the tier, budget and compute hint that go with it. Job-specific text (the reassessment note) is the caller's. */
 export async function composeReviewBrief(returnId: number, problemId: number, options: { judgmentOnly?: boolean } = {}): Promise<{ brief: string; tier: number; budget: number; compute: any; judgmentOnly: boolean; packaged: boolean }> {
-  const parent = await one<{ type: string; paper_slug: string | null; revision_path: string | null; recipe_md: string | null; target: any; job_budget: string | null; job_compute: any; transcript_head?: string; model: string; handle: string; author_tier: number | null; problem_id: number; has_patch?: boolean; patch?: string | null; revision_sha?: string | null; transcript_omitted?: any; duplicate_of?: string | null; author_tokens?: any; verification_plan?: any }>(
-    `SELECT r.verification_plan,r.type, r.paper_slug, r.revision_path, r.recipe_md, r.target, j.budget_hours AS job_budget, j.compute_hint AS job_compute, r.model, u.handle, mt.tier AS author_tier, r.problem_id, left(r.transcript, 24) AS transcript_head, r.patch, r.revision_sha, r.transcript_omitted, r.duplicate_of, r.tokens AS author_tokens, r.file_notes, (r.patch IS NOT NULL) AS has_patch
+  const parent = await one<{ type: string; paper_slug: string | null; revision_path: string | null; recipe_md: string | null; target: any; job_budget: string | null; job_compute: any; transcript_head?: string; model: string; handle: string; author_tier: number | null; problem_id: number; has_patch?: boolean; patch?: string | null; revision_sha?: string | null; transcript_omitted?: any; duplicate_of?: string | null; author_tokens?: any; verification_plan?: any; paper_exposition?: any }>(
+    `SELECT r.paper_exposition,r.verification_plan,r.type, r.paper_slug, r.revision_path, r.recipe_md, r.target, j.budget_hours AS job_budget, j.compute_hint AS job_compute, r.model, u.handle, mt.tier AS author_tier, r.problem_id, left(r.transcript, 24) AS transcript_head, r.patch, r.revision_sha, r.transcript_omitted, r.duplicate_of, r.tokens AS author_tokens, r.file_notes, (r.patch IS NOT NULL) AS has_patch
      FROM returns r LEFT JOIN jobs j ON j.id = r.job_id JOIN users u ON u.id = r.user_id LEFT JOIN model_tiers mt ON mt.model = r.model WHERE r.id = $1`, [returnId]);
   // Provenance (Q68): the reviewer sees who made this and with what, and who last verified the document it touches, and is told to be a different pair of eyes.
   let provenance = parent ? `\n\nProvenance: authored by @${parent.handle} with ${parent.model}${parent.author_tier ? ` (tier ${parent.author_tier})` : ""}. If that is your own handle: a trusted reviewer may review their handle's return; the value is a second look by another model in a clean session, so declare it in the claim and the return and proceed, do not release. You are a different model, at least as capable for a judgment call; a model does not review its own kind because it shares its blind spots. Look for what that model would miss.` : "";
@@ -1657,6 +1681,7 @@ export async function composeReviewBrief(returnId: number, problemId: number, op
     ? `\n\nThis is a mechanical check; take the time it needs, there is no time budget or deadline on a review. The author's verification recipe is below with its captured outputs and hashes. Read the recipe and the code against the claim first; rerun it, exactly and in a fresh directory, only for a reason (see verification below), except a counterexample, which is cheap: run it against the validator when that takes minutes. ${parent?.type === "break" ? "Accept if the counterexample runs against the validator and refutes the claim as stated; reject if it does not run, does not refute, or refutes a weaker statement than claimed." : parent?.type === "measure" ? "Accept if your hashes match; reject on any mismatch, with your hashes." : "Accept if the Lean file compiles against the stated Mathlib commit with the stated lemma and no sorry; reject otherwise."} Do not redo the search. If the recipe cannot be run as supplied, reject as unverifiable and say what is missing.\n\n### Verification recipe\n\n${parent?.recipe_md ?? "(none given)"}`
     : `\n\nTake the time the verification needs: there is no time budget or deadline on a review. Verify what the author gives you to verify; do not redo the work. If the return cannot be checked with what it supplies, reject as unverifiable and say what a checkable return would need.`;
   const unverifiableNote = `\n\nTo reject as unverifiable (it cannot be checked with what the author supplied), return \`"verdict": "reject", "unverifiable": true, "needs_md": "<exactly what a checkable return would need: commands, inputs, expected outputs, what was missing>"\`. That is not a mark against the author: the platform opens a follow-up job for any tier to bring the work to a checkable state, with your needs_md as its brief.`;
+  const expositionNote = parent?.paper_exposition ? await expositionReviewGuidance(parent.paper_exposition,problemId) : "";
   const paperNote = parent?.type === "paper" ? `\n\nThis return is a manuscript (paper \`${parent.paper_slug}\`). Write a referee report: for every theorem, lemma and measured claim, check that the stated calibration is the one the argument supports; check each citation at the page; check that the abstract claims nothing the body does not carry; check the AI-disclosure and authorship block. Accept means: publishable as a project draft at the calibrations it states. Reject means: name the statements that overclaim or the steps that fail, so the next revision can fix them. Your notes_md is the referee report and is published with the paper.` : "";
   const challengeNote = parent?.type === "challenge" ? `\n\nThis return is a challenge: a person's objection to ${parent.target ? `${targetLabel(parent.target)} (GET <project base>${targetUrl(parent.target, "").replace(/^\/projects\/[^/]+/, "")})` : "something in the project"}, worked by their agent, with their own words in human_md and a finding (holds | partial | does-not-hold). Judge the objection, not the person: read the target yourself, check that the identified step is really the step, that the author tried to rescue the target before attacking it, and that the finding label matches the evidence. Accept means the objection is sound as labelled; a challenge honestly reported as does-not-hold can be accepted too. The rung is the challenge's own claim on the ladder.` : "";
   const projectSlug = (await one<{ slug: string }>(`SELECT slug FROM problems WHERE id = $1`, [problemId]))?.slug;
@@ -1683,7 +1708,7 @@ export async function composeReviewBrief(returnId: number, problemId: number, op
   const auditNote = parent?.type === "audit" ? `\n\nThis return is a change proposal for \`${parent.revision_path}\`. Fetch the current document (GET <project base>/docs/${parent.revision_path}) and the revised file; read the diff. For every issue the author raises, check that it is real; for every change, check that it fixes the issue without lowering rigour or overclaiming; check nothing else was altered silently. Accept means: integrate this revision as the document's next version, credited to the author and verified by you. Reject means: name the changes that must not go in.` : "";
   // Worth announcing (#sah-discord-announcer): asked only where a finding can be news, never on audits, curation or papers.
   const announceNote = ANNOUNCE_TYPES.has(parent?.type ?? "") ? `\n\nWorth announcing: only if you review as a person holding a role on this project (an owner, or trust granted on the trust page; trust by model does not count) and you accept. Add \`"announce": true\` with \`"announce_md": "<one sentence, at most ${ANNOUNCE_MD_MAX} characters>"\` only if this finding would matter to someone following the project who reads nothing else this week: a proof, a refutation, a computation reproduced by an independent agent, or a genuinely new direction that changes what the project should do next. Most accepted work is not. Your sentence goes out publicly under the finder's name, the return's author, who gets the whole credit in the post: say what was shown and at what rung, in the record's words, with no adjectives. The post goes out only if the final decision is a trusted acceptance of that kind, after a hold, and it is corrected if the decision is revisited.` : "";
-  const brief = `Review return #${returnId}. ${parent?.verification_plan ? `The Verification section below is the basis for judgment: the claim, its assumptions, the argument connecting the check to the claim, the generated summary, the caveats and the receipts. The full record is at GET <project base>/return/${returnId} (same headers; the project base is the URL you fetched this assignment from, minus /start) for a named obligation the section leaves open.` : `Fetch it at GET <project base>/return/${returnId} (same headers; the project base is the URL you fetched this assignment from, minus /start; the review brief above uses it). Read the exact claim, its scope, the supplied check and recorded observations first.`} Consult the original brief, patch and transcript when needed to resolve a question. A message it cites is at GET <project base>/chat/messages/<id>; the lane's recent messages at GET <project base>/chat/<lane>/messages?limit=50 (project-wide: GET <project base>/chat/messages?limit=50).${String(parent?.transcript_head ?? "").startsWith("[transcript withheld") ? " (This return's transcript is withheld: it was recorded before launch. Review the report, the files and the recipe; do not look for the transcript.)" : ""}\n\nYour job: ${parent?.verification_plan ? `judge it from the Verification section. Fetch the full package, a receipt's observed output (GET <project base>/return/${returnId}) or the files (GET /files/<sha256>) only for a named obligation the section leaves open; say which.` : `verify it. Fetch the return's files (GET /files/<sha256>) and the served scripts it names (GET <project base>/docs/<path>), apply its patch if any, and read what the author gives you to run against what they say it produced; that is the author's evidence, and the author owes you a recipe with captured outputs. If it names a repo_url and commit, that commit is the same evidence in git form.`} Reuse credible execution of an identical check package. Run the smallest decisive check only when missing execution matters to the assigned judgment and fits the compute your person offered (verification, below). Otherwise report that missing obligation; do not repeat discovery or claim an unperformed execution. Check every claimed rung against the ladder; assign the rung you can defend, not the author's: work that is sound at a lower rung than it claims is an accept at that rung, not a reject. Reject with a reason class: refuted (the claim fails), unsourced (it hides what it built on), unverifiable (it cannot be checked with what was supplied), or overclaimed only when nothing in it holds at any rung. Check the closed-routes register (\`research/OUTCOMES.md\`, section "Closed routes") for prior closures.\n\nCheck attribution too: did the author cite the messages, returns, files and people they built on? Add "also_credit" with anything missing; a return that hides its sources is a reject.\n\nCheck what it earns: does this return earn credit, a rung or a citation without the work? A citation list padded with work it never used, a rung the evidence does not carry, earlier work restated as new, the author's own previous return repeated: say which in notes_md, and assign the rung and the credit the work itself supports (reject as overclaimed only when nothing in it holds at any rung). If the mechanism itself let it through (a rule that pays for something without the work), also file it as a Mechanism proposal at https://github.com/solveathome/platform/issues so the rule gets fixed, not only this return.\n\nReturn: { "job_id": <this job>, "verdict": "accept" | "reject", "reject_reason": "<on a reject: refuted | overclaimed | unsourced | unverifiable>", "rung": "<your rung>", "notes_md": "<what you checked, what failed, what would falsify>", "verification": "read" | "spot" | "rerun", "rerun_reason": "<when spot or rerun: what made it worth it>", ${parent?.verification_plan ? `"verification_sufficiency_md": "<required on an accept: why the package's checks suffice for the claim>", ` : ""}"also_credit": { "messages": [], "returns": [], "files": [], "handles": [] }, "also_fix": [{ "path": "<a served document with a defect, this revision's own path included>", "note": "<what to change there, at most 1000 characters>", "scope": "<before_circulation when it must be fixed before the text circulates; advisory when optional>" }], "transcript": "<scrubbed>" }` + recipeNote + provenance + paperNote + auditNote + findingNote + patchNote + ledgerNote + omittedNote + chatNote + noLogNote + mismatchNote + customNote + twinNote + portabilityNote + challengeNote + checkNote + verificationNote + unverifiableNote + packageNote + triageNote + announceNote;
+  const brief = `Review return #${returnId}. ${parent?.verification_plan ? `The Verification section below is the basis for judgment: the claim, its assumptions, the argument connecting the check to the claim, the generated summary, the caveats and the receipts. The full record is at GET <project base>/return/${returnId} (same headers; the project base is the URL you fetched this assignment from, minus /start) for a named obligation the section leaves open.` : `Fetch it at GET <project base>/return/${returnId} (same headers; the project base is the URL you fetched this assignment from, minus /start; the review brief above uses it). Read the exact claim, its scope, the supplied check and recorded observations first.`} Consult the original brief, patch and transcript when needed to resolve a question. A message it cites is at GET <project base>/chat/messages/<id>; the lane's recent messages at GET <project base>/chat/<lane>/messages?limit=50 (project-wide: GET <project base>/chat/messages?limit=50).${String(parent?.transcript_head ?? "").startsWith("[transcript withheld") ? " (This return's transcript is withheld: it was recorded before launch. Review the report, the files and the recipe; do not look for the transcript.)" : ""}\n\nYour job: ${parent?.verification_plan ? `judge it from the Verification section. Fetch the full package, a receipt's observed output (GET <project base>/return/${returnId}) or the files (GET /files/<sha256>) only for a named obligation the section leaves open; say which.` : `verify it. Fetch the return's files (GET /files/<sha256>) and the served scripts it names (GET <project base>/docs/<path>), apply its patch if any, and read what the author gives you to run against what they say it produced; that is the author's evidence, and the author owes you a recipe with captured outputs. If it names a repo_url and commit, that commit is the same evidence in git form.`} Reuse credible execution of an identical check package. Run the smallest decisive check only when missing execution matters to the assigned judgment and fits the compute your person offered (verification, below). Otherwise report that missing obligation; do not repeat discovery or claim an unperformed execution. Check every claimed rung against the ladder; assign the rung you can defend, not the author's: work that is sound at a lower rung than it claims is an accept at that rung, not a reject. Reject with a reason class: refuted (the claim fails), unsourced (it hides what it built on), unverifiable (it cannot be checked with what was supplied), or overclaimed only when nothing in it holds at any rung. Check the closed-routes register (\`research/OUTCOMES.md\`, section "Closed routes") for prior closures.\n\nCheck attribution too: did the author cite the messages, returns, files and people they built on? Add "also_credit" with anything missing; a return that hides its sources is a reject.\n\nCheck what it earns: does this return earn credit, a rung or a citation without the work? A citation list padded with work it never used, a rung the evidence does not carry, earlier work restated as new, the author's own previous return repeated: say which in notes_md, and assign the rung and the credit the work itself supports (reject as overclaimed only when nothing in it holds at any rung). If the mechanism itself let it through (a rule that pays for something without the work), also file it as a Mechanism proposal at https://github.com/solveathome/platform/issues so the rule gets fixed, not only this return.\n\nReturn: { "job_id": <this job>, "verdict": "accept" | "reject", "reject_reason": "<on a reject: refuted | overclaimed | unsourced | unverifiable>", "rung": "<your rung>", "notes_md": "<what you checked, what failed, what would falsify>", "verification": "read" | "spot" | "rerun", "rerun_reason": "<when spot or rerun: what made it worth it>", ${parent?.verification_plan ? `"verification_sufficiency_md": "<required on an accept: why the package's checks suffice for the claim>", ` : ""}"also_credit": { "messages": [], "returns": [], "files": [], "handles": [] }, "also_fix": [{ "path": "<a served document with a defect, this revision's own path included>", "note": "<what to change there, at most 1000 characters>", "scope": "<before_circulation when it must be fixed before the text circulates; advisory when optional>" }], "transcript": "<scrubbed>" }` + recipeNote + provenance + paperNote + expositionNote + auditNote + findingNote + patchNote + ledgerNote + omittedNote + chatNote + noLogNote + mismatchNote + customNote + twinNote + portabilityNote + challengeNote + checkNote + verificationNote + unverifiableNote + packageNote + triageNote + announceNote;
   return { brief, tier: reviewTier, budget: reviewBudget, compute: independentExecution || judgmentOnly ? {} : parent?.verification_plan?.cost ?? (mechanical ? reviewComputeHint(parent?.job_compute, !!String(parent?.recipe_md ?? "").trim()) : {}), judgmentOnly: !!judgmentOnly, packaged: !!parent?.verification_plan };
 }
 export async function spawnReviews(returnId: number, problemId: number, laneId: number | null, n: number, options: { fresh?: boolean; judgmentOnly?: boolean } = {}): Promise<void> {
@@ -1767,7 +1792,7 @@ export async function skipTriage(triageJob: any, why: string): Promise<boolean> 
   if (!moved || !ret || ret.status !== "pending") return false;
   await q(`INSERT INTO return_decisions (return_id, status, final_rung, provisional, by, note) VALUES ($1,'pending',NULL,false,'triage',$2)`, [ret.id, `Triage skipped: ${why}`]);
   // fresh: counted against open jobs only, so a return with an old history of jobs still gets its review (never left with none).
-  await spawnReviews(Number(ret.id), Number(ret.problem_id), ret.lane_id, ret.verification_plan || ret.research ? 1 : MIN_REVIEWS, { fresh: true });
+  await spawnReviews(Number(ret.id), Number(ret.problem_id), ret.lane_id, ret.paper_exposition || ret.verification_plan || ret.research ? 1 : MIN_REVIEWS, { fresh: true });
   return true;
 }
 /** The triages already waiting on trusted tier-1 work go to review (#sah-tier1-skip-triage): the ones queued before the rule, and
@@ -1905,7 +1930,7 @@ Return: { "job_id": <this job>, "escalate": true | false, "reason": "<on a no: f
 /** A review queued under an earlier guidance version gets the current standard brief when served; its job-specific reassessment note is kept. Packaged reviews only: that is the template that changed. */
 async function refreshReviewBrief(row: any, problemId: number): Promise<string> {
   if (row.type !== 'review' || !row.parent_return_id || Number(row.brief_version ?? 0) >= REVIEW_BRIEF_VERSION) return row.brief_md;
-  if (!(await one(`SELECT 1 FROM returns WHERE id=$1 AND verification_plan IS NOT NULL`, [row.parent_return_id]))) return row.brief_md;
+  if (!(await one(`SELECT 1 FROM returns WHERE id=$1 AND (verification_plan IS NOT NULL OR paper_exposition IS NOT NULL)`, [row.parent_return_id]))) return row.brief_md;
   const composed = await composeReviewBrief(Number(row.parent_return_id), problemId);
   const brief = composed.brief + (String(row.brief_md ?? '').includes('Evidence needs reassessment or execution could not find capacity within 24 hours.') ? REASSESSMENT_NOTE : '');   // the note's head is stable across wording changes
   await q(`UPDATE jobs SET brief_md=$2, brief_version=$3 WHERE id=$1`, [row.id, brief, REVIEW_BRIEF_VERSION]);
@@ -1943,9 +1968,12 @@ export async function resolveReturn(returnId: number): Promise<string> {
 async function resolveReturnLocked(returnId: number): Promise<string> {
   const ret = await one(`SELECT * FROM returns WHERE id = $1`, [returnId]);
   if (!ret) return "unknown";
-  const votes = await q<{ id: number; verdict: "accept" | "reject"; weight: string; provider: string; rung: string | null; user_id: number; model: string; also_credit: any; unverifiable: boolean; needs_md: string | null; verification: string; trusted: boolean; scored_at: string | null; effort: string | null; reject_reason: string | null }>(
-    `SELECT id, verdict, weight, provider, rung, user_id, model, also_credit, unverifiable, needs_md, verification, trusted, scored_at, effort, reject_reason FROM reviews WHERE return_id = $1 AND NOT needs_reassessment`, [returnId]);
+  const recordedVotes = await q<{ id: number; verdict: "accept" | "reject"; weight: string; provider: string; rung: string | null; user_id: number; model: string; also_credit: any; unverifiable: boolean; needs_md: string | null; verification: string; trusted: boolean; scored_at: string | null; effort: string | null; reject_reason: string | null; paper_exposition_review: any }>(
+    `SELECT id, verdict, weight, provider, rung, user_id, model, also_credit, unverifiable, needs_md, verification, trusted, scored_at, effort, reject_reason, paper_exposition_review FROM reviews WHERE return_id = $1 AND NOT needs_reassessment`, [returnId]);
+  // A series verdict or a historical unbound vote cannot review different exposition bytes by inheritance.
+  const votes = recordedVotes.filter(v => !ret.paper_exposition || v.verdict !== 'accept' || expositionReviewMatches(ret.paper_exposition,v.paper_exposition_review));
   const d = decide(votes.map((v) => ({ ...v, weight: Number(v.weight) })));
+  if (ret.paper_exposition && d.status === 'accepted' && !(await expositionEvidence(ret.paper_exposition,Number(ret.problem_id))).current) return 'pending (exposition source evidence is pending, stale or revoked)';
   const isFinal = ret.status !== "pending" && !ret.provisional;
   // A final decision is the current state of the trusted record: only trusted votes move it (advisory ones never do), and only to something different.
   if (isFinal && d.status === "pending") {
@@ -2046,7 +2074,8 @@ async function resolveReturnLocked(returnId: number): Promise<string> {
   }
   // A final rejection pays the reviewers whose verdict matched (a correct rejection is work too); paid once per reviewer per return.
   if (d.status === "rejected" && !d.provisional) await credit.payRejectedReturn(final, deciding);
-  if (ret.type === "paper" && ret.paper_slug) await settlePaper(final, d.status);
+  if (ret.type === "paper" && ret.paper_slug && !ret.paper_exposition) await settlePaper(final, d.status);
+  if (d.status === "accepted" && ret.verification_plan?.lean) await queuePaperExposition(returnId,Number(ret.problem_id));
   // A fix job that ended without closing a finding it carried hands it to the next fix job: findings survive job turnover.
   if (ret.job_id) await requeueFindings(Number(ret.job_id), Number(ret.problem_id), ret.lane_id === null || ret.lane_id === undefined ? null : Number(ret.lane_id));
   return d.status;
@@ -2066,7 +2095,7 @@ export async function reopen(ret: any, userId: number | null, note: string, by: 
   if (options.propagate !== false) await reassessAffected(Number(ret.id), 'pending: ' + note);
   if (ret.job_id) await q(`UPDATE jobs SET status = 'returned' WHERE id = $1`, [ret.job_id]);
   const checking = !options.judgmentOnly && await queueCheck(ret);
-  const reviewCount = ret.verification_plan || ret.research ? 1 : MIN_REVIEWS;
+  const reviewCount = ret.paper_exposition || ret.verification_plan || ret.research ? 1 : MIN_REVIEWS;
   if (!checking) await spawnReviews(Number(ret.id), Number(ret.problem_id), ret.lane_id, reviewCount, { fresh: true, judgmentOnly: options.judgmentOnly });
   const ch = await noticeChannel(ret.problem_id, ret.lane_id);
   if (ch && userId) await q(`INSERT INTO messages (channel_id, user_id, kind, body_md, return_id) VALUES ($1,$2,'challenge',$3,$4)`, [ch.id, userId, `Return #${ret.id} reopened: ${note}. Trusted reviewers, look again.`, ret.id]);
@@ -2078,6 +2107,7 @@ export async function reopen(ret: any, userId: number | null, note: string, by: 
  * one leaves the previous version in place.
  */
 async function settlePaper(ret: any, status: string): Promise<void> {
+  if (ret.paper_exposition) return;
   if (status === "accepted") {
     await q(`UPDATE papers SET status = CASE WHEN current_return_id IS NOT NULL THEN 'reviewed' WHEN kind = 'proposal' OR path IS NULL THEN 'proposed' ELSE 'draft' END, updated_at = now() WHERE problem_id = $1 AND slug = $2 AND status = 'under_review'`, [ret.problem_id, ret.paper_slug]);
   } else {
@@ -2315,7 +2345,7 @@ async function openLaneFromDirection(ret: any): Promise<void> {
 
 /** One review or one finding by id, as JSON (#mba-sah-bot-feedback-fixes, fix 16: "got 404 at /review/292 and /finding/152"). The review's transcript is its own resource. */
 job.get("/review/:id", optionalAuth, project, async (req: any, res) => {
-  const r = await one(`SELECT rv.id, rv.return_id, u.handle, rv.model, rv.verdict, rv.rung, rv.reject_reason, rv.notes_md, rv.also_fix, rv.verification, rv.trusted, rv.created_at FROM reviews rv JOIN users u ON u.id = rv.user_id JOIN returns r ON r.id = rv.return_id WHERE rv.id = $1 AND r.problem_id = $2`, [Number(req.params.id) || 0, req.project.id]);
+  const r = await one(`SELECT rv.id, rv.return_id, u.handle, rv.model, rv.verdict, rv.rung, rv.reject_reason, rv.notes_md, rv.also_fix, rv.verification, rv.paper_exposition_review, rv.trusted, rv.created_at FROM reviews rv JOIN users u ON u.id = rv.user_id JOIN returns r ON r.id = rv.return_id WHERE rv.id = $1 AND r.problem_id = $2`, [Number(req.params.id) || 0, req.project.id]);
   if (!r) { res.status(404).json({ error: `no such review #${String(req.params.id).slice(0, 20)} (a replaced review is in its return's review_history)` }); return; }
   res.type("application/json").send(redactHarnessIds(JSON.stringify({ ...r, return_url: `/projects/${req.project.slug}/return/${r.return_id}` })).text);
 });
@@ -2350,6 +2380,7 @@ job.get("/return/:id", optionalAuth, project, async (req: any, res) => {
   r.verification_runs = await verificationRuns(Number(r.id));
   r.verification_state = r.verification_plan ? await verificationState(Number(r.id)) : null;
   r.verification_summary = r.verification_plan ? await verificationSummary(Number(r.id)) : null;   // generated from the record; see summaryMarkdown for the page
+  if (r.paper_exposition) r.paper_exposition_evidence = await expositionEvidence(r.paper_exposition,Number(r.problem_id));
   r.canonical_return = r.verification_plan && r.duplicate_of ? await one(`SELECT id,status,final_rung,provisional FROM returns WHERE id=$1`, [r.duplicate_of]) : null;
   r.review_history = await q(`SELECT h.review-'transcript'||jsonb_build_object('handle',u.handle) AS review,h.archived_at FROM review_history h LEFT JOIN users u ON u.id=(h.review->>'user_id')::bigint WHERE h.return_id=$1 ORDER BY h.id`, [r.id]);
   r.dependencies = await q(`SELECT source.id,source.status,source.final_rung,source.duplicate_of AS canonical_return_id FROM return_dependencies d JOIN returns source ON source.id=d.depends_on_id WHERE d.return_id=$1 ORDER BY source.id`, [r.id]);
@@ -2366,7 +2397,7 @@ job.get("/return/:id", optionalAuth, project, async (req: any, res) => {
   // The reviews and the decision record travel with the return (issue #29). `returns.decision` is a curate return's own input, so it is `curation` here;
   // `decision` is the latest decision row (null while nothing has been decided) with the reviews that carried it, and `decisions` the whole record, oldest first.
   if (r.type === "curate") r.curation = r.decision; delete r.decision;
-  r.reviews = (await q(`SELECT rv.id, u.handle, rv.model, rv.verdict, rv.rung, rv.reject_reason, rv.verification, rv.rerun_reason, rv.verification_receipt_id, rv.verification_sufficiency_md, rv.verification_conflict_resolution_md, rv.lean_statement_review, rv.lean_execution_review, rv.trusted, rv.weight, rv.notes_md, rv.also_fix, rv.needs_reassessment, rv.created_at FROM reviews rv JOIN users u ON u.id = rv.user_id WHERE rv.return_id = $1 ORDER BY rv.id`, [r.id])).map((v: any) => ({ ...v, id: Number(v.id), weight: Number(v.weight) }));
+  r.reviews = (await q(`SELECT rv.id, u.handle, rv.model, rv.verdict, rv.rung, rv.reject_reason, rv.verification, rv.rerun_reason, rv.verification_receipt_id, rv.verification_sufficiency_md, rv.verification_conflict_resolution_md, rv.lean_statement_review, rv.lean_execution_review, rv.paper_exposition_review, rv.trusted, rv.weight, rv.notes_md, rv.also_fix, rv.needs_reassessment, rv.created_at FROM reviews rv JOIN users u ON u.id = rv.user_id WHERE rv.return_id = $1 ORDER BY rv.id`, [r.id])).map((v: any) => ({ ...v, id: Number(v.id), weight: Number(v.weight) }));
   // Each decision row names who decided (issue #31): the reviewers whose verdicts carried it, or the person who reopened or challenged; and whether the author's own trusted handle was among them.
   const historicalReviews = [...r.reviews.map((v: any) => ({ ...v, archived_at: null })), ...r.review_history.map((h: any) => ({ ...h.review, archived_at: h.archived_at }))];
   r.decisions = (await q(`SELECT d.status, d.final_rung, d.provisional, d.by, d.note, d.decided_at, u.handle AS actor FROM return_decisions d LEFT JOIN users u ON u.id = d.user_id WHERE d.return_id = $1 ORDER BY d.id`, [r.id])).map((d: any) => {
@@ -2453,7 +2484,7 @@ job.post("/return/:id/request-review", bearer, project, assignmentMutation(async
   const folded = await foldExactClaim(Number(ret.id));
   if (folded) { res.json({ ok: true, return_id: Number(ret.id), status: folded.status, canonical_return_id: folded.id, check_requested: false, reviews_requested: 0 }); return; }
   const checking = await queueCheck(ret);
-  const reviewCount = ret.verification_plan || ret.research ? 1 : MIN_REVIEWS;
+  const reviewCount = ret.paper_exposition || ret.verification_plan || ret.research ? 1 : MIN_REVIEWS;
   const triaging = !checking && await admitToReview(ret, req.project.slug, reviewCount);
   const ch = await noticeChannel(ret.problem_id, ret.lane_id);
   if (ch) await q(`INSERT INTO messages (channel_id, user_id, model, kind, body_md, return_id, session) VALUES ($1,$2,$3,'challenge',$4,$5,$6)`, [ch.id, uid, req.model ?? null, `Return #${ret.id} elevated for review by @${req.user!.handle}: ${note}. ${triaging ? "It goes to triage first: a first read decides whether it goes before reviewers." : "Reviewers, verify it."}`, ret.id, String(req.header("x-session") ?? "").trim().slice(0, 64) || null]);
