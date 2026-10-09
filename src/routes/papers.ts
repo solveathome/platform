@@ -31,6 +31,7 @@ import { page as sitePage } from "../lib/page.js";
 import { paperSource, paperReview, coarseStatus, type PaperReview } from "../lib/paper-state.js";
 import { openFindings } from "../lib/findings.js";
 import { posix } from "node:path";
+import { expositionVersions, decodeExpositionPdf } from "../lib/paper-exposition.js";
 
 export const papers = Router({ mergeParams: true });
 const REPOS = process.env.DOCS_DIR ?? join(ROOT, "data", "repos");
@@ -40,8 +41,8 @@ const STATUS: Record<string, string> = { proposed: "proposed", draft: "draft", u
 export async function listPapers(problemId: number, slug: string) {
   const rows = await q(`
     SELECT p.*, r.final_rung, r.created_at AS version_at, u.handle AS version_by,
-      (SELECT count(*) FROM returns x WHERE x.problem_id = p.problem_id AND x.paper_slug = p.slug) AS versions,
-      (SELECT count(*) FROM returns x WHERE x.problem_id = p.problem_id AND x.paper_slug = p.slug AND x.status = 'pending') AS in_review,
+      (SELECT count(*) FROM returns x WHERE x.problem_id = p.problem_id AND x.paper_slug = p.slug AND x.paper_exposition IS NULL) AS versions,
+      (SELECT count(*) FROM returns x WHERE x.problem_id = p.problem_id AND x.paper_slug = p.slug AND x.status = 'pending' AND x.paper_exposition IS NULL) AS in_review,
       (SELECT count(*) FROM jobs j WHERE j.problem_id = p.problem_id AND j.type IN ('paper','audit') AND j.status = 'queued' AND (j.brief_md LIKE '%paper.slug: ' || p.slug || '%' OR j.title = 'Fix ' || COALESCE(p.path, 'paper/' || p.slug || '.md'))) AS open_jobs
     FROM papers p LEFT JOIN returns r ON r.id = p.current_return_id LEFT JOIN users u ON u.id = r.user_id
     WHERE p.problem_id = $1
@@ -66,6 +67,32 @@ export async function listPapers(problemId: number, slug: string) {
     .sort((a, b) => (rank[a.status] ?? 3) - (rank[b.status] ?? 3));
 }
 const SHORT: Record<string, string> = { reviewed: "reviewed", corrections_required: "reviewed, corrections required", corrections_recorded: "reviewed, corrections recorded", under_reassessment: "under reassessment", earlier_version_reviewed: "earlier version reviewed" };
+
+function expositionPanel(versions: any[], slug: string, paperSlug: string): string {
+  if (!versions.length) return '';
+  const base = `/projects/${encodeURIComponent(slug)}/papers/${encodeURIComponent(paperSlug)}/expositions`;
+  return `<section class="panel-note"><h2>LaTeX expositions</h2><p>Each version has its own fidelity review and mapped claims. Source proof evidence and unproved original claims remain separate.</p><ol>${versions.map(v => {
+    const label = v.status === 'accepted' && !v.provisional && v.evidence.current ? 'Fidelity reviewed; current mapped proof evidence' : `${v.provisional ? 'provisional ' : ''}${v.status}; ${v.evidence.label}`;
+    return `<li>Exposition version ${v.version}: ${esc(label)}. <a href="/projects/${esc(slug)}/return/${v.return_id}">Submission and review</a> by @${esc(v.handle)} (${esc(v.model)}). <a href="${base}/${v.return_id}/source">LaTeX source</a> · <a href="${base}/${v.return_id}/pdf">PDF</a> · <a href="${base}/${v.return_id}/map">Claim map</a> · <a href="${base}/${v.return_id}/compilation">Compilation evidence</a><p>Maps ${v.paper_exposition.claims.map((c:any)=>esc(c.source_claim_id)).join(', ')} to source <a href="/projects/${esc(slug)}/return/${v.paper_exposition.source_return_id}">#${v.paper_exposition.source_return_id}</a>, receipt #${v.paper_exposition.receipt_id}.</p></li>`;
+  }).join('')}</ol></section>`;
+}
+
+/** Decode a bounded PDF transport envelope only; all artifacts download inert, under their exact reviewed version. */
+papers.get('/papers/:paper/expositions/:id/:kind', async (req:any,res) => {
+  const row = await one(`SELECT r.paper_exposition FROM returns r JOIN problems p ON p.id=r.problem_id
+    WHERE p.slug=$1 AND r.paper_slug=$2 AND r.id=$3 AND r.paper_exposition IS NOT NULL`, [req.params.slug,req.params.paper,/^[1-9][0-9]*$/.test(req.params.id) ? req.params.id : 0]);
+  if (!row) { res.status(404).json({error:'No such exposition version'}); return; }
+  const e = row.paper_exposition, kind = req.params.kind;
+  const hashes: Record<string,string> = {source:e.tex_sha256,pdf:e.pdf_sha256,map:e.claim_map_sha256,compilation:e.compilation_sha256};
+  if (!hashes[kind]) { res.status(404).json({error:'No such exposition artifact'}); return; }
+  const file = await one(`SELECT deleted_at FROM files WHERE sha256=$1`, [hashes[kind]]);
+  const text = file && !file.deleted_at ? files.read(hashes[kind]) : null;
+  if (!text || files.sha256(text) !== hashes[kind]) { res.status(410).json({error:'Exposition artifact missing or removed; its historical record is retained'}); return; }
+  const pdf = kind === 'pdf' ? decodeExpositionPdf(text) : null;
+  const ext = kind === 'source' ? 'tex' : kind === 'pdf' ? 'pdf' : 'json';
+  res.set({'Content-Type':kind === 'pdf' ? 'application/pdf' : 'text/plain; charset=utf-8','Content-Disposition':`attachment; filename="exposition-${req.params.id}-${kind}.${ext}"`,
+    'Content-Security-Policy':"default-src 'none'; sandbox",'X-Content-Type-Options':'nosniff','X-Content-SHA256':pdf?.sha256 ?? hashes[kind],'Cache-Control':'no-store'}).send(pdf?.bytes ?? text);
+});
 
 papers.get("/papers", async (req: any, res) => {
   const p = await one(`SELECT id, slug FROM problems WHERE slug = $1`, [req.params.slug]);
@@ -138,11 +165,11 @@ papers.get("/papers/:paper", async (req: any, res) => {
   if (!p) { res.status(404).type("text/plain").send("unknown project"); return; }
   const paper = (await listPapers(Number(p.id), p.slug)).find((x) => x.slug === req.params.paper);
   if (!paper) { if (wantsHtml(req)) res.status(404).type("text/html").send(notFoundPage("No such paper in this project.")); else res.status(404).type("text/plain").send("no such paper"); return; }
-  const versions = await q(`SELECT r.id, r.status, r.final_rung, r.author_rung, r.created_at, u.handle, r.model FROM returns r JOIN users u ON u.id = r.user_id WHERE r.problem_id = $1 AND r.paper_slug = $2 ORDER BY r.id DESC`, [p.id, paper.slug]);
+  const versions = await q(`SELECT r.id, r.status, r.final_rung, r.author_rung, r.created_at, u.handle, r.model FROM returns r JOIN users u ON u.id = r.user_id WHERE r.problem_id = $1 AND r.paper_slug = $2 AND r.paper_exposition IS NULL ORDER BY r.id DESC`, [p.id, paper.slug]);
   const docPath = paper.path ?? `paper/${paper.slug}.md`;
   const track = await history(Number(p.id), docPath);
   // Each report says which text it read: a report on another version is history, not a review of the served manuscript.
-  const reports = (await q(`SELECT rv.id, rv.return_id, rv.verdict, rv.rung, rv.notes_md, rv.also_fix, rv.trusted, rv.needs_reassessment, rv.created_at, u.handle, rv.model, r.revision_sha FROM reviews rv JOIN returns r ON r.id = rv.return_id JOIN users u ON u.id = rv.user_id WHERE r.problem_id = $1 AND r.paper_slug = $2 ORDER BY rv.id DESC`, [p.id, paper.slug]))
+  const reports = (await q(`SELECT rv.id, rv.return_id, rv.verdict, rv.rung, rv.notes_md, rv.also_fix, rv.trusted, rv.needs_reassessment, rv.created_at, u.handle, rv.model, r.revision_sha FROM reviews rv JOIN returns r ON r.id = rv.return_id JOIN users u ON u.id = rv.user_id WHERE r.problem_id = $1 AND r.paper_slug = $2 AND r.paper_exposition IS NULL ORDER BY rv.id DESC`, [p.id, paper.slug]))
     .map(({ revision_sha, ...r }: any) => ({ ...r, reviewed_sha: revision_sha, on_current_version: !!revision_sha && revision_sha === paper.review.current_sha }));
   let { source, from } = paperSource(paper,p.slug);
   // An unreviewed proposal is not rendered as the paper: the page links to the return under review instead.
@@ -151,11 +178,13 @@ papers.get("/papers/:paper", async (req: any, res) => {
     if (pending) { from = `a submitted version is under review on return #${pending.rid}`; source = null; }
   }
   // The seed manuscript comes from the mirror only if it is a published document there (same gate as /docs).
+  const expositions = await expositionVersions(Number(p.id),paper.slug);
+  const expositionJobs = await q(`SELECT id,status,exposition_source_return_id AS source_return_id FROM jobs WHERE problem_id=$1 AND exposition_source_return_id IS NOT NULL AND brief_md LIKE $2 ORDER BY id DESC`, [p.id, `%paper.slug: ${paper.slug}\n%`]);
   const lean = await paperLeanVerification(Number(p.id), paper.slug, source === null ? null : sha256(source));
   const designation = mainTheoremDesignation(readProjectConfig(p.slug)?.lean_main_theorems, paper.slug, source === null ? null : sha256(source));
   if (!wantsHtml(req)) {
     const request = typeof req.query.lean_request === 'string' && /^[a-zA-Z0-9-]{1,100}$/.test(req.query.lean_request) ? req.query.lean_request : null;
-    res.set('Cache-Control','no-store').json({ paper, versions, reports, lean_verification: lean,
+    res.set('Cache-Control','no-store').json({ paper, versions, reports, expositions, exposition_jobs:expositionJobs, lean_verification: lean,
       lean_milestone_request: request,
       lean_milestone_html: mainTheoremCallout(mainTheoremEvidence(lean, designation), designation, p.slug, paper.slug, paper.title),
       source_from: from, manuscript_md: source }); return;
@@ -167,7 +196,7 @@ papers.get("/papers/:paper", async (req: any, res) => {
   const linkFn = renderer.link.bind(renderer);
   renderer.link = ({ href, title, tokens }: any) => { let h = String(href ?? ""); if (!/^(?:[a-z]+:|\/|#)/i.test(h)) { const rel = posix.normalize(posix.join(baseDir, h)).replace(/^\/+/, ""); h = pages.get(rel) ?? docsBase + rel; } return linkFn({ href: h, title, tokens } as any); };
   const md = (t: string) => { const m = protectMath(t.replace(/<!--[\s\S]*?-->/g, "")); return linkPaths(m.restore(marked.parse(escapeSource(m.text), { gfm: true, renderer }) as string), p.slug, baseDir, pages); };
-  const body = challengeBanner(await challengesFor(Number(p.id), "paper", paper.slug), `/projects/${p.slug}`) + reviewPanel(paper.review, p.slug) + leanEvidencePanel(lean, p.slug, designation) + (source ? demoteHeadings(await linkPeople(md(source))) : "<p class=\"muted\">No manuscript yet.</p>");
+  const body = challengeBanner(await challengesFor(Number(p.id), "paper", paper.slug), `/projects/${p.slug}`) + reviewPanel(paper.review, p.slug) + leanEvidencePanel(lean, p.slug, designation) + expositionPanel(expositions,p.slug,paper.slug) + (source ? demoteHeadings(await linkPeople(md(source))) : "<p class=\"muted\">No manuscript yet.</p>");
   const page = readFileSync(join(PUBLIC_DIR, "paper.html"), "utf8");
   const meta = recordHtml(paper.timestamps, paper.history_url) + `<p class="paper-meta"><span>Registered: ${timeHtml(paper.created_at)}</span><span>Registry updated: ${timeHtml(paper.updated_at)}</span><span class="paper-status ${esc(paper.status)}">${esc(paper.review.label)}</span>${paper.grade ? `<span title="The registry's own grade line, written by the manuscript's authors; not a review conclusion">registry grade: ${esc(paper.grade)}</span>` : ""}${paper.version_by ? `<span>current version by @${esc(paper.version_by)}, ${timeHtml(paper.version_at)}${paper.final_rung ? `, ${esc(paper.final_rung)}` : ""}</span>` : ""}<span>${esc(from)}</span></p>`;
   const tlist = track.slice().reverse().map((v: any) => `<li>Version ${v.version}: ${v.author ? `changed by ${credit(v.author)}${v.model ? ` (${esc(v.model)})` : ""}${(v.verified_by ?? []).length ? `, verified by ${v.verified_by.map((h: string) => { const vm = (v.verified_models ?? []).find((x: any) => x.handle === h); return `${credit(h)}${vm?.model ? ` (${esc(vm.model)}${vm.verification && vm.verification !== "read" ? `, ${esc(vm.verification)}` : ""})` : ""}`; }).join(", ")}` : ""}` : esc(v.summary)}, ${timeHtml(v.created_at)}${v.version > 1 ? ` · <a href="/projects/${esc(p.slug)}/history/${esc(docPath)}/${v.version}/diff">diff</a>` : ""}</li>`).join("");
