@@ -25,6 +25,7 @@ export type ChallengeTarget = {
 export type ChallengeTrack = {
   id: string; lane: string; name: string; question: string; metric: string; unit: string; better: "higher" | "lower";
   max?: number; fields: string[]; spec_md: string; brief_md: string; targets: ChallengeTarget[];
+  studies?: string[];   // open questions about MD5's structure; a study assignment answers one in writing (Chris, Oct 9 2026: understanding first)
 };
 export type ChallengeConfig = { tracks: ChallengeTrack[]; brief_md?: string };
 
@@ -334,13 +335,25 @@ export async function challengeJob(problemId: number, slug: string, lane: string
     track = [...cfg.tracks].sort((a, b) => n(a) - n(b))[0];
   }
   const laneRow = await one(`SELECT id, slug FROM lanes WHERE problem_id = $1 AND slug = $2`, [problemId, track.lane]);
+  // Understanding first, not a hashing farm (Chris, Oct 9 2026): on each track a run alternates with a study of one open question about
+  // MD5's structure, whose return is a written finding (recorded like any exploration, elevated to review when it claims something).
+  const last = await one(`SELECT origin_key FROM jobs WHERE problem_id = $1 AND (origin_key = $2 OR origin_key LIKE $2 || ':%') ORDER BY id DESC LIMIT 1`, [problemId, `challenge:${track.id}`]);
+  if (track.studies?.length && last && !/:study:/.test(String(last.origin_key))) {
+    const queuedStudy = await one(`SELECT j.*, l.slug AS lane_slug FROM jobs j LEFT JOIN lanes l ON l.id = j.lane_id WHERE j.problem_id = $1 AND j.status = 'queued' AND j.origin_key LIKE $2 ORDER BY j.id LIMIT 1`, [problemId, `challenge:${track.id}:study:%`]);
+    if (queuedStudy) return queuedStudy;
+    const done = Number((await one(`SELECT count(*) AS n FROM jobs WHERE problem_id = $1 AND origin_key LIKE $2`, [problemId, `challenge:${track.id}:study:%`]))?.n ?? 0);
+    const question = track.studies[done % track.studies.length];
+    const study = await one(`INSERT INTO jobs (problem_id, lane_id, type, title, brief_md, compute_hint, budget_hours, min_tier, purpose, origin_key)
+      VALUES ($1,$2,'explore',$3,$4,$5,1,99,'discovery',$6) RETURNING *`, [problemId, laneRow?.id ?? null, `${track.name} study: ${question}`.slice(0, 200), question, JSON.stringify({ cpu_hours: 0.5 }), `challenge:${track.id}:study:${randomUUID()}`]);
+    return { ...study, lane_slug: laneRow?.slug ?? null };
+  }
   // A track run handed back (release, silence) is queued again; the next agent on that track takes it rather than a new one.
   // Each run is its own job: origin keys are unique among open jobs (jobs_open_origin_idx), so two agents on one track never share a key
   // (cycle 1, Oct 9 2026: the second agent on a held track got a 500 on /start). The plain key is the first beta's form.
-  const queued = await one(`SELECT j.*, l.slug AS lane_slug FROM jobs j LEFT JOIN lanes l ON l.id = j.lane_id WHERE j.problem_id = $1 AND j.status = 'queued' AND (j.origin_key = $2 OR j.origin_key LIKE $2 || ':%') ORDER BY j.id LIMIT 1`, [problemId, `challenge:${track.id}`]);
+  const queued = await one(`SELECT j.*, l.slug AS lane_slug FROM jobs j LEFT JOIN lanes l ON l.id = j.lane_id WHERE j.problem_id = $1 AND j.status = 'queued' AND j.type = 'measure' AND (j.origin_key = $2 OR j.origin_key LIKE $2 || ':%') ORDER BY j.id LIMIT 1`, [problemId, `challenge:${track.id}`]);
   if (queued) return queued;
   const row = await one(`INSERT INTO jobs (problem_id, lane_id, type, title, brief_md, compute_hint, budget_hours, min_tier, purpose, origin_key)
-    VALUES ($1,$2,'measure',$3,$4,$5,1,99,'work',$6) RETURNING *`, [problemId, laneRow?.id ?? null, `${track.name}: a bounded search run on the verified record`, track.brief_md, JSON.stringify({ cpu_hours: 1 }), `challenge:${track.id}:${randomUUID()}`]);
+    VALUES ($1,$2,'measure',$3,$4,$5,1,99,'work',$6) RETURNING *`, [problemId, laneRow?.id ?? null, `${track.name}: a research run: understand the structure, then reach for the record`, track.brief_md, JSON.stringify({ cpu_hours: 1 }), `challenge:${track.id}:${randomUUID()}`]);
   return { ...row, lane_slug: laneRow?.slug ?? null };
 }
 export const challengeTrackOfJob = (slug: string, job: { origin_key?: string | null }): ChallengeTrack | null => {
@@ -362,6 +375,15 @@ export async function challengeTaskBrief(job: any, project: { id: number; slug: 
   const target = currentTarget(track);
   const fieldsJson = track.fields.map((f) => `"${f}": "…"`).join(", ");
   const mine = view.personal.slice(0, 5).map((p) => `@${p.handle} ${fmtValue(track, p.best)}`).join(", ");
+  if (/:study:/.test(String(job.origin_key ?? ""))) return `A study on track \`${track.id}\` (${track.name}): understanding of MD5 first, not a search.
+
+**The question.** ${job.brief_md}
+
+**How.** Read \`${P}/docs/research/OUTCOMES.md\` and \`${P}/docs/research/QUESTIONS.md\` first, and the published work the question names. Work from the algorithm (RFC 1321: the four rounds, the message schedule, the additions into the chaining value), with small, exact experiments on your machine where an experiment can decide something. A sound negative answer is a result: say what it closes and for which scope.
+
+**The return.** \`POST ${P}/result\` with the finding as the report: the claim, the argument or measurement behind it, its limits, and what it means for the track's record (${fmtValue(track, view.best?.value ?? null)} on the platform, ${target ? fmtValue(track, target.value) : "none"} published). End with an entry for research/OUTCOMES.md (or research/QUESTIONS.md when the question changes). If you find a candidate along the way, submit it (\`POST ${P}/submissions\`, \`challenge_id: "${track.id}"\`); the server verifies it the same way as in a run.
+
+${cfg.brief_md ?? ""}`;
   return `Track \`${track.id}\` (${track.name}). ${track.question}
 
 **The rules.** ${track.spec_md}
@@ -370,7 +392,7 @@ ${cfg.brief_md ?? ""}
 
 **Where it stands.** Verified platform best: ${view.best ? `${fmtValue(track, view.best.value)} (submission #${view.best.submission_id} by @${view.best.handle}, received ${new Date(view.best.received_at).toISOString().slice(0, 16).replace("T", " ")} UTC)` : fmtValue(track, null)}. Best published result verified by us: ${target ? `${fmtValue(track, target.value)}, ${target.credit} (${target.source_url}, checked ${target.checked})` : "none recorded"}.${mine ? ` Personal bests so far: ${mine}.` : ""} Records and every receipt: ${P}/tracks/${track.lane}. Read \`${P}/docs/research/OUTCOMES.md\` for the methods tried on this track and what they reached before you choose yours.
 
-**The run.** ${track.brief_md}
+**The research.** ${track.brief_md}
 
 **Submitting candidates.** Each candidate you want on the record goes to the server, which recomputes the digest with two independent MD5 implementations and records it in arrival order. Nothing you send about the digest or score is trusted; a field the track does not take is refused.
 
