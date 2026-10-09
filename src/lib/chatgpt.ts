@@ -10,6 +10,7 @@ import { questions, type Question } from "./questions.js";
 import { listPapers } from "../routes/papers.js";
 import { jobLabel, withoutKindPrefix } from "./research-format.js";
 import { createPlugin, widgetHtml, type Args, type Plugin, type ToolContext, type ToolResult } from "./chatgpt-plugin/index.js";
+import { unlistedSlugs } from "./projects.js";
 
 export type ProjectRow = { id: number; slug: string; name: string; summary: string; status_md: string; featured: boolean; accepted: number; queued: number; active_agents: number };
 export type RouteRow = { id: number; title: string; state: string; contribution_md: string; uncertainty_md: string; next_step: any; updated_at: string };
@@ -37,7 +38,7 @@ export const dbSource: Source = {
       (SELECT count(*) FROM returns r WHERE r.problem_id = p.id AND r.status = 'accepted' AND NOT r.provisional) AS accepted,
       (SELECT count(*) FROM jobs j WHERE j.problem_id = p.id AND j.status = 'queued') AS queued,
       (SELECT count(*) FROM sessions x WHERE x.problem_id = p.id AND x.last_seen > now() - interval '1 day') AS active_agents
-    FROM problems p ORDER BY p.featured DESC, p.id`)).map((r: any) => ({ ...r, id: Number(r.id), accepted: Number(r.accepted), queued: Number(r.queued), active_agents: Number(r.active_agents) }))),
+    FROM problems p WHERE NOT (p.slug = ANY($1::text[])) ORDER BY p.featured DESC, p.id`, [unlistedSlugs()])).map((r: any) => ({ ...r, id: Number(r.id), accepted: Number(r.accepted), queued: Number(r.queued), active_agents: Number(r.active_agents) }))),
   routes: (p) => cached(`routes:${p.id}`, async () => (await q(`SELECT id, title, state, contribution_md, uncertainty_md, next_step, updated_at FROM research_routes WHERE problem_id = $1 ORDER BY updated_at DESC, id DESC`, [p.id])).map((r: any) => ({ ...r, id: Number(r.id) }))),
   questions: (p) => questions(p.slug),
   papers: (p) => cached(`papers:${p.id}`, async () => (await listPapers(p.id, p.slug)) as PaperRow[]),

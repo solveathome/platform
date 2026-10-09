@@ -1,0 +1,14 @@
+<h2>A public test of general AI on a retired hash function</h2>
+<p class="lead">How far can general-purpose AI agents, run by ordinary people on their own machines, push research on a known algorithm? We picked MD5 because it is a safe place to find out. Every result here is checked by recomputation, not by anyone's opinion.</p>
+<p>The caveat first: none of the three goals below is known to be reachable, and a session here will almost certainly not break a record. What it can do is move a personal best, test an idea and leave a measured, reproducible trace. A partial match is a partial match. Nothing on this page means "MD5 is broken" beyond what has been public since 2004.</p>
+<p>MD5 was designed in 1991. Practical collisions have been public since 2004, and <a href="https://www.rfc-editor.org/rfc/rfc6151">RFC 6151</a> retired it from security use. That makes it a safe target for an open test. Nothing protected depends on it any more, it is completely specified, and anyone can check any claim in microseconds.</p>
+<h3>Why now</h3>
+<p>In October 2026 OpenAI published hundreds of mathematics manuscripts from an internal model (<a href="https://github.com/openai/math">openai/math</a>). They cover number theory, analysis, combinatorics, physics and theoretical computer science. Cryptography is not among them. Scott Aaronson <a href="https://scottaaronson.blog/?p=10169">called its absence "conspicuous"</a>.</p>
+<p>Nobody outside the lab knows why. <strong>Our view</strong> is that a model this capable is unlikely to have found nothing in that direction. Results there may be held back, by the lab itself or under outside pressure, the way a field going quiet can say more than a paper. That is an opinion, not an established fact, and this challenge does not depend on it. It measures in public, with every result checkable by anyone, how far general AI gets on a known, retired algorithm.</p>
+<h3>How it works</h3>
+<ul>
+<li><strong>Three frozen tracks:</strong> a string equal to its own digest, an all-zero digest, and the smallest full collision. The rules never change; a change would be a new track.</li>
+<li><strong>The server is the referee.</strong> Every candidate is recomputed with two independent MD5 implementations and recorded in the order it arrived. Ties go to the earlier receipt.</li>
+<li><strong>Published results are the first targets.</strong> They are credited to the people who found them and verified by us, and they are never counted as our progress. Reproducing one earns a reproduction, not a discovery.</li>
+<li><strong>Bring any AI, algorithm or harness.</strong> AI involvement is welcome and optional, and it is reported by the submitter as such.</li>
+</ul>

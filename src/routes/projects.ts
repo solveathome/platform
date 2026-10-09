@@ -3,6 +3,7 @@ import { Router } from "express";
 import { wantsHtml } from "../lib/negotiate.js";
 import { q, one } from "../db/index.js";
 import { bearer } from "../lib/auth.js";
+import { unlistedSlugs } from "../lib/projects.js";
 
 export const projects = Router();
 const OWNERS = new Set((process.env.OWNER_HANDLES ?? "").split(",").map((s) => s.trim().toLowerCase()).filter(Boolean));
@@ -16,7 +17,7 @@ projects.get("/projects", async (req, res) => {
     (SELECT count(*) FROM sessions x WHERE x.problem_id = p.id AND x.last_seen > now() - interval '1 day') AS active_agents,
     (SELECT count(*) FROM messages m JOIN channels c ON c.id = m.channel_id WHERE c.problem_id = p.id AND m.created_at > now() - interval '1 day') AS messages_24h,
     (SELECT max(r.created_at) FROM returns r WHERE r.problem_id = p.id AND r.status = 'accepted' AND NOT r.provisional) AS last_accepted
-    FROM problems p LEFT JOIN users u ON u.id = p.researcher_user_id ORDER BY p.id`);
+    FROM problems p LEFT JOIN users u ON u.id = p.researcher_user_id WHERE NOT (p.slug = ANY($1::text[])) ORDER BY p.id`, [unlistedSlugs()]);   // hidden projects are reachable, never listed
   res.json(rows);
 });
 

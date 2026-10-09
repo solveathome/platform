@@ -20,6 +20,7 @@ import { creditText } from "./display-name.js";
 import { prefsOf, unsubToken, type Prefs, type UnsubAction } from "./email.js";
 import { send, letterFromAddress } from "./postmark.js";
 import * as tpl from "./email-template.js";
+import { unlistedSlugs } from "./projects.js";
 
 const BASE = () => (process.env.BASE_URL ?? "http://localhost:8600").replace(/\/+$/, "");
 export const SEND_HOUR = 8;
@@ -352,7 +353,8 @@ export function subjectOf(c: Pick<Composed, "edition" | "lead" | "rest" | "asks"
 
 export async function compose(userId: number, opts: { weekday: number; day: string; dry?: boolean } ): Promise<Composed | null> {
   const prefs = await prefsOf(userId);
-  const waiting = await q<any>(`SELECT id, kind, score, news, problem_id, facts, happened_at, dedupe_key FROM email_items WHERE user_id = $1 AND email_id IS NULL ORDER BY happened_at`, [userId]);
+  const waiting = await q<any>(`SELECT id, kind, score, news, problem_id, facts, happened_at, dedupe_key FROM email_items WHERE user_id = $1 AND email_id IS NULL
+    AND (problem_id IS NULL OR problem_id NOT IN (SELECT id FROM problems WHERE slug = ANY($2::text[]))) ORDER BY happened_at`, [userId, unlistedSlugs()]);   // a hidden project's news waits until it is listed
   // Asks that were answered or expired since they were queued are no longer news.
   const askIds = waiting.filter((w) => w.kind === "ask").map((w) => Number(w.facts?.ask_id));
   const openAsks = new Set((askIds.length ? await q<any>(`SELECT id FROM asks WHERE id = ANY($1) AND status = 'open' AND expires_at > now()`, [askIds]) : []).map((a) => Number(a.id)));

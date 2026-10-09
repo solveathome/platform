@@ -7,6 +7,9 @@ import { join } from "node:path";
 import { PUBLIC_DIR } from "./lib/paths.js";
 import { migrate, flushFileEffects } from "./db/index.js";
 import { job } from "./routes/job.js";
+import { challenges } from "./routes/challenges.js";
+import { ensureChallengeProjects } from "./lib/challenges.js";
+import { ensureChannels } from "./routes/chat.js";
 import { lane } from "./routes/lane.js";
 import { board, root } from "./routes/board.js";
 import { chat } from "./routes/chat.js";
@@ -34,7 +37,8 @@ import { pathGuard } from "./lib/guards.js";
 import { responseCache, warmCache } from "./lib/cache.js";
 import { shareMeta, SITE_DESCRIPTION } from "./lib/share.js";
 import { jsonLd, noindexPath, notFoundPage, ORGANIZATION, WEBSITE } from "./lib/seo.js";
-import { seo } from "./routes/seo.js";
+import { seo, sitemapSnapshot } from "./routes/seo.js";
+import { startIndexNow } from "./lib/indexnow.js";
 import { visualizations, visualizationsRoot } from "./routes/visualizations.js";
 import { mountPlugin } from "./lib/chatgpt-plugin/express.js";
 import { solveAtHomePlugin } from "./lib/chatgpt.js";
@@ -91,6 +95,8 @@ app.use(oauthRoutes);
 app.get("/auth/github", githubStart);
 app.get("/auth/github/callback", githubCallback);
 app.post("/auth/logout", logout);
+// A record challenge answers its own pages and API first; every other project passes straight through (src/routes/challenges.ts).
+app.use("/projects/:slug", challenges);
 app.use("/projects/:slug", job);
 app.use("/projects/:slug", lane);
 app.use("/projects/:slug", board);
@@ -112,13 +118,15 @@ app.use(terms);
 app.use(filesRouter);
 // The footer's "become a trusted reviewer" lands on the featured project's trust page.
 app.get("/trust", async (_req, res) => { const f = await featuredProject(); res.redirect(302, f ? `/projects/${f.slug}/trust` : "/projects"); });
+// Bing Webmaster Tools' ownership check (#sah-bing-indexnow): the msvalidate.01 value it issues, on the home page only; absent while unset.
+const bingVerification = () => { const v = (process.env.BING_SITE_VERIFICATION ?? "").trim(); return /^[A-Za-z0-9]{8,64}$/.test(v) ? `<meta name="msvalidate.01" content="${v}">` : ""; };
 const homeHtml = () => readFileSync(join(PUBLIC_DIR, "home.html"), "utf8");
 app.get("/", async (req, res) => {
   const f = await featuredProject();
   const slug = f?.slug ?? "<slug>";
   if (wantsHtml(req)) {
     const esc = (t: string) => String(t ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
-    res.type("text/html").send(homeHtml().replace("__SHARE__", shareMeta({ title: "solveathome: hard problems, solved in the open", description: SITE_DESCRIPTION, path: "/" }) + jsonLd({ "@context": "https://schema.org", "@graph": [WEBSITE(), { ...ORGANIZATION(), description: SITE_DESCRIPTION }] })).replaceAll("__FEATURED_SLUG__", esc(slug)).replaceAll("__FEATURED_NAME__", esc(f?.name ?? "the first project")).replace("__FEATURED_TAGLINE__", esc(f?.tagline ?? "")).replace("__FEATURED_HERO__", f ? (projectPartial(f.slug, "home-hero") ?? "") : ""));
+    res.type("text/html").send(homeHtml().replace("__SHARE__", shareMeta({ title: "solveathome: hard problems, solved in the open", description: SITE_DESCRIPTION, path: "/" }) + bingVerification() + jsonLd({ "@context": "https://schema.org", "@graph": [WEBSITE(), { ...ORGANIZATION(), description: SITE_DESCRIPTION }] })).replaceAll("__FEATURED_SLUG__", esc(slug)).replaceAll("__FEATURED_NAME__", esc(f?.name ?? "the first project")).replace("__FEATURED_TAGLINE__", esc(f?.tagline ?? "")).replace("__FEATURED_HERO__", f ? (projectPartial(f.slug, "home-hero") ?? "") : ""));
     return;
   }
   res.type("text/plain").send(
@@ -135,7 +143,7 @@ Code: MIT. Results and traces: CC BY 4.0.
 `);
 });
 
-app.use(notFound([job, lane, board, papers, sequences, chat, asks, trust, announcements, docs, visualizations]));
+app.use(notFound([challenges, job, lane, board, papers, sequences, chat, asks, trust, announcements, docs, visualizations]));
 // A browser or crawler that misses gets the site's own not-found page with a real 404, never Express's bare "Cannot GET".
 app.use((req, res) => { res.status(404).type("text/html").send(notFoundPage(`Nothing at ${String(req.originalUrl ?? req.url).split("?")[0].slice(0, 200)}.`)); });
 
@@ -148,6 +156,8 @@ app.use((err: any, req: any, res: any, _next: any) => {
 });
 migrate().then(async () => {
   await flushFileEffects();
+  // A challenge project has no seed run or mirror: its problem row and track lanes are made from project.json at start.
+  await ensureChallengeProjects(listProjectConfigs(), ensureChannels);
   await recordAllPublications();
   setInterval(() => { flushFileEffects().catch(error => console.error("publication retry:", error)); }, 30000).unref();
   // Announcements (#sah-discord-announcer): scan and send once a minute; off unless a project turns it on, ANNOUNCE_ENABLED=0 stops it.
@@ -156,6 +166,7 @@ migrate().then(async () => {
   setInterval(() => { emailTick().catch(error => console.error("email:", error)); }, 60_000).unref();
   const srv = app.listen(port, () => {
     console.log(`solveathome on :${port}`);
+    startIndexNow(sitemapSnapshot);
     // What every visitor fetches: the project page and board, and the standings the home and project pages ask for by default
     // (public/assets/home.js, project-community.js), with the exact query strings, since the cache keys on the full URL.
     const html = "text/html", json = "application/json";

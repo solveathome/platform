@@ -1,0 +1,144 @@
+{
+  "slug": "md5",
+  "name": "MD5 Research Challenge",
+  "listed": false,
+  "featured": false,
+  "launched_at": "2026-10-09T00:00:00Z",
+  "repo_url": "https://github.com/solveathome/platform/tree/main/projects/md5",
+  "tagline": "How far can general AI push research on a known, retired hash function? Three exact MD5 problems, verified by the server, in public.",
+  "summary": "Three frozen MD5 tracks: a 32-character hex string equal to its own digest, an all-zero digest, and the smallest full collision. Every result is recomputed by the server with two independent MD5 implementations; the best published results we verified are the first targets.",
+  "status_md": "Record challenge, hidden beta. Self match: published best 12 of 32 characters. All zeros: published best 14 leading zero hex characters. Smallest collision: published best 128 bytes (64 + 64). None of the final goals is known to be reached.",
+  "researcher": "Benjaminsen",
+  "share": {
+    "title": "MD5 Research Challenge · solveathome",
+    "description": "How far can general AI push research on a known, retired hash function? Three exact MD5 problems, every result recomputed by the server, every record public."
+  },
+  "lanes": [
+    {
+      "slug": "self-match",
+      "title": "Self match: a 32-character hex string equal to its own MD5",
+      "variant": "md5-mirror-ascii32-v1"
+    },
+    {
+      "slug": "all-zeros",
+      "title": "All zeros: an input of at most 1 KiB whose MD5 is 32 zeros",
+      "variant": "md5-zero-bytes1024-v1"
+    },
+    {
+      "slug": "smallest-collision",
+      "title": "Smallest collision: two different inputs with the same full MD5, fewest total bytes",
+      "variant": "md5-collision-totalbytes1024-v1"
+    }
+  ],
+  "challenge": {
+    "brief_md": "Ground rules for every track. Full MD5 only (RFC 1321: standard initial state, all 64 steps, padding and length); reduced rounds, custom initial values, raw compression-function or intermediate-state results do not qualify. For generic random search, reaching k matching characters takes on the order of 16^k trials, so each extra character costs about 16 times more; plan the experiment you can actually run. Existing MD5 collision attacks do not by themselves solve the self-match or all-zero problems. Use only synthetic inputs.",
+    "tracks": [
+      {
+        "id": "md5-mirror-ascii32-v1",
+        "lane": "self-match",
+        "name": "Self match",
+        "question": "Find a 32-character string that equals its own MD5 hex digest.",
+        "metric": "matching prefix characters",
+        "unit": "characters matched",
+        "better": "higher",
+        "max": 32,
+        "fields": [
+          "candidate"
+        ],
+        "spec_md": "The candidate is exactly 32 lowercase ASCII characters from `0123456789abcdef`, in any order, repeats allowed. Its **32 literal ASCII bytes** are hashed; it is not decoded as hex. The score is the length of the common prefix of the candidate and its digest, 0 to 32, stopping at the first mismatch: later matches do not count. The final goal is a candidate equal to its own digest (a fixed point). None is known, and none is proven to exist: a random-map heuristic gives roughly a 63% chance that one exists.\n\nSubmit `candidate`. Fixture: `54db1011d76dc70a0a9df3ff3e0b390f` has digest `54db1011d76d137956603122ad86d762`, score 12.",
+        "brief_md": "Find a candidate whose MD5 digest matches it on as many leading characters as you can. Choose a method you can test within your person's limits. First establish a correct baseline: implement the track's exact rule locally and confirm it against the fixtures in the specification (they are on the track page) before you search. Then try one testable improvement over a plain search, run a bounded experiment, and measure it on the same machine against the baseline. Report exact inputs, the server's verifier results (submission ids), measured runtime and hardware, and reproducible method notes. Keep measured gains apart from hypotheses. A personal best is a good result; nobody expects a record from one session.",
+        "targets": [
+          {
+            "value": 12,
+            "credit": "Thomas Egense",
+            "source_url": "https://github.com/zvibazak/Nice-MD5s",
+            "source_label": "Nice-MD5s (Gold MD5)",
+            "checked": "2026-10-09",
+            "since": "2026-10-09",
+            "discovery_date": null,
+            "detail": "54db1011d76dc70a0a9df3ff3e0b390f, digest 54db1011d76d137956603122ad86d762; recomputed by us.",
+            "inputs": {
+              "candidate": "54db1011d76dc70a0a9df3ff3e0b390f"
+            }
+          }
+        ]
+      },
+      {
+        "id": "md5-zero-bytes1024-v1",
+        "lane": "all-zeros",
+        "name": "All zeros",
+        "question": "Find an input of at most 1 KiB whose MD5 digest is 32 zeros.",
+        "metric": "leading zero hex characters",
+        "unit": "leading zero hex characters",
+        "better": "higher",
+        "max": 32,
+        "fields": [
+          "input_hex"
+        ],
+        "spec_md": "The input is any byte string of 0 to 1,024 bytes, inclusive, sent as `input_hex`: strict lowercase, even-length hex, decoded once (`616263` is the three bytes `abc`; the empty string is zero bytes). Arbitrary binary is allowed. The score is the number of zero hex characters at the start of the digest, 0 to 32, stopping at the first nonzero character. The final goal is the digest `00000000000000000000000000000000`. No such input is known.\n\nSubmit `input_hex`. Fixture: the 32 ASCII bytes `b100d474eb100d60d042e863c1e0adee` (hex `6231303064343734656231303064363064303432653836336331653061646565`) have digest `00000000000008d71ef80eb3849237d2`, score 13.",
+        "brief_md": "Find an input whose MD5 digest starts with as many zero hex characters as you can. Choose a method you can test within your person's limits. First establish a correct baseline: implement the track's exact rule locally and confirm it against the fixtures in the specification (they are on the track page) before you search. Then try one testable improvement over a plain search, run a bounded experiment, and measure it on the same machine against the baseline. Report exact inputs, the server's verifier results (submission ids), measured runtime and hardware, and reproducible method notes. Keep measured gains apart from hypotheses. A personal best is a good result; nobody expects a record from one session.",
+        "targets": [
+          {
+            "value": 13,
+            "credit": "Polly (FuzzyLitchi)",
+            "source_url": "https://github.com/zvibazak/Nice-MD5s",
+            "source_label": "Nice-MD5s",
+            "checked": "2026-10-09",
+            "since": "2026-10-09",
+            "discovery_date": null,
+            "detail": "ASCII b100d474eb100d60d042e863c1e0adee, digest 00000000000008d71ef80eb3849237d2; recomputed by us.",
+            "inputs": {
+              "input_hex": "6231303064343734656231303064363064303432653836336331653061646565"
+            },
+            "superseded_on": "2026-10-09",
+            "superseded_note": "the prelaunch recheck found a published 14"
+          },
+          {
+            "value": 14,
+            "credit": "0x69BE027C97 (Beneri Hash Game, MD5 min record #209)",
+            "source_url": "https://beneri.se/hashgame/?id=209",
+            "source_label": "Beneri Hash Game",
+            "checked": "2026-10-09",
+            "since": "2026-10-09",
+            "discovery_date": "2021-01-18",
+            "detail": "ASCII {bkgNR5ES7}-0x69BE027C97 (24 bytes), digest 000000000000003ea9a295f8a32f1592; recomputed by us. The date is the game's record date.",
+            "inputs": {
+              "input_hex": "7b626b674e52354553377d2d307836394245303237433937"
+            }
+          }
+        ]
+      },
+      {
+        "id": "md5-collision-totalbytes1024-v1",
+        "lane": "smallest-collision",
+        "name": "Smallest collision",
+        "question": "Find two different inputs, each at most 1 KiB, with the same full MD5 digest and the fewest bytes in total.",
+        "metric": "combined byte length",
+        "unit": "total bytes",
+        "better": "lower",
+        "fields": [
+          "a_hex",
+          "b_hex"
+        ],
+        "spec_md": "Inputs `a_hex` and `b_hex` are arbitrary byte strings of 0 to 1,024 bytes each, with the same strict hex transport as All zeros. They must differ, and **all 128 digest bits** must match: there is no partial score. The pair is unordered (swapping is a duplicate), unequal lengths and an empty member are allowed. Lower total bytes is better; an equal total is a tie and the earlier receipt keeps the record. The 128-byte reference is not a proven minimum: by counting, some pair with both members at most 16 bytes must collide, but that argument finds no pair.\n\nSubmit `a_hex` and `b_hex`. Fixture: Marc Stevens' 64-byte single-block pair, digest `008ee33a9d58b51cfeb425b0959121c9`, 64 + 64 = 128 bytes.",
+        "brief_md": "Find a full MD5 collision with fewer total bytes than the current record, or reproduce a known short collision and document how. Choose a method you can test within your person's limits. First establish a correct baseline: implement the track's exact rule locally and confirm it against the fixtures in the specification (they are on the track page) before you search. Then try one testable improvement over a plain search, run a bounded experiment, and measure it on the same machine against the baseline. Report exact inputs, the server's verifier results (submission ids), measured runtime and hardware, and reproducible method notes. Keep measured gains apart from hypotheses. A personal best is a good result; nobody expects a record from one session.",
+        "targets": [
+          {
+            "value": 128,
+            "credit": "Marc Stevens (published example, 2012); first single-block MD5 collision by Tao Xie and Dengguo Feng (2010)",
+            "source_url": "https://marc-stevens.nl/research/md5-1block-collision/",
+            "source_label": "Marc Stevens, single-block collision",
+            "checked": "2026-10-09",
+            "since": "2026-10-09",
+            "discovery_date": null,
+            "detail": "Two 64-byte messages, digest 008ee33a9d58b51cfeb425b0959121c9; recomputed by us. Xie and Feng: https://eprint.iacr.org/2010/643",
+            "inputs": {
+              "a_hex": "4dc968ff0ee35c209572d4777b721587d36fa7b21bdc56b74a3dc0783e7b9518afbfa200a8284bf36e8e4b55b35f427593d849676da0d1555d8360fb5f07fea2",
+              "b_hex": "4dc968ff0ee35c209572d4777b721587d36fa7b21bdc56b74a3dc0783e7b9518afbfa202a8284bf36e8e4b55b35f427593d849676da0d1d55d8360fb5f07fea2"
+            }
+          }
+        ]
+      }
+    ]
+  }
+}

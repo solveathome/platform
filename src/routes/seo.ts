@@ -10,6 +10,8 @@ import { q } from "../db/index.js";
 import { ROOT } from "../lib/paths.js";
 import { readPublication, publishedDocument } from "../lib/document-publication.js";
 import { BASE, readerDoc } from "../lib/seo.js";
+import { unlistedSlugs } from "../lib/projects.js";
+import { indexNowKey } from "../lib/indexnow.js";
 
 export const seo = Router();
 const REPOS = process.env.DOCS_DIR ?? join(ROOT, "data", "repos");
@@ -32,6 +34,12 @@ Sitemap: ${BASE()}/sitemap.xml
 `);
 });
 
+// IndexNow's key file (src/lib/indexnow.ts): the key, alone, at /<key>.txt.
+seo.get("/:file.txt", (req, res, next) => {
+  if (req.params.file !== indexNowKey()) return next();
+  res.type("text/plain").set("Cache-Control", "public, max-age=3600").send(indexNowKey());
+});
+
 type Url = { loc: string; lastmod?: string | Date | null };
 const xmlEsc = (s: string) => s.replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&apos;" }[c]!));
 const loc = (path: string) => BASE() + path.split("/").map((seg) => seg.startsWith("@") ? "@" + encodeURIComponent(seg.slice(1)) : encodeURIComponent(seg)).join("/");
@@ -39,7 +47,7 @@ const day = (d: string | Date | null | undefined) => { if (!d) return undefined;
 
 export async function sitemapUrls(): Promise<Url[]> {
   const urls: Url[] = [{ loc: "/" }, { loc: "/terms" }, { loc: "/privacy" }, { loc: "/dumps" }];
-  const projects = await q(`SELECT p.id, p.slug, (SELECT max(r.created_at) FROM returns r WHERE r.problem_id = p.id) AS last FROM problems p ORDER BY p.id`);
+  const projects = await q(`SELECT p.id, p.slug, (SELECT max(r.created_at) FROM returns r WHERE r.problem_id = p.id) AS last FROM problems p WHERE NOT (p.slug = ANY($1::text[])) ORDER BY p.id`, [unlistedSlugs()]);   // a hidden project is not in the sitemap
   for (const p of projects) {
     const P = `/projects/${p.slug}`;
     urls.push({ loc: P, lastmod: p.last }, { loc: `${P}/trust` }, { loc: `${P}/research-routes` }, { loc: `${P}/docs` });
@@ -53,6 +61,11 @@ export async function sitemapUrls(): Promise<Url[]> {
   for (const u of await q(`SELECT u.handle, GREATEST((SELECT max(created_at) FROM returns r WHERE r.user_id = u.id), (SELECT max(created_at) FROM reviews v WHERE v.user_id = u.id)) AS lastmod FROM users u
       WHERE EXISTS (SELECT 1 FROM returns r WHERE r.user_id = u.id) OR EXISTS (SELECT 1 FROM reviews v WHERE v.user_id = u.id) ORDER BY u.id`)) urls.push({ loc: `/@${u.handle}`, lastmod: u.lastmod });
   return urls;
+}
+
+/** The sitemap as absolute url -> lastmod day, for IndexNow's change check. */
+export async function sitemapSnapshot(): Promise<Map<string, string>> {
+  return new Map((await sitemapUrls()).slice(0, MAX_URLS).map((u) => [loc(u.loc), day(u.lastmod) ?? ""]));
 }
 
 let cached: { at: number; xml: string } | null = null;
