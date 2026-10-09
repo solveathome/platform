@@ -27,7 +27,7 @@ export const root = Router();
 
 /** GET /projects/:slug : project introduction, agent activity, and research workspace. */
 board.get("/", async (req: any, res) => {
-  const p = await one(`SELECT id, slug, name, summary FROM problems WHERE slug = $1`, [req.params.slug]);
+  const p = await one(`SELECT p.id, p.slug, p.name, p.summary, u.handle AS researcher FROM problems p LEFT JOIN users u ON u.id = p.researcher_user_id WHERE p.slug = $1`, [req.params.slug]);
   if (!p) { if (wantsHtml(req)) res.status(404).type("text/html").send(notFoundPage("No such project.")); else res.status(404).type("text/plain").send("unknown project"); return; }
   if (!wantsHtml(req)) { res.redirect(`/projects/${p.slug}/board`); return; }
   const escape = (text: unknown) => String(text ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
@@ -38,11 +38,14 @@ board.get("/", async (req: any, res) => {
   const share = config?.share ?? {};
   // A record challenge carries its progress charts inline at the top of the overview (src/routes/challenges.ts); every other project nothing.
   const charts = await challengeChartsSection(Number(p.id), p.slug);
+  const names = config?.challenge && p.researcher ? await crediter() : null;
+  const researcher = p.researcher && names ? `Research direction by ${names(p.researcher)}` : "";
+  const heading = `<div class="page-heading project-heading"><div><p class="eyebrow">${escape(config?.challenge?.heading?.eyebrow ?? "Research project")}</p><h1>${escape(p.name)}</h1>${config?.challenge ? `<p class="lead challenge-description">${escape(config.challenge.heading?.description ?? config.tagline ?? p.summary)}</p>` : ""}<p class="researcher-line" id="researcher">${researcher}</p></div><div class="page-actions"><a class="button primary" href="#contribute">Contribute your agent →</a></div></div>`;
   // Current proof status and reviewed PDF links live in the uncached Papers list.
   const ld = jsonLd({ "@context": "https://schema.org", "@graph": [
     { "@type": "ResearchProject", "@id": abs(`/projects/${p.slug}`), url: abs(`/projects/${p.slug}`), name: p.name, description: share.description ?? p.summary ?? "", parentOrganization: { "@id": abs("/#organization") } },
     ORGANIZATION(), breadcrumbs([{ name: "solveathome", path: "/" }, { name: p.name, path: `/projects/${p.slug}` }]) ] });
-  res.type("text/html").send(page("project.html").replace("__SHARE__", shareMeta({ title: share.title ?? `${p.name} · solveathome`, description: share.description ?? (p.summary || undefined), path: `/projects/${p.slug}`, image: share.image, robots: isListed(p.slug) ? undefined : "noindex, nofollow" }) + ld).replaceAll("__SLUG__", p.slug).replaceAll("__NAME__", escape(p.name)).replace("__PROJECT_CHARTS__", () => charts).replace("__PROJECT_INTRO__", intro).replace("__PROJECT_PRIOR_WORK__", prior).replace("__PROJECT_PRIOR_READINGS__", readings));
+  res.type("text/html").send(page("project.html").replace("__SHARE__", shareMeta({ title: share.title ?? `${p.name} · solveathome`, description: share.description ?? (p.summary || undefined), path: `/projects/${p.slug}`, image: share.image, robots: isListed(p.slug) ? undefined : "noindex, nofollow" }) + ld).replaceAll("__SLUG__", p.slug).replaceAll("__NAME__", escape(p.name)).replace("__PROJECT_CLASS__", config?.challenge ? "record-challenge" : "").replace("__PROJECT_STYLES__", config?.challenge ? `<link rel="stylesheet" href="/assets/challenge.css?v=1">` : "").replace("__PROJECT_HEADING__", () => heading).replace("__PROJECT_CHARTS__", () => charts).replace("__PROJECT_INTRO__", intro).replace("__PROJECT_PRIOR_WORK__", prior).replace("__PROJECT_PRIOR_READINGS__", readings));
 });
 
 /** GET /me : who the cookie or bearer token belongs to (for the browser UI). */

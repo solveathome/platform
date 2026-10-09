@@ -131,6 +131,59 @@ async function views(problemId: number, cfg: ChallengeConfig, ns: Namespace) {
   return Promise.all(cfg.tracks.map(async (t) => ({ track: t, view: await trackView(problemId, t, ns) })));
 }
 
+/** Compact overview charts keep their time window in common and begin only at real receipts. No completion/probability scale. */
+export function recordChartSvg(track: ChallengeTrack, view: TrackView, P: string, now = new Date(), firstReceipt?: number): string {
+  const W = 366, H = 200, L = 38, R = 16, T = 18, B = 34, pw = W - L - R, ph = H - T - B;
+  const higher = track.better === "higher", target = view.target, steps = view.steps;
+  const values = [...steps.map((s) => s.value), ...(target ? [target.value] : [])];
+  const largest = Math.max(0, ...values);
+  const top = higher ? Math.min(track.max ?? 32, Math.max(8, Math.ceil((largest + 2) / 4) * 4)) : Math.max(64, Math.ceil(largest * 1.2 / 64) * 64);
+  const end = Math.max(now.getTime(), ...steps.map((s) => new Date(s.received_at).getTime()));
+  const first = firstReceipt ?? (steps.length ? new Date(steps[0].received_at).getTime() : end - 3600e3);
+  const start = first - Math.max((end - first) * .03, 60e3);
+  const x = (t: number) => L + (t - start) / (end - start) * pw, y = (v: number) => T + ph - v / top * ph;
+  const clock = (t: number) => new Date(t).toISOString().slice(11, 16);
+  const date = (t: number) => new Intl.DateTimeFormat("en", { month: "short", day: "numeric", timeZone: "UTC" }).format(t);
+  const sameDay = iso(start).slice(0, 10) === iso(end).slice(0, 10), middle = (start + end) / 2;
+  const tickLabel = (t: number) => sameDay ? clock(t) : date(t);
+  let path = "", dots = "";
+  steps.forEach((s, i) => {
+    const xs = x(new Date(s.received_at).getTime()), ys = y(s.value);
+    path += i ? `H${xs.toFixed(1)}V${ys.toFixed(1)}` : `M${xs.toFixed(1)},${ys.toFixed(1)}`;
+    const label = `${fmtValue(track, s.value)} by @${s.handle}, ${utc(s.received_at)}, receipt #${s.submission_id}`;
+    dots += `<a href="${P}/submissions/${s.submission_id}" aria-label="${esc(label)}"><circle cx="${xs.toFixed(1)}" cy="${ys.toFixed(1)}" r="4.5" class="cc-dot"><title>${esc(label)}</title></circle></a>`;
+  });
+  if (steps.length) path += `H${W - R}`;
+  const empty = higher ? "No verified submission yet" : "No verified pair yet";
+  const description = view.best ? `${steps.length} verified improvement(s); best ${fmtValue(track, view.best.value)} by @${view.best.handle}.` : `${empty}.`;
+  return `<svg class="cc-chart" viewBox="0 0 ${W} ${H}" role="img" aria-labelledby="record-t-${esc(track.lane)} record-d-${esc(track.lane)}">
+<title id="record-t-${esc(track.lane)}">${esc(track.display?.name ?? track.name)}: verified history (${higher ? "more is better" : "fewer bytes is better"})</title>
+<desc id="record-d-${esc(track.lane)}">${esc(description)}${target ? ` Best known published reference verified by us: ${esc(fmtValue(track, target.value))}, ${esc(target.credit)}.` : ""} Receipt times in UTC; the line holds the last record until ${esc(utc(end))}.</desc>
+${[0, top / 2, top].map((v) => `<line x1="${L}" x2="${W - R}" y1="${y(v).toFixed(1)}" y2="${y(v).toFixed(1)}" class="cc-grid"/><text x="${L - 8}" y="${(y(v) + 4).toFixed(1)}" text-anchor="end" class="cc-axis">${v}</text>`).join("")}
+${target ? `<line x1="${L}" x2="${W - R}" y1="${y(target.value).toFixed(1)}" y2="${y(target.value).toFixed(1)}" class="cc-target"/>` : ""}
+${steps.length ? `<path d="${path}" class="cc-line"/>${dots}` : `<text x="${L + pw / 2}" y="${T + ph / 2 + 4}" text-anchor="middle" class="cc-empty">${empty}</text>`}
+<text x="${L}" y="${H - 12}" class="cc-axis">${esc(tickLabel(start))}</text><text x="${L + pw / 2}" y="${H - 12}" text-anchor="middle" class="cc-axis">${esc(tickLabel(middle))}</text><text x="${W - R}" y="${H - 12}" text-anchor="end" class="cc-axis">${esc(tickLabel(end))} UTC</text>
+</svg>`;
+}
+
+/** One current record and its credit, one published reference and the ultimate goal. Detailed rankings stay on the track page. */
+export function recordCard(track: ChallengeTrack, view: TrackView, P: string, name: (h: string) => string, now = new Date(), firstReceipt?: number): string {
+  const higher = track.better === "higher", best = view.best, target = view.target;
+  const display = track.display, goal = display?.goal ?? (higher ? `${track.max ?? 32} ${track.unit}` : "Minimize combined bytes");
+  const count = view.steps.length;
+  const goalNote = higher && best && best.value === (track.max ?? 32) ? "Exact goal reached by this verified record." : display?.goal_note;
+  const referenceValue = target ? display?.reference_unit ? `${target.value} ${display.reference_unit}` : fmtValue(track, target.value) : "";
+  return `<section class="cc-record-card" aria-labelledby="h-${esc(track.lane)}">
+<div class="cc-record-title"><div><h3 id="h-${esc(track.lane)}"><a href="${P}/tracks/${esc(track.lane)}">${esc(display?.name ?? track.name)}</a></h3><span class="cc-better">${higher ? "↑ More is better" : "↓ Fewer is better"}</span></div><p class="cc-record-question">${esc(display?.question ?? track.question)}</p></div>
+<div class="cc-score"><p class="cc-score-label">Our verified record</p>${best ? `<p class="cc-score-value"><a href="${P}/submissions/${best.submission_id}" aria-label="${esc(fmtValue(track, best.value))}, receipt #${best.submission_id}">${best.value}</a><span>${esc(display?.unit ?? track.unit)}</span></p>` : `<p class="cc-score-empty">${higher ? "No verified result yet" : "No verified pair yet"}</p>`}</div>
+<div class="cc-record-credit">${best ? `<p>${name(best.handle)}</p><p class="cc-model-receipt">${best.model ? `${esc(best.model)} · ` : ""}<a href="${P}/submissions/${best.submission_id}">receipt #${best.submission_id}</a>${best.known_result ? " · reproduction" : ""}</p>` : `<p class="muted">The first verified result starts the history.</p>`}</div>
+<div class="cc-benchmark"><p class="cc-summary-row"><span>Best known verified</span><b>${target ? `<a href="${esc(safeUrl(target.source_url))}" rel="noopener nofollow">${esc(referenceValue)}</a>` : "None recorded"}</b></p>${target ? `<p class="cc-source"><a href="${esc(safeUrl(target.source_url))}" rel="noopener nofollow">${esc(target.credit)}</a><br>${esc(target.source_label)} · checked ${esc(target.checked)}</p>` : ""}</div>
+<div class="cc-goal"><p class="cc-summary-row"><span>Ultimate goal</span><b>${esc(goal)}</b></p>${goalNote ? `<p>${esc(goalNote)}</p>` : ""}</div>
+<div class="cc-history"><p class="cc-history-unit">${esc(track.unit)} · ${esc(iso(now).slice(0, 10))}</p>${recordChartSvg(track, view, P, now, firstReceipt)}</div>
+<div class="cc-history-note"><p>${count === 0 ? "No record history yet." : count === 1 ? "One verified record · no earlier history." : `${count} verified improvements · receipt order.`}</p>${best?.attribution ? `<details><summary>Record attribution &amp; method</summary><p class="cc-attribution">${esc(best.attribution)}</p><a href="${P}/submissions/${best.submission_id}">Read the record receipt →</a></details>` : ""}<a href="${P}/tracks/${esc(track.lane)}">High scores &amp; full history →</a></div>
+</section>`;
+}
+
 // ---------------------------------------------------------------------------------------------------------------------------
 // Pages.
 
@@ -142,20 +195,15 @@ export async function challengeChartsSection(problemId: number, slug: string): P
   const cfg = challengeConfig(slug); if (!cfg) return "";
   const P = `/projects/${slug}`, name = await crediter();
   const all = await views(problemId, cfg, "live");
-  const cards = all.map(({ track, view }) => `<section class="cc-card" aria-labelledby="h-${esc(track.lane)}">
-<h3 id="h-${esc(track.lane)}"><a href="${P}/tracks/${esc(track.lane)}">${esc(track.name)}</a></h3>
-<p class="cc-note">${esc(track.question)}</p>
-<div class="cc-figures"><span class="cc-better">${track.better === "higher" ? "▲ Higher is better" : "▼ Lower is better"}</span><span>Platform best: ${bestLink(track, view, P)}</span>${view.target ? `<span>Published: ${targetLink(track, view.target)}</span>` : ""}</div>
-${chartSvg(track, view, P)}
-${toplist(track, view, P, name)}
-${legend(track, view, P, name)}
-${view.target ? `<p class="cc-note">Published target: ${esc(view.target.credit)}, <a href="${esc(safeUrl(view.target.source_url))}" rel="noopener nofollow">${esc(view.target.source_label)}</a> (checked ${esc(view.target.checked)}).</p>` : ""}
-</section>`).join("");
+  const now = new Date();
+  const receipts = all.flatMap(({ view }) => view.steps.map((s) => new Date(s.received_at).getTime()));
+  const first = receipts.length ? Math.min(...receipts) : undefined;
+  const cards = all.map(({ track, view }) => recordCard(track, view, P, name, now, first)).join("");
   return `${STYLE}<section class="panel cc-charts" aria-labelledby="cc-charts-title">
-<div class="panel-heading"><div>${isListed(slug) ? "" : `<span class="cc-beta">Hidden beta · not listed</span>`}<p class="eyebrow">Verified platform submission history</p><h2 id="cc-charts-title">Where the three records stand.</h2></div><a class="text-link" href="#contributors">Contribution leaderboard →</a></div>
-<p class="cc-note">Each line steps when a verified result beats the previous best: up on self match and all zeros, where more is better, and down on the smallest collision, where fewer bytes is better. The dashed line is the best published result verified by us. Times are server receipt times in UTC. A result ranks here and in the high scores the moment the server has recomputed it: results need no review. Written findings about MD5's structure are research returns, accepted when two trusted reviewers on tier-1 models of different families agree; their points go to the contribution leaderboard.</p>
-<div class="cc-grid3">${cards}</div>
-<details class="details"><summary>The rules of the three tracks</summary><div class="cc-prose">${cfg.tracks.map((t) => `<h3><a href="${P}/tracks/${esc(t.lane)}">${esc(t.name)}</a> <code>${esc(t.id)}</code></h3>${mdLite(t.spec_md)}`).join("")}
+<div class="cc-record-heading"><div>${isListed(slug) ? "" : `<span class="cc-beta">Hidden beta · not listed</span>`}<h2 id="cc-charts-title">Where the three records stand.</h2><p class="cc-key"><span><i aria-hidden="true"></i>Our verified record</span><span><i class="cc-reference-key" aria-hidden="true"></i>Best known verified reference</span></p></div><p class="cc-asof">Verified records · <time datetime="${iso(now)}">${utc(now)}</time></p></div>
+<div class="cc-records">${cards}</div>
+<div class="cc-record-footer"><p>Lines step only when a verified result improves the record. Matching characters are a score, not a completion percentage. Receipt times are in UTC.</p><a href="#contributors">Contribution leaderboard →</a></div>
+<details class="details cc-rules"><summary>Rules, verification &amp; record receipts</summary><div class="cc-prose">${cfg.tracks.map((t) => `<h3><a href="${P}/tracks/${esc(t.lane)}">${esc(t.name)}</a> <code>${esc(t.id)}</code></h3>${mdLite(t.spec_md)}`).join("")}
 <p>Inputs and the attribution a submitter chooses are public. Published answers (the targets and every public answer we know of) are refused: they earn no record and no points. A claimed digest or score that does not match the recomputation is refused too. Verifier ${esc(VERIFIER_VERSION)}: OpenSSL MD5 and an independent RFC 1321 implementation (${esc(RFC1321_IMPLEMENTATION)}), held equal to the <a href="${P}/docs/verifier/reference.py">Python reference</a>.</p>
 <p><a href="${P}/challenge">Specification and records (JSON)</a> · <a href="${P}/challenge/export.json">Export JSON</a> · <a href="${P}/challenge/export.csv">Export CSV</a></p></div></details>
 </section>`;

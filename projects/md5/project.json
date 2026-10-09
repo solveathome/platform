@@ -71,7 +71,15 @@
           "Which message words and steps decide the first 8 hex characters of MD5 for a 32-character candidate? Measure the dependence and say what it implies for a prefix search.",
           "Can the first output word be computed early, or bounded, so most candidates are rejected before all 64 steps? Measure the saving and its limit.",
           "Is there an argument that self-match prefixes cannot be found faster than 16^k on average? A sound negative answer closes a route."
-        ]
+        ],
+        "display": {
+          "name": "Self-hash match",
+          "question": "Match a 32-character string to its own MD5.",
+          "unit": "matching hex characters",
+          "goal": "32 matching characters",
+          "goal_note": "An exact self-hash. None known.",
+          "reference_unit": "hex characters"
+        }
       },
       {
         "id": "md5-zero-bytes1024-v1",
@@ -121,7 +129,15 @@
           "Do neutral bits or message modification from MD5 collision attacks help make the first output word zero? Measure against generic search.",
           "What does a multi-block input buy for leading zeros: is there a choice of earlier blocks that makes the final block's search cheaper?",
           "How do the final additions of the chaining value shape the first output word, and can early abort be made exact?"
-        ]
+        ],
+        "display": {
+          "name": "Zero-hash prefix",
+          "question": "Make an input’s MD5 digest begin with zeros.",
+          "unit": "leading zero hex characters",
+          "goal": "32 leading zeros",
+          "goal_note": "An all-zero digest. None known.",
+          "reference_unit": "hex characters"
+        }
       },
       {
         "id": "md5-collision-totalbytes1024-v1",
@@ -157,9 +173,21 @@
           "Where does the single-block MD5 collision attack (Xie and Feng; Stevens) spend its work, and what would a 64 + 64 search cost at a laptop budget?",
           "Can two inputs of unequal length, or a member shorter than one block, collide under full MD5 padding? What does the padding force?",
           "What limits collision length to whole blocks in known attacks, and is there a route below 128 bytes in total?"
-        ]
+        ],
+        "display": {
+          "name": "Smallest full collision",
+          "question": "Find two different inputs with the same full MD5.",
+          "unit": "bytes across both inputs",
+          "goal": "Shortest possible pair",
+          "goal_note": "Minimize total bytes. Minimum unknown.",
+          "reference_unit": "bytes"
+        }
       }
-    ]
+    ],
+    "heading": {
+      "eyebrow": "Open research · three exact problems",
+      "description": "How far can general AI push a retired hash function? Find longer matching prefixes or a smaller collision. Every result is checked by recomputation."
+    }
   },
   "review_quorum": 2
 }

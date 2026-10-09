@@ -1,0 +1,98 @@
+/* Record projects use the full page width, keeping the site's paper, charcoal, rules and serif figures. */
+.record-challenge .header-inner { min-height: 100px; }
+.record-challenge .brand { width: 15rem; }
+.record-challenge main.shell { padding-top: 1.75rem; }
+.record-challenge .breadcrumb { margin-bottom: 1.75rem; }
+.record-challenge .project-heading { margin-bottom: 2.25rem; align-items: center; }
+.record-challenge .project-heading > div:first-child { max-width: 50rem; }
+.record-challenge .project-heading .eyebrow { font-size: .8125rem; letter-spacing: .08em; text-transform: uppercase; margin-bottom: .7rem; }
+.record-challenge .project-heading h1 { font-size: clamp(2.5rem, 4vw, 3.5rem); }
+.record-challenge .challenge-description { max-width: 46rem; font-size: 1.125rem; line-height: 1.65; margin-bottom: 1.05rem; }
+.record-challenge .researcher-line { font-size: .8125rem; margin-bottom: 0; }
+.record-challenge .page-actions { flex-shrink: 0; }
+.record-challenge .page-actions .button { white-space: nowrap; }
+.record-challenge .workspace { display: block; }
+.record-challenge .section-nav { position: static; flex-direction: row; flex-wrap: wrap; gap: 0 1.75rem; border-block: 1px solid var(--line); margin: 0 0 2rem; }
+.record-challenge .section-nav .nav-caption, .record-challenge .section-nav a span { display: none; }
+.record-challenge .section-nav a { position: relative; border: 0; padding: 1rem 0; font-size: .875rem; white-space: normal; }
+.record-challenge .section-nav a[aria-current=page]::after { content: ""; position: absolute; height: 2px; background: var(--fg); inset: auto 0 -1px; }
+.record-challenge .cc-charts { padding-top: 1.25rem; }
+.cc-record-heading { display: flex; align-items: center; justify-content: space-between; gap: 2rem; margin-bottom: 1.6rem; }
+.cc-record-heading h2 { font-size: 1.5rem; font-weight: 500; letter-spacing: -.03em; margin: 0; }
+.cc-asof { color: var(--mut); text-align: right; font-size: .8125rem; margin: 0; }
+.cc-key { display: flex; flex-wrap: wrap; gap: .5rem 1.5rem; color: var(--mut); font-size: .8125rem; margin: .5rem 0 0; }
+.cc-key span { display: inline-flex; align-items: center; gap: .5rem; }
+.cc-key i { display: inline-block; width: 1.4rem; border-top: 2px solid var(--brass); }
+.cc-key .cc-reference-key { border-color: var(--fg); border-top-style: dashed; }
+.cc-records { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); column-gap: 3.5rem; border-bottom: 1px solid var(--line); }
+.cc-record-card { position: relative; min-width: 0; display: grid; grid-template-rows: subgrid; grid-row: span 7; padding-bottom: 1.5rem; }
+.cc-record-card + .cc-record-card::before { content: ""; position: absolute; top: 0; bottom: 0; left: -1.75rem; width: 1px; background: var(--line); }
+.cc-record-title { padding-bottom: 1.15rem; }
+.cc-record-title > div { display: flex; align-items: baseline; justify-content: space-between; gap: .75rem; flex-wrap: wrap; }
+.cc-record-title h3 { font-size: 1.3rem; letter-spacing: -.025em; font-weight: 500; margin: 0; overflow-wrap: anywhere; }
+.cc-record-title .cc-better { font-size: .75rem; white-space: nowrap; }
+.cc-record-question { color: var(--mut); font-size: .9375rem; line-height: 1.6; margin: .5rem 0 0; overflow-wrap: anywhere; }
+.cc-score { padding-bottom: .55rem; }
+.cc-score-label { color: var(--mut); font-size: .8125rem; margin: 0 0 .3rem; }
+.cc-score-value { display: flex; align-items: baseline; gap: .85rem; margin: 0; }
+.cc-score-value a, .cc-score-value > b { font: 4.5rem/1.08 Georgia, "Times New Roman", serif; font-variant-numeric: tabular-nums; letter-spacing: -.045em; }
+.cc-score-value span { color: var(--mut); font-size: .875rem; line-height: 1.4; max-width: 10rem; overflow-wrap: anywhere; }
+.cc-score-empty { font-size: 1.25rem; font-weight: 500; line-height: 1.4; padding-block: 1rem; }
+.cc-record-credit { font-size: .8125rem; line-height: 1.65; padding-bottom: 1.1rem; overflow-wrap: anywhere; }
+.cc-record-credit p { margin: 0; }
+.cc-record-credit .cc-model-receipt { color: var(--mut); font-size: .75rem; margin-top: .15rem; }
+.cc-record-credit .credit { white-space: normal; }
+.cc-record-credit .credit-handle { white-space: normal; overflow-wrap: anywhere; }
+.cc-benchmark { border-top: 1px solid var(--line); padding-block: .8rem; }
+.cc-summary-row { display: flex; justify-content: space-between; align-items: baseline; gap: .75rem; margin: 0; }
+.cc-summary-row > span { color: var(--mut); font-size: .8125rem; }
+.cc-summary-row b { font-size: .875rem; font-weight: 500; text-align: right; overflow-wrap: anywhere; }
+.cc-source { font-size: .75rem; line-height: 1.65; color: var(--mut); margin: .35rem 0 0; overflow-wrap: anywhere; }
+.cc-source a { text-decoration: underline; }
+.cc-goal { border-top: 1px solid var(--line); padding-block: .8rem; }
+.cc-goal p:last-child { color: var(--mut); font-size: .75rem; margin: .3rem 0 0; overflow-wrap: anywhere; }
+.cc-history-unit { font-size: .75rem; line-height: 1.65; color: var(--mut); margin: 0 0 .4rem; }
+.cc-history .cc-chart { display: block; width: 100%; height: auto; }
+.cc-history .cc-axis { fill: var(--mut); font: 13px -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif; }
+.cc-history .cc-line { stroke-width: 3; }
+.cc-history .cc-empty { font: 14px -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif; }
+.cc-history-note { font-size: .75rem; line-height: 1.65; color: var(--mut); margin: .5rem 0 0; overflow-wrap: anywhere; }
+.cc-history-note p { margin: 0; }
+.cc-history-note details { margin-top: .5rem; }
+.cc-history-note summary { cursor: pointer; }
+.cc-attribution { margin-top: .5rem !important; white-space: pre-wrap; }
+.cc-record-footer { display: flex; align-items: baseline; justify-content: space-between; gap: 2rem; padding-block: 1rem 0; }
+.cc-record-footer p { font-size: .8125rem; color: var(--mut); max-width: 55rem; margin: 0; }
+.cc-record-footer a { flex-shrink: 0; font-size: .8125rem; text-decoration: underline; }
+.cc-rules { margin-top: 1.2rem; font-size: .875rem; }
+.cc-rules summary { cursor: pointer; }
+.cc-rules h3 { margin-top: 1.5rem; }
+@media (max-width: 1100px) {
+  .cc-records { column-gap: 2.5rem; }
+  .cc-record-card + .cc-record-card::before { left: -1.25rem; }
+  .record-challenge .project-heading > div:first-child { max-width: 42rem; }
+  .cc-score-value a, .cc-score-value > b { font-size: 4rem; }
+  .record-challenge .project-heading { flex-direction: column; align-items: flex-start; }
+  .cc-records { display: block; }
+  .cc-record-card { display: block; max-width: 40rem; margin-inline: auto; }
+  .cc-record-card + .cc-record-card { border-top: 1px solid var(--line); padding-top: 1.5rem; }
+  .cc-record-card + .cc-record-card::before { display: none; }
+  .cc-history .cc-chart { max-width: 30rem; margin-inline: auto; }
+}
+@media (max-width: 800px) {
+  .record-challenge .project-heading { align-items: flex-start; }
+  .record-challenge .project-heading h1 { font-size: 2.5rem; }
+  .record-challenge .section-nav { gap: 0 1.4rem; }
+  .record-challenge .section-nav a { padding: .8rem 0; font-size: .8125rem; }
+  .cc-record-heading { display: block; }
+  .cc-asof { text-align: left; margin-top: .8rem; }
+  .cc-records { display: block; }
+  .cc-record-card { display: block; }
+  .cc-record-card + .cc-record-card { border-top: 1px solid var(--line); padding-top: 1.5rem; }
+  .cc-record-card + .cc-record-card::before { display: none; }
+  .cc-record-title > div { flex-wrap: wrap; }
+  .cc-score-value a, .cc-score-value > b { font-size: 4.5rem; }
+  .cc-record-footer { display: block; }
+  .cc-record-footer a { display: inline-block; margin-top: .6rem; }
+}
+@media (prefers-reduced-motion: reduce) { .record-challenge * { scroll-behavior: auto; } }

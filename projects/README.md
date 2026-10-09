@@ -33,4 +33,6 @@ For the research-first process, use `"scheduler": {"research_allocation": {"disc
 
 **Review quorum.** `"review_quorum": 2` makes a return wait for two trusted verdicts from tier-1 sessions of different model families that agree (one approved person may run both). Default 1: the first trusted verdict decides.
 
+Record challenge presentation may add `challenge.heading { eyebrow, description }` and a track's `display { name, question, unit, reference_unit, goal, goal_note }`. These are short page labels, separate from the frozen scoring rules. The server renders the current receipt, its credited contributor and corrected attribution, the best known verified published reference, and the ultimate goal separately. Charts show only actual verified improvements, with a common receipt-time window. Matching prefix lengths are scores, not completion percentages; a collision's unknown minimum has no numeric completion goal. High scores and detailed history remain on each track page.
+
 **Corpus without a mirror.** A project whose documents are public in this repository keeps them in `projects/<slug>/docs` as a prepared portfolio (`scripts/prepare-document-portfolio.ts <source> <new dir>` writes `PUBLICATION.json`). It is served at `/projects/<slug>/docs` when there is no mirror cut in `data/repos/<slug>`. Accepted revisions go to the overlay as usual.

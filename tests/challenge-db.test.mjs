@@ -192,6 +192,12 @@ test('corrections withdraw and restore without rewriting; demo data stays apart 
   assert.ok(await one(`SELECT 1 FROM challenge_submissions WHERE id = $1`, [best.submission_id]), 'the receipt itself is kept');
   await call('owner', 'POST', '/challenge/corrections', {body: {submission_id: best.submission_id, kind: 'restore', note: 'test: restored'}});
   assert.equal((await trackView(pid, track)).best.submission_id, best.submission_id);
+  const attribution = 'Corrected algorithm credit <retained as text>';
+  assert.equal((await call('owner', 'POST', '/challenge/corrections', {body: {submission_id: best.submission_id, kind: 'attribution', note: 'correct the public credit', attribution}})).status, 200);
+  assert.equal((await trackView(pid, track)).best.attribution, attribution, 'overview uses the latest attribution correction');
+  const html = await (await call('a', 'GET', '', {accept: 'text/html'})).text();
+  assert.match(html, /Corrected algorithm credit &lt;retained as text&gt;/);
+
 
   const demo = await submit('a', {challenge_id: MIRROR, candidate: '00000000000000000000000000001efd', demo: true});
   assert.equal(demo.body.namespace, 'demo'); assert.equal(demo.body.site_record, true, 'records in the demo namespace are its own');
@@ -287,9 +293,9 @@ test('pages render: overview with three charts, track, record; JSON for agents',
   // Each platform best links to the receipt that holds it, each published value to its source (Chris, Oct 9 2026).
   for (const t of md5.challenge.tracks) {
     const best = (await trackView(pid, challengeConfig(slug).tracks.find((x) => x.id === t.id))).best;
-    if (best) assert.ok(html.includes(`Platform best: <a href="/projects/${slug}/submissions/${best.submission_id}"`), `${t.id} best links to #${best.submission_id}`);
+    if (best) assert.ok(html.includes(`<a href="/projects/${slug}/submissions/${best.submission_id}" aria-label=`), `${t.id} best links to #${best.submission_id}`);
     const target = [...t.targets].reverse().find((x) => !x.superseded_on);
-    assert.ok(html.includes(`Published: <a href="${target.source_url}"`), `${t.id} published links to ${target.source_url}`);
+    assert.ok(html.includes(`<a href="${target.source_url}" rel="noopener nofollow">`), `${t.id} published links to ${target.source_url}`);
   }
   assert.match(html, /noindex/);
   for (const t of md5.challenge.tracks) assert.equal((await call('a', 'GET', `/tracks/${t.lane}`, {accept: 'text/html'})).status, 200);
