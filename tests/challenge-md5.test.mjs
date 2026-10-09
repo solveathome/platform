@@ -149,3 +149,61 @@ test('the collision bar fills on a log scale from the 2,048-byte cap to 32 bytes
   assert.equal(trackFill(coll, 2), 1, 'never past full');
   assert.equal(trackFill(mirror, 9), 9 / 32);
 });
+
+const recordView = (track, values = []) => {
+  const steps = values.map((value, i) => ({value, submission_id: i + 1, handle: 'researcher', model: 'test-model', attribution: null, known_result: false, received_at: `2026-10-09T${i ? '18' : '15'}:30:00Z`}));
+  return {challenge_id: track.id, namespace: 'live', best: steps.at(-1) ?? null, steps, personal: [], milestones: [], submissions: steps.length, target: track.targets.at(-1)};
+};
+
+test('overview charts render empty and single-receipt histories without inventing earlier progress', async () => {
+  const {recordChartSvg, recordCard} = await import('../src/routes/challenges.ts');
+  const track = config.challenge.tracks[0], now = new Date('2026-10-09T20:30:00Z');
+  const empty = recordChartSvg(track, recordView(track), '/projects/test', now);
+  assert.match(empty, /No verified submission yet/);
+  assert.doesNotMatch(empty, /<path|<circle/);
+  assert.match(empty, /class="cc-target"/);
+  const single = recordChartSvg(track, recordView(track, [9]), '/projects/test', now);
+  assert.equal((single.match(/<circle/g) ?? []).length, 1);
+  assert.match(single, /d="M[\d.]+,[\d.]+H350" class="cc-line"/);
+  assert.doesNotMatch(single, /NaN|Infinity/);
+  const zero = recordCard(track, recordView(track, [0]), '/projects/test', h => `@${h}`, now);
+  assert.match(zero, /aria-label="0 of 32, receipt #1">0<\/a>/, 'a measured zero is distinct from no result');
+  assert.doesNotMatch(zero, /cc-score-empty/);
+});
+
+test('overview charts step up for prefix improvements and down for fewer collision bytes', async () => {
+  const {recordChartSvg} = await import('../src/routes/challenges.ts');
+  for (const [track, values, upward] of [[config.challenge.tracks[1], [8, 11], true], [config.challenge.tracks[2], [256, 128], false]]) {
+    const svg = recordChartSvg(track, recordView(track, values), '/projects/test', new Date('2026-10-09T20:30:00Z'));
+    const coords = /d="M([\d.]+),([\d.]+)H([\d.]+)V([\d.]+)H350"/.exec(svg);
+    assert.ok(coords, 'one actual step between the two receipts');
+    assert.equal(Number(coords[4]) < Number(coords[2]), upward);
+    assert.equal((svg.match(/<circle/g) ?? []).length, 2);
+    assert.match(svg, /Receipt times in UTC/);
+    assert.doesNotMatch(svg, /%|NaN|Infinity/);
+  }
+});
+
+test('record summaries separate the current score, credited reference and ultimate goal and escape attribution', async () => {
+  const {recordCard} = await import('../src/routes/challenges.ts');
+  const track = config.challenge.tracks[2], view = recordView(track, [256]);
+  view.best.attribution = 'A method <script> with a very long source name';
+  const card = recordCard(track, view, '/projects/test', h => `<a href="/@${h}">Long Contributor Name @${h}</a>`, new Date('2026-10-09T20:30:00Z'));
+  assert.match(card, /Our verified record/);
+  assert.match(card, /Best known verified/);
+  assert.match(card, /Ultimate goal/);
+  assert.match(card, /Minimum unknown/);
+  assert.match(card, /Long Contributor Name @researcher/);
+  assert.match(card, /A method &lt;script&gt;/);
+  assert.match(card, /High scores &amp; full history/);
+  assert.match(card, /https:\/\/marc-stevens.nl\/research\/md5-1block-collision\//);
+  assert.doesNotMatch(card, /<script>|progressbar|complete|%/);
+});
+
+test('a full prefix record reports a reached goal rather than retaining the no-known-result note', async () => {
+  const {recordCard} = await import('../src/routes/challenges.ts');
+  const track = config.challenge.tracks[0];
+  const card = recordCard(track, recordView(track, [32]), '/projects/test', h => `@${h}`);
+  assert.match(card, /Exact goal reached by this verified record/);
+  assert.doesNotMatch(card, /None known/);
+});

@@ -24,10 +24,11 @@ export type ChallengeTarget = {
 };
 export type ChallengeTrack = {
   id: string; lane: string; name: string; question: string; metric: string; unit: string; better: "higher" | "lower";
+  display?: { name?: string; question?: string; unit?: string; reference_unit?: string; goal?: string; goal_note?: string };
   max?: number; fields: string[]; spec_md: string; brief_md: string; targets: ChallengeTarget[];
   studies?: string[];   // open questions about MD5's structure; a study assignment answers one in writing (Chris, Oct 9 2026: understanding first)
 };
-export type ChallengeConfig = { tracks: ChallengeTrack[]; brief_md?: string };
+export type ChallengeConfig = { tracks: ChallengeTrack[]; brief_md?: string; heading?: { eyebrow?: string; description?: string } };
 
 export const VERIFIER_VERSION = "solveathome-challenge-verifier-1";
 export const NAMESPACES = ["live", "demo"] as const;
@@ -283,7 +284,9 @@ export type TrackView = {
   personal: { handle: string; best: number; submission_id: number; received_at: string; submissions: number }[]; submissions: number; target: ChallengeTarget | null;
 };
 export async function trackView(problemId: number, track: ChallengeTrack, ns: Namespace = "live"): Promise<TrackView> {
-  const rows = await q(`SELECT s.id, s.score, s.total_bytes, s.received_at, s.known_result, s.attribution, s.model, s.user_id, s.duplicate_of, u.handle
+  const rows = await q(`SELECT s.id, s.score, s.total_bytes, s.received_at, s.known_result,
+    COALESCE((SELECT c.attribution FROM challenge_corrections c WHERE c.submission_id = s.id AND c.kind = 'attribution' ORDER BY c.id DESC LIMIT 1), s.attribution) AS attribution,
+    s.model, s.user_id, s.duplicate_of, u.handle
     FROM challenge_submissions s JOIN users u ON u.id = s.user_id WHERE s.problem_id = $1 AND s.challenge_id = $2 AND s.namespace = $3 AND ${LIVE_SQL} ORDER BY s.id`, [problemId, track.id, ns]);
   const steps: Step[] = [], milestones: TrackView["milestones"] = [], per = new Map<string, TrackView["personal"][number]>();
   let best: number | null = null;
