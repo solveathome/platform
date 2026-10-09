@@ -7,6 +7,8 @@ export type MainTheoremDesignation = {
   required_claim_ids: string[]; unproved_claims: { id: string; locator: string }[];
 };
 export type LeanDisplayRecord = LeanSummary & { return_id: number; fingerprint: string; policy?: string };
+export const PROVEN_WITH_LEAN_LABEL = 'Proven with Lean';
+export const MAIN_THEOREM_LEAN_LABEL = 'Main theorem proven with Lean';
 const hash = (x: unknown): x is string => typeof x === 'string' && /^[a-f0-9]{64}$/.test(x);
 const text = (x: unknown): x is string => typeof x === 'string' && x.trim().length > 0 && x.length <= 1000;
 
@@ -55,7 +57,8 @@ export function mainTheoremEvidence(records: LeanDisplayRecord[], designation: M
 export function mainTheoremCallout(record: LeanDisplayRecord | null, designation: MainTheoremDesignation | null, slug: string, paperSlug: string, title: string): string {
   if (!record || !designation || mainTheoremEvidence([record], designation) !== record) return '';
   const url = `/projects/${encodeURIComponent(slug)}/papers/${encodeURIComponent(paperSlug)}#lean-evidence`;
-  return `<section class="panel" aria-label="Lean milestone"><p><span class="paper-status reviewed">Main theorem verified in Lean</span> · <a href="${esc(url)}">${esc(title)}</a></p><p><b>${esc(verificationProfile(record).label)}</b>. The designated main claims are checked for this manuscript. Other claims remain outside this badge’s coverage; this is not a proof of the project’s overall conjecture.</p>${unproved(designation)}</section>`;
+  const P = `/projects/${encodeURIComponent(slug)}`, current = record.current_evidence!;
+  return `<section class="panel" aria-label="Lean milestone"><p><span class="paper-status reviewed">${MAIN_THEOREM_LEAN_LABEL}</span> · <a href="${esc(url)}">${esc(title)}</a></p><p><b>${esc(verificationProfile(record).label)}</b>. Proven with Lean is the highest research-verification tier. The designated main claims are proven for this manuscript. Other claims remain outside this badge’s coverage; this is not a proof of the project’s overall conjecture.</p><p><a href="${P}/return/${record.return_id}">Accepted source #${record.return_id}</a> · <a href="${P}/return/${current.execution_return_id}">Trusted execution receipt #${current.receipt_id}</a> · ${current.semantic_review_ids.map(id => `<a href="${P}/review/${id}">Mathematical correctness review #${id}</a>`).join(' · ')}</p>${unproved(designation)}</section>`;
 }
 
 function unproved(designation: MainTheoremDesignation | null): string {
@@ -66,7 +69,7 @@ export function leanEvidencePanel(records: LeanDisplayRecord[], slug: string, de
   if (!records.length) return '<section id="lean-evidence"><p class="muted">No Lean proof evidence recorded for this paper.</p></section>';
   const P = `/projects/${encodeURIComponent(slug)}`;
   const main = mainTheoremEvidence(records, designation);
-  return `<section class="panel" id="lean-evidence"><h2>Lean evidence</h2>${main ? '<p><span class="paper-status reviewed">Main theorem verified in Lean</span></p>' : '<p>No current verification of a designated main theorem is recorded.</p>'}<p>Worker-reported validation of exact mapped claims, assessed by trusted reviewers. A checked helper claim is not verification of the main theorem or the entire paper. The project’s overall conjecture and ordinary review grade remain separate.</p>${unproved(designation)}${records.map(r => {
+  return `<section class="panel" id="lean-evidence"><h2>Lean evidence</h2>${main ? `<p><span class="paper-status reviewed">${MAIN_THEOREM_LEAN_LABEL}</span></p>` : '<p>No current verification of a designated main theorem is recorded.</p>'}<p>Worker-reported validation of exact mapped claims, assessed by trusted reviewers. A checked helper claim is not verification of the main theorem or the entire paper. The project’s overall conjecture and ordinary review grade remain separate.</p>${unproved(designation)}${records.map(r => {
     const current = r.current_evidence;
     const counted = current && ['checked','partial','conditional'].includes(r.status);
     const profile = verificationProfile(r);

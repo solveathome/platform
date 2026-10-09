@@ -20,26 +20,27 @@ test('only a canonical exact designation plus accepted current reviewed executio
   const {r,p,mapping}=fixture();const d=mainTheoremDesignation([mapping],'example',p.manuscript_sha256);
   assert.equal(mainTheoremEvidence([r],d),r);
   const panel=leanEvidencePanel([r],'example-project',d);
-  assert.match(panel,/Main theorem verified in Lean/);
+  assert.match(panel,/Main theorem proven with Lean/);
   for(const path of ['return/40','return/30','review/10','review/50'])assert.match(panel,new RegExp(path));
   assert.match(panel,/currently checked/);assert.match(panel,/Other claims remain unproved/);assert.match(panel,/open-a/);
   assert.match(panel,/Package fingerprint/);assert.match(panel,/does not authenticate physical computation/);
   const callout=mainTheoremCallout(r,d,'example-project','example','Example');
   assert.match(callout,/papers\/example#lean-evidence/);assert.match(callout,/not a proof of the project/);
+  for(const path of ['return/40','return/30','review/50'])assert.match(callout,new RegExp(path));
 });
 
 test('checked helpers alone never establish the designated main theorem',()=>{
   const {r,mapping}=fixture({claim:'helper'});assert.equal(r.status,'checked');
   assert.equal(mainTheoremEvidence([r],mapping),null);
   assert.equal(mainTheoremCallout(r,mapping,'project','example','Example'),'');
-  assert.doesNotMatch(leanEvidencePanel([r],'project',mapping),/Main theorem verified in Lean/);
+  assert.doesNotMatch(leanEvidencePanel([r],'project',mapping),/Main theorem proven with Lean/);
 });
 
 test('partial, conditional, pending, provisional, revoked, stale and unreviewed evidence cannot celebrate',()=>{
   for(const options of [{coverage:'partial'},{assumptions:['Unproved input']},{status:'pending'},{provisional:true},{trusted:false},{current:false},{reviewed:false},{outcome:'fail'},{status:'rejected'},{status:'superseded'}]){
     const {r,mapping}=fixture(options);assert.equal(mainTheoremEvidence([r],mapping),null,JSON.stringify(options));
     assert.equal(mainTheoremCallout(r,mapping,'project','example','Example'),'');
-    assert.doesNotMatch(leanEvidencePanel([r],'project',mapping),/Main theorem verified in Lean/);
+    assert.doesNotMatch(leanEvidencePanel([r],'project',mapping),/Main theorem proven with Lean/);
   }
 });
 
@@ -88,11 +89,22 @@ test('comparator profiles retain their independent export and external kernel ch
   }
 });
 
+test('accepted kernel and comparator methods share the highest scoped research tier',()=>{
+  for(const policy of ['lean-kernel-v1','lean-comparator-v1','lean-comparator-v2']){
+    const {r,mapping}=fixture();r.policy=policy;
+    const callout=mainTheoremCallout(r,mapping,'project','example','Main result');
+    assert.match(callout,/Main theorem proven with Lean/);
+    assert.match(callout,/Proven with Lean is the highest research-verification tier/);
+    assert.match(callout,/Other claims remain unproved/);
+    assert.match(callout,/not a proof of the project/);
+  }
+});
+
 test('kernel label cannot upgrade pending, helper-only, revoked or stale evidence; unknown policy claims no checking method',()=>{
   for(const options of [{status:'pending'},{claim:'helper'},{trusted:false},{current:false},{reviewed:false},{coverage:'partial'}]){
     const {r,mapping}=fixture(options);r.policy='lean-kernel-v1';
     assert.equal(mainTheoremEvidence([r],mapping),null);
-    assert.doesNotMatch(leanEvidencePanel([r],'project',mapping),/Main theorem verified in Lean/);
+    assert.doesNotMatch(leanEvidencePanel([r],'project',mapping),/Main theorem proven with Lean/);
   }
   const {r,mapping}=fixture();delete r.policy;
   const panel=leanEvidencePanel([r],'project',mapping);

@@ -22,7 +22,7 @@ const {leanStatementBinding}=await import('../src/lib/lean-verification.ts');
 const {paperLeanVerification}=await import('../src/lib/verification.ts');
 const {mainTheoremEvidence}=await import('../src/lib/lean-display.ts');
 const files=await import('../src/lib/files.ts');
-const {papers}=await import('../src/routes/papers.ts');
+const {papers,listPapers}=await import('../src/routes/papers.ts');
 const {board}=await import('../src/routes/board.ts');
 const {responseCache}=await import('../src/lib/cache.ts');
 
@@ -93,12 +93,17 @@ test('rejected and superseded packages show their decision; a rejected one names
     assert.equal(response.headers.get('cache-control'),'no-store');
     const body=await response.json();assert.equal(body.lean_milestone_request,'current-fixture-read');return body.lean_milestone_html;
   };
-  configure([designation]);assert.match(await currentCallout(),/Main theorem verified in Lean/);
+  configure([designation]);assert.match(await currentCallout(),/Main theorem proven with Lean/);
+  await q(`INSERT INTO papers(problem_id,slug,title,kind,status,grade,updated_at) VALUES($1,'new-draft','Newest draft','draft','reviewed','Proven with Lean',now()+interval '1 day')`,[pid]);
+  const ordered=async()=>listPapers(pid,slug);
+  let ranked=await ordered();assert.equal(ranked[0].slug,'example','current main proof outranks a fresher registry claim');assert.equal(ranked[0].research_status,'proven_with_lean');assert.equal(ranked[0].status_label,'Main theorem proven with Lean');assert.notEqual(ranked.find(p=>p.slug==='new-draft').research_status,'proven_with_lean');
+  const listResponse=await fetch(base+'/papers');assert.equal(listResponse.headers.get('cache-control'),'no-store');assert.equal((await listResponse.json()).papers[0].slug,'example');
+
   const rootPage=await fetch(base,{headers:{accept:'text/html'}});
   const rootHtml=await rootPage.text();assert.match(rootHtml,/data-papers="\[&quot;example&quot;\]"/);
-  assert.doesNotMatch(rootHtml,/Main theorem verified in Lean/,'cached HTML carries no positive verdict');
+  assert.doesNotMatch(rootHtml,/Main theorem proven with Lean/,'cached HTML carries no positive verdict');
   const cached=await fetch(base,{headers:{accept:'text/html'}});assert.equal(cached.headers.get('x-cache'),'hit');
-  configure([]);assert.equal(await currentCallout(),'','removed config invalidates an already cached candidate list');
+  configure([]);assert.equal(await currentCallout(),'','removed config invalidates an already cached candidate list');assert.notEqual((await ordered()).find(p=>p.slug==='example').research_status,'proven_with_lean','removed designation downgrades list rank');
   configure([{...designation,statement_binding:'0'.repeat(64)}]);assert.equal(await currentCallout(),'','mismatched designation has no main callout');
   configure([designation]);
 
@@ -129,6 +134,8 @@ test('rejected and superseded packages show their decision; a rejected one names
   assert.equal(legacy.return_status,'accepted');assert.equal(legacy.status,'no_proof');assert.deepEqual(legacy.checked_claims,[]);
   assert.equal(legacy.current_evidence,undefined);assert.equal(mainTheoremEvidence([legacy],designation),null,'revoked execution invalidates the milestone');
   assert.equal(await currentCallout(),'');
+  ranked=await ordered();assert.notEqual(ranked.find(p=>p.slug==='example').research_status,'proven_with_lean','revoked execution removes highest list status');assert.notEqual(ranked.find(p=>p.slug==='example').status_label,'Main theorem proven with Lean');
+  assert.equal(ranked[0].slug,'new-draft','recency breaks equal downgraded status ties');
   assert.equal((await one('SELECT status FROM returns WHERE id=$1',[accepted.id])).status,'accepted');
 
 });

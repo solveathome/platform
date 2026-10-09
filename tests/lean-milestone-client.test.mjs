@@ -64,7 +64,7 @@ test('actual project initialization installs pagehide invalidation before its fi
   const initialization=runInNewContext(page.slice(start,end),{
     document,addEventListener:window.addEventListener.bind(window),leanMilestones:client,loadMe:noop,
     refreshBoard:client.refresh,renderStartField:noop,$:()=>root,SLUG:'example-project',safeLoad:noop,
-    loadPapers:noop,loadDocuments:noop,loadProvenance:noop,loadHighscores:noop,
+    loadPapers:noop,clearPaperLists:noop,loadDocuments:noop,loadProvenance:noop,loadHighscores:noop,
     sequenceList:{refresh:noop},openChannel:noop,polling:null,channelRequest:null,
     setInterval:()=>{timers++;return timers;},clearInterval:()=>{}
   });
