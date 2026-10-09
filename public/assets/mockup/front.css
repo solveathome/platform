@@ -1,0 +1,114 @@
+/* Mockup: a front page that holds N problems. Same charcoal/paper identity as app.css; cards, not one featured panel. */
+.mock-banner { border: 1px dashed var(--line); padding: .7rem 1rem; font: .75rem/1.7 var(--mono); color: var(--mut); margin: 0 0 1rem; }
+.mock-banner b { color: var(--fg); }
+.mock-tag { display: inline-block; font: .6875rem/1.4 var(--mono); padding: .05rem .4rem; border: 1px solid var(--line); border-radius: 2px; color: var(--mut); white-space: nowrap; vertical-align: .1em; }
+.mock-tag.placeholder { border-style: dashed; color: var(--recognition); border-color: var(--recognition); }
+
+.mf-hero { display: grid; grid-template-columns: minmax(0, 1.4fr) minmax(280px, .8fr); gap: clamp(3rem, 7vw, 7rem); align-items: center; padding-block: 3rem 4.5rem; }
+.mf-hero h1 { font-size: clamp(3.4rem, 5.8vw, 5.2rem); letter-spacing: -.065em; line-height: 1.04; margin-bottom: 2rem; }
+.mf-hero h1 span { display: block; }
+.mf-hero .lead { max-width: 33rem; }
+.mf-hero .principle { margin: 1rem 0 2rem; font-size: 1rem; }
+.mf-hero-actions { display: flex; flex-wrap: wrap; align-items: center; gap: .5rem 0; }
+
+/* The hero's right column: an index of every problem, so the count can grow without moving the headline. */
+.mf-index { border-top: 1px solid var(--fg); padding-top: 1.5rem; min-width: 0; }
+.mf-index .panel-heading { font: .8125rem var(--mono); color: var(--mut); }
+.mf-index-list { list-style: none; margin: 0; padding: 0; }
+.mf-index-list li { border-bottom: 1px solid var(--line); }
+.mf-index-list a { display: grid; grid-template-columns: 2.75rem minmax(0, 1fr) auto; gap: .75rem; align-items: baseline; padding: 1rem 0; }
+.mf-index-list a:hover { text-decoration: none; }
+.mf-index-list a:hover b { text-decoration: underline; }
+.mf-index-list .n { font: .75rem var(--mono); color: var(--mut); }
+.mf-index-list b { font-weight: 600; letter-spacing: -.02em; }
+.mf-index-list small { display: block; color: var(--mut); font-size: .8125rem; line-height: 1.5; margin-top: .2rem; }
+.mf-index-list .state { font: .6875rem var(--mono); color: var(--mut); white-space: nowrap; }
+.mf-index-list .next b { color: var(--mut); font-weight: 500; }
+.mf-swarm { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 1rem; margin-top: 1.5rem; }
+.mf-swarm div b { display: block; font-size: 1.5rem; letter-spacing: -.04em; font-weight: 600; line-height: 1.2; }
+.mf-swarm div span { font: .6875rem/1.5 var(--mono); color: var(--mut); }
+.mf-swarm p { grid-column: 1 / -1; margin: 0; }
+
+.mf-section-head { display: flex; justify-content: space-between; align-items: end; gap: 1rem; margin-bottom: 2rem; }
+.mf-section-head .eyebrow { margin-bottom: .5rem; }
+.mf-section-head h2 { font-size: clamp(1.6rem, 2.6vw, 2.1rem); letter-spacing: -.045em; margin: 0; }
+.mf-problems, .mf-join { border-top: 1px solid var(--line); padding-block: 2.5rem 3.5rem; scroll-margin-top: 1rem; }
+
+/* One card per problem. auto-fill keeps two across on a desktop, one on a tablet or phone, and wraps a third below. */
+.mf-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 32rem), 1fr)); gap: 1.5rem; }
+.mf-card { border: 1px solid var(--line); border-top: 1px solid var(--fg); padding: 1.5rem; display: flex; flex-direction: column; gap: 1.25rem; min-width: 0; scroll-margin-top: 1rem; }
+.mf-card-top { display: flex; justify-content: space-between; gap: 1rem; font: .75rem var(--mono); color: var(--mut); flex-wrap: wrap; }
+.mf-card h3 { font-size: 1.6rem; letter-spacing: -.045em; line-height: 1.15; margin: 0; }
+.mf-card h3 a:hover { text-decoration: underline; }
+.mf-card .question { font-size: 1.0625rem; line-height: 1.6; margin: 0; }
+.mf-card .why { color: var(--mut); font-size: .9375rem; line-height: 1.75; margin: 0; }
+.mf-card .why b { color: var(--fg); font-weight: 500; }
+.mf-emblem { border-block: 1px solid var(--line); padding-block: 1.25rem; min-height: 9.5rem; display: flex; flex-direction: column; justify-content: center; gap: .5rem; }
+.mf-emblem .prime-pair { margin: 0; font-size: 3.6rem; }
+.mf-emblem .prime-sequence { border: 0; padding: 0; }
+.md5-pair { margin: 0; font: clamp(.7rem, 3.3vw, 1.15rem)/1.6 var(--mono); text-align: center; letter-spacing: .02em; }
+.md5-pair div { white-space: nowrap; margin-bottom: .6rem; }
+.md5-pair div span { color: var(--mut); }
+.md5-pair div b { font-weight: 600; background: var(--soft); box-shadow: inset 0 -2px 0 var(--fg); }
+.md5-pair .lbl { display: block; font-size: .65rem; color: var(--mut); letter-spacing: .04em; }
+.mf-emblem figcaption { font: .75rem/1.6 var(--mono); color: var(--mut); text-align: center; }
+
+.mf-stand h4, .mf-board h4 { font: .75rem var(--mono); color: var(--mut); font-weight: 400; margin: 0 0 .75rem; display: flex; justify-content: space-between; gap: .5rem; flex-wrap: wrap; }
+.mf-facts { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: .75rem; margin: 0; }
+.mf-facts div { min-width: 0; }
+.mf-facts dt { font: .6875rem/1.5 var(--mono); color: var(--mut); }
+.mf-facts dd { margin: 0; font-size: 1.25rem; font-weight: 600; letter-spacing: -.03em; }
+.mf-headline { font-size: .9375rem; margin: 0 0 1rem; line-height: 1.6; }
+.mf-headline b { font-family: var(--mono); font-weight: 600; }
+.mf-tracks { list-style: none; margin: 0; padding: 0; display: grid; gap: .9rem; }
+.mf-tracks li { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: .2rem 1rem; font-size: .875rem; }
+.mf-tracks .v { font: .75rem var(--mono); color: var(--mut); text-align: right; }
+.mf-bar { grid-column: 1 / -1; position: relative; height: 6px; background: var(--soft); }
+.mf-bar i { position: absolute; inset: 0 auto 0 0; background: var(--fg); }
+.mf-bar s { position: absolute; top: -4px; bottom: -4px; width: 0; border-left: 2px dashed var(--mut); }
+.mf-legend { font: .6875rem/1.6 var(--mono); color: var(--mut); margin: .75rem 0 0; }
+.mf-board ol { list-style: none; margin: 0; padding: 0; }
+.mf-board li { display: grid; grid-template-columns: 1.75rem minmax(0, 1fr) auto; gap: .5rem; padding: .45rem 0; border-bottom: 1px solid var(--line); font-size: .875rem; }
+.mf-board li span:first-child { font: .75rem/1.9 var(--mono); color: var(--mut); }
+.mf-board li a { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.mf-board li b { font: .8125rem var(--mono); font-weight: 500; }
+.mf-board .empty { display: block; color: var(--mut); padding: .75rem 0; border-bottom: 1px solid var(--line); }
+.mf-actions { display: flex; flex-wrap: wrap; gap: .75rem; margin-top: auto; padding-top: .25rem; }
+.mf-actions .button { flex: 1 1 12rem; }
+
+/* The slot a third problem fills: proof that the page takes N without a redesign. */
+.mf-card.next { border-style: dashed; border-top-style: solid; border-top-color: var(--line); justify-content: center; }
+.mf-card.next h3 { color: var(--mut); }
+
+.mf-steps { list-style: none; counter-reset: s; display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 1.5rem; padding: 0; margin: 0 0 2rem; }
+.mf-steps li { counter-increment: s; border-top: 1px solid var(--fg); padding-top: 1rem; }
+.mf-steps li::before { content: counter(s, decimal-leading-zero); display: block; font: .75rem var(--mono); color: var(--mut); margin-bottom: .75rem; }
+.mf-steps b, .mf-steps span { display: block; }
+.mf-steps b { font-weight: 600; margin-bottom: .35rem; }
+.mf-steps span { color: var(--mut); font-size: .9375rem; line-height: 1.7; }
+
+.mf-community { margin-bottom: 2rem; }
+.mf-leaders { list-style: none; margin: 0; padding: 0; }
+.mf-leaders li { display: grid; grid-template-columns: 2rem minmax(0, 1fr) auto; gap: .75rem; align-items: center; padding: .7rem 0; border-bottom: 1px solid var(--line); }
+.mf-leaders .r { font: .75rem var(--mono); color: var(--mut); }
+.mf-leaders .who-cell { min-width: 0; }
+.mf-leaders .who-cell a { font-weight: 500; }
+.mf-leaders .chips { display: flex; flex-wrap: wrap; gap: .3rem; margin-top: .25rem; }
+.mf-leaders .chips span { font: .6875rem var(--mono); color: var(--mut); border: 1px solid var(--line); padding: 0 .35rem; border-radius: 2px; }
+.mf-leaders b { font: .875rem var(--mono); font-weight: 600; }
+
+@media (max-width: 960px) {
+  .mf-hero { grid-template-columns: 1fr; gap: 3rem; padding: 1.5rem 0 3rem; }
+  .mf-hero h1 { font-size: clamp(3rem, 8vw, 4.5rem); }
+  .mf-steps { grid-template-columns: 1fr; gap: 1.25rem; }
+  .mf-community { grid-template-columns: 1fr; }
+}
+@media (max-width: 560px) {
+  .mf-hero h1 { font-size: 2.85rem; }
+  .mf-card { padding: 1.1rem; }
+  .mf-card h3 { font-size: 1.35rem; }
+  .mf-facts dd { font-size: 1.05rem; }
+  .mf-emblem .prime-pair { font-size: 3rem; }
+  .mf-tracks li { grid-template-columns: 1fr; }
+  .mf-tracks .v { text-align: left; }
+}
