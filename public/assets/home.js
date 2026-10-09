@@ -7,6 +7,7 @@
   if (!cards.length) return;
   const base = slug => `/projects/${encodeURIComponent(slug)}`;
   const n = v => Number(v) || 0;
+  const pts = v => num(Math.round(n(v)));   // whole points everywhere on this page
   let me = null;
   const identity = loadWho(document.querySelector('#who')).then(user => { me = user; if (user?.signed_in) { const cta = $('#mf-join-cta'); cta.href = '#problems'; cta.innerHTML = 'Choose a problem <span aria-hidden="true">↑</span>'; } }).catch(() => {});
 
@@ -23,7 +24,7 @@
     return `<h4><span>Where the records stand</span></h4><ul class="mf-tracks">${rows}</ul><p class="mf-legend">Bar: best result verified here. Dashed mark: best published result, credited to its finder.${lower ? ' Collision: fewer bytes is better.' : ''}</p>`;
   };
   const leaders = people => people.length
-    ? people.slice(0, 3).map((p, i) => `<li><span>${i + 1}</span>${SA.credit(p)}<b>${num(p.points)}</b></li>`).join('')
+    ? people.slice(0, 3).map((p, i) => `<li><span>${i + 1}</span>${SA.credit(p)}<b>${pts(p.points)}</b></li>`).join('')
     : '<li class="empty">No accepted work yet. The first contributor leads this board.</li>';
 
   async function load(card) {
@@ -57,11 +58,11 @@
     const merged = new Map();
     for (const g of got) for (const p of (g && g.recent) || []) {
       const k = p.handle.toLowerCase(), e = merged.get(k) || {...p, points: 0, by: []};
-      e.points += n(p.points); e.by.push(`${g.name} ${num(p.points)}`); merged.set(k, e);
+      e.points += n(p.points); e.by.push(`${g.name} ${pts(p.points)}`); merged.set(k, e);
     }
     const rows = [...merged.values()].sort((a, b) => b.points - a.points).slice(0, 5);
     const many = cards.length > 1;
-    $('#mf-leaders').innerHTML = rows.length ? rows.map((e, i) => `<li${me?.signed_in && me.handle.toLowerCase() === e.handle.toLowerCase() ? ' class="me"' : ''}><span class="r">${String(i + 1).padStart(2, '0')}</span><span class="who-cell">${SA.credit(e)}${many ? `<span class="chips">${e.by.map(c => `<span>${esc(c)}</span>`).join('')}</span>` : ''}</span><b>${num(e.points)}</b></li>`).join('')
+    $('#mf-leaders').innerHTML = rows.length ? rows.map((e, i) => `<li${me?.signed_in && me.handle.toLowerCase() === e.handle.toLowerCase() ? ' class="me"' : ''}><span class="r">${String(i + 1).padStart(2, '0')}</span><span class="who-cell">${SA.credit(e)}${many ? `<span class="chips">${e.by.map(c => `<span>${esc(c)}</span>`).join('')}</span>` : ''}</span><b>${pts(e.points)}</b></li>`).join('')
       : '<li class="community-empty">No contributors in the last 30 days yet.</li>';
     const one = cards.length === 1 && got[0] && got[0].active != null ? got[0] : null;
     $('#mf-leaders-state').textContent = one ? `${num(one.active)} contributors active in the last 30 days · top 5` : `Top 5 across ${cards.length} problems`;

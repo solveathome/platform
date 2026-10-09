@@ -6,6 +6,7 @@
 import { q, one } from "../db/index.js";
 import { modelTier } from "./auth.js";
 import { parseEffort, tierForEffort } from "./model-id.js";
+import { unlistedSlugs } from "./projects.js";
 
 export const POINTS = {
   result: { formalize: 100, break: 60, measure: 20, source: 15, explore: 40, direction: 60, challenge: 60, curate: 10, consolidate: 50, paper: 100, audit: 60, review: 0 } as Record<string, number>,
@@ -113,8 +114,11 @@ const since = (w: Window) => w === "7d" ? "now() - interval '7 days'" : w === "3
 
 /** Leaderboards: humans by handle, models by model id, each overall and per kind. */
 export async function leaderboard(problemId: number | null, w: Window, limit = 50) {
-  const where = `${problemId ? "c.problem_id = $1 AND" : ""} c.created_at >= ${since(w)}`;
-  const params = problemId ? [problemId] : [];
+  // Across projects, a hidden project's credit is left out (listed: false, the rule /projects, the sitemap, the dump and the front page
+  // follow): MD5 points must not show on the public board before MD5 is public. A row with no project stays.
+  const hidden = (col: string) => `NOT EXISTS (SELECT 1 FROM problems hp WHERE hp.id = ${col} AND hp.slug = ANY($1::text[]))`;
+  const where = `${problemId ? "c.problem_id = $1" : hidden("c.problem_id")} AND c.created_at >= ${since(w)}`;
+  const params = problemId ? [problemId] : [unlistedSlugs()];
   const humans = await q(`SELECT u.handle, sum(c.points) AS points,
       sum(c.points) FILTER (WHERE c.kind = 'insight') AS insight, sum(c.points) FILTER (WHERE c.kind = 'breakthrough') AS breakthrough,
       sum(c.points) FILTER (WHERE c.kind = 'result') AS result, sum(c.points) FILTER (WHERE c.kind = 'direction') AS direction,
@@ -123,7 +127,7 @@ export async function leaderboard(problemId: number | null, w: Window, limit = 5
   const models = await q(`SELECT c.model, c.provider, sum(c.points) AS points, count(DISTINCT c.user_id) AS donors,
       sum(c.points) FILTER (WHERE c.kind = 'breakthrough') AS breakthrough, sum(c.points) FILTER (WHERE c.kind = 'insight') AS insight, sum(c.points) FILTER (WHERE c.kind = 'review') AS review
     FROM credits c WHERE c.model IS NOT NULL AND ${where} GROUP BY c.model, c.provider ORDER BY points DESC LIMIT ${limit}`, params);
-  const tokenWhere = `${problemId ? "r.problem_id = $1 AND" : ""} r.created_at >= ${since(w)}`;
+  const tokenWhere = `${problemId ? "r.problem_id = $1" : hidden("r.problem_id")} AND r.created_at >= ${since(w)}`;
   const tokens = await q(`SELECT u.handle, sum((r.tokens->>'input')::numeric + (r.tokens->>'cache_read')::numeric + (r.tokens->>'cache_write')::numeric) AS input_tokens, sum((r.tokens->>'output')::numeric) AS output_tokens, count(*) AS returns
     FROM returns r JOIN users u ON u.id = r.user_id WHERE r.tokens IS NOT NULL AND ${tokenWhere} GROUP BY u.handle ORDER BY output_tokens DESC NULLS LAST LIMIT ${limit}`, params);
   const tokensByModel = await q(`SELECT r.model, sum((r.tokens->>'output')::numeric) AS output_tokens, sum((r.tokens->>'input')::numeric + (r.tokens->>'cache_read')::numeric + (r.tokens->>'cache_write')::numeric) AS input_tokens
