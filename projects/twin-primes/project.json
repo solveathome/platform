@@ -74,5 +74,47 @@
     "start": "<!-- ledger",
     "end": "-->",
     "registry": "research/QUESTIONS.md"
-  }
+  },
+  "lean_main_theorems": [
+    {
+      "paper_slug": "kk-lower-bound",
+      "manuscript_sha256": "cc0432e2b45ac88f478860fe2da61262047d55764837e80f8cae65d9b525ca5e",
+      "statement_binding": "183aa1137436a6741c8baa3b2cd09ef16290d79cbe0fa52a97766b548c4c4d9c",
+      "required_claim_ids": [
+        "main_eq1",
+        "integer_maximum",
+        "integer_main_eq1"
+      ],
+      "unproved_claims": [
+        {
+          "id": "O1",
+          "locator": "Prime harmonic asymptotic"
+        },
+        {
+          "id": "O2",
+          "locator": "Uniform smooth-number asymptotic"
+        },
+        {
+          "id": "O3",
+          "locator": "Arbitrary fixed A > 4 route"
+        },
+        {
+          "id": "O4",
+          "locator": "Dyadic prime-count asymptotic"
+        },
+        {
+          "id": "O5",
+          "locator": "Sieve input"
+        },
+        {
+          "id": "O6",
+          "locator": "Two-sided density and Euler estimates"
+        },
+        {
+          "id": "O7",
+          "locator": "Equation (28) constant"
+        }
+      ]
+    }
+  ]
 }

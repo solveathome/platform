@@ -1360,6 +1360,8 @@ INSERT INTO terms_acceptances (user_id, version, via, accepted_at)
 
 -- Explicit, hash-bound statement/definition review; proof execution stays on donors.
 ALTER TABLE reviews ADD COLUMN IF NOT EXISTS lean_statement_review jsonb;
+-- A portable execution contract needs its own independent source review; it is not a statement attestation.
+ALTER TABLE reviews ADD COLUMN IF NOT EXISTS lean_execution_review jsonb;
 
 -- Preserve reported identities; aliases cannot manufacture independent Lean validators/reviewers.
 CREATE OR REPLACE FUNCTION lean_model_identity(model text) RETURNS text LANGUAGE sql IMMUTABLE AS $$
@@ -1395,8 +1397,19 @@ CREATE OR REPLACE FUNCTION lean_independent(p_problem bigint, p_actor bigint, p_
     AND lean_tier1(p_actor_model, p_actor_effort)
     AND (p_actor<>p_author OR lean_approved_member(p_problem, p_actor));
 $$;
--- Scheduling predicate; intake has validated the attestation hash against the immutable source profile.
--- The serving boundary additionally recomputes that exact hash in leanStatementReviewed.
+-- V2 intake normalizes inventories and integer bounds. Compact canonical JSON matches its key-sorted digest
+-- without an extension: sha256(bytea) is built in. Strings retain their JSON escaping and arrays their normalized order.
+CREATE OR REPLACE FUNCTION lean_identity_canonical(value jsonb) RETURNS text LANGUAGE sql IMMUTABLE STRICT AS $$
+  SELECT CASE jsonb_typeof(value)
+    WHEN 'object' THEN '{'||coalesce((SELECT string_agg(to_json(key)::text||':'||lean_identity_canonical(val),',' ORDER BY key COLLATE "C") FROM jsonb_each(value) AS item(key,val)),'')||'}'
+    WHEN 'array' THEN '['||coalesce((SELECT string_agg(lean_identity_canonical(val),',' ORDER BY ordinal) FROM jsonb_array_elements(value) WITH ORDINALITY AS item(val,ordinal)),'')||']'
+    ELSE value::text END;
+$$;
+CREATE OR REPLACE FUNCTION lean_identity_binding(domain text, value jsonb) RETURNS text LANGUAGE sql IMMUTABLE STRICT AS $$
+  SELECT encode(sha256(convert_to(domain||E'\n'||lean_identity_canonical(value),'UTF8')),'hex');
+$$;
+-- Scheduling predicate. V1 keeps its original exact profile equality; V2 binds mathematical meaning separately
+-- from proof exports and portable execution contracts. Serving also recomputes bindings from the strict parser.
 CREATE OR REPLACE FUNCTION lean_statement_review_current(subject_id bigint) RETURNS boolean LANGUAGE sql STABLE AS $$
   SELECT EXISTS (
     SELECT 1 FROM returns proof JOIN reviews rv ON rv.id::text=proof.verification_plan->'lean'->>'statement_review_id'
@@ -1406,7 +1419,40 @@ CREATE OR REPLACE FUNCTION lean_statement_review_current(subject_id bigint) RETU
       AND lean_independent(proof.problem_id, rv.user_id, rv.model, rv.effort, proof.user_id, proof.model)
       AND lean_independent(proof.problem_id, rv.user_id, rv.model, rv.effort, source.user_id, source.model)
       AND rv.lean_statement_review->>'binding_sha256' ~ '^[a-f0-9]{64}$'
-      AND ((source.verification_plan->'lean') - 'statement_review_id')=((proof.verification_plan->'lean') - 'statement_review_id')
+      AND CASE WHEN proof.verification_plan->'lean'->>'policy'='lean-comparator-v2' THEN
+        source.verification_plan->'lean'->>'policy'='lean-comparator-v2'
+        AND jsonb_typeof(proof.verification_plan->'lean'->'scientific_identity')='object'
+        AND proof.verification_plan->'lean'->'scientific_identity'->>'schema'='solveathome-lean-scientific-v2'
+        AND rv.lean_statement_review->>'binding_sha256'=lean_identity_binding('solveathome-lean-meaning-v2',
+          (proof.verification_plan->'lean'->'scientific_identity') - 'proof_artifacts')
+        AND ((source.verification_plan->'lean'->'scientific_identity') - 'proof_artifacts')=
+            ((proof.verification_plan->'lean'->'scientific_identity') - 'proof_artifacts')
+      ELSE source.verification_plan->'lean'->>'policy'='lean-comparator-v1'
+        AND proof.verification_plan->'lean'->>'policy'='lean-comparator-v1'
+        AND ((source.verification_plan->'lean') - 'statement_review_id')=((proof.verification_plan->'lean') - 'statement_review_id') END
+  );
+$$;
+
+-- Intake and serving recompute the exact execution binding. SQL compares the complete pinned portable contract,
+-- so a new validator, tool, invocation, layout, isolation policy or resource bound needs a new source review.
+CREATE OR REPLACE FUNCTION lean_execution_review_current(subject_id bigint) RETURNS boolean LANGUAGE sql STABLE AS $$
+  SELECT EXISTS (
+    SELECT 1 FROM returns proof JOIN reviews rv ON rv.id::text=proof.verification_plan->'lean'->>'execution_review_id'
+      JOIN returns source ON source.id=rv.return_id AND source.problem_id=proof.problem_id
+    WHERE proof.id=subject_id AND proof.verification_plan->'lean'->>'policy'='lean-comparator-v2'
+      AND source.verification_plan->'lean'->>'policy'='lean-comparator-v2'
+      AND lean_tier1(proof.model,proof.effort) AND lean_tier1(source.model,source.effort)
+      AND rv.trusted AND rv.verdict='accept' AND NOT rv.needs_reassessment
+      AND source.status='accepted' AND NOT source.provisional
+      AND lean_independent(proof.problem_id,rv.user_id,rv.model,rv.effort,proof.user_id,proof.model)
+      AND lean_independent(proof.problem_id,rv.user_id,rv.model,rv.effort,source.user_id,source.model)
+      AND rv.lean_execution_review->>'binding_sha256' ~ '^[a-f0-9]{64}$'
+      AND length(trim(rv.lean_execution_review->>'correctness_md'))>=80
+      AND jsonb_typeof(proof.verification_plan->'lean'->'execution_identity')='object'
+      AND proof.verification_plan->'lean'->'execution_identity'->>'schema'='solveathome-lean-execution-contract-v2'
+      AND rv.lean_execution_review->>'binding_sha256'=lean_identity_binding('solveathome-lean-execution-contract-v2',
+        proof.verification_plan->'lean'->'execution_identity')
+      AND source.verification_plan->'lean'->'execution_identity'=proof.verification_plan->'lean'->'execution_identity'
   );
 $$;
 
@@ -1434,20 +1480,63 @@ CREATE OR REPLACE FUNCTION lean_execution_snapshot(p_run_id bigint) RETURNS json
     JOIN sessions s ON s.id=r.session AND s.user_id=r.user_id AND s.problem_id=r.problem_id AND s.model=r.model
   WHERE v.id=p_run_id;
 $$;
+-- V2 encoded exports are retained as exact transport files. Their declared decoded bytes remain scientific pins,
+-- never an unavailable-file exemption. Intake binds these representations to the actual inert descriptor bytes.
+CREATE OR REPLACE FUNCTION lean_identity_items(value jsonb) RETURNS SETOF jsonb LANGUAGE sql IMMUTABLE AS $$
+  SELECT jsonb_array_elements(CASE WHEN jsonb_typeof(value)='array' THEN value ELSE '[]'::jsonb END);
+$$;
+CREATE OR REPLACE FUNCTION lean_v2_proof_files_current(profile jsonb, evidence jsonb, result_id bigint) RETURNS boolean LANGUAGE sql STABLE AS $$
+  SELECT coalesce(evidence->>'policy'='lean-comparator-v2' AND jsonb_typeof(evidence->'proof_files')='array'
+    AND jsonb_typeof(profile->'proof_representations')='array'
+    AND evidence->>'scientific_identity'=lean_identity_binding('solveathome-lean-scientific-v2',profile->'scientific_identity')
+    AND evidence->>'execution_identity'=lean_identity_binding('solveathome-lean-execution-contract-v2',profile->'execution_identity')
+    AND NOT EXISTS(SELECT 1 FROM lean_identity_items(evidence->'proof_files') pf WHERE
+      NOT EXISTS(SELECT 1 FROM lean_identity_items(profile->'proof_representations') expected WHERE expected=pf)
+      OR NOT EXISTS(SELECT 1 FROM lean_identity_items(profile->'scientific_identity'->'proof_artifacts') proof
+        WHERE proof->'artifact'=pf->'artifact' AND EXISTS(SELECT 1 FROM lean_identity_items(evidence->'claims') claim
+          WHERE claim->>'proof_sha256'=pf->'artifact'->>'sha256' AND proof->'claim_ids' ? (claim->>'id')))
+      OR NOT EXISTS(SELECT 1 FROM lean_identity_items(profile->'artifact_bindings') binding
+        WHERE binding->'artifact'=pf->'artifact' AND CASE WHEN pf->'descriptor'='null'::jsonb THEN
+          binding->'representation'->>'kind'='manifest' AND binding->'representation'->>'path'=pf->'artifact'->>'path'
+          AND pf->'inputs'=jsonb_build_array(pf->'artifact') AND pf->'recipe'='null'::jsonb
+        ELSE binding->'representation'->>'kind'='descriptor' AND binding->'representation'->>'path'=pf->'descriptor'->>'path'
+          AND EXISTS(SELECT 1 FROM lean_identity_items(pf->'inputs')) AND EXISTS(
+            SELECT 1 FROM lean_identity_items(profile->'execution_identity'->'package_artifacts') recipe WHERE recipe=pf->'recipe') END))
+    AND (SELECT count(*)=count(DISTINCT pf->'artifact'->>'path') FROM lean_identity_items(evidence->'proof_files') pf)
+    AND NOT EXISTS(SELECT 1 FROM lean_identity_items(evidence->'claims') claim
+      WHERE claim->>'proof_sha256' IS NOT NULL AND NOT EXISTS(
+        SELECT 1 FROM lean_identity_items(evidence->'proof_files') pf JOIN lean_identity_items(profile->'scientific_identity'->'proof_artifacts') proof
+          ON proof->'artifact'=pf->'artifact'
+        WHERE pf->'artifact'->>'sha256'=claim->>'proof_sha256' AND proof->'claim_ids' ? (claim->>'id')))
+    AND NOT EXISTS(SELECT 1 FROM lean_identity_items(evidence->'proof_files') pf CROSS JOIN LATERAL (
+      SELECT pf->'descriptor' AS artifact WHERE pf->'descriptor'<>'null'::jsonb
+      UNION ALL SELECT input FROM lean_identity_items(pf->'inputs') input
+      UNION ALL SELECT pf->'recipe' WHERE pf->'recipe'<>'null'::jsonb
+    ) transport WHERE NOT EXISTS(
+      SELECT 1 FROM lean_identity_items(profile->'manifest') pin WHERE pin->>'path'=transport.artifact->>'path' AND pin->>'sha256'=transport.artifact->>'sha256')
+      OR NOT EXISTS(SELECT 1 FROM files f JOIN file_refs ref ON ref.file_sha=f.sha256
+        WHERE f.sha256=transport.artifact->>'sha256' AND f.bytes::text=transport.artifact->>'bytes'
+          AND f.deleted_at IS NULL AND ref.ref_type='return' AND ref.ref_id=result_id)),false);
+$$;
 CREATE OR REPLACE FUNCTION lean_execution_current(p_run_id bigint, p_subject_id bigint) RETURNS boolean LANGUAGE sql STABLE AS $$
   SELECT EXISTS(SELECT 1 FROM verification_runs v JOIN returns r ON r.id=v.result_return_id
     JOIN returns subject ON subject.id=p_subject_id AND subject.problem_id=r.problem_id
       AND subject.verification_fingerprint=v.fingerprint
     WHERE v.id=p_run_id AND lean_tier1(subject.model,subject.effort)
       AND lean_execution_eligible(subject.problem_id,r.user_id,r.model,r.effort,subject.user_id)
+      AND (subject.verification_plan->'lean'->>'policy'<>'lean-comparator-v2'
+        OR (lean_statement_review_current(subject.id) AND lean_execution_review_current(subject.id)))
       AND v.execution_attestation->>'version'='authenticated-contributor-v1'
       AND v.details->>'execution_policy'='authenticated-contributor-v1'
       AND length(trim(v.details->>'attestation_md'))>=40
       AND v.execution_attestation->'authority'=lean_execution_authority(subject.problem_id,r.user_id)
       AND v.execution_attestation->'receipt'=lean_execution_snapshot(v.id)
+      AND (subject.verification_plan->'lean'->>'policy'<>'lean-comparator-v2' OR v.details->'lean' IS NULL
+        OR lean_v2_proof_files_current((subject.verification_plan->'lean')||jsonb_build_object('manifest',subject.verification_plan->'manifest'),v.details->'lean',r.id))
       AND NOT EXISTS(SELECT 1 FROM (
         SELECT unnest(ARRAY[v.details->>'stdout_sha256',v.details->'lean'->>'audit_sha256',v.details->'lean'->>'axioms_sha256']) AS sha
         UNION SELECT claim->>'proof_sha256' FROM jsonb_array_elements(coalesce(v.details->'lean'->'claims','[]'::jsonb)) claim
+          WHERE subject.verification_plan->'lean'->>'policy'<>'lean-comparator-v2'
       ) artifact WHERE artifact.sha IS NOT NULL AND NOT EXISTS(
         SELECT 1 FROM files f JOIN file_refs ref ON ref.file_sha=f.sha256
         WHERE f.sha256=artifact.sha AND f.deleted_at IS NULL AND ref.ref_type='return' AND ref.ref_id=r.id)));

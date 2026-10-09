@@ -1,10 +1,12 @@
 /** Immutable check packages and independent execution receipts. No submitted code runs here. */
-import { parseLeanProfile, parseLeanEvidence, leanEvidenceFiles, leanStatementBinding, summarizeLean, LEAN_GUIDANCE, type LeanProfile, type LeanSummary } from './lean-verification.js';
+import { parseLeanProfile, parseLeanEvidence, leanEvidenceFiles, leanStatementBinding, leanExecutionBinding, validateLeanV2Artifacts, validateLeanProofFiles, LEAN_POLICY_V2, summarizeLean, LEAN_GUIDANCE, type LeanProfile, type LeanSummary } from './lean-verification.js';
 import { createHash } from 'node:crypto';
 import { one, q } from '../db/index.js';
 import { amount, bad, object, prose, tags } from './research-format.js';
 import { distinctLeanFamilies } from './model-id.js';
 import { paperSource } from './paper-state.js';
+import { read as readArtifact } from './files.js';
+import { identityObject } from './lean-identity-v2.js';
 
 export type VerificationPlan = {
   lean?: LeanProfile;
@@ -81,7 +83,23 @@ export function fingerprint(plan: VerificationPlan): string {
   const { cost, ...check } = plan;
   return createHash('sha256').update('solveathome-verification-v1\n').update(JSON.stringify(canonical(check))).digest('hex');
 }
+/** Read-only intake preflight. Uploaded descriptors are inert data; opaque source completeness is reviewed externally. */
+export async function validateLeanIdentityArtifacts(plan: VerificationPlan): Promise<void> {
+  if (plan.lean?.policy !== LEAN_POLICY_V2) return;
+  const files = new Map<string,{bytes:number;content?:string}>();
+  const descriptorPaths = new Set(plan.lean.artifact_bindings!.filter(b=>b.representation.kind==='descriptor').map(b=>b.representation.path));
+  for (const f of plan.manifest) {
+    const stored = await one('SELECT bytes FROM files WHERE sha256=$1 AND deleted_at IS NULL',[f.sha256]);
+    if (!stored) bad(`verification artifact ${f.sha256} is not available; upload it first`);
+    const bytes = Number(stored.bytes);
+    if (descriptorPaths.has(f.path) && bytes > 1024**2) bad('v2 descriptor exceeds 1 MiB');
+    const content = descriptorPaths.has(f.path) ? readArtifact(f.sha256) : undefined;
+    files.set(f.sha256,{bytes,...(typeof content==='string'?{content}:{})});
+  }
+  validateLeanV2Artifacts(plan.lean,plan.manifest,files);
+}
 export async function saveVerificationPlan(returnId: number, plan: VerificationPlan): Promise<void> {
+  await validateLeanIdentityArtifacts(plan);
   if (plan.lean) {
     const ret = await one(`SELECT problem_id,paper_slug,revision_sha FROM returns WHERE id=$1`, [returnId]);
     if (!(await one(`SELECT 1 FROM papers WHERE problem_id=$1 AND slug=$2`, [ret.problem_id,plan.lean.paper_slug]))) bad('Lean binding must name a registered paper in this project');
@@ -117,7 +135,7 @@ export async function queueCheck(ret: any): Promise<boolean> {
   if (!ret.verification_plan) return false;
   const runs = (await verificationRuns(Number(ret.id))).filter(r => ['recorded', 'accepted'].includes(r.receipt_status));
   // Statement proposals are reviewed before untrusted proof execution. Missing trust is visible, not a reason to run unsafe code.
-  if (ret.verification_plan.lean && !(await leanStatementReviewed(ret))) return false;
+  if (ret.verification_plan.lean && (!(await leanStatementReviewed(ret)) || !(await leanExecutionReviewed(ret)))) return false;
   // Failure/conflict also goes to judgment; do not quietly rerun until a pass appears.
   if (runs.some(isCompletedCheck)) return false;
   if (await checkWaitExpired(Number(ret.id))) return false;
@@ -200,6 +218,7 @@ export async function saveCheckReceipt(ret: any, job: any, raw: any, authenticat
     if (attestationMd.length < 40) bad('check_receipt.attestation_md must explicitly describe personally observed execution, artifacts and limits (or the observed unable blocker)');
   }
   if (subject.verification_plan?.lean && !(await leanStatementReviewed(subject))) bad('Lean statement trust is no longer current; do not execute this package');
+  if (subject.verification_plan?.lean && !(await leanExecutionReviewed(subject))) bad('Lean execution-source review is no longer current; do not execute this package');
   if (!['pass', 'fail', 'unable'].includes(x.outcome)) bad('check_receipt.outcome must be pass|fail|unable');
   if (x.blocker !== undefined && x.outcome !== 'unable') bad('check_receipt.blocker belongs only on an unable receipt');
   const blocker = parseCheckBlocker(x.blocker);
@@ -212,6 +231,11 @@ export async function saveCheckReceipt(ret: any, job: any, raw: any, authenticat
   }
   const lean = parseLeanEvidence(x.lean);
   if (lean && !subject.verification_plan?.lean) bad('Lean evidence requires an assigned Lean profile');
+  if (lean?.policy===LEAN_POLICY_V2 && subject.verification_plan?.lean?.policy!==LEAN_POLICY_V2) bad('encoded v2 proof references require an assigned v2 profile; legacy raw proof requirements are unchanged');
+  if (lean && subject.verification_plan?.lean?.policy===LEAN_POLICY_V2) {
+    await validateLeanIdentityArtifacts(subject.verification_plan);
+    validateLeanProofFiles(subject.verification_plan.lean,lean);
+  }
   if (lean) for (const file of leanEvidenceFiles(lean)) {
     if (!(await one(`SELECT 1 FROM files WHERE sha256=$1 AND deleted_at IS NULL`, [file]))) bad('upload actual Lean audit, axiom and proof exports before recording evidence');
     await q(`INSERT INTO file_refs (file_sha,ref_type,ref_id) VALUES ($1,'return',$2) ON CONFLICT DO NOTHING`, [file, ret.id]);
@@ -421,6 +445,39 @@ export async function saveLeanStatementReview(returnId: number, reviewerId: numb
   if (!profile || x.binding_sha256 !== leanStatementBinding(profile)) bad('lean_statement_review must name the exact lean_statement_binding served on the return');
   await q(`UPDATE reviews SET lean_statement_review=$3 WHERE return_id=$1 AND user_id=$2`, [returnId, reviewerId, JSON.stringify({ binding_sha256: x.binding_sha256, meaning_md: prose(x.meaning_md, 'lean_statement_review.meaning_md', 8000) })]);
 }
+/** Separate review of executable source and pinned execution contract; this cannot grant execution authority. */
+export function parseLeanExecutionReview(profile: LeanProfile | undefined, raw: unknown): {binding_sha256:string;correctness_md:string} | undefined {
+  if (raw === undefined) return;
+  const x = identityObject(raw,['binding_sha256','correctness_md'],'lean_execution_review');
+  if (profile?.policy !== LEAN_POLICY_V2 || x.binding_sha256 !== leanExecutionBinding(profile)) bad('lean_execution_review must name the exact v2 lean_execution_binding served on the return');
+  const correctness_md = prose(x.correctness_md,'lean_execution_review.correctness_md',8000);
+  if (correctness_md.length < 80) bad('lean_execution_review.correctness_md must substantively assess validator/tool source, invocation, isolation, limits and scope');
+  return {binding_sha256:x.binding_sha256,correctness_md};
+}
+export async function saveLeanExecutionReview(returnId: number, reviewerId: number, raw: unknown): Promise<void> {
+  if (raw === undefined) return;
+  const ret = await one(`SELECT verification_plan FROM returns WHERE id=$1`,[returnId]);
+  const p = ret?.verification_plan?.lean as LeanProfile | undefined;
+  const x = parseLeanExecutionReview(p,raw);
+  await q(`UPDATE reviews SET lean_execution_review=$3 WHERE return_id=$1 AND user_id=$2`,[returnId,reviewerId,JSON.stringify(x)]);
+}
+export async function leanExecutionReviewed(ret: any): Promise<boolean> {
+  const p: LeanProfile | undefined = ret.verification_plan?.lean;
+  if (!p || p.policy === 'lean-comparator-v1') return true; // Legacy review/hash meanings stay unchanged.
+  if (p.policy !== LEAN_POLICY_V2) return false;
+  if (!p.execution_review_id || !(await one('SELECT lean_tier1($1,$2) AS ok',[ret.model,ret.effort]))?.ok) return false;
+  const review = await one(`SELECT rv.*,r.status AS source_status,r.provisional AS source_provisional,r.model AS source_model,
+    lean_tier1(r.model,r.effort) AS source_tier1,r.verification_plan AS source_plan,
+    lean_independent(r.problem_id,rv.user_id,rv.model,rv.effort,$3,$4) AS independent_of_proof,
+    lean_independent(r.problem_id,rv.user_id,rv.model,rv.effort,r.user_id,r.model) AS independent_of_source
+    FROM reviews rv JOIN returns r ON r.id=rv.return_id WHERE rv.id=$1 AND r.problem_id=$2`,[p.execution_review_id,ret.problem_id,ret.user_id,ret.model]);
+  return !!review && review.source_tier1 === true && review.trusted && review.verdict==='accept' && !review.needs_reassessment && review.source_status==='accepted' && !review.source_provisional
+    && review.independent_of_proof===true && distinctLeanFamilies(review.model,ret.model)
+    && review.independent_of_source===true && distinctLeanFamilies(review.model,review.source_model)
+    && review.source_plan?.lean?.policy===LEAN_POLICY_V2 && leanExecutionBinding(review.source_plan.lean)===leanExecutionBinding(p)
+    && review.lean_execution_review?.binding_sha256===leanExecutionBinding(p)
+    && typeof review.lean_execution_review?.correctness_md==='string' && review.lean_execution_review.correctness_md.trim().length>=80;
+}
 export async function leanStatementReviewed(ret: any): Promise<boolean> {
   const p: LeanProfile | undefined = ret.verification_plan?.lean;
   if (!p?.statement_review_id || !(await one('SELECT lean_tier1($1,$2) AS ok',[ret.model,ret.effort]))?.ok) return false;
@@ -431,7 +488,7 @@ export async function leanStatementReviewed(ret: any): Promise<boolean> {
   return !!review && review.source_tier1 === true && review.trusted && review.verdict === 'accept' && !review.needs_reassessment && review.source_status === 'accepted' && !review.source_provisional
     && review.independent_of_proof === true && distinctLeanFamilies(review.model, ret.model)
     && review.independent_of_source === true && distinctLeanFamilies(review.model, review.source_model)
-    && !!review.source_plan?.lean && leanStatementBinding(review.source_plan.lean) === leanStatementBinding(p)
+    && !!review.source_plan?.lean && review.source_plan.lean.policy === p.policy && leanStatementBinding(review.source_plan.lean) === leanStatementBinding(p)
     && review.lean_statement_review?.binding_sha256 === leanStatementBinding(p);
 }
 export async function leanVerificationSummary(returnId: number, currentSha: string | null): Promise<LeanSummary | undefined> {
@@ -440,11 +497,12 @@ export async function leanVerificationSummary(returnId: number, currentSha: stri
   if (!p) return undefined;
   const reviews = ret.status === 'accepted' && !ret.provisional ? await q(`SELECT id,verification_receipt_id FROM reviews WHERE return_id=$1 AND trusted AND verdict='accept' AND NOT needs_reassessment AND lean_independent($4, user_id, model, effort, $2, $3) AND length(trim(verification_sufficiency_md))>=80`, [returnId, ret.user_id, ret.model, ret.problem_id]) : [];
   const runs = await verificationRuns(returnId);
-  const summary = summarizeLean(p, runs, reviews.map(r => Number(r.verification_receipt_id)), await leanStatementReviewed(ret), currentSha, { status: ret.status, provisional: ret.provisional, superseded_by: ret.superseded_by });
+  const summary = summarizeLean(p, runs, reviews.map(r => Number(r.verification_receipt_id)), await leanStatementReviewed(ret) && await leanExecutionReviewed(ret), currentSha, { status: ret.status, provisional: ret.provisional, superseded_by: ret.superseded_by });
   const judged = runs.find(r => Number(r.id) === summary.judged_receipt_id);
   if (judged && p.statement_review_id) summary.current_evidence = {
     receipt_id: Number(judged.id), execution_return_id: Number(judged.result_return_id),
     statement_review_id: p.statement_review_id,
+    ...(p.policy===LEAN_POLICY_V2 && p.execution_review_id ? {execution_review_id:p.execution_review_id}:{}),
     semantic_review_ids: reviews.filter(r => Number(r.verification_receipt_id) === Number(judged.id)).map(r => Number(r.id))
   };
   return summary;
@@ -453,7 +511,7 @@ export async function leanVerificationSummary(returnId: number, currentSha: stri
 /** Revoked statement authority cancels both queued and issued work before another brief can be served. */
 export async function expireUntrustedLeanChecks(problemId: number): Promise<void> {
   const jobs = await q(`SELECT j.id AS check_id,r.* FROM jobs j JOIN returns r ON r.id=j.evidence_return_id WHERE j.problem_id=$1 AND j.type='check' AND j.status IN ('queued','assigned') AND r.verification_plan ? 'lean'`, [problemId]);
-  for (const ret of jobs) if (!(await leanStatementReviewed(ret))) await q(`UPDATE jobs SET status='expired',last_release_note='Lean statement review is no longer trusted; execution authorization withdrawn' WHERE id=$1 AND status IN ('queued','assigned')`, [ret.check_id]);
+  for (const ret of jobs) if (!(await leanStatementReviewed(ret)) || !(await leanExecutionReviewed(ret))) await q(`UPDATE jobs SET status='expired',last_release_note='Lean statement or execution-source review is no longer trusted; execution authorization withdrawn' WHERE id=$1 AND status IN ('queued','assigned')`, [ret.check_id]);
 }
 /** Per-package evidence, never a blanket paper proof grade; manuscript changes invalidate it on read. */
 export async function paperLeanVerification(problemId: number, paperSlug: string, currentSha: string | null): Promise<any[]> {

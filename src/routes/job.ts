@@ -18,8 +18,8 @@ import { isDeepStrictEqual } from "node:util";
 import { backlogFor, reviewWorkFor, selectJob, selectRequiredCorrection, REQUIRED_CORRECTION_INTERVAL, whyNotEligible, computeBlocked, discoveryShare, discoveryDue, allocation, researchPolicy, researchAllocation, portfolioOrder, researchBucket, reviewPressure, reviewTriage, unmetRequirements, STALE_REQUIREMENT_HOURS, ROUTE_REPEAT_WINDOW, type SchedulingAgent } from "../lib/scheduler.js";
 import { parseResearch, stageOf, jobLabel } from '../lib/research-format.js';
 import { stepCheckContext, recordResearch, prepareRescue, retireRedundantRescueSamples, retireRedundantStepChecks, researchBrief, routeContext, reconsiderDependents, holdForStepCheck } from '../lib/research.js';
-import { leanStatementBinding } from '../lib/lean-verification.js';
-import { expireUntrustedLeanChecks, saveLeanStatementReview, parseVerificationPlan, saveVerificationPlan, queueCheck, saveCheckReceipt, verificationRuns, verificationState, verificationBrief, judgmentBudget, validateReceiptUse, isCompletedCheck, expireWaitingChecks, checkWaitExpired, identicalClaim, verificationSummary, receiptId } from '../lib/verification.js';
+import { leanStatementBinding, leanExecutionBinding, leanScientificBinding } from '../lib/lean-verification.js';
+import { expireUntrustedLeanChecks, saveLeanStatementReview, saveLeanExecutionReview, parseLeanExecutionReview, validateLeanIdentityArtifacts, parseVerificationPlan, saveVerificationPlan, queueCheck, saveCheckReceipt, verificationRuns, verificationState, verificationBrief, judgmentBudget, validateReceiptUse, isCompletedCheck, expireWaitingChecks, checkWaitExpired, identicalClaim, verificationSummary, receiptId } from '../lib/verification.js';
 import { readFileSync } from 'node:fs';
 import { ROOT } from '../lib/paths.js';
 import { bearer, optionalAuth, modelTier } from "../lib/auth.js";
@@ -1104,7 +1104,7 @@ job.post("/result", bearer, project, assignmentMutation(async (req: any, res) =>
     if (typeof b[field] === "string" && needsSourceReview(b[field])) { res.status(400).json({ error: `${SOURCE_REVIEW_MESSAGE} The check tripped in "${field}" on this line: "${sourceReviewHit(b[field]) ?? "?"}". Paraphrase with a locator (page, theorem number) instead of transcribing.`, field, at: sourceReviewHit(b[field]) }); return; }
   }
   // Structured public text has the same publication and secret rules as ordinary reports.
-  for (const field of ['research', 'verification_plan', 'check_receipt']) if (b[field] !== undefined) {
+  for (const field of ['research', 'verification_plan', 'check_receipt', 'lean_statement_review', 'lean_execution_review']) if (b[field] !== undefined) {
     const value = JSON.stringify(b[field]);
     const bad = scrubError(field, value); if (bad) { res.status(400).json(bad); return; }
     if (needsSourceReview(value)) { res.status(400).json({ error: SOURCE_REVIEW_MESSAGE, field }); return; }
@@ -1211,10 +1211,12 @@ job.post("/result", bearer, project, assignmentMutation(async (req: any, res) =>
     if (reviewed?.verification_plan?.lean?.statement_review_id && b.verdict === 'accept' && String(b.verification_sufficiency_md ?? '').trim().length < 80) { res.status(400).json({ error: 'Lean proof acceptance requires substantive verification_sufficiency_md (at least 80 characters): independently assess mathematical correctness, claim match, proof reasoning and every assumption, as well as execution provenance, isolation, controls and coverage; a pass receipt or status endorsement is insufficient' }); return; }
     const executionState = reviewed?.verification_plan ? await verificationState(reviewOf) : null;
     if (b.verdict === 'accept' && executionState?.unresolved_conflict && (!reviewerTrusted || !String(b.verification_conflict_resolution_md ?? '').trim())) { res.status(409).json({ error: 'conflicting execution receipts require a trusted verification_conflict_resolution_md explaining the discrepancy before acceptance' }); return; }
+    if (b.lean_execution_review !== undefined) parseLeanExecutionReview(reviewed?.verification_plan?.lean, b.lean_execution_review);
     await q(`INSERT INTO reviews (return_id, review_job_id, user_id, model, provider, verdict, rung, notes_md, weight, also_credit, transcript, tokens, unverifiable, needs_md, verification, rerun_reason, trusted, effort, reject_reason)
              VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19)`,
       [reviewOf, jobRow?.id ?? null, uid, req.model ?? "unknown", req.provider ?? "unknown", b.verdict, reviewRung, b.notes_md ?? b.report_md ?? "", w, b.also_credit && typeof b.also_credit === "object" ? JSON.stringify(b.also_credit) : null, String(b.transcript), JSON.stringify(tokens), unverifiable, unverifiable ? String(b.needs_md).slice(0, 4000) : null, verification, verification === "read" ? null : rerunReason, reviewerTrusted, effortEff, rejectReason]);
     await saveLeanStatementReview(reviewOf, uid, b.lean_statement_review);
+    await saveLeanExecutionReview(reviewOf, uid, b.lean_execution_review);
     if (priorScoredAt) await q(`UPDATE reviews SET scored_at = $3 WHERE return_id = $1 AND user_id = $2`, [reviewOf, uid, priorScoredAt]);
     // Worth announcing (#sah-discord-announcer): only a reviewer holding a role on the project marks an accepted finding; the final record decides whether it is a candidate. Never refused: a mark that cannot count is a warning.
     const announceWarnings: string[] = [];
@@ -1379,6 +1381,7 @@ job.post("/result", bearer, project, assignmentMutation(async (req: any, res) =>
     res.status(403).json({ error: 'formalize requires a Tier 1 model at high or above, measured on this session/turn; low, medium and unmeasured effort do not qualify' }); return;
   }
   const verificationPlan = parseVerificationPlan(b.verification_plan);
+  if (verificationPlan) await validateLeanIdentityArtifacts(verificationPlan);
   if (verificationPlan?.lean && !['formalize','paper','audit'].includes(rtype)) { res.status(400).json({error:'Lean profiles belong on formalize, paper or audit returns'}); return; }
   if (verificationPlan?.lean && tierForEffort(await modelTier(req.model ?? 'unknown'), effortEff).tier !== 1) { res.status(403).json({error:'Lean formalization packages require Tier 1 at high or above'}); return; }
   if (b.check_receipt !== undefined && rtype !== 'check') { res.status(400).json({ error: 'check_receipt answers a check assignment only' }); return; }
@@ -2336,6 +2339,9 @@ job.get("/return/:id", optionalAuth, project, async (req: any, res) => {
   r.in_triage = r.status === 'pending' && !!(await one(`SELECT 1 FROM jobs WHERE parent_return_id = $1 AND type = 'triage' AND status IN ('queued','assigned')`, [r.id]));
   r.triage = await q(`SELECT t.id, u.handle, t.model, t.escalate, t.notes_md, t.created_at FROM triages t JOIN users u ON u.id = t.user_id WHERE t.return_id = $1 ORDER BY t.id`, [r.id]);
   r.lean_statement_binding = r.verification_plan?.lean ? leanStatementBinding(r.verification_plan.lean) : null;
+  r.lean_execution_binding = r.verification_plan?.lean ? leanExecutionBinding(r.verification_plan.lean) : null;
+  r.lean_scientific_identity = r.verification_plan?.lean ? leanScientificBinding(r.verification_plan.lean) : null;
+  r.lean_execution_identity = r.lean_execution_binding;
   r.verification_runs = await verificationRuns(Number(r.id));
   r.verification_state = r.verification_plan ? await verificationState(Number(r.id)) : null;
   r.verification_summary = r.verification_plan ? await verificationSummary(Number(r.id)) : null;   // generated from the record; see summaryMarkdown for the page
@@ -2355,7 +2361,7 @@ job.get("/return/:id", optionalAuth, project, async (req: any, res) => {
   // The reviews and the decision record travel with the return (issue #29). `returns.decision` is a curate return's own input, so it is `curation` here;
   // `decision` is the latest decision row (null while nothing has been decided) with the reviews that carried it, and `decisions` the whole record, oldest first.
   if (r.type === "curate") r.curation = r.decision; delete r.decision;
-  r.reviews = (await q(`SELECT rv.id, u.handle, rv.model, rv.verdict, rv.rung, rv.reject_reason, rv.verification, rv.rerun_reason, rv.verification_receipt_id, rv.verification_sufficiency_md, rv.verification_conflict_resolution_md, rv.lean_statement_review, rv.trusted, rv.weight, rv.notes_md, rv.also_fix, rv.needs_reassessment, rv.created_at FROM reviews rv JOIN users u ON u.id = rv.user_id WHERE rv.return_id = $1 ORDER BY rv.id`, [r.id])).map((v: any) => ({ ...v, id: Number(v.id), weight: Number(v.weight) }));
+  r.reviews = (await q(`SELECT rv.id, u.handle, rv.model, rv.verdict, rv.rung, rv.reject_reason, rv.verification, rv.rerun_reason, rv.verification_receipt_id, rv.verification_sufficiency_md, rv.verification_conflict_resolution_md, rv.lean_statement_review, rv.lean_execution_review, rv.trusted, rv.weight, rv.notes_md, rv.also_fix, rv.needs_reassessment, rv.created_at FROM reviews rv JOIN users u ON u.id = rv.user_id WHERE rv.return_id = $1 ORDER BY rv.id`, [r.id])).map((v: any) => ({ ...v, id: Number(v.id), weight: Number(v.weight) }));
   // Each decision row names who decided (issue #31): the reviewers whose verdicts carried it, or the person who reopened or challenged; and whether the author's own trusted handle was among them.
   const historicalReviews = [...r.reviews.map((v: any) => ({ ...v, archived_at: null })), ...r.review_history.map((h: any) => ({ ...h.review, archived_at: h.archived_at }))];
   r.decisions = (await q(`SELECT d.status, d.final_rung, d.provisional, d.by, d.note, d.decided_at, u.handle AS actor FROM return_decisions d LEFT JOIN users u ON u.id = d.user_id WHERE d.return_id = $1 ORDER BY d.id`, [r.id])).map((d: any) => {
