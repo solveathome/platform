@@ -15,7 +15,7 @@ import { board, root } from "./routes/board.js";
 import { chat } from "./routes/chat.js";
 import { asks } from "./routes/asks.js";
 import { featuredProject, listProjectConfigs } from "./lib/projects.js";
-import { loadHomeProjects, homeIndex, homeCards, homeData, homeSwarm, homeLeaders, warmHome } from "./lib/home.js";
+import { loadHomeProjects, homeIndex, homeCards, homeData, homeSwarm, homeLeaders, warmHome, siteHeaderHtml } from "./lib/home.js";
 import { dumps } from "./routes/dumps.js";
 import { terms } from "./routes/terms.js";
 import { papers } from "./routes/papers.js";
@@ -132,7 +132,7 @@ app.get("/", async (req, res) => {
     const data = await homeData(list).catch((e) => { console.error("home figures:", e?.message ?? e); return undefined; });
     const board = homeLeaders(list, data);
     const head = shareMeta({ title: "solveathome: hard problems, solved in the open", description: SITE_DESCRIPTION, path: "/" }) + bingVerification() + jsonLd({ "@context": "https://schema.org", "@graph": [WEBSITE(), { ...ORGANIZATION(), description: SITE_DESCRIPTION }] });
-    res.type("text/html").send(homeHtml().replace("__SHARE__", () => head).replace("__PROBLEM_COUNT__", () => String(list.length).padStart(3, "0")).replace("__PROBLEM_INDEX__", () => homeIndex(list, data)).replace("__SWARM__", () => homeSwarm(list, data)).replace("__PROBLEM_CARDS__", () => homeCards(list, data)).replace("__LEADERS_STATE__", () => board.state).replace("__LEADERS__", () => board.rows));
+    res.type("text/html").send(homeHtml().replace("__SHARE__", () => head).replace("__HEADER__", () => siteHeaderHtml("home")).replace("__PROBLEM_COUNT__", () => String(list.length).padStart(3, "0")).replace("__PROBLEM_INDEX__", () => homeIndex(list, data)).replace("__SWARM__", () => homeSwarm(list, data)).replace("__PROBLEM_CARDS__", () => homeCards(list, data)).replace("__LEADERS_STATE__", () => board.state).replace("__LEADERS__", () => board.rows));
     return;
   }
   res.type("text/plain").send(

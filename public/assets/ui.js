@@ -23,7 +23,8 @@
   };
   const metric = (value, label) => `<div class="metric"><b>${number(value)}</b><span>${esc(label)}</span></div>`;
   const header = document.querySelector('[data-site-header]');
-  if (header) {
+  // A header the server already rendered (data-ssr, the front page) is kept: rewriting it after the first paint moved the page.
+  if (header && !header.hasAttribute('data-ssr')) {
     const current = document.body.dataset.page;
     header.className = 'site-header';
     header.innerHTML = `<a class="skip-link" href="#main">Skip to content</a><div class="shell header-inner"><a class="brand" href="/" aria-label="solveathome home"><img src="/brand/solveathome-logo.png" alt="solveathome" width="2146" height="733"></a><nav class="global-nav" aria-label="Main navigation"><a href="/" ${current === 'home' ? 'aria-current="page"' : ''}>Overview</a><a href="/visualizations" ${current === 'visualizations' ? 'aria-current="page"' : ''}>Replay</a><a href="/dumps" ${current === 'dataset' ? 'aria-current="page"' : ''}>Open dataset</a></nav><div class="who" id="who"><a href="/auth/github">Sign in with GitHub</a></div></div>`;

@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 
 // The front page holds every public problem and never a hidden one (Oct 9 2026): the same rule as /projects and the sitemap,
 // so publishing a project puts it on the front page with no code change. The last entry always invites the next problem.
-const { publicProjects, homeIndex, homeCards, homeSwarm, homeLeaders, PROPOSE_URL } = await import("../src/lib/home.ts");
+const { publicProjects, homeIndex, homeCards, homeSwarm, homeLeaders, siteHeaderHtml, PROPOSE_URL } = await import("../src/lib/home.ts");
 
 const rows = [{ slug: "twin-primes", name: "Twin Prime Conjecture" }, { slug: "md5", name: "MD5 Research Challenge" }];
 
@@ -65,4 +65,29 @@ test("the live figures are in the first render: nothing says Loading, numbers an
   assert.equal(board.state, "Top 5 across 2 problems");
   // A project whose figures failed says so; it never shows a stale "Loading".
   assert.match(homeCards(list, { at: 0, by: {} }), /Live figures are unavailable right now\./);
+});
+
+test("each Open problems entry opens its project page; Propose a problem goes to Discord", () => {
+  // Client, Oct 2026: clicking an entry scrolled down the page; it should go straight to the problem.
+  const index = homeIndex(publicProjects(rows, []));
+  assert.match(index, /<a href="\/projects\/twin-primes"><span class="n">001<\/span>/);
+  assert.match(index, /<a href="\/projects\/md5"><span class="n">002<\/span>/);
+  assert.doesNotMatch(index, /href="#/);
+  assert.ok(index.includes(`<a href="${PROPOSE_URL}" rel="noopener"><span class="n">003</span>`));
+});
+
+test("the server's header is the one ui.js writes, and ui.js keeps it", async () => {
+  // The front page carries the header in its first HTML so nothing moves when ui.js runs (CLS 0.07 at 1440 px before, Oct 2026).
+  const { readFileSync } = await import("node:fs");
+  const vm = await import("node:vm");
+  const src = readFileSync(new URL("../public/assets/ui.js", import.meta.url), "utf8");
+  const run = (ssr) => {
+    const header = { className: "", innerHTML: "", hasAttribute: (a) => ssr && a === "data-ssr" };
+    const document = { body: { dataset: { page: "home" } }, querySelector: (q) => q === "[data-site-header]" ? header : null, querySelectorAll: () => [], getElementById: () => null };
+    vm.runInNewContext(src, { document, window: {}, location: { hash: "" }, addEventListener() {}, requestAnimationFrame() {}, Intl, Date, Number, String, Math, JSON, console });
+    return header;
+  };
+  const written = run(false), html = siteHeaderHtml("home");
+  assert.equal(`<header data-site-header data-ssr class="${written.className}">${written.innerHTML}</header>`, html);
+  assert.equal(run(true).innerHTML, "", "a server-rendered header is left alone");
 });

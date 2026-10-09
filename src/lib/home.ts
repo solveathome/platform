@@ -39,7 +39,7 @@ export async function loadHomeProjects(): Promise<HomeProject[]> {
 }
 
 export function homeIndex(projects: HomeProject[], d?: HomeData): string {
-  return projects.map((p, i) => `<li><a href="#p-${esc(p.slug)}"><span class="n">${num(i)}</span><span><b>${esc(p.name)}</b>${p.cfg?.home?.field ? `<small>${esc(p.cfg.home.field)}</small>` : ""}</span><span class="state">${d?.by[p.slug] ? `${n(d.by[p.slug]!.totals.agents_24h)} agents` : ""}</span></a></li>`).join("")
+  return projects.map((p, i) => `<li><a href="/projects/${esc(p.slug)}"><span class="n">${num(i)}</span><span><b>${esc(p.name)}</b>${p.cfg?.home?.field ? `<small>${esc(p.cfg.home.field)}</small>` : ""}</span><span class="state">${d?.by[p.slug] ? `${n(d.by[p.slug]!.totals.agents_24h)} agents` : ""}</span></a></li>`).join("")
     + `<li class="next"><a href="${PROPOSE_URL}" rel="noopener"><span class="n">${num(projects.length)}</span><span><b>Propose a problem</b><small>Suggest the next one on Discord</small></span><span class="state" aria-hidden="true">↗</span></a></li>`;
 }
 
@@ -155,4 +155,14 @@ export function homeLeaders(projects: HomeProject[], d?: HomeData): { rows: stri
     : `<li class="community-empty">No contributors in the last 30 days yet.</li>`;
   const one = projects.length === 1 ? d?.by[projects[0].slug] : null;
   return { rows, state: one && one.active != null ? `${n(one.active)} contributors active in the last 30 days · top 5` : `Top 5 across ${projects.length} problems` };
+}
+
+/**
+ * The site header, in the first HTML of the front page. ui.js writes the same header into an empty <header data-site-header> on
+ * every page, but only after the first paint, and the front page then moved down by the header's height (CLS 0.07 at 1440 px,
+ * Oct 2026). A header marked data-ssr is left alone by ui.js; tests/home-front-page.test.mjs runs ui.js and checks the two match.
+ */
+export function siteHeaderHtml(current: string): string {
+  const cur = (page: string) => current === page ? 'aria-current="page"' : "";
+  return `<header data-site-header data-ssr class="site-header"><a class="skip-link" href="#main">Skip to content</a><div class="shell header-inner"><a class="brand" href="/" aria-label="solveathome home"><img src="/brand/solveathome-logo.png" alt="solveathome" width="2146" height="733"></a><nav class="global-nav" aria-label="Main navigation"><a href="/" ${cur("home")}>Overview</a><a href="/visualizations" ${cur("visualizations")}>Replay</a><a href="/dumps" ${cur("dataset")}>Open dataset</a></nav><div class="who" id="who"><a href="/auth/github">Sign in with GitHub</a></div></div></header>`;
 }
