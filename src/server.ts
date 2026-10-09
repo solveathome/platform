@@ -34,7 +34,8 @@ import { pathGuard } from "./lib/guards.js";
 import { responseCache, warmCache } from "./lib/cache.js";
 import { shareMeta, SITE_DESCRIPTION } from "./lib/share.js";
 import { jsonLd, noindexPath, notFoundPage, ORGANIZATION, WEBSITE } from "./lib/seo.js";
-import { seo } from "./routes/seo.js";
+import { seo, sitemapSnapshot } from "./routes/seo.js";
+import { startIndexNow } from "./lib/indexnow.js";
 import { visualizations, visualizationsRoot } from "./routes/visualizations.js";
 import { mountPlugin } from "./lib/chatgpt-plugin/express.js";
 import { solveAtHomePlugin } from "./lib/chatgpt.js";
@@ -112,13 +113,15 @@ app.use(terms);
 app.use(filesRouter);
 // The footer's "become a trusted reviewer" lands on the featured project's trust page.
 app.get("/trust", async (_req, res) => { const f = await featuredProject(); res.redirect(302, f ? `/projects/${f.slug}/trust` : "/projects"); });
+// Bing Webmaster Tools' ownership check (#sah-bing-indexnow): the msvalidate.01 value it issues, on the home page only; absent while unset.
+const bingVerification = () => { const v = (process.env.BING_SITE_VERIFICATION ?? "").trim(); return /^[A-Za-z0-9]{8,64}$/.test(v) ? `<meta name="msvalidate.01" content="${v}">` : ""; };
 const homeHtml = () => readFileSync(join(PUBLIC_DIR, "home.html"), "utf8");
 app.get("/", async (req, res) => {
   const f = await featuredProject();
   const slug = f?.slug ?? "<slug>";
   if (wantsHtml(req)) {
     const esc = (t: string) => String(t ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
-    res.type("text/html").send(homeHtml().replace("__SHARE__", shareMeta({ title: "solveathome: hard problems, solved in the open", description: SITE_DESCRIPTION, path: "/" }) + jsonLd({ "@context": "https://schema.org", "@graph": [WEBSITE(), { ...ORGANIZATION(), description: SITE_DESCRIPTION }] })).replaceAll("__FEATURED_SLUG__", esc(slug)).replaceAll("__FEATURED_NAME__", esc(f?.name ?? "the first project")).replace("__FEATURED_TAGLINE__", esc(f?.tagline ?? "")).replace("__FEATURED_HERO__", f ? (projectPartial(f.slug, "home-hero") ?? "") : ""));
+    res.type("text/html").send(homeHtml().replace("__SHARE__", shareMeta({ title: "solveathome: hard problems, solved in the open", description: SITE_DESCRIPTION, path: "/" }) + bingVerification() + jsonLd({ "@context": "https://schema.org", "@graph": [WEBSITE(), { ...ORGANIZATION(), description: SITE_DESCRIPTION }] })).replaceAll("__FEATURED_SLUG__", esc(slug)).replaceAll("__FEATURED_NAME__", esc(f?.name ?? "the first project")).replace("__FEATURED_TAGLINE__", esc(f?.tagline ?? "")).replace("__FEATURED_HERO__", f ? (projectPartial(f.slug, "home-hero") ?? "") : ""));
     return;
   }
   res.type("text/plain").send(
@@ -156,6 +159,7 @@ migrate().then(async () => {
   setInterval(() => { emailTick().catch(error => console.error("email:", error)); }, 60_000).unref();
   const srv = app.listen(port, () => {
     console.log(`solveathome on :${port}`);
+    startIndexNow(sitemapSnapshot);
     // What every visitor fetches: the project page and board, and the standings the home and project pages ask for by default
     // (public/assets/home.js, project-community.js), with the exact query strings, since the cache keys on the full URL.
     const html = "text/html", json = "application/json";
