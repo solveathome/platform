@@ -608,6 +608,11 @@ body[data-page=contributor] .breadcrumb { margin-bottom: 2.5rem; }
 .day .bar i { position: absolute; left: 0; right: 0; bottom: 0; background: var(--brass); }
 .day .cnt { font: .875rem Georgia, "Times New Roman", serif; font-variant-numeric: tabular-nums; text-align: center; }
 .daylbl { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: .75rem; font-size: .75rem; color: var(--mut); text-align: center; }
+.days, .daylbl { overflow-x: clip; }
+.days.dense, .daylbl.dense { gap: 2px; }
+.days.dense .cnt { font-size: .625rem; }
+.days.sparse .cnt { visibility: hidden; }
+.daylbl.dense span { white-space: nowrap; text-align: left; }
 .facts { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 1rem 2rem; margin: 1rem 0 0; padding: 0; list-style: none; }
 .facts li b { display: block; font: 2rem/1.2 Georgia, "Times New Roman", serif; letter-spacing: -.04em; font-variant-numeric: tabular-nums; }
 .facts li span { font-size: .8125rem; color: var(--mut); }

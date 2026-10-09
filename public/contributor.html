@@ -153,8 +153,12 @@ SA.json(location.pathname).then((d) => {
   if (days.length) {
     const max = Math.max(...days.map((r) => r.submitted), 1);
     $("#days").innerHTML = days.map((r) => `<div class="day"><div class="cnt">${n0(r.submitted)}</div><div class="bar" style="height:${r.submitted ? Math.max(2, (r.submitted / max) * 100).toFixed(0) + "%" : "1px"}"><i style="height:${r.submitted ? ((r.accepted / r.submitted) * 100).toFixed(0) : 0}%"></i></div></div>`).join("");
-    $("#daylbl").innerHTML = days.map((r, i) => `<span>${esc(dayLabel(r.day, i === 0 || new Date(r.day).getUTCDate() === 1))}</span>`).join("");
+    // Past two weeks a column is a few pixels wide at phone width: narrow gaps, small counts, a label a week, no counts past ~six weeks
+    // (a month of days pushed the last count past a 390 px screen, Oct 9 2026).
+    const dense = days.length > 14, sparse = days.length > 45;
+    $("#daylbl").innerHTML = days.map((r, i) => { const month = i === 0 || new Date(r.day).getUTCDate() === 1; const weekly = i % 7 === 0 && !days.slice(i + 1, i + 4).some((x) => new Date(x.day).getUTCDate() === 1); return `<span>${!dense || month || weekly ? esc(dayLabel(r.day, month)) : ""}</span>`; }).join("");
     $("#days").style.gridTemplateColumns = $("#daylbl").style.gridTemplateColumns = `repeat(${days.length}, minmax(0, 1fr))`;
+    for (const el of [$("#days"), $("#daylbl")]) { el.classList.toggle("dense", dense); el.classList.toggle("sparse", sparse); }
     const w = d.work ?? {}, at = d.agent_time ?? {};
     $("#facts").innerHTML = [[w.submitted, "results submitted"], [at.accepted, `accepted, ${n0(at.rejected)} rejected`], [rg.total, `reviews given, ${n0(rg.accept)} accept, ${n0(rg.reject)} reject`], [rg.disagreed ?? 0, "reviews that disagreed with the outcome"]].map(([v, l]) => `<li><b>${n0(v)}</b><span>${esc(l)}</span></li>`).join("");
     $("#models").innerHTML = (d.models ?? []).map((m) => `<li><b>${esc(m.model ?? "unknown")}</b> ${n0(m.submitted)}${m.accepted ? `, ${n0(m.accepted)} accepted` : ""}</li>`).join("");
