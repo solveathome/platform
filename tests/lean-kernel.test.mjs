@@ -38,3 +38,15 @@ test('kernel evidence and object inventories reject sparse or accessor arrays',(
  const e=kernelEvidence(valid().lean);e.claims.length=2;assert.throws(()=>parseLeanEvidence(e),/dense/);
  const f=leanKernelFixture();Object.defineProperty(f.plan.lean.kernel_objects,'0',{get(){throw new Error('must not execute');}});assert.throws(()=>parseVerificationPlan(f.plan),/dense/);
 });
+
+test('kernel compares exact execution path sets independently of ASCII versus case-fold normalization',()=>{
+ const f=leanKernelFixture(),old='invocation.json',fresh='checker/KernelReplay.lean';
+ for(const r of f.plan.manifest)if(r.path===old)r.path=fresh;
+ for(const b of f.plan.lean.artifact_bindings){if(b.artifact.path===old)b.artifact.path=fresh;if(b.representation.path===old)b.representation.path=fresh;}
+ for(const r of f.plan.lean.artifact_roles)if(r.path===old)r.path=fresh;
+ f.plan.lean.execution_identity.invocation.path=fresh;for(const a of f.plan.lean.execution_identity.package_artifacts)if(a.path===old)a.path=fresh;
+ for(const a of f.artifacts)if(a[0]===old)a[0]=fresh;
+ const p=parseVerificationPlan(f.plan);validateLeanV2Artifacts(p.lean,p.manifest,artifactFiles(f.artifacts));
+ const exact=p.lean.artifact_roles.filter(r=>r.kind==='execution').map(r=>r.path).sort();assert.deepEqual(exact,p.lean.execution_identity.package_artifacts.map(a=>a.path).sort());
+ const missing=structuredClone(f.plan);missing.lean.execution_identity.package_artifacts=missing.lean.execution_identity.package_artifacts.filter(a=>a.path!==fresh);assert.throws(()=>parseVerificationPlan(missing),/inventory/);
+});

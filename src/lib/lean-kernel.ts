@@ -66,7 +66,7 @@ export function parseKernelProfile(raw:unknown,manifest:Manifest,targets:string[
   for(const a of [science.manuscript,science.statement_bundle,...science.source_artifacts])if(bind(a).representation.kind!=='manifest'||roles.find(r=>r.path===a.path)?.kind!=='scientific')bad('kernel mathematical source must be direct scientific bytes');
   for(const d of science.semantic_dependencies){const b=bind(d.source);if(manifest.find(f=>f.path===b.representation.path)?.sha256!==dependencies.find(a=>a.name===d.name)?.sha256)bad('kernel dependency transport alias mismatch');}
   for(const a of [execution.validator,execution.invocation,...execution.package_artifacts])if(bind(a).representation.kind!=='manifest'||roles.find(r=>r.path===a.path)?.kind!=='execution')bad('kernel executable assets require direct execution bindings');
-  if(!same(roles.filter(r=>r.kind==='execution').map(r=>r.path),execution.package_artifacts.map(a=>a.path)))bad('kernel execution inventory must cover all execution-classified files');
+  if(!same(sorted(roles.filter(r=>r.kind==='execution').map(r=>r.path),x=>x),sorted(execution.package_artifacts.map(a=>a.path),x=>x)))bad('kernel execution inventory must cover all execution-classified files');
   for(const f of manifest.filter(f=>f.path.endsWith('.lean')))if(![science.statement_bundle,...science.source_artifacts].some(a=>a.path===f.path&&a.sha256===f.sha256)&&roles.find(r=>r.path===f.path)?.kind!=='execution')bad('kernel Lean source omitted from science');
   const byHash=(h:string)=>bindings.filter(b=>b.artifact.sha256===h);
   if(!byHash(execution.isolation.policy_sha256).length)bad('kernel isolation policy must be pinned');
