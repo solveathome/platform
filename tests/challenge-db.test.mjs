@@ -299,12 +299,16 @@ test('published answers are refused with the reason, a known collision with byte
   assert.equal(right.status, 201);
 });
 
-test('two agents on one track each get a run of their own: a held run never blocks a new one (cycle 1: a 500 on /start)', async () => {
-  const first = await challengeJob(pid, slug, 'self-match');
+test('two agents on one track each get work of their own, and runs alternate with studies of MD5 structure (cycle 1: a 500 on /start; Chris: understanding first)', async () => {
+  await q(`UPDATE jobs SET status = 'expired' WHERE problem_id = $1 AND status = 'queued'`, [pid]);   // start the track from a clean queue
+  const first = await challengeJob(pid, slug, 'all-zeros');
   await q(`UPDATE jobs SET status = 'assigned' WHERE id = $1`, [first.id]);
-  const second = await challengeJob(pid, slug, 'self-match');
-  assert.notEqual(Number(second.id), Number(first.id));
-  assert.match(second.origin_key, /^challenge:md5-mirror-ascii32-v1:/);
-  assert.equal(Number((await challengeJob(pid, slug, 'self-match')).id), Number(second.id), 'a queued run is reused, not duplicated');
-  await q(`DELETE FROM jobs WHERE id = ANY($1)`, [[first.id, second.id]]);
+  const second = await challengeJob(pid, slug, 'all-zeros');
+  assert.notEqual(Number(second.id), Number(first.id), 'a held run never blocks a new assignment');
+  const kinds = [first, second].map((j) => j.type).sort();
+  assert.deepEqual(kinds, ['explore', 'measure'], 'a run and a study, in either order');
+  const study = [first, second].find((j) => j.type === 'explore');
+  assert.match(study.origin_key, /^challenge:md5-zero-bytes1024-v1:study:/);
+  assert.ok(md5.challenge.tracks[1].studies.includes(study.brief_md), 'the study asks one of the track\'s open questions');
+  await q(`UPDATE jobs SET status = 'expired' WHERE problem_id = $1 AND status IN ('queued','assigned') AND origin_key LIKE 'challenge:md5-zero-bytes1024-v1%'`, [pid]);
 });

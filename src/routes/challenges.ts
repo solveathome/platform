@@ -71,7 +71,8 @@ export function chartSvg(track: ChallengeTrack, view: TrackView, P: string, now 
 <desc id="cc-d-${esc(track.lane)}">${esc(desc)}${target ? ` Best published result verified by us: ${esc(fmtValue(track, target.value))}, ${esc(target.credit)}.` : ""}</desc>
 ${ticks.map((v) => `<line x1="${L}" x2="${W - R}" y1="${y(v).toFixed(1)}" y2="${y(v).toFixed(1)}" class="cc-grid"/><text x="${L - 8}" y="${(y(v) + 4).toFixed(1)}" text-anchor="end" class="cc-axis">${v}</text>`).join("")}
 <text x="${L}" y="${H - 12}" class="cc-axis">${esc(steps.length ? utc(t0).slice(0, 10) : "")}</text><text x="${W - R}" y="${H - 12}" text-anchor="end" class="cc-axis">now</text>
-<text x="12" y="${T + ph / 2}" transform="rotate(-90 12 ${T + ph / 2})" text-anchor="middle" class="cc-axis">${esc(track.unit)}</text>
+<text x="12" y="${T + ph / 2}" transform="rotate(-90 12 ${T + ph / 2})" text-anchor="middle" class="cc-axis">${esc(track.unit)} ${higher ? "↑" : "↓"}</text>
+<text x="${L}" y="14" class="cc-dir">${higher ? "▲ Higher is better" : "▼ Lower is better"}</text>
 ${tline}
 ${steps.length ? `<path d="${path}" class="cc-line"/>${dots}` : `<text x="${L + pw / 2}" y="${T + ph / 2}" text-anchor="middle" class="cc-empty">${esc(empty)}</text>`}
 </svg>`;
@@ -102,7 +103,7 @@ const STYLE = `<style>
 .cc-grid{stroke:var(--line);stroke-width:1}.cc-axis{fill:var(--mut);font:13px var(--mono)}
 .cc-line{fill:none;stroke:var(--brass,#d3ad3a);stroke-width:2.5}.cc-dot{fill:var(--brass,#d3ad3a);stroke:var(--bg);stroke-width:2}
 .cc-target{stroke:var(--fg);stroke-width:1.5;stroke-dasharray:6 5}.cc-tlabel{fill:var(--fg);font:13px var(--mono)}
-.cc-empty{fill:var(--mut);font:15px sans-serif}
+.cc-empty{fill:var(--mut);font:15px sans-serif}.cc-dir{fill:var(--fg);font:600 13px sans-serif}.cc-better{color:var(--mut);font-size:.8125rem}
 .cc-legend{list-style:none;padding:0;margin:.5rem 0 0;font-size:.8125rem;line-height:1.6}.cc-legend li{overflow-wrap:anywhere}
 .cc-legend a b{font-family:var(--mono)}.cc-model,.cc-when,.cc-tag{color:var(--mut);font-family:var(--mono);font-size:.75rem}.cc-tag{border:1px solid var(--line);border-radius:3px;padding:0 .3rem}
 .cc-note{color:var(--mut);font-size:.8125rem;margin:.5rem 0 0}
@@ -139,14 +140,14 @@ export async function challengeChartsSection(problemId: number, slug: string): P
   const cards = all.map(({ track, view }) => `<section class="cc-card" aria-labelledby="h-${esc(track.lane)}">
 <h3 id="h-${esc(track.lane)}"><a href="${P}/tracks/${esc(track.lane)}">${esc(track.name)}</a></h3>
 <p class="cc-note">${esc(track.question)}</p>
-<div class="cc-figures"><span>Platform best: ${bestLink(track, view, P)}</span>${view.target ? `<span>Published: ${targetLink(track, view.target)}</span>` : ""}</div>
+<div class="cc-figures"><span class="cc-better">${track.better === "higher" ? "▲ Higher is better" : "▼ Lower is better"}</span><span>Platform best: ${bestLink(track, view, P)}</span>${view.target ? `<span>Published: ${targetLink(track, view.target)}</span>` : ""}</div>
 ${chartSvg(track, view, P)}
 ${legend(track, view, P, name)}
 ${view.target ? `<p class="cc-note">Published target: ${esc(view.target.credit)}, <a href="${esc(safeUrl(view.target.source_url))}" rel="noopener nofollow">${esc(view.target.source_label)}</a> (checked ${esc(view.target.checked)}).</p>` : ""}
 </section>`).join("");
   return `${STYLE}<section class="panel cc-charts" aria-labelledby="cc-charts-title">
 <div class="panel-heading"><div>${isListed(slug) ? "" : `<span class="cc-beta">Hidden beta · not listed</span>`}<p class="eyebrow">Verified platform submission history</p><h2 id="cc-charts-title">Where the three records stand.</h2></div><a class="text-link" href="#contributors">Contribution leaderboard →</a></div>
-<p class="cc-note">Each line steps when a verified result beats the previous best; the dashed line is the best published result verified by us. Times are server receipt times in UTC. Points for the work come from the same ledger as every project: see the leaderboard.</p>
+<p class="cc-note">Each line steps when a verified result beats the previous best: up on self match and all zeros, where more is better, and down on the smallest collision, where fewer bytes is better. The dashed line is the best published result verified by us. Times are server receipt times in UTC. Points for the work come from the same ledger as every project: see the leaderboard.</p>
 <div class="cc-grid3">${cards}</div>
 <details class="details"><summary>The rules of the three tracks</summary><div class="cc-prose">${cfg.tracks.map((t) => `<h3><a href="${P}/tracks/${esc(t.lane)}">${esc(t.name)}</a> <code>${esc(t.id)}</code></h3>${mdLite(t.spec_md)}`).join("")}
 <p>Inputs and the attribution a submitter chooses are public. Published answers (the targets and every public answer we know of) are refused: they earn no record and no points. A claimed digest or score that does not match the recomputation is refused too. Verifier ${esc(VERIFIER_VERSION)}: OpenSSL MD5 and an independent RFC 1321 implementation (${esc(RFC1321_IMPLEMENTATION)}), held equal to the <a href="${P}/docs/verifier/reference.py">Python reference</a>.</p>
@@ -181,7 +182,7 @@ challenges.get("/tracks/:lane", async (req: any, res) => {
   const body = `<div class="page-heading"><div>${isListed(p.slug) ? "" : `<span class="cc-beta">Hidden beta · not listed</span>`}<p class="eyebrow">${esc(p.name)} · <code>${esc(track.id)}</code></p><h1>${esc(track.name)}</h1></div></div>
 <div class="cc-prose">${mdLite(track.spec_md)}</div>
 <section class="panel"><h2>Verified platform submission history</h2>
-<div class="cc-figures"><span>Platform best: ${bestLink(track, view, P)}</span><span>Submissions: <b>${view.submissions}</b></span>${view.target ? `<span>Best published result verified by us: ${targetLink(track, view.target)}</span>` : ""}</div>
+<div class="cc-figures"><span class="cc-better">${track.better === "higher" ? "▲ Higher is better" : "▼ Lower is better"}</span><span>Platform best: ${bestLink(track, view, P)}</span><span>Submissions: <b>${view.submissions}</b></span>${view.target ? `<span>Best published result verified by us: ${targetLink(track, view.target)}</span>` : ""}</div>
 ${chartSvg(track, view, P)}${legend(track, view, P, name, 100)}</section>
 ${track.better === "higher" ? `<section class="panel"><h2>Site milestones</h2>${view.milestones.length ? `<div class="cc-wrap"><table class="cc-table"><thead><tr><th>Milestone</th><th>Reached by</th><th>Submission</th><th>Received</th></tr></thead><tbody>${view.milestones.map((m) => `<tr><td>${m.value}</td><td>${name(m.handle)}</td><td><a href="${P}/submissions/${m.submission_id}">#${m.submission_id}</a></td><td>${esc(utc(m.received_at))}</td></tr>`).join("")}</tbody></table></div>` : `<p class="cc-note">No milestone reached yet. A score of 0 is valid and earns none; a jump from 8 to 12 awards 9 through 12 to the same submission.</p>`}</section>` : ""}
 <section class="panel"><h2>Personal bests</h2>${view.personal.length ? `<div class="cc-wrap"><table class="cc-table"><thead><tr><th>Contributor</th><th>Best</th><th>Submission</th><th>Submissions</th></tr></thead><tbody>${view.personal.map((r) => `<tr><td>${name(r.handle)}</td><td>${esc(fmtValue(track, r.best))}</td><td><a href="${P}/submissions/${r.submission_id}">#${r.submission_id}</a></td><td>${r.submissions}</td></tr>`).join("")}</tbody></table></div>` : `<p class="cc-note">Nobody yet.</p>`}</section>

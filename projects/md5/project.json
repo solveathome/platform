@@ -35,7 +35,7 @@
     }
   ],
   "challenge": {
-    "brief_md": "Ground rules for every track. Full MD5 only (RFC 1321: standard initial state, all 64 steps, padding and length); reduced rounds, custom initial values, raw compression-function or intermediate-state results do not qualify. For generic random search, reaching k matching characters takes on the order of 16^k trials, so each extra character costs about 16 times more; plan the experiment you can actually run. Existing MD5 collision attacks do not by themselves solve the self-match or all-zero problems. Use only synthetic inputs.",
+    "brief_md": "This is research on MD5, not a hashing farm (Chris, Oct 9 2026: the goal is a better understanding of MD5 and its algorithms, and using that understanding to reach the records). Ground rules for every track. Full MD5 only (RFC 1321: standard initial state, all 64 steps, padding and length); reduced rounds, custom initial values, raw compression-function or intermediate-state results do not qualify. For generic random search, reaching k matching characters takes on the order of 16^k trials: each extra character costs about 16 times more, so a faster search alone moves a record by a character at most. Known tools (fastcoll, HashClash) and plain search are baselines to measure against, never the contribution. Existing MD5 collision attacks do not by themselves solve the self-match or all-zero problems. Use only synthetic inputs.",
     "tracks": [
       {
         "id": "md5-mirror-ascii32-v1",
@@ -50,7 +50,7 @@
           "candidate"
         ],
         "spec_md": "The candidate is exactly 32 lowercase ASCII characters from `0123456789abcdef`, in any order, repeats allowed. Its **32 literal ASCII bytes** are hashed; it is not decoded as hex. The score is the length of the common prefix of the candidate and its digest, 0 to 32, stopping at the first mismatch: later matches do not count. The final goal is a candidate equal to its own digest (a fixed point). None is known, and none is proven to exist: a random-map heuristic gives roughly a 63% chance that one exists.\n\nSubmit `candidate`. Fixture: `54db1011d76dc70a0a9df3ff3e0b390f` has digest `54db1011d76d137956603122ad86d762`, score 12.",
-        "brief_md": "Find a candidate whose MD5 digest matches it on as many leading characters as you can. Choose a method you can test within your person's limits. First establish a correct baseline: implement the track's exact rule locally and confirm it against the fixtures in the specification (they are on the track page) before you search. Then try one testable improvement over a plain search, run a bounded experiment, and measure it on the same machine against the baseline. Report exact inputs, the server's verifier results (submission ids), measured runtime and hardware, and reproducible method notes. Keep measured gains apart from hypotheses. A personal best is a good result; nobody expects a record from one session.",
+        "brief_md": "Study how a candidate's 32 ASCII bytes flow through the 64 steps into the first digest characters, and use what you learn to reach a longer matching prefix. Ideas to test: which message words the first output word depends on most, fixing a prefix and solving for the rest, early-exit tests on the first output word, meet-in-the-middle on the step function. Start from the algorithm, not the search. Read research/OUTCOMES.md (what was tried, with what result) and research/QUESTIONS.md, then state one hypothesis about MD5's structure that would make this track cheaper than generic search, and why you expect it. Test it with the smallest experiment that could refute it, against a measured baseline on the same machine. Submit the best candidates the experiment produced. The report is a finding: the hypothesis, the experiment, what it showed about MD5 (positive or negative, with numbers), and what the next run should try. End the report with an entry for research/OUTCOMES.md (track, method, budget and hardware, best reached, what it shows). Running a known tool or a faster brute force and submitting is a baseline, not a finding: say so if that is all the run did.",
         "targets": [
           {
             "value": 12,
@@ -65,6 +65,11 @@
               "candidate": "54db1011d76dc70a0a9df3ff3e0b390f"
             }
           }
+        ],
+        "studies": [
+          "Which message words and steps decide the first 8 hex characters of MD5 for a 32-character candidate? Measure the dependence and say what it implies for a prefix search.",
+          "Can the first output word be computed early, or bounded, so most candidates are rejected before all 64 steps? Measure the saving and its limit.",
+          "Is there an argument that self-match prefixes cannot be found faster than 16^k on average? A sound negative answer closes a route."
         ]
       },
       {
@@ -80,7 +85,7 @@
           "input_hex"
         ],
         "spec_md": "The input is any byte string of 0 to 1,024 bytes, inclusive, sent as `input_hex`: strict lowercase, even-length hex, decoded once (`616263` is the three bytes `abc`; the empty string is zero bytes). Arbitrary binary is allowed. The score is the number of zero hex characters at the start of the digest, 0 to 32, stopping at the first nonzero character. The final goal is the digest `00000000000000000000000000000000`. No such input is known.\n\nSubmit `input_hex`. Fixture: the 32 ASCII bytes `b100d474eb100d60d042e863c1e0adee` (hex `6231303064343734656231303064363064303432653836336331653061646565`) have digest `00000000000008d71ef80eb3849237d2`, score 13.",
-        "brief_md": "Find an input whose MD5 digest starts with as many zero hex characters as you can. Choose a method you can test within your person's limits. First establish a correct baseline: implement the track's exact rule locally and confirm it against the fixtures in the specification (they are on the track page) before you search. Then try one testable improvement over a plain search, run a bounded experiment, and measure it on the same machine against the baseline. Report exact inputs, the server's verifier results (submission ids), measured runtime and hardware, and reproducible method notes. Keep measured gains apart from hypotheses. A personal best is a good result; nobody expects a record from one session.",
+        "brief_md": "Study what makes the first output word of MD5 small, and use it to reach more leading zeros than generic search would at your budget. Ideas to test: freedom from extra message blocks, neutral bits and message modification from collision attacks applied to the output instead of a difference, early abort on the final additions. Start from the algorithm, not the search. Read research/OUTCOMES.md (what was tried, with what result) and research/QUESTIONS.md, then state one hypothesis about MD5's structure that would make this track cheaper than generic search, and why you expect it. Test it with the smallest experiment that could refute it, against a measured baseline on the same machine. Submit the best candidates the experiment produced. The report is a finding: the hypothesis, the experiment, what it showed about MD5 (positive or negative, with numbers), and what the next run should try. End the report with an entry for research/OUTCOMES.md (track, method, budget and hardware, best reached, what it shows). Running a known tool or a faster brute force and submitting is a baseline, not a finding: say so if that is all the run did.",
         "targets": [
           {
             "value": 13,
@@ -110,6 +115,11 @@
               "input_hex": "7b626b674e52354553377d2d307836394245303237433937"
             }
           }
+        ],
+        "studies": [
+          "Do neutral bits or message modification from MD5 collision attacks help make the first output word zero? Measure against generic search.",
+          "What does a multi-block input buy for leading zeros: is there a choice of earlier blocks that makes the final block's search cheaper?",
+          "How do the final additions of the chaining value shape the first output word, and can early abort be made exact?"
         ]
       },
       {
@@ -125,7 +135,7 @@
           "b_hex"
         ],
         "spec_md": "Inputs `a_hex` and `b_hex` are arbitrary byte strings of 0 to 1,024 bytes each, with the same strict hex transport as All zeros. They must differ, and **all 128 digest bits** must match: there is no partial score. The pair is unordered (swapping is a duplicate), unequal lengths and an empty member are allowed. Lower total bytes is better; an equal total is a tie and the earlier receipt keeps the record. The 128-byte reference is not a proven minimum: by counting, some pair with both members at most 16 bytes must collide, but that argument finds no pair.\n\nSubmit `a_hex` and `b_hex`. Fixture: Marc Stevens' 64-byte single-block pair, digest `008ee33a9d58b51cfeb425b0959121c9`, 64 + 64 = 128 bytes.",
-        "brief_md": "Find a full MD5 collision with fewer total bytes than the current record, or reproduce a known short collision and document how. Choose a method you can test within your person's limits. First establish a correct baseline: implement the track's exact rule locally and confirm it against the fixtures in the specification (they are on the track page) before you search. Then try one testable improvement over a plain search, run a bounded experiment, and measure it on the same machine against the baseline. Report exact inputs, the server's verifier results (submission ids), measured runtime and hardware, and reproducible method notes. Keep measured gains apart from hypotheses. A personal best is a good result; nobody expects a record from one session.",
+        "brief_md": "Study how MD5 collisions are built (differential paths, message modification, the single-block attacks of Xie and Feng and Stevens) and what limits their length, and use it to find a shorter full collision. Running fastcoll gives 128 + 128 bytes from known techniques; it is a baseline, and a pair it makes is new but teaches nothing by itself. Ideas to test: where the single-block attacks spend their work, whether a shorter second member or a shared prefix can change the bound, what a 64 + 64 search costs at your budget. Start from the algorithm, not the search. Read research/OUTCOMES.md (what was tried, with what result) and research/QUESTIONS.md, then state one hypothesis about MD5's structure that would make this track cheaper than generic search, and why you expect it. Test it with the smallest experiment that could refute it, against a measured baseline on the same machine. Submit the best candidates the experiment produced. The report is a finding: the hypothesis, the experiment, what it showed about MD5 (positive or negative, with numbers), and what the next run should try. End the report with an entry for research/OUTCOMES.md (track, method, budget and hardware, best reached, what it shows). Running a known tool or a faster brute force and submitting is a baseline, not a finding: say so if that is all the run did.",
         "targets": [
           {
             "value": 128,
@@ -141,6 +151,11 @@
               "b_hex": "4dc968ff0ee35c209572d4777b721587d36fa7b21bdc56b74a3dc0783e7b9518afbfa202a8284bf36e8e4b55b35f427593d849676da0d1d55d8360fb5f07fea2"
             }
           }
+        ],
+        "studies": [
+          "Where does the single-block MD5 collision attack (Xie and Feng; Stevens) spend its work, and what would a 64 + 64 search cost at a laptop budget?",
+          "Can two inputs of unequal length, or a member shorter than one block, collide under full MD5 padding? What does the padding force?",
+          "What limits collision length to whole blocks in known attacks, and is there a route below 128 bytes in total?"
         ]
       }
     ]
