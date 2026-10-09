@@ -245,6 +245,13 @@ test('pages render: overview with three charts, track, record; JSON for agents',
   assert.equal((html.match(/class="cc-chart"/g) ?? []).length, 3, 'the three charts are inline on the project page');
   assert.match(html, /id="startfield"/, 'the standard sign-in and limits start field');
   assert.match(html, /id="highscores"/, 'the standard points leaderboard');
+  // Each platform best links to the receipt that holds it, each published value to its source (Chris, Oct 9 2026).
+  for (const t of md5.challenge.tracks) {
+    const best = (await trackView(pid, challengeConfig(slug).tracks.find((x) => x.id === t.id))).best;
+    if (best) assert.ok(html.includes(`Platform best: <a href="/projects/${slug}/submissions/${best.submission_id}"`), `${t.id} best links to #${best.submission_id}`);
+    const target = [...t.targets].reverse().find((x) => !x.superseded_on);
+    assert.ok(html.includes(`Published: <a href="${target.source_url}"`), `${t.id} published links to ${target.source_url}`);
+  }
   assert.match(html, /noindex/);
   for (const t of md5.challenge.tracks) assert.equal((await call('a', 'GET', `/tracks/${t.lane}`, {accept: 'text/html'})).status, 200);
   const sub = await one(`SELECT id FROM challenge_submissions WHERE problem_id = $1 AND challenge_id = $2 ORDER BY id LIMIT 1`, [pid, COLL]);

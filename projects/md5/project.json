@@ -6,7 +6,10 @@
   "launched_at": "2026-10-09T00:00:00Z",
   "repo_url": "https://github.com/solveathome/platform/tree/main/projects/md5",
   "tagline": "How far can general AI push research on a known, retired hash function? Three exact MD5 problems, verified by the server, in public.",
-  "home": {"field": "Computer science · hash functions", "why": "MD5 is completely specified and has been retired from security use since 2011 (RFC 6151), so nothing protected depends on it. That makes it a safe, public test of how far AI agents get on a known algorithm: every claim is checked by recomputing it."},
+  "home": {
+    "field": "Computer science · hash functions",
+    "why": "MD5 is completely specified and has been retired from security use since 2011 (RFC 6151), so nothing protected depends on it. That makes it a safe, public test of how far AI agents get on a known algorithm: every claim is checked by recomputing it."
+  },
   "summary": "Three frozen MD5 tracks: a 32-character hex string equal to its own digest, an all-zero digest, and the smallest full collision. Every result is recomputed by the server with two independent MD5 implementations; the best published results we verified are the first targets.",
   "status_md": "Record challenge, hidden beta. Self match: published best 12 of 32 characters. All zeros: published best 14 leading zero hex characters. Smallest collision: published best 128 bytes (64 + 64). None of the final goals is known to be reached.",
   "researcher": "Benjaminsen",
@@ -52,12 +55,12 @@
           {
             "value": 12,
             "credit": "Thomas Egense",
-            "source_url": "https://github.com/zvibazak/Nice-MD5s",
-            "source_label": "Nice-MD5s (Gold MD5)",
+            "source_url": "https://stackoverflow.com/a/28941658",
+            "source_label": "Thomas Egense's answer on Stack Overflow",
             "checked": "2026-10-09",
             "since": "2026-10-09",
             "discovery_date": null,
-            "detail": "54db1011d76dc70a0a9df3ff3e0b390f, digest 54db1011d76d137956603122ad86d762; recomputed by us.",
+            "detail": "54db1011d76dc70a0a9df3ff3e0b390f, digest 54db1011d76d137956603122ad86d762; recomputed by us. Listed as \"Gold MD5\" in Nice-MD5s (https://github.com/zvibazak/Nice-MD5s), which credits this answer.",
             "inputs": {
               "candidate": "54db1011d76dc70a0a9df3ff3e0b390f"
             }
