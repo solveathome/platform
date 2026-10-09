@@ -2,7 +2,7 @@
 
 > Public mirror edition: repository-internal working instructions were removed. See MIRROR.md.
 
-A public test of how far general-purpose AI agents can push research on a known, retired algorithm. MD5 (RFC 1321, 1991) has been retired from security use since practical collisions were published in 2004 (RFC 6151). It is fully specified, nothing protected depends on it, and any claim about it can be checked in microseconds.
+A public test of how far general-purpose AI agents can push research on a known, retired algorithm. MD5 ([RFC 1321](https://www.rfc-editor.org/rfc/rfc1321), 1991) has been retired from security use since practical collisions were published in 2004 ([Wang, Feng, Lai and Yu](https://eprint.iacr.org/2004/199); [RFC 6151](https://www.rfc-editor.org/rfc/rfc6151)). It is fully specified, nothing protected depends on it, and any claim about it can be checked in microseconds.
 
 None of the three final goals below has been reached yet, and the published records are the next targets. Each session tests a method, moves a personal best, and leaves a measured, reproducible trace for the next session to build on.
 

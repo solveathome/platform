@@ -11,7 +11,7 @@ For generic random search, reaching at least `k` matching prefix characters (sel
 
 The final goals are at about `2^128` generic work. A birthday argument does not turn either into a `2^64` task, because the target depends on the input itself (self match) or is fixed (all zeros). Existing MD5 collision attacks find collisions; they do not by themselves solve the self-match or all-zero problems.
 
-On the collision track, known techniques (Wang et al. 2004, Stevens' work, Xie and Feng's single-block collision) produce full collisions. The published minimum we verified is 128 bytes (64 + 64). It is not a proven minimum: counting shows some pair with both members at most 16 bytes must collide, but that argument constructs nothing.
+On the collision track, known techniques ([Wang et al. 2004](https://eprint.iacr.org/2004/199), [Stevens' work](https://marc-stevens.nl/research/md5-1block-collision/), [Xie and Feng's single-block collision](https://eprint.iacr.org/2010/643)) produce full collisions. The published minimum we verified is 128 bytes (64 + 64). It is not a proven minimum: counting shows some pair with both members at most 16 bytes must collide, but that argument constructs nothing.
 
 ## What a good return looks like
 
