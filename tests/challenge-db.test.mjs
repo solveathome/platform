@@ -31,7 +31,7 @@ const {job} = await import('../src/routes/job.ts');
 const {challenges} = await import('../src/routes/challenges.ts');
 const {projects} = await import('../src/routes/projects.ts');
 const {board} = await import('../src/routes/board.ts');
-const {ensureChallengeProjects, trackView, challengeConfig, forgetKnown} = await import('../src/lib/challenges.ts');
+const {ensureChallengeProjects, trackView, challengeConfig, forgetKnown, challengeJob} = await import('../src/lib/challenges.ts');
 const {ensureChannels} = await import('../src/routes/chat.ts');
 const {listProjectConfigs, featuredProject, isListed} = await import('../src/lib/projects.ts');
 const {noindexPath} = await import('../src/lib/seo.ts');
@@ -194,15 +194,18 @@ test('corrections withdraw and restore without rewriting; demo data stays apart 
 
 test('a track run returns through /result, is reviewed by a trusted reviewer, and pays points into the ordinary ledger', async () => {
   const held = await one(`SELECT id, attempt_id FROM jobs WHERE problem_id = $1 AND assigned_session = $2 AND status = 'assigned'`, [pid, S.a]);
+  const long = '5a'.repeat(40);   // a 40-byte input: 80 hex characters, which hold a 64-character run that looks like a sha256
+  assert.equal((await submit('a', {challenge_id: ZERO, input_hex: long})).status, 201);
   const transcript = [
     {type: 'user', message: {role: 'user', content: 'Test: run the search'}, timestamp: '2026-10-09T10:00:00Z'},
     {type: 'assistant', message: {role: 'assistant', model: 'claude-opus-5-5', content: [{type: 'text', text: 'ran it'}], usage: {input_tokens: 100, output_tokens: 50}}, timestamp: '2026-10-09T10:01:00Z'},
   ].map((l) => JSON.stringify(l)).join('\n');
   const r = await call('a', 'POST', '/result', {session: S.a, body: {job_id: Number(held.id), attempt_id: held.attempt_id, transcript, transcript_approved: true,
-    report_md: 'Test: a plain random search reached 12 by reproducing the published candidate, submission ids above.', recipe_md: 'Test: node search.mjs mirror 15 7 prints the candidate and its score; reproduce with the same seed.'}});
+    report_md: 'Test: a plain random search reached 12 by reproducing the published candidate, submission ids above.', recipe_md: `Test: node search.mjs mirror 15 7 prints the candidate and its score; reproduce with the same seed. Best input ${long}.`}});
   const ret = await r.json();
   assert.equal(r.status, 200, JSON.stringify(ret).slice(0, 300));
   assert.equal(ret.status, 'pending');
+  assert.ok(!ret.warnings.some((w) => /sha256 value/.test(w)), 'the run\'s own candidate in its recipe is not taken for a file hash');
   const rv = await call('owner', 'POST', '/result', {body: {type: 'review', return_id: ret.return_id, verdict: 'accept', rung: 'verified', notes_md: 'Test: receipts verified by the server; recipe reran.', transcript: transcript.replaceAll('claude-opus-5-5', 'gpt-6-astra'), transcript_approved: true}});
   const review = await rv.json();
   assert.equal(rv.status, 200, JSON.stringify(review).slice(0, 300));
@@ -263,4 +266,14 @@ test('published answers are refused with the reason, a known collision with byte
   assert.equal(Number((await one(`SELECT count(*) AS c FROM challenge_submissions WHERE problem_id = $1`, [pid])).c), before, 'nothing refused was recorded');
   const right = await submit('a', {challenge_id: MIRROR, candidate: '00000000000000000000000000001efd', claimed_digest: '0005b7062c52fc4ee9762f633adb35fa', claimed_score: 3});
   assert.equal(right.status, 201);
+});
+
+test('two agents on one track each get a run of their own: a held run never blocks a new one (cycle 1: a 500 on /start)', async () => {
+  const first = await challengeJob(pid, slug, 'self-match');
+  await q(`UPDATE jobs SET status = 'assigned' WHERE id = $1`, [first.id]);
+  const second = await challengeJob(pid, slug, 'self-match');
+  assert.notEqual(Number(second.id), Number(first.id));
+  assert.match(second.origin_key, /^challenge:md5-mirror-ascii32-v1:/);
+  assert.equal(Number((await challengeJob(pid, slug, 'self-match')).id), Number(second.id), 'a queued run is reused, not duplicated');
+  await q(`DELETE FROM jobs WHERE id = ANY($1)`, [[first.id, second.id]]);
 });

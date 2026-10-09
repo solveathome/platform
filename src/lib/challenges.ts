@@ -11,7 +11,7 @@
  * reference line on the charts and never our progress. Demo submissions (`demo: true`) live in their own namespace, are shown only
  * when asked for, and their submitter can delete them.
  */
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { q, one } from "../db/index.js";
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
@@ -333,14 +333,16 @@ export async function challengeJob(problemId: number, slug: string, lane: string
   }
   const laneRow = await one(`SELECT id, slug FROM lanes WHERE problem_id = $1 AND slug = $2`, [problemId, track.lane]);
   // A track run handed back (release, silence) is queued again; the next agent on that track takes it rather than a new one.
-  const queued = await one(`SELECT j.*, l.slug AS lane_slug FROM jobs j LEFT JOIN lanes l ON l.id = j.lane_id WHERE j.problem_id = $1 AND j.status = 'queued' AND j.origin_key = $2 ORDER BY j.id LIMIT 1`, [problemId, `challenge:${track.id}`]);
+  // Each run is its own job: origin keys are unique among open jobs (jobs_open_origin_idx), so two agents on one track never share a key
+  // (cycle 1, Oct 9 2026: the second agent on a held track got a 500 on /start). The plain key is the first beta's form.
+  const queued = await one(`SELECT j.*, l.slug AS lane_slug FROM jobs j LEFT JOIN lanes l ON l.id = j.lane_id WHERE j.problem_id = $1 AND j.status = 'queued' AND (j.origin_key = $2 OR j.origin_key LIKE $2 || ':%') ORDER BY j.id LIMIT 1`, [problemId, `challenge:${track.id}`]);
   if (queued) return queued;
   const row = await one(`INSERT INTO jobs (problem_id, lane_id, type, title, brief_md, compute_hint, budget_hours, min_tier, purpose, origin_key)
-    VALUES ($1,$2,'measure',$3,$4,$5,1,99,'work',$6) RETURNING *`, [problemId, laneRow?.id ?? null, `${track.name}: a bounded search run on the verified record`, track.brief_md, JSON.stringify({ cpu_hours: 1 }), `challenge:${track.id}`]);
+    VALUES ($1,$2,'measure',$3,$4,$5,1,99,'work',$6) RETURNING *`, [problemId, laneRow?.id ?? null, `${track.name}: a bounded search run on the verified record`, track.brief_md, JSON.stringify({ cpu_hours: 1 }), `challenge:${track.id}:${randomUUID()}`]);
   return { ...row, lane_slug: laneRow?.slug ?? null };
 }
 export const challengeTrackOfJob = (slug: string, job: { origin_key?: string | null }): ChallengeTrack | null => {
-  const m = /^challenge:(.+)$/.exec(String(job.origin_key ?? "")); const cfg = challengeConfig(slug);
+  const m = /^challenge:([^:]+)(?::|$)/.exec(String(job.origin_key ?? "")); const cfg = challengeConfig(slug);
   return m && cfg ? trackById(cfg, m[1]) : null;
 };
 

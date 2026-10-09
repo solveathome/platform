@@ -1596,7 +1596,10 @@ job.post("/result", bearer, project, assignmentMutation(async (req: any, res) =>
   // A sha named in the recipe should be one of the declared hashes or an uploaded file; a typo there costs a reviewer a rerun (agent feedback, Sep 10).
   // Known (issue #7): declared hashes, this return's files, cited files, anything in the file store (a cited return's file, a pinned version), and the served portfolio's own hashes.
   const known = new Set<string>([...attached, ...(Array.isArray(b.files) ? b.files.map((x: any) => String(x).toLowerCase()) : []), ...(Array.isArray(cites.files) ? cites.files.map((x: any) => String(x).toLowerCase()) : []), ...JSON.stringify(b.hashes ?? {}).match(/[0-9a-f]{64}/g) ?? []]);
-  const found = (recipe.match(/[0-9a-f]{64}/g) ?? []) as string[];
+  // On a record challenge a recipe quotes its candidates as hex, and a 32-byte input is 64 hex characters: the inputs of the
+  // run's own verified submissions are data, not file hashes (cycle 1, Oct 9 2026: run 5 was warned about its own input).
+  const ownInputs = jobRow && challengeConfig(req.project.slug) ? (await q<{ inputs: Record<string, string> }>(`SELECT inputs FROM challenge_submissions WHERE job_id = $1`, [jobRow.id])).flatMap((r) => Object.values(r.inputs ?? {})).filter((x) => typeof x === "string" && x.length >= 64) : [];
+  const found = (ownInputs.reduce((t, x) => t.split(x).join(" "), recipe).match(/[0-9a-f]{64}/g) ?? []) as string[];
   const candidates = Array.from(new Set(found.map((x) => x.toLowerCase()))).filter((x) => !known.has(x));
   const portfolio = candidates.length ? new Set(Object.values(readPublication(revisions.docsRoot(problem.slug))?.files ?? {}).map((f: any) => String(f?.sha256 ?? "").toLowerCase())) : new Set<string>();
   const patchWarning = b.patch ? [patchGuidance(String(b.patch), readProjectConfig(req.project.slug)?.review_notes?.patch)] : [];
