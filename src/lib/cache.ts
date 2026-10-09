@@ -46,7 +46,8 @@ export function responseCache(patterns: RegExp[], ttlMs = 20_000, staleMs = STAL
     }
     const send = res.send.bind(res);
     res.send = ((body: any) => {
-      if (res.statusCode === 200 && (typeof body === "string" || Buffer.isBuffer(body))) {
+      const noStore = /(?:^|,)\s*no-store(?:\s*(?:,|$))/i.test(String(res.getHeader("cache-control") ?? ""));
+      if (!noStore && res.statusCode === 200 && (typeof body === "string" || Buffer.isBuffer(body))) {
         if (!store.has(key) && store.size >= MAX_ENTRIES) store.delete(store.keys().next().value as string);
         store.set(key, { at: Date.now(), status: 200, type: String(res.getHeader("content-type") ?? "text/plain"), body, accept: acc });
       }
