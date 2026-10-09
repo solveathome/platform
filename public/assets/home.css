@@ -1,8 +1,4 @@
-/* Mockup: a front page that holds N problems. Same charcoal/paper identity as app.css; cards, not one featured panel. */
-.mock-banner { border: 1px dashed var(--line); padding: .7rem 1rem; font: .75rem/1.7 var(--mono); color: var(--mut); margin: 0 0 1rem; }
-.mock-banner b { color: var(--fg); }
-.mock-tag { display: inline-block; font: .6875rem/1.4 var(--mono); padding: .05rem .4rem; border: 1px solid var(--line); border-radius: 2px; color: var(--mut); white-space: nowrap; vertical-align: .1em; }
-.mock-tag.placeholder { border-style: dashed; color: var(--recognition); border-color: var(--recognition); }
+/* The front page for many problems (Oct 9 2026): an index in the hero and one card per problem, in app.css's charcoal and paper. */
 
 .mf-hero { display: grid; grid-template-columns: minmax(0, 1.4fr) minmax(280px, .8fr); gap: clamp(3rem, 7vw, 7rem); align-items: center; padding-block: 3rem 4.5rem; }
 .mf-hero h1 { font-size: clamp(3.4rem, 5.8vw, 5.2rem); letter-spacing: -.065em; line-height: 1.04; margin-bottom: 2rem; }
@@ -76,9 +72,9 @@
 .mf-actions { display: flex; flex-wrap: wrap; gap: .75rem; margin-top: auto; padding-top: .25rem; }
 .mf-actions .button { flex: 1 1 12rem; }
 
-/* The slot a third problem fills: proof that the page takes N without a redesign. */
+/* The last card invites the next problem (Discord); a new public project takes its place in the row before it. */
 .mf-card.next { border-style: dashed; border-top-style: solid; border-top-color: var(--line); justify-content: center; }
-.mf-card.next h3 { color: var(--mut); }
+.mf-card.next .why { margin-bottom: .5rem; }
 
 .mf-steps { list-style: none; counter-reset: s; display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 1.5rem; padding: 0; margin: 0 0 2rem; }
 .mf-steps li { counter-increment: s; border-top: 1px solid var(--fg); padding-top: 1rem; }
@@ -112,3 +108,8 @@
   .mf-tracks li { grid-template-columns: 1fr; }
   .mf-tracks .v { text-align: left; }
 }
+
+.mf-board li a.credit { min-width: 0; }
+.mf-leaders .who-cell .credit-handle, .mf-board .credit-handle { color: var(--mut); font-size: .8125rem; }
+.mf-leaders li.community-empty { display: block; color: var(--mut); }
+.mf-card.next { align-self: start; }

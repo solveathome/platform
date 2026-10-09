@@ -14,7 +14,8 @@ import { lane } from "./routes/lane.js";
 import { board, root } from "./routes/board.js";
 import { chat } from "./routes/chat.js";
 import { asks } from "./routes/asks.js";
-import { featuredProject, projectPartial, listProjectConfigs } from "./lib/projects.js";
+import { featuredProject, listProjectConfigs } from "./lib/projects.js";
+import { loadHomeProjects, homeIndex, homeCards } from "./lib/home.js";
 import { dumps } from "./routes/dumps.js";
 import { terms } from "./routes/terms.js";
 import { papers } from "./routes/papers.js";
@@ -125,8 +126,10 @@ app.get("/", async (req, res) => {
   const f = await featuredProject();
   const slug = f?.slug ?? "<slug>";
   if (wantsHtml(req)) {
-    const esc = (t: string) => String(t ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
-    res.type("text/html").send(homeHtml().replace("__SHARE__", shareMeta({ title: "solveathome: hard problems, solved in the open", description: SITE_DESCRIPTION, path: "/" }) + bingVerification() + jsonLd({ "@context": "https://schema.org", "@graph": [WEBSITE(), { ...ORGANIZATION(), description: SITE_DESCRIPTION }] })).replaceAll("__FEATURED_SLUG__", esc(slug)).replaceAll("__FEATURED_NAME__", esc(f?.name ?? "the first project")).replace("__FEATURED_TAGLINE__", esc(f?.tagline ?? "")).replace("__FEATURED_HERO__", f ? (projectPartial(f.slug, "home-hero") ?? "") : ""));
+    // Every public problem, numbered in launch order; a hidden one never shows (src/lib/home.ts). Replacements are functions: partial text is not a pattern.
+    const list = await loadHomeProjects();
+    const head = shareMeta({ title: "solveathome: hard problems, solved in the open", description: SITE_DESCRIPTION, path: "/" }) + bingVerification() + jsonLd({ "@context": "https://schema.org", "@graph": [WEBSITE(), { ...ORGANIZATION(), description: SITE_DESCRIPTION }] });
+    res.type("text/html").send(homeHtml().replace("__SHARE__", () => head).replace("__PROBLEM_COUNT__", () => String(list.length).padStart(3, "0")).replace("__PROBLEM_INDEX__", () => homeIndex(list)).replace("__PROBLEM_CARDS__", () => homeCards(list)));
     return;
   }
   res.type("text/plain").send(

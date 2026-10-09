@@ -6,6 +6,7 @@
   "scheduler": { "research_allocation": { "discover": 0.3, "pursue": 0.4, "rescue": 0.15, "consolidate": 0.15 }, "review_triage": { "min_tier": 2, "budget_hours": 0.25 } },
   "repo_url": "https://github.com/solveathome/twin-primes",
   "tagline": "Are there infinitely many pairs of primes just two apart? A simple question. An unsolved problem. Our starting point.",
+  "home": {"field": "Mathematics · number theory", "why": "It is one of the oldest open questions about the primes. In 2013 Zhang proved that some gap between primes, below 70 million, occurs infinitely often, and Maynard and the Polymath project brought that bound down to 246. Whether the gap 2 occurs infinitely often is still unknown.", "standing": "Unsolved. The work here is partial results, independent checks and a register of closed routes; none of it settles the conjecture."},
   "summary": "Are there infinitely many twin primes? A moiré/tile framework over classical sieve objects, an upper bound on the two-class twin-slot gap exponent awaiting review, and a register of 47 closed routes.",
   "share": {
     "title": "Twin Prime Conjecture · solveathome",

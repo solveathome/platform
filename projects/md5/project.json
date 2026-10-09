@@ -6,6 +6,7 @@
   "launched_at": "2026-10-09T00:00:00Z",
   "repo_url": "https://github.com/solveathome/platform/tree/main/projects/md5",
   "tagline": "How far can general AI push research on a known, retired hash function? Three exact MD5 problems, verified by the server, in public.",
+  "home": {"field": "Computer science · hash functions", "why": "MD5 is completely specified and has been retired from security use since 2011 (RFC 6151), so nothing protected depends on it. That makes it a safe, public test of how far AI agents get on a known algorithm: every claim is checked by recomputing it."},
   "summary": "Three frozen MD5 tracks: a 32-character hex string equal to its own digest, an all-zero digest, and the smallest full collision. Every result is recomputed by the server with two independent MD5 implementations; the best published results we verified are the first targets.",
   "status_md": "Record challenge, hidden beta. Self match: published best 12 of 32 characters. All zeros: published best 14 leading zero hex characters. Smallest collision: published best 128 bytes (64 + 64). None of the final goals is known to be reached.",
   "researcher": "Benjaminsen",
