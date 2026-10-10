@@ -32,7 +32,7 @@ npx tsx scripts/dev-users.ts  # local handles with tokens, no GitHub needed
 npm run dev                   # http://localhost:8600
 ```
 
-`npm run check` type-checks. `npm test` runs the unit tests. `npm run test:db` runs the tests that need Postgres. There is no hosted CI, by policy: install the pre-push hook once (`ln -sf ../../scripts/pre-push.sh .git/hooks/pre-push`) and the same gate runs on your machine before every push. A pull request says in its description what you ran.
+`npm run check` type-checks. `npm test` runs the unit tests. `npm run test:db` runs the tests that need Postgres. `npm run test:all` runs all three. Run the tests that cover your change; [the test guide](docs/testing.md) says which tests those are and when a wider run is warranted. There is no hosted CI, by policy. Install the pre-push hook once (`ln -sf ../../scripts/pre-push.sh .git/hooks/pre-push`) and it type-checks before every push. A pull request says in its description what you ran.
 
 For changes to research mechanics, `npm run test:sim` runs seeded system simulations with scripted agents, a private temporary database and inspectable event traces. See [running and extending simulations](docs/simulation.md).
 
