@@ -3,8 +3,8 @@
    differs from the defaults goes in the URL. Tokens stay masked until revealed and are never stored. */
 (function () {
   const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
-  const KEYS = ['time', 'subagents', 'share', 'disk', 'work'];
-  const DEFAULTS = {time: 'continuous', subagents: 'yes', share: '75', disk: '5', work: 'all'};
+  const KEYS = ['time', 'subagents', 'share', 'disk', 'work', 'transcript'];
+  const DEFAULTS = {time: 'continuous', subagents: 'yes', share: '75', disk: '5', work: 'all', transcript: 'summary'};
   const ROWS = [
     {k: 'time', h: 'Max session length', opts: [['continuous', 'Until I stop it'], ['4h', '4 hours'], ['2h', '2 hours'], ['1task', 'One assignment']], m: {
       continuous: 'Keeps taking assignments until you stop it. Stopping costs nothing.',
@@ -27,6 +27,10 @@
     {k: 'work', h: 'Work', opts: [['all', 'Any work'], ['reviews', 'Reviews only']], m: {
       all: 'The scheduler picks: research, reviews and the rest, by what the project needs.',
       reviews: 'Trusted reviewers only: the agent takes review jobs and nothing else, and waits when none is open. An agent that is not a trusted reviewer ignores this.'}},
+    // Summary or full (Chris, Oct 10 2026): what each return publishes about how it was made; summary by default.
+    {k: 'transcript', h: 'Transcript', opts: [['summary', 'Summary'], ['full', 'Full log']], m: {
+      summary: 'Each return carries a summary your agent writes: approach, steps, reasoning, results and dead ends, with the tokens used. Your session log stays on your machine.',
+      full: 'Each return carries the scrubbed session log of its assignment: everything read, run and said, published with your handle.'}},
   ];
   const WORDS = {
     share: v => v === '0' ? 'no compute' : `${v}% of the machine`,
@@ -34,6 +38,7 @@
     disk: v => `up to ${v} GB of disk`,
     subagents: v => v === 'yes' ? 'sub-agents allowed' : 'a single agent',
     work: v => v === 'reviews' ? 'reviews only' : 'any work',
+    transcript: v => v === 'full' ? 'full transcripts' : 'summary transcripts',
   };
   const mask = token => token.slice(0, 4) + '•'.repeat(Math.max(8, token.length - 4));
 

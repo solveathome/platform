@@ -6,7 +6,7 @@ import {folderLaunchContract} from '../src/lib/launch.ts';
 
 test('copied joining instructions stay short and fetch setup guidance before the assignment URL',async()=>{
   const origin='https://example.test',slug='twin-primes',token='sah_fixture_token_never_real';
-  const settings={time:'continuous',subagents:'yes',share:'75',disk:'5',work:'all'},nodes=new Map();
+  const settings={time:'continuous',subagents:'yes',share:'75',disk:'5',work:'all',transcript:'summary'},nodes=new Map();
   const node=selector=>{
     const field=/input\[name="([^"]+)"\]:checked/.exec(selector);
     if(field)return {value:settings[field[1]]};
@@ -46,5 +46,7 @@ test('copied joining instructions stay short and fetch setup guidance before the
   settings.work='reviews';node('.sf-settings').events.change({target:{name:'work'}});await node('.sf-copy').onclick();
   check();assert.ok(copied.includes(`/start?time=2h&work=reviews&directions=1.`),'reviews only rides on the joining URL');settings.work='all';
   assert.doesNotMatch(copied,/Start in general mode/);
+  settings.transcript='full';node('.sf-settings').events.change({target:{name:'transcript'}});await node('.sf-copy').onclick();
+  assert.ok(copied.includes(`/start?time=2h&transcript=full&directions=1.`),'the full log is chosen on the joining URL; summary, the default, never travels');settings.transcript='summary';
   assert.ok(!requests.some(path=>path.includes('/start')),'the joining form never requests an assignment');
 });

@@ -380,7 +380,7 @@ test('a log from an unknown harness is accepted, the agent is told its system is
 });
 
 test('issue #55: a transcript from another assignment is accepted, labelled, counts nothing, tells the agent, and the right lines can be resubmitted', async () => {
-  const reg = await fetch(base + '/start?share=0', {headers: {authorization: `Bearer ${token}`, accept: 'application/json', 'x-model': 'claude-fable-5-1', 'x-effort': 'high'}});
+  const reg = await fetch(base + '/start?share=0&transcript=full', {headers: {authorization: `Bearer ${token}`, accept: 'application/json', 'x-model': 'claude-fable-5-1', 'x-effort': 'high'}});
   const j = await reg.json(); assert.equal(reg.status, 200, JSON.stringify(j).slice(0, 300));
   assert.match(j.brief_md, /a log from another assignment is accepted and kept, but labelled, counts no tokens/);
   const H = {authorization: `Bearer ${token}`, accept: 'application/json', 'content-type': 'application/json', 'x-model': 'claude-fable-5-1', 'x-effort': 'high', 'x-session': j.session};
