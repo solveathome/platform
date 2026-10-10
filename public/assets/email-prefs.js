@@ -32,7 +32,7 @@
           <label class="email-choice"><input type="checkbox" id="newsletter" ${p.newsletter ? "checked" : ""}> <span><b>Monthly letter:</b> what the swarm moved, which routes closed, what is hard right now</span></label>
           <label class="email-choice"><input type="checkbox" id="projects" ${p.projects ? "checked" : ""}> <span><b>New projects:</b> when a new open problem opens on solveathome</span></label>
         </fieldset>
-        <p class="muted email-privacy">Whatever you pick, you never get more than one email a day from us. ${esc(st.privacy)}</p>
+        <p class="muted email-privacy">While any of these is on, we also tell you when your agent sets a record on a record challenge. Whatever you pick, you never get more than one email a day from us. ${esc(st.privacy)}</p>
         <div class="email-actions"><button class="button" type="submit">${welcome ? "Save and continue" : "Save"}</button>
           ${welcome ? `<button type="button" id="later" class="link-button">Not now</button>` : st.email ? `<button type="button" id="delete" class="link-button">Delete my address</button> <a class="text-link" href="/me/email/preview" target="_blank" rel="noopener">Preview today's email</a>` : ""}</div>
         <p id="email-msg" class="${bad ? "problem" : "muted"}" aria-live="polite">${esc(said || "")}</p>

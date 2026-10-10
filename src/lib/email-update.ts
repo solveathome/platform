@@ -21,6 +21,7 @@ import { prefsOf, unsubToken, type Prefs, type UnsubAction } from "./email.js";
 import { send, letterFromAddress } from "./postmark.js";
 import * as tpl from "./email-template.js";
 import { unlistedSlugs } from "./projects.js";
+import { challengeConfig, trackById, fmtValue, beats, LIVE_SQL, type ChallengeTrack } from "./challenges.js";
 
 const BASE = () => (process.env.BASE_URL ?? "http://localhost:8600").replace(/\/+$/, "");
 export const SEND_HOUR = 8;
@@ -30,7 +31,7 @@ const LIST_MAX = 8;
 export const RANK_JUMP = 3, QUEUE_JUMP = 3;
 
 /** The lead order (plan, section 3). An ask is news but never the lead unless it is the only news: it has its own slot. */
-export const SCORES = { record: 100, first: 90, breakthrough: 90, accepted: 80, cited: 70, milestone: 60, rank: 50, verdict: 40, queue: 35, ask: 0, letter: 0, project: 0 } as const;
+export const SCORES = { challenge_record: 120, record: 100, first: 90, breakthrough: 90, accepted: 80, cited: 70, milestone: 60, rank: 50, verdict: 40, queue: 35, ask: 0, letter: 0, project: 0 } as const;
 export type Kind = keyof typeof SCORES;
 export type Item = { id?: number; kind: Kind; score: number; news: boolean; problem_id: number | null; facts: any; happened_at: string | Date; dedupe_key: string };
 
@@ -38,6 +39,15 @@ export type Item = { id?: number; kind: Kind; score: number; news: boolean; prob
 const EU = `eu AS (SELECT u.id, greatest(u.email_confirmed_at, now() - interval '${SCAN_DAYS} days') AS since FROM users u
   LEFT JOIN email_preferences p ON p.user_id = u.id
   WHERE u.email IS NOT NULL AND u.email_confirmed_at IS NOT NULL AND u.email_status IS NULL AND coalesce(p.updates, 'daily') <> 'off')`;
+/**
+ * Users who allow any email at all: a confirmed, working address and any choice on (updates, the letter or new projects). A record set
+ * on a record challenge is told to them even with updates off (Chris, 10 Oct 2026: "make sure a person who broke a record is told if
+ * they have allowed any form of email"); a person with every choice off gets nothing.
+ */
+const EA = `ea AS (SELECT u.id, greatest(u.email_confirmed_at, now() - interval '${SCAN_DAYS} days') AS since FROM users u
+  LEFT JOIN email_preferences p ON p.user_id = u.id
+  WHERE u.email IS NOT NULL AND u.email_confirmed_at IS NOT NULL AND u.email_status IS NULL
+    AND (coalesce(p.updates, 'daily') <> 'off' OR coalesce(p.newsletter, false) OR coalesce(p.projects, false)))`;
 const INS = `INSERT INTO email_items (user_id, problem_id, kind, score, news, dedupe_key, facts, happened_at)`;
 const TRUSTED = `d.provisional = false AND d.by IN ('trusted','challenge','reopen')`;
 
@@ -93,6 +103,18 @@ export async function scan(): Promise<void> {
   // Questions for the person (not for their agent: the agent reads those in its inbox).
   await q(`WITH ${EU} ${INS} SELECT a.to_user_id, a.problem_id, 'ask', ${SCORES.ask}, true, 'ask:' || a.id, jsonb_build_object('ask_id', a.id), a.created_at
     FROM asks a JOIN eu ON eu.id = a.to_user_id WHERE a.to_human AND a.status = 'open' AND a.created_at >= eu.since ON CONFLICT (dedupe_key) DO NOTHING`);
+  // A record on a record challenge: the submission that beat the platform best on its track. The server writes the record event only for
+  // a strictly better value than the live best before it, never for a duplicate (src/lib/challenges.ts submit), and published answers
+  // are refused before that, so a tie or a known answer never gets here. Demo submissions and withdrawn ones are left out. The best before
+  // it and the published target are the receipt's own, as the submitter was told them.
+  await q(`WITH ${EA} ${INS} SELECT s.user_id, e.problem_id, 'challenge_record', ${SCORES.challenge_record}, true, 'challenge_record:' || e.id,
+      jsonb_build_object('submission_id', s.id, 'challenge_id', e.challenge_id, 'value', e.value, 'previous', s.response->'site_best_before',
+        'previous_submission_id', (SELECT p.submission_id FROM challenge_events p WHERE p.problem_id = e.problem_id AND p.challenge_id = e.challenge_id AND p.namespace = 'live'
+          AND p.kind = 'record' AND p.value::text = s.response->>'site_best_before'),
+        'target', s.response->'published_target', 'model', s.model), e.created_at
+    FROM challenge_events e JOIN challenge_submissions s ON s.id = e.submission_id JOIN ea ON ea.id = s.user_id
+    WHERE e.kind = 'record' AND e.namespace = 'live' AND s.namespace = 'live' AND s.duplicate_of IS NULL AND NOT s.known_result AND ${LIVE_SQL} AND e.created_at >= ea.since
+    ON CONFLICT (dedupe_key) DO NOTHING`);
   // The monthly letter and new projects, for the people who ticked them (updates may be off). Approved in the last two weeks only.
   await q(`${INS} SELECT u.id, NULL, l.kind, 0, false, l.kind || ':' || l.id || ':' || u.id, jsonb_build_object('letter_id', l.id), l.approved_at
     FROM email_letters l JOIN email_preferences p ON (l.kind = 'letter' AND p.newsletter) OR (l.kind = 'project' AND p.projects) JOIN users u ON u.id = p.user_id
@@ -213,6 +235,25 @@ export function mergeByReturn(items: Item[]): Item[] {
   });
 }
 
+/**
+ * Several records by one person on one track since their last email are one line: from the best before the first to the newest value
+ * (records only ever improve, so the newest is the best). Records on different tracks stay separate lines.
+ */
+export function mergeRecords(items: Item[]): Item[] {
+  const groups = new Map<string, Item[]>();
+  for (const it of items) if (it.kind === "challenge_record") { const k = `${it.problem_id}:${it.facts?.challenge_id}`; groups.set(k, [...(groups.get(k) ?? []), it]); }
+  return items.flatMap((it) => {
+    if (it.kind !== "challenge_record") return [it];
+    const g = groups.get(`${it.problem_id}:${it.facts?.challenge_id}`)!;
+    if (g.length < 2) return [it];
+    if (g[0] !== it) return [];
+    const bySub = [...g].sort((a, b) => Number(a.facts.submission_id) - Number(b.facts.submission_id));
+    const first = bySub[0], last = bySub[bySub.length - 1];
+    return [{ ...last, facts: { ...last.facts, previous: first.facts.previous ?? null, previous_submission_id: first.facts.previous_submission_id ?? null, count: g.length },
+      merged: g.flatMap((x: any) => [x.id, ...(x.merged ?? [])]).filter(Boolean) } as any];
+  });
+}
+
 /** The lead: highest score, then more points, then newest. An ask leads only when it is the only news. */
 export function pickLead(items: Item[]): Item | null {
   const news = items.filter((i) => i.news);
@@ -220,7 +261,8 @@ export function pickLead(items: Item[]): Item | null {
   return ranked[0] ?? news.find((i) => i.kind === "ask") ?? null;
 }
 
-export type Edition = "daily" | "weekly" | "letter";
+/** The record edition: a person's own record, told the day it is set to anyone who allows any email, inside the one-a-day cap. */
+export type Edition = "daily" | "weekly" | "letter" | "record";
 export type Composed = {
   edition: Edition; subject: string; lead: Item | null; asks: Item[]; rest: Item[]; more: number; stats: Stats | null; letters: any[];
   items: Item[]; quietSince: string | null; idleSince: string | null; offerLetter: boolean; prefs: Prefs; project: ProjectUpdate | null;
@@ -237,7 +279,19 @@ export type ProjectUpdate = {
   days: number; accepted: number; returns: number; reviews: number; agents: number; opened: number; closed: number;
   highlights: Array<{ return_id: number; type: string; handle: string; display_name: string | null; points: number }>;
   closedRoutes: Array<{ id: number; title: string; return_id: number }>;
+  /** Records set on the project's record-challenge tracks in the window by others (the reader's own lead their email). */
+  records: ProjectRecord[];
 };
+export type ProjectRecord = { submission_id: number; challenge_id: string; value: number; previous: number | null; target: { value: number; credit: string } | null; handle: string; display_name: string | null; model: string | null };
+/** Records set on a project's tracks in the last `days`, oldest first, leaving out `userId`'s own. Empty for a project without tracks. */
+export async function projectRecords(problemId: number, days: number, userId: number): Promise<ProjectRecord[]> {
+  const rows = await q<any>(`SELECT s.id AS submission_id, e.challenge_id, e.value, s.response->'site_best_before' AS previous, s.response->'published_target' AS target, s.model, u.handle, u.display_name
+    FROM challenge_events e JOIN challenge_submissions s ON s.id = e.submission_id JOIN users u ON u.id = s.user_id
+    WHERE e.problem_id = $1 AND e.kind = 'record' AND e.namespace = 'live' AND s.namespace = 'live' AND s.duplicate_of IS NULL AND NOT s.known_result AND ${LIVE_SQL}
+      AND e.created_at >= now() - ($2::int * interval '1 day') AND s.user_id <> $3 ORDER BY s.id`, [problemId, days, userId]);
+  return rows.map((r) => ({ submission_id: Number(r.submission_id), challenge_id: r.challenge_id, value: Number(r.value), previous: r.previous == null ? null : Number(r.previous),
+    target: r.target?.value != null ? { value: Number(r.target.value), credit: String(r.target.credit ?? "") } : null, handle: r.handle, display_name: r.display_name, model: r.model }));
+}
 export async function projectUpdate(problemId: number, days: number, userId: number): Promise<ProjectUpdate> {
   const P = [problemId, days, userId];
   const W = `now() - ($2::int * interval '1 day')`;
@@ -260,6 +314,7 @@ export async function projectUpdate(problemId: number, days: number, userId: num
     // One highlight per person: the bottom shows who moved the project, not one person three times (live check, 3 Oct 2026).
     highlights: highlights.sort((a, b) => b.points - a.points).filter((h, i, all) => all.findIndex((o) => o.handle === h.handle) === i).slice(0, 3).map((h) => ({ ...h, return_id: Number(h.return_id), points: Math.round(h.points) })),
     closedRoutes: closedRoutes.map((r) => ({ id: Number(r.id), title: r.title, return_id: Number(r.return_id) })),
+    records: await projectRecords(problemId, days, userId),
   };
 }
 
@@ -270,11 +325,14 @@ export async function projectUpdate(problemId: number, days: number, userId: num
  */
 export function decide(prefs: Prefs, waiting: Item[], computed: Item[], s: Stats | null, weekday: number): { edition: Edition; items: Item[]; letters: Item[] } | null {
   const letters = waiting.filter((i) => i.kind === "letter" || i.kind === "project");
-  const work = mergeByReturn([...waiting.filter((i) => i.kind !== "letter" && i.kind !== "project"), ...computed]);
+  const work = mergeRecords(mergeByReturn([...waiting.filter((i) => i.kind !== "letter" && i.kind !== "project"), ...computed]));
   const hasNews = work.some((i) => i.news);
   const monday = weekday === 1;
   if (prefs.updates === "daily" && !monday && hasNews) return { edition: "daily", items: work, letters };
   if (prefs.updates !== "off" && monday && (hasNews || (s?.activity7 ?? 0) > 0)) return { edition: "weekly", items: work, letters };
+  // A record does not wait for Monday or for updates being on: it goes out today on its own; the rest keeps its own schedule.
+  const records = work.filter((i) => i.kind === "challenge_record");
+  if (records.length) return { edition: "record", items: records, letters: [] };
   if (letters.length) return { edition: "letter", items: [], letters };
   return null;
 }
@@ -288,7 +346,7 @@ const typeName = (t: string) => ({ formalize: "formalization", paper: "paper", b
 const REASONS: Record<string, string> = { refuted: "refuted", overclaimed: "it claimed more than its evidence showed", unsourced: "its sources were missing", unverifiable: "it could not be checked in budget" };
 
 /** What the renderer needs that items only point at: handles, ask texts, letters, project slugs. Joined at send time, never stored. */
-type Ctx = { slug: (pid: number | null) => string; projectName: (pid: number | null) => string; handleOfReturn: Map<number, string>; asks: Map<number, any>; letters: Map<number, any>; link: (path: string) => string };
+type Ctx = { slug: (pid: number | null) => string; projectName: (pid: number | null) => string; handleOfReturn: Map<number, string>; handleOfSubmission?: Map<number, string>; asks: Map<number, any>; letters: Map<number, any>; link: (path: string) => string };
 
 async function context(c: Composed, outboxId: number): Promise<Ctx> {
   const all = [...(c.lead ? [c.lead] : []), ...c.asks, ...c.rest];
@@ -296,6 +354,8 @@ async function context(c: Composed, outboxId: number): Promise<Ctx> {
   const projects = new Map((pids.length ? await q<any>(`SELECT id, slug, name FROM problems WHERE id = ANY($1)`, [pids]) : []).map((p) => [Number(p.id), p]));
   const citers = all.map((i) => Number(i.facts?.by_return_id)).filter(Boolean);
   const handleOfReturn = new Map((citers.length ? await q<any>(`SELECT r.id, u.handle, u.display_name FROM returns r JOIN users u ON u.id = r.user_id WHERE r.id = ANY($1)`, [citers]) : []).map((r) => [Number(r.id), creditText(r)]));
+  const subs = all.filter((i) => i.kind === "challenge_record").map((i) => Number(i.facts?.previous_submission_id)).filter(Boolean);
+  const handleOfSubmission = new Map((subs.length ? await q<any>(`SELECT s.id, u.handle, u.display_name FROM challenge_submissions s JOIN users u ON u.id = s.user_id WHERE s.id = ANY($1)`, [subs]) : []).map((r) => [Number(r.id), creditText(r)]));
   const askIds = c.asks.map((a) => Number(a.facts?.ask_id)).filter(Boolean);
   const asks = new Map((askIds.length ? await q<any>(`SELECT a.id, a.body_md, a.return_id, a.expires_at, a.status, u.handle, u.display_name FROM asks a JOIN users u ON u.id = a.from_user_id WHERE a.id = ANY($1)`, [askIds]) : []).map((a) => [Number(a.id), a]));
   const lids = c.letters.map((l) => Number(l.facts?.letter_id)).filter(Boolean);
@@ -304,16 +364,52 @@ async function context(c: Composed, outboxId: number): Promise<Ctx> {
   return {
     slug: (pid) => (pid != null && projects.get(pid)?.slug) || fallback?.slug || "",
     projectName: (pid) => (pid != null && projects.get(pid)?.name) || fallback?.name || "the project",
-    handleOfReturn, asks, letters,
+    handleOfReturn, handleOfSubmission, asks, letters,
     link: (path) => { const [p, hash] = path.split("#"); return `${BASE()}${p}${p.includes("?") ? "&" : "?"}e=${outboxId}${hash ? `#${hash}` : ""}`; },
   };
 }
 
+/** The track a record item is on, from the project's frozen config; null when the project or track is gone. */
+function trackOf(slug: string, challengeId: unknown): ChallengeTrack | null {
+  const cfg = challengeConfig(slug);
+  return cfg ? trackById(cfg, String(challengeId ?? "")) : null;
+}
+export const trackName = (t: ChallengeTrack) => t.display?.name ?? t.name;
+
+/**
+ * Where a record stands against the published best, in one sentence: beyond it, level with it, or how it compares. Higher or lower is
+ * better as the track says (`beats`); the target is the one the receipt was given.
+ */
+export function againstPublished(t: ChallengeTrack, value: number, target: { value: number; credit: string } | null): { beyond: boolean; level: boolean; text: string } {
+  if (!target) return { beyond: false, level: false, text: "" };
+  const ref = `${fmtValue(t, target.value)}${target.credit ? `, ${target.credit}` : ""}`;
+  if (beats(t, value, target.value)) return { beyond: true, level: false, text: `It goes beyond the best published result we verified (${ref}).` };
+  if (value === target.value) return { beyond: false, level: true, text: `It matches the best published result we verified (${ref}).` };
+  return { beyond: false, level: false, text: `The best published result we verified is ${ref}: the next mark to reach.` };
+}
+
+/** A record as its parts: what the headline and the research section both say. */
+export function recordFacts(t: ChallengeTrack, f: any, previousHolder: string | null) {
+  const value = Number(f.value), previous = f.previous == null ? null : Number(f.previous);
+  const target = f.target?.value != null ? { value: Number(f.target.value), credit: String(f.target.credit ?? "") } : null;
+  const pub = againstPublished(t, value, target);
+  const before = previous == null ? (Number(f.count) > 1 ? `${f.count} records in a row, starting with the first verified result on this track.` : `It is the first verified result on this track, so it sets the platform best.`)
+    : `${Number(f.count) > 1 ? `${f.count} records in a row, from` : "Up from"} ${fmtValue(t, previous)}, the platform best before it${previousHolder ? ` (${previousHolder})` : ""}.`;
+  return { value, previous, target, pub, before };
+}
+
 /** One item as a headline, a sentence of why it matters, and its link. Platform facts lead; agent text is quoted capped and escaped by the caller. */
-export function describe(it: Item, x: Pick<Ctx, "slug" | "projectName" | "handleOfReturn" | "asks">): { head: string; why: string; path: string } {
+export function describe(it: Item, x: Pick<Ctx, "slug" | "projectName" | "handleOfReturn" | "asks"> & Partial<Pick<Ctx, "handleOfSubmission">>): { head: string; why: string; path: string } {
   const f = it.facts ?? {}, slug = x.slug(it.problem_id), pts = Number(f.points ?? 0), plus = pts > 0 ? ` (+${n(Math.round(pts))})` : "";
   const ret = (id: unknown) => `/projects/${slug}/return/${id}`;
   switch (it.kind) {
+    case "challenge_record": {
+      const t = trackOf(slug, f.challenge_id), path = `/projects/${slug}/submissions/${f.submission_id}`;
+      if (!t) return { head: `Your agent set a new record on ${x.projectName(it.problem_id)}`, why: `Recomputed by the server and on the record as submission #${f.submission_id}.`, path };
+      const r = recordFacts(t, f, x.handleOfSubmission?.get(Number(f.previous_submission_id)) ?? null);
+      const head = r.pub.beyond ? `Your agent beat the best published result on ${trackName(t)}: ${fmtValue(t, r.value)}` : `Your agent set a new record on ${trackName(t)}: ${fmtValue(t, r.value)}`;
+      return { head, why: `${r.before} ${r.pub.text ? `${r.pub.text} ` : ""}The server recomputed it, and it is on the record as submission #${f.submission_id}${f.model ? `, by your agent on ${f.model}` : ""}.`, path };
+    }
     case "record":
       if (f.what === "revision") return { head: `Your revision is now the text everyone reads: ${f.path}`, why: `Version ${f.version} of ${f.path} is your agent's. Everyone who opens the document, and every agent briefed on it, reads your version.`, path: `/projects/${slug}/history/${String(f.path).split("/").map(encodeURIComponent).join("/")}` };
       if (f.what === "route") return { head: `A route your agent worked on reached a result: "${cap(f.title, 90)}"`, why: `The route is closed with a result on ${x.projectName(it.problem_id)}, and your work is part of it.`, path: ret(f.return_id) };
@@ -358,7 +454,10 @@ export async function compose(userId: number, opts: { weekday: number; day: stri
   // Asks that were answered or expired since they were queued are no longer news.
   const askIds = waiting.filter((w) => w.kind === "ask").map((w) => Number(w.facts?.ask_id));
   const openAsks = new Set((askIds.length ? await q<any>(`SELECT id FROM asks WHERE id = ANY($1) AND status = 'open' AND expires_at > now()`, [askIds]) : []).map((a) => Number(a.id)));
-  const live = waiting.filter((w) => w.kind !== "ask" || openAsks.has(Number(w.facts?.ask_id))).map((w) => ({ ...w, problem_id: w.problem_id == null ? null : Number(w.problem_id), id: Number(w.id) }));
+  // A record whose submission was withdrawn by a correction since it was queued is no longer news.
+  const subIds = waiting.filter((w) => w.kind === "challenge_record").map((w) => Number(w.facts?.submission_id));
+  const standing = new Set((subIds.length ? await q<any>(`SELECT s.id FROM challenge_submissions s WHERE s.id = ANY($1) AND ${LIVE_SQL}`, [subIds]) : []).map((r) => Number(r.id)));
+  const live = waiting.filter((w) => w.kind !== "ask" || openAsks.has(Number(w.facts?.ask_id))).filter((w) => w.kind !== "challenge_record" || standing.has(Number(w.facts?.submission_id))).map((w) => ({ ...w, problem_id: w.problem_id == null ? null : Number(w.problem_id), id: Number(w.id) }));
   const last = await one<any>(`SELECT sections, sent_at, created_at FROM email_outbox WHERE user_id = $1 AND status IN ('sent','suppressed') ORDER BY local_day DESC LIMIT 1`, [userId]);
   const s = prefs.updates === "off" ? null : await stats(userId, last ? new Date(last.sent_at ?? last.created_at) : null);
   const computed = s ? composeTimeItems(userId, s, (last?.sections?.stats as Stats) ?? null, opts.day) : [];
@@ -367,18 +466,20 @@ export async function compose(userId: number, opts: { weekday: number; day: stri
   const lead = pickLead(d.items);
   const asks = d.items.filter((i) => i.kind === "ask" && i !== lead);
   const others = d.items.filter((i) => i !== lead && i.kind !== "ask").sort((a, b) => +new Date(b.happened_at) - +new Date(a.happened_at));
-  const quiet = s?.agent.last_seen && Date.now() - +new Date(s.agent.last_seen) > 14 * 86400_000 ? s.agent.last_seen : null;
+  const own = d.edition === "letter" || d.edition === "record";   // a letter or a record email carries no stats and no project update
+  const quiet = !own && s?.agent.last_seen && Date.now() - +new Date(s.agent.last_seen) > 14 * 86400_000 ? s.agent.last_seen : null;
   const offerLetter = !prefs.newsletter && d.items.some((i) => i.kind === "first");
   // An agent that has not been seen for three days gets one clear next step at the top: start it again.
-  const idle = s?.agent.last_seen && Date.now() - +new Date(s.agent.last_seen) > 3 * 86400_000 ? s.agent.last_seen : null;
-  const project = d.edition !== "letter" && s?.project ? await projectUpdate(s.project.id, d.edition === "weekly" ? 7 : 1, userId) : null;
-  return { edition: d.edition, subject: "", lead, asks, rest: others.slice(0, LIST_MAX), more: Math.max(0, others.length - LIST_MAX), stats: d.edition === "letter" ? null : s, letters: d.letters, items: [...d.items, ...d.letters], quietSince: quiet, idleSince: idle, offerLetter, prefs, project, first: !last };
+  const idle = !own && s?.agent.last_seen && Date.now() - +new Date(s.agent.last_seen) > 3 * 86400_000 ? s.agent.last_seen : null;
+  const project = !own && s?.project ? await projectUpdate(s.project.id, d.edition === "weekly" ? 7 : 1, userId) : null;
+  return { edition: d.edition, subject: "", lead, asks, rest: others.slice(0, LIST_MAX), more: Math.max(0, others.length - LIST_MAX), stats: own ? null : s, letters: d.letters, items: [...d.items, ...d.letters], quietSince: quiet, idleSince: idle, offerLetter, prefs, project, first: !last };
 }
 
 /** The small label beside a line in the list, and the eyebrow over the lead. */
 export function labelOf(it: Item): string {
   const f = it.facts ?? {};
   switch (it.kind) {
+    case "challenge_record": return "New record";
     case "record": return f.what === "revision" ? "In the record" : f.what === "route" ? "Route closed" : "Announced";
     case "first": return "First result";
     case "breakthrough": return "It held";
@@ -408,7 +509,7 @@ export async function render(c: Composed, userId: number, outboxId: number): Pro
     const d = describe(c.lead, x);
     T.push(d.head, `${d.why}\n${x.link(d.path)}`, "");
     preheader = d.why;
-    B.push(tpl.hero({ eyebrow: labelOf(c.lead), head: d.head, why: d.why, href: x.link(d.path), cta: c.lead.kind === "ask" ? "Answer" : c.lead.kind === "record" && c.lead.facts?.what === "revision" ? "See the change" : "See it", note: quiet || undefined }));
+    B.push(tpl.hero({ eyebrow: labelOf(c.lead), head: d.head, why: d.why, href: x.link(d.path), cta: c.lead.kind === "ask" ? "Answer" : c.lead.kind === "challenge_record" ? "See the record" : c.lead.kind === "record" && c.lead.facts?.what === "revision" ? "See the change" : "See it", note: quiet || undefined }));
   } else if (c.stats && c.edition === "weekly") {
     const s = c.stats;
     const head = `Your agent made ${n(s.returns7.made)} return${s.returns7.made === 1 ? "" : "s"} and ${n(s.agent.reviews)} review${s.agent.reviews === 1 ? "" : "s"} this week.`;
@@ -429,7 +530,7 @@ export async function render(c: Composed, userId: number, outboxId: number): Pro
     B.push(tpl.askBlock(asks));
   }
   if (c.rest.length) {
-    const title = c.edition === "weekly" ? "Also this week" : c.first ? "Also recently" : "Also since your last email";
+    const title = c.edition === "record" ? "More records" : c.edition === "weekly" ? "Also this week" : c.first ? "Also recently" : "Also since your last email";
     T.push(title.toUpperCase(), "");
     const lines = c.rest.map((it) => { const d = describe(it, x); T.push(`- ${d.head}  ${x.link(d.path)}`); return { label: labelOf(it), head: d.head, href: x.link(d.path) }; });
     if (c.more) T.push(`- and ${c.more} more on your page`);
@@ -467,7 +568,8 @@ export async function render(c: Composed, userId: number, outboxId: number): Pro
   // Bottom: the research as a whole. Other people and the project live here, never above.
   if (c.project && c.stats?.project) {
     const pu = c.project, slug = c.stats.project.slug, name = c.stats.project.name, when = pu.days === 7 ? "this week" : "today";
-    const lead = pu.accepted || pu.closed || pu.returns
+    const lead = !pu.returns && pu.records.length ? `${pu.records.length === 1 ? "A record was" : `${n(pu.records.length)} records were`} broken on ${name} ${when}.`
+      : pu.accepted || pu.closed || pu.returns
       ? `${n(pu.agents)} agent${pu.agents === 1 ? "" : "s"} worked on ${name} ${when}: ${n(pu.returns)} return${pu.returns === 1 ? "" : "s"}, ${n(pu.reviews)} review${pu.reviews === 1 ? "" : "s"}, ${n(pu.accepted)} accepted by trusted reviewers.`
       : `A quiet ${pu.days === 7 ? "week" : "day"} on ${name}: nothing new was accepted ${when}.`;
     const rowsOut = [
@@ -475,8 +577,18 @@ export async function render(c: Composed, userId: number, outboxId: number): Pro
       ...pu.closedRoutes.map((r) => ({ label: "Route closed", head: `"${cap(r.title, 90)}" reached a result`, href: x.link(`/projects/${slug}/return/${r.return_id}`) })),
     ];
     const title = `${name} ${when}`;
-    T.push(`THE RESEARCH: ${title.toUpperCase()}`, "", lead, `Accepted ${pu.accepted} · returns ${pu.returns} · routes opened ${pu.opened}, closed ${pu.closed} · agents active ${pu.agents}`, ...rowsOut.map((r) => `- ${r.head}  ${r.href}`), "", `The project: ${x.link(`/projects/${slug}`)}`, "");
-    B.push(tpl.researchSection({ title: `What moved on ${title}`, lead, href: x.link(`/projects/${slug}`), cta: "See the project",
+    // Records on the project's tracks lead the section, ahead of the numbers: the platform moving past its best is the research's news.
+    const recs = pu.records.flatMap((r) => {
+      const t = trackOf(slug, r.challenge_id); if (!t) return [];
+      const f = recordFacts(t, r, null), who = creditText(r);
+      const head = `${trackName(t)}: ${fmtValue(t, r.value)}${f.previous != null ? `, up from ${fmtValue(t, f.previous)}` : ""}`;
+      const why = `Set by ${who}${r.model ? ` (${r.model})` : ""}. ${f.previous == null ? "The first verified result on this track. " : ""}${f.pub.text}`.trim();
+      return [{ head, why, href: x.link(`/projects/${slug}/submissions/${r.submission_id}`), beyond: f.pub.beyond }];
+    });
+    T.push(`THE RESEARCH: ${title.toUpperCase()}`, "", lead, "");
+    if (recs.length) T.push(`RECORDS BROKEN ${when.toUpperCase()}`, "", ...recs.map((r) => `- ${r.head}. ${r.why}  ${r.href}`), "");
+    T.push(`Accepted ${pu.accepted} · returns ${pu.returns} · routes opened ${pu.opened}, closed ${pu.closed} · agents active ${pu.agents}`, ...rowsOut.map((r) => `- ${r.head}  ${r.href}`), "", `The project: ${x.link(`/projects/${slug}`)}`, "");
+    B.push(tpl.researchSection({ title: `What moved on ${title}`, lead, records: recs.length ? { title: `${recs.length === 1 ? "A record" : `${recs.length} records`} broken ${when}`, items: recs } : undefined, href: x.link(`/projects/${slug}`), cta: "See the project",
       cards: [{ value: n(pu.accepted), label: "accepted" }, { value: n(pu.returns), label: "returns" }, { value: `${n(pu.opened)} / ${n(pu.closed)}`, label: "routes opened / closed" }, { value: n(pu.agents), label: "agents active" }], rows: rowsOut }));
   }
   if (c.offerLetter) {
@@ -491,16 +603,20 @@ export async function render(c: Composed, userId: number, outboxId: number): Pro
     if (!preheader) preheader = cap(String(L.body_md).replace(/[*_#>`]/g, ""), 140);
     B.push(c.edition === "letter" && !B.length ? tpl.letterBlock(null, L.subject, marked.parse(String(L.body_md), { async: false }) as string).replace(/^<tr><td style="height:\d+px[^]*?<\/tr>/, "") : tpl.letterBlock(title, L.subject, marked.parse(String(L.body_md), { async: false }) as string));
   }
-  const why = c.edition === "letter"
+  const why = c.edition === "record"
+    ? `You get this because your agent set a record and your settings allow email from us. We never send more than one email a day.`
+    : c.edition === "letter"
     ? `You get this because you asked for ${c.letters.some((l) => l.kind === "project") ? "news of new projects" : "the monthly letter"}. We never send more than one email a day.`
     : `You get one update ${c.prefs.updates === "weekly" ? "a week, on Mondays" : "a day at most, only on days something happened to your work"}.`;
-  const links: Array<[string, string]> = c.edition === "letter"
+  const links: Array<[string, string]> = c.edition === "record"
+    ? [[u("all-off"), "Stop all email"], [`${BASE()}/settings#email`, "All settings"]]
+    : c.edition === "letter"
     ? [[u(c.letters.some((l) => l.kind === "letter") ? "newsletter-off" : "projects-off"), "Stop these"], [`${BASE()}/settings#email`, "All settings"]]
     : [...(c.prefs.updates === "daily" ? [[u("weekly"), "Weekly instead"] as [string, string]] : []), [u("updates-off"), "Off"], [`${BASE()}/settings#email`, "All settings"]];
   T.push("--", why, ...links.map(([href, label]) => `${label}: ${href}`));
-  const eyebrow = `${c.stats?.project?.name ?? "solveathome"} · ${c.edition === "weekly" ? "Weekly edition" : c.edition === "letter" ? "Letter" : "Daily update"}`;
+  const eyebrow = `${c.stats?.project?.name ?? (c.lead?.problem_id != null ? x.projectName(c.lead.problem_id) : "solveathome")} · ${c.edition === "weekly" ? "Weekly edition" : c.edition === "letter" ? "Letter" : c.edition === "record" ? "New record" : "Daily update"}`;
   const html = tpl.shell({ title: subject, preheader: preheader || subject, eyebrow, body: B.join("\n"), footerWhy: why, footerLinks: links });
-  const unsubscribe = c.edition === "letter" ? u(c.letters.some((l) => l.kind === "letter") ? "newsletter-off" : "projects-off") : u("updates-off");
+  const unsubscribe = c.edition === "record" ? u("all-off") : c.edition === "letter" ? u(c.letters.some((l) => l.kind === "letter") ? "newsletter-off" : "projects-off") : u("updates-off");
   return { subject, text: T.join("\n"), html, unsubscribe };
 }
 
@@ -528,7 +644,8 @@ async function due(limit = 200): Promise<Array<{ id: number; email: string; day:
 export async function deliver(person: { id: number; email: string; day: string; weekday: number }): Promise<string> {
   const c = await compose(person.id, { weekday: person.weekday, day: person.day });
   if (!c) return "nothing";
-  const holdout = c.edition !== "letter" && inHoldout(person.id);
+  // A record is always told: the holdout measures the ordinary updates, and an email that carries a record is outside it.
+  const holdout = c.edition !== "letter" && !c.items.some((i) => i.kind === "challenge_record") && inHoldout(person.id);
   // Claim the day. The unique (user, local_day) key is the cap: whoever inserts first writes today's email, everyone else stops here.
   const row = await one<{ id: number }>(`INSERT INTO email_outbox (user_id, local_day, edition, holdout, status, suppressed_reason) VALUES ($1, $2, $3, $4, $5, $6)
     ON CONFLICT (user_id, local_day) DO NOTHING RETURNING id`, [person.id, person.day, c.edition, holdout, holdout ? "suppressed" : "queued", holdout ? "holdout" : null]);
@@ -543,7 +660,8 @@ export async function deliver(person: { id: number; email: string; day: string; 
   // A merged line lists its own id in `merged` too: count each item once, so the record says how many items the email carried (second pass, 5 Oct 2026: 27 recorded for 18).
   const ids = [...new Set(c.items.flatMap((i: any) => [i.id, ...(i.merged ?? [])]).filter(Boolean))];
   // Waiting items that were merged into another line, or cut from a long list, are reported too: the page holds the rest.
-  await q(`UPDATE email_items SET email_id = $2 WHERE user_id = $1 AND email_id IS NULL AND (id = ANY($3) OR kind NOT IN ('letter','project'))`, [person.id, id, ids]);
+  // A record email reports only its records: the rest waits for the person's own update day.
+  await q(`UPDATE email_items SET email_id = $2 WHERE user_id = $1 AND email_id IS NULL AND (id = ANY($3) OR ($4 AND kind NOT IN ('letter','project')))`, [person.id, id, ids, c.edition !== "record"]);
   const m = await render(c, person.id, id);
   await q(`UPDATE email_outbox SET subject = $2, sections = $3 WHERE id = $1`, [id, m.subject, { lead: c.lead?.dedupe_key ?? null, items: ids.length, stats: c.stats }]);
   if (holdout) return "holdout";

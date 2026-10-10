@@ -9,7 +9,8 @@
  *   --dry-run   change nothing; print what would change
  *   --backup    change nothing; write the affected rows as JSON lines ({table, id, transcript}) to stdout, logs to stderr
  */
-import { q, pool } from "../src/db/index.js";
+import pg from "pg";
+import { pool } from "../src/db/index.js";
 import { findHarnessId, findHomePath, redactHarnessIds, redactHomePaths } from "../src/lib/files.js";
 
 const backup = process.argv.includes("--backup"), dryRun = backup || process.argv.includes("--dry-run");
@@ -19,6 +20,10 @@ const PATTERN = String.raw`"(atis|ownerAccountUuid|ownerOrganizationUuid|bridgeS
 // statement timeout on Oct 10 2026); the function decides.
 const HOME = `strpos(r.transcript, '/Users/') > 0 OR strpos(r.transcript, '/home/') > 0 OR strpos(r.transcript, 'Users' || chr(92)) > 0`;
 const IDS = new RegExp(PATTERN);
+// A batch reads every stored transcript (about a gigabyte on Oct 10 2026): one connection of its own, with five minutes instead of the
+// web pool's 15 s statement timeout, which the nightly run passed once home paths were added.
+const batch = new pg.Pool({ connectionString: process.env.DATABASE_URL, max: 1, statement_timeout: 300_000, query_timeout: 310_000 });
+const q = async <T = any>(text: string, values: unknown[] = []): Promise<T[]> => (await batch.query(text, values)).rows as T[];
 let changed = 0, homes = 0, still = 0;
 for (const table of ["returns", "reviews"] as const) {
   const rows = await q<{ id: string; transcript: string; slug: string | null; ids_hit: boolean }>(
@@ -43,4 +48,4 @@ for (const table of ["returns", "reviews"] as const) {
   }
 }
 log(`scan-transcripts: ${changed} transcript(s) ${dryRun ? "would change" : "changed"}, ${homes} with home paths; ${still} return(s) where a home path is still found`);
-await pool.end();
+await batch.end(); await pool.end();
