@@ -3,7 +3,7 @@ import {test} from 'node:test';
 
 // A transcript that still carries harness-written identifiers is not scrubbed (issue #28): Claude Code's signed `atis`
 // latch value and the account, organisation and bridge ids the brief names. Redacted values pass; opaque ones are named with their line.
-const {findHarnessId, findHomePath, redactHarnessIds, checkUpload} = await import('../src/lib/files.ts');
+const {findHarnessId, findHomePath, redactHarnessIds, redactHomePaths, checkUpload} = await import('../src/lib/files.ts');
 
 test('ownership fields in decoded responses redact opaque historical labels and preserve exact science',()=>{
   for (const key of ['last_released_session','assigned_session','held_by_session']) {
@@ -139,4 +139,21 @@ test('encoded private key/value tokens cannot bypass the harmless-text fast path
   const value=String.raw`{"\u0073ession_id":"\u0030\u0031\u0032\u0033\u0034\u0035\u0036\u0037\u0038\u0039abcdef0123456789abcdef","anchor":75053614359224265389282351}`;
   assert.ok(findHarnessId(value));const clean=redactHarnessIds(value).text;
   assert.ok(!findHarnessId(clean));assert.match(clean,/75053614359224265389282351/);
+});
+
+test('home paths: only the user prefix becomes ~, in plain text, JSON strings and Windows form; URLs, longer paths and /Users/Shared stay (Oct 10 2026)', () => {
+  const cases = [
+    ['cd /Users/ann/twin-primes/x.py', 'cd ~/twin-primes/x.py'],
+    ['{"cwd":"/Users/ann.b"}', '{"cwd":"~"}'],
+    ['"text":"done\\n/home/bob/x"', '"text":"done\\n~/x"'],
+    ['C:\\Users\\Ann Lee\\proj', '~\\proj'],
+    ['{"p":"C:\\\\Users\\\\ann\\\\proj"}', '{"p":"~\\\\proj"}'],
+    ['file:///Users/ann/x and (/home/bob/y)', 'file://~/x and (~/y)'],
+    ['https://x.org/home/page /usr/home/ann/ http://h/Users/ann', 'https://x.org/home/page /usr/home/ann/ http://h/Users/ann'],
+    ['/Users/Shared/data', '/Users/Shared/data'],
+    ['"C:\\\\\\\\Users\\\\\\\\bob\\\\\\\\y"', '"~\\\\\\\\y"'],
+  ];
+  for (const [input, want] of cases) assert.equal(redactHomePaths(input).text, want, input);
+  const r = redactHomePaths('/Users/a/x /Users/a/y'); assert.equal(r.n, 2);
+  for (const [input] of cases.slice(0, 6)) assert.equal(findHomePath(redactHomePaths(input).text), null, input);
 });
