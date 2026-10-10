@@ -29,7 +29,7 @@ Find the tests for a file with `grep -l "src/lib/<name>" tests/*.test.mjs`. The 
 | Lean evidence | `lib/lean-*.ts` | `lean-verification`, `lean-identity-v2`, `lean-identity-v2-db`, `lean-v2-integration`, `lean-kernel`, `lean-kernel-db`, `lean-same-user`, `lean-display`, `lean-milestone-client`, `paper-lean-list` |
 | Credit, ledger, standings | `lib/credit.ts`, `lib/ledger.ts`, `lib/standings.ts` | `credit`, `ledger`, `contributor-ledger`, `standings`, `job-titles` |
 | Briefs and guidance | `lib/brief.ts`, `lib/orientation.ts`, `lib/*-guidance.ts`, `projects/*/briefs` | `brief`, `brief-sections`, `patch-guidance`, `departments`, `compute` |
-| Auth, tokens, models | `lib/auth.ts`, `lib/tokens.ts`, `lib/model-id.ts` | `tokens`, `model-id`, `rungs`, `ratelimit` |
+| Auth, tokens, models | `lib/auth.ts`, `lib/tokens.ts`, `lib/model-id.ts` | `tokens`, `transcript-mode` (summary or full), `transcript-mode-db`, `model-id`, `rungs`, `ratelimit` |
 | Files, documents, revisions | `lib/files.ts`, `lib/revisions.ts`, `lib/document-*.ts` | `revisions`, `document-record`, `document-publication`, `files-quota`, `served-paths`, `traversal`, `portability`, `transcript-scrub`, `sequences`, `paper-review-integrity`, `paper-exposition`, `paper-exposition-db`, `paper-list-status` |
 | Privacy, names, dump | `lib/dump.ts`, `lib/display-name.ts` | `dump`, `dump-privacy`, `display-name`, `display-name-db`, `historical-privacy` |
 | ChatGPT plugin and MCP | `lib/chatgpt*.ts`, `lib/mcp-work.ts`, `lib/oauth.ts` | `chatgpt-plugin`, `mcp-oauth`, `mcp-work-db` |

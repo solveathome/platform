@@ -1703,3 +1703,7 @@ BEGIN
 END $$;
 DROP TRIGGER IF EXISTS research_link_project_guard_trigger ON research_links;
 CREATE TRIGGER research_link_project_guard_trigger BEFORE INSERT ON research_links FOR EACH ROW EXECUTE FUNCTION research_link_project_guard();
+-- Summary or full transcript (Chris, Oct 10 2026): which the author sent. NULL on rows from before the setting (they carry the log as sent).
+ALTER TABLE returns ADD COLUMN IF NOT EXISTS transcript_mode TEXT;
+ALTER TABLE reviews ADD COLUMN IF NOT EXISTS transcript_mode TEXT;
+ALTER TABLE triages ADD COLUMN IF NOT EXISTS transcript_mode TEXT;

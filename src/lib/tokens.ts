@@ -106,6 +106,34 @@ export function logHead(text: string, lines = 3, width = 400): string {
   return String(text ?? "").split("\n").filter((l) => l.trim()).slice(0, lines).map((l) => l.length > width ? l.slice(0, width) + "…" : l).join("\n");
 }
 
+/**
+ * Summary or full transcript (Chris, Oct 10 2026: "we currently send in the full chat transcript of how something was created. That is a
+ * bit of a concern … the agent can elect to send a summary or full transcript, with summary being the default"). The person picks it in
+ * the joining instruction (`transcript=summary|full`); a session registered before the setting existed sent full logs and keeps doing so.
+ * A summary is written by the agent, so the usage it reports in `tokens` is its own statement, as with the agent-written format.
+ */
+export type TranscriptMode = "summary" | "full";
+export const TRANSCRIPT_MODES: TranscriptMode[] = ["summary", "full"];
+export const TRANSCRIPT_MODE_DEFAULT: TranscriptMode = "summary";
+/** The mode a session works in: its own setting, or full for a session from before the setting (its agent was told to send the log). */
+export const sessionTranscriptMode = (ai: any): TranscriptMode => ai?.transcript_mode === "summary" ? "summary" : "full";
+/** The mode a contribution is recorded under: a recognised session log is full whatever was declared; anything else follows the declaration, then the session. */
+export function recordedTranscriptMode(declared: unknown, sessionMode: TranscriptMode, tokens: { log?: LogKind } | null | undefined): TranscriptMode {
+  if (isSessionLog(tokens)) return "full";
+  const d = String(declared ?? "").trim().toLowerCase();
+  if (d === "summary" || d === "full") return d;
+  // JSON lines of a harness the server does not know yet are a log, not a summary: they go to a harness report like any full log.
+  return tokens?.log === "unknown" ? "full" : sessionMode;
+}
+/** The sections a summary carries so a reviewer can judge the reasoning without the log; a heading per section, in this order. */
+export const SUMMARY_SECTIONS = ["Approach", "Steps", "Reasoning", "Results", "Dead ends", "Sources"] as const;
+export const SUMMARY_GUIDANCE = `A summary is markdown you write at the end of the assignment, with one heading per section: ## Approach (what you set out to do and why this route), ## Steps (what you read, ran and checked, in order, with the commands and the served paths or file hashes involved), ## Reasoning (the key inferences and the decisions they led to), ## Results (what came out, with the numbers and the outputs the report relies on), ## Dead ends (what you tried that failed or was abandoned, and why), ## Sources (the documents, messages, returns and papers you read). A reviewer judges your reasoning from it together with the report, files and recipe, so leave nothing out that the claim rests on; failures are data. Keep it to this assignment, scrubbed like any public text, and send the assignment's usage totals from your harness's record as \`"tokens": { "input", "output", "cache_read", "cache_write" }\` so your person is credited (omit what the record does not show; never estimate).`;
+/** The summary sections a text lacks, by heading; empty for a complete summary. */
+export function summaryGaps(text: string): string[] {
+  const heads = [...String(text ?? "").matchAll(/^#{1,4}\s*([^\n#]+?)\s*#*\s*$/gm)].map((m) => m[1].toLowerCase());
+  return SUMMARY_SECTIONS.filter((s) => !heads.some((h) => h.startsWith(s.toLowerCase())));
+}
+
 /** Runtime discovery guidance shared by orientation and intake warnings; app examples stay in the reference. */
 export const LOG_LOCATIONS = "Identify this application session explicitly from its metadata; never choose a log by newest modification time. Research the installed application's supported APIs, exports, documentation or read-only records. Build or reuse a scoped reader with available native tools, verify its schema and bind records to this assignment. No JSONL file does not mean no usage; inspect database/export records when applicable. Keep private stores and unrelated sessions local. If no supported export exists, implement one in the solveathome transcript format (" + CUSTOM_FORMAT_URL + "): preserve what was said, run and returned, with only observed attributable usage. Validate the exporter before research, keep incomplete usage pending and reconcile it later. Optional application examples in that reference are starting points to verify locally, not requirements for a particular runtime.";
 

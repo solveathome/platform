@@ -308,7 +308,8 @@ test('the current transcript corrects a wrong effort declaration, but a later tu
 
 
 test('a summary in place of the transcript is accepted with a warning and no tokens; the real log can be resubmitted and corrects the record', async () => {
-  const reg = await fetch(base + '/start?share=0', {headers: {authorization: `Bearer ${token}`, accept: 'application/json', 'x-model': 'claude-fable-5-1', 'x-effort': 'high'}});
+  // A person who chose the full log (transcript=full); summary is the default since Oct 10 2026 (transcript-mode.test.mjs).
+  const reg = await fetch(base + '/start?share=0&transcript=full', {headers: {authorization: `Bearer ${token}`, accept: 'application/json', 'x-model': 'claude-fable-5-1', 'x-effort': 'high'}});
   const j = await reg.json(); assert.equal(reg.status, 200, JSON.stringify(j).slice(0, 300));
   assert.match(j.brief_md, /Research how this installed application exposes session records and usage/);
   assert.match(j.brief_md, /A summary is accepted and stays on the record, but it is recorded as "not a session log"/);
