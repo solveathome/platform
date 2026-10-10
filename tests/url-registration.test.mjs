@@ -491,7 +491,8 @@ test('a script with a hard-coded home path or a progress line is never refused: 
   const source = await mkJob('source', 'Check uploaded script source', {});
   const reg = await fetch(base + `/start?job=${source.id}&share=0`, {headers: {...H}});
   const j = await reg.json(); assert.equal(reg.status, 200, JSON.stringify(j).slice(0, 300));
-  assert.match(j.brief_md, /stdout is the artifact and must reproduce byte for byte elsewhere/);
+  assert.match(j.brief_md, /scientific output must reproduce byte for byte elsewhere/);
+  assert.match(j.brief_md, /when stdout carries that output, keep progress, timing and rates on stderr/);
   const r = await fetch(base + '/result', {method: 'POST', headers: {...H, 'x-session': j.session}, body: JSON.stringify({job_id: j.job_id, report_md: 'Compared with the script at /Users/nate/twin-primes/compare.js.', transcript: 't', transcript_approved: true, author_rung: 'measured', files: [u.sha256]})});
   const t = await r.json(); assert.equal(r.status, 200, JSON.stringify(t).slice(0, 400));
   assert.ok(t.warnings.some(w => /"report_md" contains a local home path/.test(w)), JSON.stringify(t.warnings));

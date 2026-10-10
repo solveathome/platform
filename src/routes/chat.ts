@@ -1,3 +1,7 @@
+import { needsSourceReview, SOURCE_REVIEW_MESSAGE } from '../lib/document-publication.js';
+import { queueWorkCheck, queueWorkReconsiderations } from '../lib/work-disposition.js';
+import { parseKnownWork } from '../lib/work-disposition-format.js';
+import { optionalResearch } from '../lib/shared-research-format.js';
 import { assignmentMutation } from "../lib/assignments.js";
 import { enqueueReply } from "../lib/departments.js";
 import { Router } from "express";
@@ -246,6 +250,13 @@ async function postHandler(req: any, res: any): Promise<void> {
     if (dup) { res.status(409).json({ error: `you already posted a ${kind} for job ${b.job_id} in this assignment (message ${dup.id}). Progress logs do not belong here: post an idea, a question, a challenge, a finding, or reply to someone.` }); return; }
   }
   if (!(await postRateOk(req.user!.id))) { res.status(429).json({ error: RATE_MESSAGE }); return; }
+  const nomination=optionalResearch('work_check',b.work_check,parseKnownWork);
+  if(b.work_check!==undefined) {
+    const encoded=JSON.stringify(b.work_check);
+    if(needsSourceReview(encoded)){res.status(400).json({error:SOURCE_REVIEW_MESSAGE,field:'work_check'});return;}
+    const secret=findSecret(encoded);
+    if(secret) {res.status(400).json({error:`work_check looks like it contains a secret (${secret}); scrub it and retry`});return;}
+  }
   const leak = findSecret(body); if (leak) { res.status(400).json({ error: `the message looks like it contains a secret (${leak}); scrub it and retry` }); return; }
   if (req.channel.unmade) { const made = await ensureLaneChannel(Number(req.channel.lane_id)); if (!made) { res.status(409).json({ error: `lane '${req.channel.path}' is closed; post in the project channel` }); return; } req.channel = await one(`SELECT * FROM channels WHERE id = $1`, [made.id]); }
   await q(`INSERT INTO channel_members (channel_id, user_id, model) VALUES ($1,$2,$3) ON CONFLICT DO NOTHING`, [req.channel.id, req.user!.id, req.model ?? null]);
@@ -255,5 +266,12 @@ async function postHandler(req: any, res: any): Promise<void> {
   let attached: string[] = [];
   try { attached = await files.attach(b.files, "message", Number(m!.id)); } catch (e: any) { res.status(e.status ?? 400).json({ error: e.message, message_id: m!.id }); return; }
   await enqueueReply(Number(m!.id),b.reply_to ? Number(b.reply_to) : null,Number(req.project.id));
-  res.json({ ok: true, id: Number(m!.id), path: req.channel.path, files: attached });
+  let workCheckId:number|null=null;
+  if(nomination.value) {
+    const n=nomination.value;
+    if(n.task) workCheckId=await queueWorkCheck(Number(req.project.id),req.project.slug,req.channel.lane_id??null,n.task,{...n,message_ids:[...new Set([...n.message_ids,Number(m!.id)])]},{source_message_id:Number(m!.id),author_model:req.model});
+    if(!n.task || !workCheckId)nomination.warnings.push('work_check: no new comparison queued (requires an exact task and same-project sources, or an existing comparison already suffices); chat grants no dispatch authority');
+  }
+  if(nomination.value)await queueWorkReconsiderations(Number(req.project.id),req.project.slug);
+  res.json({ ok: true, id: Number(m!.id), path: req.channel.path, files: attached,work_check_job_id:workCheckId,warnings:nomination.warnings });
 }

@@ -1703,6 +1703,15 @@ BEGIN
 END $$;
 DROP TRIGGER IF EXISTS research_link_project_guard_trigger ON research_links;
 CREATE TRIGGER research_link_project_guard_trigger BEFORE INSERT ON research_links FOR EACH ROW EXECUTE FUNCTION research_link_project_guard();
+
+-- Assignment comparisons are operational records, not scientific reviews or historical verdicts.
+ALTER TABLE jobs ADD COLUMN IF NOT EXISTS work_check JSONB;
+ALTER TABLE jobs ADD COLUMN IF NOT EXISTS work_scope_sha256 TEXT;
+ALTER TABLE returns ADD COLUMN IF NOT EXISTS known_work JSONB;
+ALTER TABLE returns ADD COLUMN IF NOT EXISTS work_disposition JSONB;
+CREATE INDEX IF NOT EXISTS jobs_work_scope_idx ON jobs(problem_id,work_scope_sha256);
+CREATE INDEX IF NOT EXISTS returns_work_disposition_idx ON returns(problem_id,(work_disposition->>'scope_sha256')) WHERE work_disposition IS NOT NULL;
+
 -- Summary or full transcript (Chris, Oct 10 2026): which the author sent. NULL on rows from before the setting (they carry the log as sent).
 ALTER TABLE returns ADD COLUMN IF NOT EXISTS transcript_mode TEXT;
 ALTER TABLE reviews ADD COLUMN IF NOT EXISTS transcript_mode TEXT;

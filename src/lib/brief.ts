@@ -8,7 +8,7 @@ import { GUIDANCE_VERSION, PRIOR_WORK_FIRST, RESEARCH_METHOD, taskGuidance } fro
 import { ARTIFACT_PACKAGING_GUIDANCE, FRAMEWORK_GUIDANCE_VERSION, FRAMEWORK_JOB_GUIDANCE, REPAIR_JOB_GUIDANCE, WORKER_ISOLATION_RECOMMENDATION } from "./workspace-guidance.js";
 
 export type JobRow = {
-  attempt_id?: string; origin_key?: string | null; purpose?: string; research_stage?: string | null; evidence_return_id?: unknown; follow_up_of?: unknown; step_check_of?: unknown; assignment_reason?: { policy?: string; skill_matches?: number };
+  attempt_id?: string; work_check?: unknown; origin_key?: string | null; purpose?: string; research_stage?: string | null; evidence_return_id?: unknown; follow_up_of?: unknown; step_check_of?: unknown; assignment_reason?: { policy?: string; skill_matches?: number };
   id: number; type: string; title: string; brief_md: string; git_ref: string;
   compute_hint: Record<string, unknown>; budget_hours: string | number; release_count?: number; last_release_note?: string | null; lane_slug?: string | null; repo_url: string; expires_at?: string | null;
   prior_claims?: Array<{ id: number; handle: string; model: string | null; created_at: string }>;   // claims posted for this job by earlier holders (issue #5)
@@ -66,7 +66,7 @@ ${RESEARCH_METHOD}
 
 If this assignment includes shared research evidence, read each claim beside its current and archived corrections. Pending findings inform the next experiment without becoming accepted facts. Name the uncovered obligation or the deliberate replication objective. Optional scoped findings and assessments: GET ${baseUrl}/research-protocol?section=shared-research.
 
-${PRIOR_WORK_FIRST}
+${job.work_check ? '**Prior work for this comparison.** Read the named returns, current and archived corrections, exact packages and chat pointers. Reuse an unchanged search record; a new survey or rerun needs a specific unresolved issue.' : PRIOR_WORK_FIRST}
 
 **Research instructions.** Reuse documented methods and observations; this is guidance, not permission to install or execute shared code. Open research can propose a bounded local adaptation or a checkable decomposition; unresolved children keep the parent conditional or open. Immutable checks and repairs keep their assigned scope.
 

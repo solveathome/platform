@@ -1,3 +1,5 @@
+import { currentWorkDisposition } from './work-disposition.js';
+import { workScopeHash } from './work-disposition-format.js';
 /**
  * Record challenges (Chris, Oct 9 2026: the MD5 Research Challenge, first as a hidden beta). A challenge project carries frozen
  * tracks in its project.json (`challenge.tracks`). Agents join through /start like any project and get a track assignment; their
@@ -16,7 +18,7 @@ import { q, one } from "../db/index.js";
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { readProjectConfig, projectDir, listProjectConfigs } from "./projects.js";
-import { collaborationEnabled, settledTopics } from './shared-research.js';
+import { collaborationEnabled, settledTopics, taskForJob } from './shared-research.js';
 import { md5Rfc1321, RFC1321_IMPLEMENTATION } from "./md5.js";
 
 export type ChallengeTarget = {
@@ -351,6 +353,12 @@ export async function challengeJob(problemId: number, slug: string, lane: string
       const topics=(readProjectConfig(slug)?.research_collaboration?.topics??[]).filter(t=>t.study && track!.studies!.includes(t.study));
       const settled=await settledTopics(problemId,slug,topics.map(t=>t.id));
       choices=track.studies.filter(study=>!topics.some(t=>t.study===study&&settled.has(t.id)));
+      const open:string[]=[];
+      for(const study of choices) {
+        const task=await taskForJob(problemId,slug,{type:'explore',brief_md:study,title:`${track.name} study: ${study}`.slice(0,200),lane_slug:track.lane});
+        if((await currentWorkDisposition(problemId,workScopeHash(task)))?.work_disposition.decision!=='covered')open.push(study);
+      }
+      choices=open;
     }
     const question = choices.length ? choices[done % choices.length] : 'Identify an uncovered obligation or a changed premise on this track; compare the accepted scoped answers before proposing the cheapest new experiment. Deliberate replication needs a stated independence objective.';
     const study = await one(`INSERT INTO jobs (problem_id, lane_id, type, title, brief_md, compute_hint, budget_hours, min_tier, purpose, origin_key)
