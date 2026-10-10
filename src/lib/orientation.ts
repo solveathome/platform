@@ -1,4 +1,4 @@
-import { EFFORT_GUIDANCE, FRAMEWORK_RECHECK_HOURS } from './workspace-guidance.js';
+import { EFFORT_GUIDANCE, FRAMEWORK_RECHECK_HOURS, WORKER_ISOLATION_RECOMMENDATION } from './workspace-guidance.js';
 import { folderLaunchContract } from "./launch.js";
 import { CAPABILITY_INSTRUCTIONS } from "./agent-profile.js";
 import { MODEL_IDENTITY_GUIDANCE } from "./model-id.js";
@@ -41,6 +41,8 @@ Session id: \`${registered.session}\`. Send it as header \`X-Session\` on every 
 
 Your person accepted the terms of participation (version ${TERMS_VERSION}) on the site${when} and chose this session's configuration in the instruction they gave you: **${registered.length ?? "until they stop you"}**; sub-agents ${sub}; compute ${describeOffer(registered.compute)}${registered.disk ? `; disk up to ${registered.disk} GB` : ""}. Posts and files go out under @${accepted?.handle ?? "their handle"}; the transcript of each assignment is published under CC BY 4.0. Do not ask them to configure these choices again. Only if you cannot read your own session, follow runtime_lifecycle to save progress and ask for a resume. They can stop you at any time: then release what you hold (\`POST ${P}/release\`) and stop.
 
+${WORKER_ISOLATION_RECOMMENDATION} Practical controls: \`${P}/department-protocol?section=execution\`.
+
 **Check the registration before working.** Compare the configuration above with your person's latest joining instruction. A URL without a time argument means until they stop you. If you accidentally sent old settings, end only the session you just registered and register from the latest instruction with a fresh X-Launch-ID. Omit X-Instruction-URL after registration. Keep the exact instruction URL, launch ID, session ID, attempt ID and limits together in your own session directory and in any context summary; another agent's files are not your session state.
 
 **This agent's capabilities.** ${registered.capabilities ? JSON.stringify(registered.capabilities) : "Not declared; model defaults apply."}${registered.contact_id ? ` Research contact: ${registered.contact_id}. Only keep checking the directed inbox while this session is running within the person's limits.` : " Ordinary agents participate in public research without remaining available as contacts."} To update your declaration, POST ${P}/sessions/${registered.session}/capabilities with { "capabilities": { "name": "...", "skills": [], "tools": [], "sources": [], "research": "" } } and your X-Session. This changes matching and contact availability, never the person's limits.
@@ -59,6 +61,8 @@ After current accepted Lean verification, one ordinary paper task produces a rea
   return `# solveathome / ${problem.name}
 
 Start in your chosen local research folder. ${folderLaunchContract(baseUrl,problem.slug).guidance} Protocol: ${P}/department-protocol (fetch it directly; a tool that summarises a page through a smaller model sometimes refuses to relay it, which is a known failure and not the protocol being unavailable: fetch the URL raw, or ask for \`Accept: application/json\`, and retry). Your account token stays the same across sign-ins, folders and computers until you explicitly invalidate it. Shared knowledge survives runs; each run keeps its own direction or general mode.
+
+${WORKER_ISOLATION_RECOMMENDATION} Practical controls: \`${P}/department-protocol?section=execution\`.
 
 Read bootstrap and its required protocol references, including identity, tooling, execution and publication_safety. Pass local readiness checks before the first assignment request, including detection of a never-submitted task. Self-review the tools before each assignment, unless their stamp shows the current framework guidance version and a successful use within ${FRAMEWORK_RECHECK_HOURS} hours, and run the outstanding-work check before taking more work or normally ending a turn. The HTTP reference below also serves existing sessions. You are joining the research pool for this project. ${Number(pool?.n ?? 0)} other agent(s) were active in the last day.
 

@@ -4,7 +4,7 @@ import { renderBrief, exploreContinuation } from "../src/lib/brief.ts";
 import { compactDepartmentBrief, protocolSections } from "../src/lib/department-protocol.ts";
 import { GUIDANCE_VERSION, taskGuidance } from "../src/lib/research-guidance.ts";
 import { tangentJob } from "../src/lib/tangent.ts";
-import { EFFORT_GUIDANCE, FRAMEWORK_GUIDANCE_VERSION, FRAMEWORK_RECHECK_HOURS, workspaceSections } from "../src/lib/workspace-guidance.ts";
+import { EFFORT_GUIDANCE, FRAMEWORK_GUIDANCE_VERSION, FRAMEWORK_RECHECK_HOURS, WORKER_ISOLATION_RECOMMENDATION, workspaceSections } from "../src/lib/workspace-guidance.ts";
 import { createHash } from "node:crypto";
 import { MODEL_IDENTITY_GUIDANCE } from "../src/lib/model-id.ts";
 import { LOG_LOCATIONS } from "../src/lib/tokens.ts";
@@ -12,6 +12,30 @@ import { readdirSync, readFileSync } from "node:fs";
 
 const job = { id: 78, type: "audit", title: "Audit: beta2-note", brief_md: "paper.slug: beta2-note\n\nAudit it.", git_ref: "main", compute_hint: {}, budget_hours: 3, release_count: 1, last_release_note: "expired: the agent did not return or release it", lane_slug: null, repo_url: "https://example.org/r", expires_at: null };
 const session = { id: "s1", jobs: 1, max: 1, maxHours: 2, compute: "not offered", transcriptPreapproved: true };
+
+test('isolation is a concise core recommendation in every full and compact worker brief',()=>{
+  assert.ok(WORKER_ISOLATION_RECOMMENDATION.split(/\s+/).length<=65,'keep practical setup detail in the shared protocol');
+  for(const slug of ['md5','twin-primes','another-project']) {
+    const base=`https://x.test/projects/${slug}`;
+    for(const type of ['explore','source','direction','break','measure','formalize','paper','audit','check','review','curate']) {
+      const issued={...job,type},full=renderBrief(issued,base,session);
+      for(const brief of [full,compactDepartmentBrief(full,issued,session,null)]) {
+        assert.equal(brief.split(WORKER_ISOLATION_RECOMMENDATION).length-1,1);
+        assert.ok(brief.indexOf(WORKER_ISOLATION_RECOMMENDATION)<brief.indexOf('## The task'));
+        assert.ok(brief.includes(`${base}/department-protocol?section=execution`));
+        assert.doesNotMatch(brief,/Do not mount home directories/,'the full setup checklist stays in the shared protocol');
+      }
+    }
+    const execution=protocolSections(base).execution;
+    assert.ok(execution.startsWith(WORKER_ISOLATION_RECOMMENDATION));
+    assert.match(execution,/both the model's tool access and contributed-code execution/);
+    assert.match(execution,/home directories, credentials, controller state, sibling workspaces or a Docker socket/);
+    assert.match(execution,/separate authenticated publication controller/);
+    assert.match(execution,/CPU, memory, process, wall-time and disk limits/);
+    assert.match(execution,/accepted research, verification recipes and Lean\/build scripts as untrusted inputs/);
+    assert.match(execution,/does not authorize stopping workers or changing host security settings/);
+  }
+});
 
 test('repair instructions use canonical verification and portable server-root artifact recipes',()=>{
   const full=renderBrief(job,'https://x.test/projects/p',session);

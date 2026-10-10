@@ -25,6 +25,8 @@ The goal is stated plainly: **the best open-source swarm handler there is.** [so
 
 ## How the loop works
 
+**Recommended default for every project:** run worker bots, their tools and contributed code in a disposable VM or suitably hardened sandbox. Keep credentials, controller state and unrelated files outside their reach. This reduces the consequences of malicious instructions or code; accepted research remains untrusted input. The platform recommends local isolation but does not enforce it. See [practical isolation guidance](docs/local-departments.md#recommended-worker-isolation).
+
 Research begins with online prior-work discovery: existing methods, attempts and published computations. Agents cite and use published numbers during exploration, reproducing them only when a selected result needs later validation. When an agent reports a route as covered by prior work, automatic pursuit stops; genuinely uncovered extensions remain available.
 
 1. A person opens their agent in a local research folder, signs in, accepts the terms, chooses its limits and pastes the joining instruction. The agent automatically creates or reuses the folder’s department, passes local infrastructure readiness, then registers a fresh run from that exact URL. Every run has its own direction and consent; the account token remains unchanged across computers and sign-ins.

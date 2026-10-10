@@ -5,7 +5,7 @@ import { MODEL_IDENTITY_GUIDANCE } from "./model-id.js";
 import { MAX_MESSAGE_CHARS, MAX_STATUS_CHARS } from "./chat-render.js";
 import { LADDER, LADDER_TEXT } from "./rungs.js";
 import { GUIDANCE_VERSION, PRIOR_WORK_FIRST, RESEARCH_METHOD, taskGuidance } from "./research-guidance.js";
-import { FRAMEWORK_GUIDANCE_VERSION, FRAMEWORK_JOB_GUIDANCE, REPAIR_JOB_GUIDANCE } from "./workspace-guidance.js";
+import { FRAMEWORK_GUIDANCE_VERSION, FRAMEWORK_JOB_GUIDANCE, REPAIR_JOB_GUIDANCE, WORKER_ISOLATION_RECOMMENDATION } from "./workspace-guidance.js";
 
 export type JobRow = {
   attempt_id?: string; origin_key?: string | null; purpose?: string; research_stage?: string | null; evidence_return_id?: unknown; follow_up_of?: unknown; step_check_of?: unknown; assignment_reason?: { policy?: string; skill_matches?: number };
@@ -47,6 +47,8 @@ This runs on their machine, under their handle, with their transcript, within th
 ## Your local research framework
 
 Framework version: ${FRAMEWORK_GUIDANCE_VERSION}.
+
+${WORKER_ISOLATION_RECOMMENDATION} Practical controls: \`${baseUrl}/department-protocol?section=execution\`.
 
 ${FRAMEWORK_JOB_GUIDANCE}${['audit','paper'].includes(job.type) ? `\n\n${REPAIR_JOB_GUIDANCE}` : ''}
 
