@@ -150,3 +150,41 @@ test('lines say what happened without hype: no "proof", nothing called accepted 
   const subj = U.subjectOf({edition: 'daily', lead: item('accepted', {facts: {return_id: 4, points: 60, type: 'break'}}), rest: [item('cited'), item('rank')], asks: [], stats: null, letters: []}, {...x, letters: new Map()});
   assert.equal(subj, 'Accepted: your agent\'s break (+60), and 2 more');
 });
+
+// Records on a record challenge (Chris, 10 Oct 2026): the comparison follows the track's direction, a tie is never "beyond", several
+// records on one track are one line, and a record goes out on its own when the person's updates would not carry it today.
+const higher = {id: 'hi', name: 'Hi', better: 'higher', max: 32, display: {name: 'Higher track'}};
+const lower = {id: 'lo', name: 'Lo', better: 'lower'};
+test('a record is compared with the published best in the track\'s own direction', () => {
+  assert.equal(U.againstPublished(higher, 13, {value: 12, credit: 'Ref'}).beyond, true);
+  assert.equal(U.againstPublished(higher, 12, {value: 12, credit: 'Ref'}).beyond, false);
+  assert.equal(U.againstPublished(higher, 12, {value: 12, credit: 'Ref'}).level, true);
+  assert.match(U.againstPublished(higher, 9, {value: 12, credit: 'Ref'}).text, /best published result we verified is 12 of 32, Ref: the next mark/);
+  assert.equal(U.againstPublished(lower, 120, {value: 128, credit: 'Ref'}).beyond, true);
+  assert.equal(U.againstPublished(lower, 130, {value: 128, credit: 'Ref'}).beyond, false);
+  assert.match(U.againstPublished(lower, 120, {value: 128, credit: 'Ref'}).text, /beyond the best published result we verified \(128 bytes, Ref\)/);
+  assert.equal(U.againstPublished(higher, 13, null).text, '');
+  assert.match(U.recordFacts(higher, {value: 5, previous: null}, null).before, /first verified result on this track/);
+  assert.match(U.recordFacts(higher, {value: 5, previous: 4}, '@ada').before, /^Up from 4 of 32, the platform best before it \(@ada\)/);
+});
+
+test('several records by one person on one track are one line, from the first best before them to the newest', () => {
+  const rec = (sid, value, previous, challenge_id = 'hi') => item('challenge_record', {id: sid, facts: {submission_id: sid, challenge_id, value, previous}});
+  const out = U.mergeRecords([rec(11, 7, 6), rec(10, 6, 5), rec(12, 3, 2, 'other'), item('accepted', {facts: {return_id: 1}})]);
+  assert.equal(out.length, 3);
+  const hi = out.find((i) => i.facts.challenge_id === 'hi');
+  assert.deepEqual([hi.facts.value, hi.facts.previous, hi.facts.count, hi.facts.submission_id], [7, 5, 2, 11]);
+  assert.deepEqual(hi.merged.sort(), [10, 11]);
+  assert.equal(U.pickLead(out).kind, 'challenge_record', 'a record leads the email');
+});
+
+test('a record goes out the day it is set, alone, for weekly people and for people with updates off', () => {
+  const rec = item('challenge_record', {facts: {submission_id: 1, challenge_id: 'hi', value: 3, previous: 2}});
+  const verdict = item('verdict', {facts: {return_id: 9, status: 'rejected'}});
+  assert.equal(U.decide(daily, [rec, verdict], [], stats(), 3).edition, 'daily');
+  const weekly = U.decide({...daily, updates: 'weekly'}, [rec, verdict], [], stats(), 3);
+  assert.equal(weekly.edition, 'record');
+  assert.deepEqual(weekly.items.map((i) => i.kind), ['challenge_record'], 'the rest waits for Monday');
+  assert.equal(U.decide({...daily, updates: 'weekly'}, [rec, verdict], [], stats(), 1).edition, 'weekly');
+  assert.equal(U.decide({updates: 'off', newsletter: true, projects: false}, [rec], [], null, 3).edition, 'record');
+});

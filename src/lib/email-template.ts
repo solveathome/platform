@@ -88,7 +88,8 @@ export function nextStep(o: { eyebrow: string; text: string; href: string; cta: 
  * The bottom of every update: the research as a whole (Chris, 3 Oct 2026). A heavy rule and its own heading set it apart from the top,
  * which is only about the reader; then project numbers in small cards, notable accepted results and closed routes as rows, and a link.
  */
-export function researchSection(o: { title: string; lead: string; cards: Array<{ value: string; label: string }>; rows: Array<{ label: string; head: string; href: string }>; href: string; cta: string }): string {
+export function researchSection(o: { title: string; lead: string; cards: Array<{ value: string; label: string }>; rows: Array<{ label: string; head: string; href: string }>; href: string; cta: string;
+  records?: { title: string; items: Array<{ head: string; why: string; href: string; beyond?: boolean }> } }): string {
   const cell = (c: { value: string; label: string } | undefined, i: number) => c ? `<td class="stat" width="25%" valign="top" style="width:25%;padding:${i ? "0 0 0 8px" : "0"}">
       <p class="txt stat-num" style="font:600 24px/1.1 ${FONT};letter-spacing:-.03em;color:${C.ink};margin:0">${esc(c.value)}</p>
       <p class="mut" style="font:12px/1.4 ${FONT};color:${C.mut};margin:4px 0 0">${esc(c.label)}</p></td>` : `<td width="25%"></td>`;
@@ -96,8 +97,22 @@ export function researchSection(o: { title: string; lead: string; cards: Array<{
     <p class="mut" style="${eyebrowStyle(C.mut)}">The research</p>
     <h2 class="txt" style="font:600 21px/1.3 ${FONT};letter-spacing:-.02em;color:${C.ink};margin:0 0 8px">${esc(o.title)}</h2>
     <p class="mut" style="font:15px/1.55 ${FONT};color:${C.mut};margin:0 0 20px">${esc(o.lead)}</p>
+    ${o.records ? recordsBlock(o.records.title, o.records.items) : ""}
     <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" class="research-cards"><tr>${[0, 1, 2, 3].map((i) => cell(o.cards[i], i)).join("")}</tr></table>
   </td></tr>` + (o.rows.length ? rows("Accepted and closed", o.rows) : "") + spacer(22) + `<tr><td>${button(o.href, o.cta, "outline")}</td></tr>`;
+}
+
+/**
+ * Records broken on a record challenge, inside the research section (Chris, 10 Oct 2026: "make sure we correctly highlight in emails if
+ * we broke a record"): a ruled block in ink, ahead of the numbers, one line per record with who set it and how it compares.
+ */
+export function recordsBlock(title: string, items: Array<{ head: string; why: string; href: string; beyond?: boolean }>): string {
+  if (!items.length) return "";
+  return `<table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="margin:0 0 22px"><tr><td class="card ask" style="border:1px solid ${C.ink};border-left:5px solid ${C.ink};padding:20px 22px 20px;background:${C.paper}">
+    <p class="txt" style="${eyebrowStyle(C.ink)}">${esc(title)}</p>
+    ${items.map((it, i) => `<p style="margin:${i ? "16px" : "0"} 0 4px"><a class="txt" href="${esc(it.href)}" style="font:600 17px/1.4 ${FONT};letter-spacing:-.01em;color:${C.ink};text-decoration:none">${esc(it.head)}&nbsp;<span style="color:${C.mut}">&rarr;</span></a>${it.beyond ? ` <span class="txt" style="font:600 10px/1.4 ${MONO};letter-spacing:.08em;text-transform:uppercase;color:${C.ink};border:1px solid ${C.ink};padding:1px 5px;white-space:nowrap">Beyond published</span>` : ""}</p>
+      <p class="mut" style="font:14px/1.5 ${FONT};color:${C.mut};margin:0">${esc(it.why)}</p>`).join("")}
+  </td></tr></table>`;
 }
 
 /** The monthly letter or project news inside an email: a quieter, ruled section. */
