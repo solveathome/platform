@@ -26,7 +26,7 @@ export async function taskForJob(problemId: number, slug: string, job: any): Pro
   const step=route?.next_step;
   const intent=job.follow_up_of || job.type==='audit' ? 'repair' : job.type==='source' ? 'source' : job.type==='paper' || job.research_stage==='consolidate' ? 'consolidation' : sourceIds.length ? 'extend' : 'new';
   return parseResearchTask({intent,topic_ids:[...new Set([...topics.map(t=>t.id),...(source?.research_evidence?.topic_ids??[])])],predecessor_returns:sourceIds,
-    unresolved_obligation_md:step?.question ?? (job.research_stage==='first_look' ? route?.uncertainty_md : null) ?? job.title,
+    unresolved_obligation_md:step?.question ?? (job.research_stage==='first_look' ? route?.uncertainty_md : null) ?? topics.find(t=>t.study)?.question_md ?? job.title,
     changed_premise_md:intent==='repair' ? 'Address the named correction without repeating unchanged evidence.' : sourceIds.length ? 'Resolve the uncovered obligation; preserve supported earlier statements and corrections.' : 'Establish the exact uncovered difference from existing research before substantial work.',
     expected_evidence_md:step?.success ?? 'An attributable scoped claim, source, measured comparison or negative result with its cheapest decisive check.',
     stop_if_md:step?.failure ?? 'The exact obligation is already answered, a decisive counterexample defeats this attempt, or the required evidence cannot be obtained within actual consent and controls.',

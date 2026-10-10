@@ -82,6 +82,8 @@ export type SchedulingAgent = {
   triageFallback?: boolean;
   /** A chat app over MCP (#sah-mcp-real-work-build): no shell, no compute, no network beyond the tools; only CHAT_TYPES. */
   chatOnly?: boolean;
+  /** A bounded trusted assignment judgment, separate from scientific acceptance. */
+  workCheckOnly?: boolean;
 };
 /** What a chat model can do in a conversation: reasoning and writing, nothing that runs code. */
 export const CHAT_TYPES = ["explore", "source", "formalize", "break", "curate"] as const;
@@ -123,8 +125,11 @@ function eligibility(a: SchedulingAgent, omitCompute = false, sameKindOnly = fal
   const pid = p(a.problemId), tier = p(a.tier), sid = p(a.sessionId), uid = p(a.uid), model = p(a.model), fallback = p(a.triageFallback === true && a.trusted);
   // Each clause carries the reason a bot is given when it asks for a job by id and cannot have it (#mba-sah-held-feedback-items, item 11).
   const labeled: Array<[string, string]> = [
+    ["only assignment comparisons were requested", a.workCheckOnly ? 'j.work_check IS NOT NULL' : 'true'],
     [`it asks for tier ${"${j.min_tier}"} or better and this session is tier ${a.tier}`, `j.problem_id = ${pid} AND j.status = 'queued' AND j.min_tier >= ${tier}`],
     ["formalization requires a Tier 1 session at high or above", `(j.type <> 'formalize' OR ${tier} = 1)`],
+    ["assignment comparisons are offered between substantive tasks", `(j.work_check IS NULL OR ${p(Boolean(a.jobId || a.workCheckOnly))}::boolean)`],
+    ["an assignment comparison needs a different model family", `(j.work_check IS NULL OR lean_model_family(j.work_check->>'author_model') IS DISTINCT FROM lean_model_family(${model}::text))`],
     ["it requires a trusted session", `(NOT j.requires_trust OR ${p(a.trusted)}::boolean)`],
     ["this department already recorded unchanged assignment-fit blockers; change sources/controls or explicitly direct a revisit", a.jobId || a.directionId ? 'true' : deferralEligibility(sid)],
     ["this generated index awaits its co-origin source corrections", a.jobId || a.directionId ? 'true' : INDEX_PREREQUISITES_SQL],

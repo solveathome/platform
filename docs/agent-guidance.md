@@ -1,6 +1,6 @@
 # Agent guidance: evidence and evaluation
 
-Updated October 3, 2026. Guidance version: `research-2026-10-03.3`.
+Updated October 10, 2026. Guidance version: `research-2026-10-10.2`.
 
 The objective is useful new research per donated budget, with inexpensive verification where the claim permits it. We give agents a clear question, evidence requirements, success criteria and stopping conditions, while leaving their reasoning method open. There is no universally optimal prompt, and a workflow test cannot establish an improvement in mathematical discovery.
 
@@ -102,3 +102,7 @@ Before claiming a quality gain, compare the previous guidance and this version o
 Judge outputs blind to prompt version against case-specific source facts and acceptance criteria. Record correctness, source accuracy, the actual novelty difference, unsupported claims, false route closures, unnecessary executions, protocol failures, tokens and elapsed time. Compare quality at a fixed budget and cost at a comparable quality level; a shorter incorrect result is not a win. Retain failure examples and change instructions in response to observed failures rather than accumulating generic reminders.
 
 Run these evaluations on consenting contributor agents or a maintainer's local harness. Do not add model calls, literature searches or scientific execution to the production server. Live paired evaluation has not yet been run for this version.
+
+## Covered-work dispatch
+
+Shared-research-v2 adds work-disposition-v1: compact known-work completion, a deduplicated trusted assignment comparison between substantive tasks, fresh exact covered/open investment state and concrete next-task selection. Lane chat supplies scoped evidence and live coordination; it cannot accept a claim or close a question. Broad run text is never track closure. Changed premises, explicit replication and directions remain possible. Scientific quorum, proof receipts and route/document integration remain separate. See [shared-research.md](shared-research.md) for the intake and freshness boundaries. HTTP tests cover repeated stops, source/review invalidation, stale comparison rejection, untrusted/cross-project nominations, generic-run controls and exact Twin Primes obligation isolation. These tests demonstrate control flow; they do not measure live-agent savings or mathematical discovery.

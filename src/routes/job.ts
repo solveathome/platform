@@ -1,3 +1,5 @@
+import { queueWorkCheck, validateWorkSources, saveWorkDisposition, retireCoveredWork, queueWorkNextTasks, workState, workCoordination } from '../lib/work-disposition.js';
+import { parseKnownWork, parseWorkDisposition, workScopeHash, WORK_DISPOSITION_GUIDANCE, WORK_DISPOSITION_VERSION } from '../lib/work-disposition-format.js';
 import { collaborationEnabled, taskForJob, researchContext, contextMarkdown, saveResearchEvidence, saveResearchAssessment, saveResearchLinks, researchAuthority, activeLinkSQL } from '../lib/shared-research.js';
 import { SHARED_RESEARCH_VERSION, SHARED_RESEARCH_GUIDANCE, taskMarkdown, optionalResearch, parseResearchEvidence, parseResearchAssessment, parseResearchLinks } from '../lib/shared-research-format.js';
 import { JOB_CONTEXT_COLUMNS, JOB_CONTEXT_JOINS, jobPresentation } from "../lib/job-presentation.js";
@@ -343,6 +345,11 @@ ${ENDED_LAUNCH_GUIDANCE}
   // above its tier; a review it cannot take after all (compute) stays queued for another reviewer.
   const reviewsOnly = settings.ai?.reviews_only === true && trusted && !recovery && !session.direction_id && !tangentFirst;
   let triageSkipped = false;
+  if (!row && !recovery && !directed && !session.direction_id && !tangentFirst && collaborationEnabled(req.project.slug)) {
+    await retireCoveredWork(agent.problemId,req.project.slug);
+    await queueWorkNextTasks(agent.problemId,req.project.slug);
+    if(await workComparisonDue(agent))row=await selectJob({...agent,workCheckOnly:true},true);
+  }
   if (reviewsOnly && !row) {
     row = await selectJob(agent, false, false, undefined, false, true);
     for (let tries = 0; !row && reviewTriage(req.project.slug) && tries < 5; tries++) {
@@ -399,7 +406,7 @@ ${ENDED_LAUNCH_GUIDANCE}
   const stepCheck = !recovery && !directed && !session.direction_id && !tangentFirst && !chat ? await holdForStepCheck(row) : null;
   if (stepCheck) row = stepCheck;
   const unmet = row.type === 'check' ? { tools: [], sources: [] } : unmetRequirements(row, agent.capabilities);
-  const reason = { policy: directed ? "requested job" : session.direction_id ? "agent direction" : tangentFirst ? "person's tangent" : triageSkipped ? "reviews only: triage skipped, trusted reviewer" : reviewsOnly ? "reviews only" : requiredCorrection ? "required correction" : trustedJudgment ? "trusted judgment" : pressed ? "review pressure" : triaged ? "review triage" : portfolio ? "research portfolio" : reserveDiscovery ? "reserved tier-1 discovery" : "eligible work by need and capability",
+  const reason = { policy: row.work_check ? "trusted assignment comparison" : directed ? "requested job" : session.direction_id ? "agent direction" : tangentFirst ? "person's tangent" : triageSkipped ? "reviews only: triage skipped, trusted reviewer" : reviewsOnly ? "reviews only" : requiredCorrection ? "required correction" : trustedJudgment ? "trusted judgment" : pressed ? "review pressure" : triaged ? "review triage" : portfolio ? "research portfolio" : reserveDiscovery ? "reserved tier-1 discovery" : "eligible work by need and capability",
     ...(row.required_correction ? { required_correction: true, correction_interval: REQUIRED_CORRECTION_INTERVAL } : {}),
     ...(agent.hoursLeft !== null && agent.hoursLeft !== undefined ? { session_fit: `about ${Math.round(agent.hoursLeft * 60)} minutes left in this session: jobs estimated longer are passed over for one that fits. The estimate chooses the job; it is no limit on it.` } : {}),
     tier, guidance_version: GUIDANCE_VERSION, discovery_share: share, discovery_allocation: used, eligible_backlog: { reviews: need.reviews, research: need.research }, prefer_research: preferResearch,
@@ -440,9 +447,9 @@ ${ENDED_LAUNCH_GUIDANCE}
   let sharedContext: any = null;
   if (collaborationEnabled(req.project.slug)) {
     row.research_task = await taskForJob(Number(req.project.id),req.project.slug,row);
-    await q(`UPDATE jobs SET research_task=$2 WHERE id=$1`,[row.id,JSON.stringify(row.research_task)]);
+    await q(`UPDATE jobs SET research_task=$2,work_scope_sha256=$3 WHERE id=$1`,[row.id,JSON.stringify(row.research_task),row.work_check?.scope_sha256 ?? workScopeHash(row.research_task)]);
     sharedContext = await researchContext(Number(req.project.id),req.project.slug,row,row.research_task);
-    row.brief_md += taskMarkdown(row.research_task) + contextMarkdown(sharedContext,`${BASE()}/projects/${req.project.slug}`) + `\n\n${SHARED_RESEARCH_GUIDANCE}`;
+    row.brief_md += taskMarkdown(row.research_task) + contextMarkdown(sharedContext,`${BASE()}/projects/${req.project.slug}`) + `\n\n${SHARED_RESEARCH_GUIDANCE}\n\n${WORK_DISPOSITION_GUIDANCE}` + await workCoordination(Number(req.project.id),row.lane_id??null);
   }
   let md = chat ? renderChatBrief(row, `${BASE()}/projects/${req.project.slug}`, { id: String(session.id), host: String(req.oauth?.host ?? "other"), handle: req.user!.handle }) : renderBrief(row, `${BASE()}/projects/${req.project.slug}`, sess);
   if (!chat) {
@@ -488,7 +495,7 @@ ${ENDED_LAUNCH_GUIDANCE}
   if (ib.max_message_id > Number(session.inbox_seen_message_id ?? 0)) await q(`UPDATE sessions SET inbox_seen_message_id = $2 WHERE id = $1`, [session.id, ib.max_message_id]);
   if (session.department_id) md = compactDepartmentBrief(md, row, sess, savedDirection);
   }
-  const payload = { ...(chat ? { chat_brief_version: CHAT_BRIEF_VERSION, title: row.title } : {}), department_id:session.department_id,run_id:session.run_id,direction:savedDirection,protocol_version:session.department_id ? `${DEPARTMENT_PROTOCOL}.${GUIDANCE_VERSION}` : undefined,research_task: row.research_task ?? null, research_context: sharedContext, shared_research_version: sharedContext ? SHARED_RESEARCH_VERSION : undefined, job_id: row.id, attempt_id: row.attempt_id, guidance_version: GUIDANCE_VERSION, framework_version: FRAMEWORK_GUIDANCE_VERSION, type: row.type, purpose: row.purpose, research_stage: stageOf(row), research_route_id: row.research_route_id ?? null, session: sess.id, session_jobs: sess.jobs, session_max_jobs: sess.max, inbox: ib, assignment_reason: reason, operational_deferrals: row.operational_deferrals, correction_prerequisites: row.correction_prerequisites, contact_id: session.contact_id, brief_md: md };
+  const payload = { ...(chat ? { chat_brief_version: CHAT_BRIEF_VERSION, title: row.title } : {}), department_id:session.department_id,run_id:session.run_id,direction:savedDirection,protocol_version:session.department_id ? `${DEPARTMENT_PROTOCOL}.${GUIDANCE_VERSION}` : undefined,research_task: row.research_task ?? null, research_context: sharedContext, shared_research_version: sharedContext ? SHARED_RESEARCH_VERSION : undefined, work_disposition_version: sharedContext ? WORK_DISPOSITION_VERSION : undefined, work_check:row.work_check??null, job_id: row.id, attempt_id: row.attempt_id, guidance_version: GUIDANCE_VERSION, framework_version: FRAMEWORK_GUIDANCE_VERSION, type: row.type, purpose: row.purpose, research_stage: stageOf(row), research_route_id: row.research_route_id ?? null, session: sess.id, session_jobs: sess.jobs, session_max_jobs: sess.max, inbox: ib, assignment_reason: reason, operational_deferrals: row.operational_deferrals, correction_prerequisites: row.correction_prerequisites, contact_id: session.contact_id, brief_md: md };
   await q(`UPDATE assignment_attempts SET assignment_payload = $2, research_context=$3 WHERE id = $1`, [row.attempt_id, JSON.stringify(payload), sharedContext ? JSON.stringify({schema:sharedContext.schema,topic_ids:sharedContext.topic_ids,input_vector:sharedContext.input_vector,return_ids:sharedContext.items.map((r:any)=>r.id),in_flight_jobs:sharedContext.jobs.map((j:any)=>j.id),omitted:sharedContext.omitted}) : null]);
   if (wantsJson) res.json(payload);
   else res.type("text/markdown").send(md);
@@ -730,6 +737,11 @@ job.get("/scheduler", bearer, project, async (req: any, res) => {
  * scheduler that starts agents reads ({ ready, urgency, facts }). Chris's compute starts Opus 5.5 sessions with work=reviews one
  * task at a time; the project-wide queued count said 534 while none of it was review work they could take (Sep 23 2026, ask 387),
  * so every start ended with no_review_waiting. Same eligibility as /start, compute offer and session history left out. */
+async function workComparisonDue(agent:SchedulingAgent):Promise<boolean> {
+  if(!agent.trusted || agent.tier!==1 || !collaborationEnabled(agent.slug))return false;
+  const last=await one(`SELECT j.work_check FROM assignment_attempts a JOIN jobs j ON j.id=a.job_id WHERE a.problem_id=$1 AND a.user_id=$2 AND a.model IS NOT DISTINCT FROM $3 ORDER BY a.started_at DESC,a.id DESC LIMIT 1`,[agent.problemId,agent.uid,agent.model]);
+  return !last?.work_check;
+}
 job.get("/ready", bearer, project, async (req: any, res) => {
   const work = String(req.query.work ?? "all");
   if (!["all", "reviews"].includes(work)) { res.status(400).json({ error: `work must be one of all, reviews (got "${work.slice(0, 40)}")` }); return; }
@@ -739,14 +751,15 @@ job.get("/ready", bearer, project, async (req: any, res) => {
   const granted = await isGrantedTrusted(Number(req.project.id), uid, req.user!.handle);
   const agent: SchedulingAgent = { problemId: Number(req.project.id), slug: req.project.slug, sessionId: "", uid, tier, model: req.model ?? null,
     provider: req.provider ?? null, trusted, granted, lane: null, cpuHours: 0, ramGb: 0, hasGpu: false, disk: 1, maxHours: 2, reviewStreak: 0, capabilities: {} };
+  const workChecks=(await workComparisonDue(agent)) ? (await backlogFor({...agent,workCheckOnly:true})).research : 0;
   if (work === "reviews" && trusted) {
     const w = await reviewWorkFor(agent, !!reviewTriage(req.project.slug));
-    res.json({ ready: w.reviews + w.triage, urgency: "normal", reviews: w.reviews, triage: w.triage, trusted, tier,
-      facts: `${w.reviews} review${w.reviews === 1 ? "" : "s"} and ${w.triage} triage${w.triage === 1 ? "" : "s"} this agent may take (never its own model's returns${granted ? "" : ", nor its handle's"})` });
+    res.json({ ready: w.reviews + w.triage + workChecks, ...(workChecks ? {work_comparisons:workChecks} : {}), urgency: "normal", reviews: w.reviews, triage: w.triage, trusted, tier,
+      facts: `${workChecks ? `${workChecks} trusted assignment comparisons; ` : ''}${w.reviews} review${w.reviews === 1 ? "" : "s"} and ${w.triage} triage${w.triage === 1 ? "" : "s"} this agent may take (never its own model's returns${granted ? "" : ", nor its handle's"})` });
     return;
   }
   const b = await backlogFor(agent);
-  res.json({ ready: work === "reviews" ? 0 : b.reviews + b.research, urgency: "normal", reviews: b.reviews, research: b.research, trusted, tier,
+  res.json({ ready: work === "reviews" ? 0 : b.reviews + b.research + workChecks, ...(workChecks ? {work_comparisons:workChecks} : {}), urgency: "normal", reviews: b.reviews, research: b.research, trusted, tier,
     facts: work === "reviews" ? "not a trusted reviewer at this model and thinking level: reviews only does not apply" : `${b.reviews} reviews and ${b.research} other assignments this agent may take` });
 });
 
@@ -1095,10 +1108,13 @@ async function reportHarness(text: string, ctx: { returnId?: number; reviewId?: 
   return row ? { id: Number(row.id), count: Number(row.count) } : null;
 }
 
+job.get("/work-state", project, async (req:any,res) => { res.json({schema:WORK_DISPOSITION_VERSION,decisions:await workState(Number(req.project.id)),authority:"assignment investment only; scientific acceptance unchanged"}); });
+
 job.post("/result", bearer, project, assignmentMutation(async (req: any, res) => {
   const b = req.body ?? {};
   const uid = req.user!.id;
   if (req.termsStale) { res.status(403).json({ error: req.termsStale }); return; }
+  const explicitlyRequestsReview=b.request_review===true;
   // A chat return (#sah-mcp-real-work-build): it answers its assignment, always goes to review, and its hourly cap is the chat one.
   const chat = req.via === "mcp";
   if (chat) {
@@ -1125,7 +1141,7 @@ job.post("/result", bearer, project, assignmentMutation(async (req: any, res) =>
     if (typeof b[field] === "string" && needsSourceReview(b[field])) { res.status(400).json({ error: `${SOURCE_REVIEW_MESSAGE} The check tripped in "${field}" on this line: "${sourceReviewHit(b[field]) ?? "?"}". Paraphrase with a locator (page, theorem number) instead of transcribing.`, field, at: sourceReviewHit(b[field]) }); return; }
   }
   // Structured public text has the same publication and secret rules as ordinary reports.
-  for (const field of ['research', 'verification_plan', 'check_receipt', 'lean_statement_review', 'lean_execution_review', 'paper_exposition_review', 'research_evidence', 'research_assessment', 'research_links']) if (b[field] !== undefined) {
+  for (const field of ['research', 'verification_plan', 'check_receipt', 'lean_statement_review', 'lean_execution_review', 'paper_exposition_review', 'research_evidence', 'research_assessment', 'research_links', 'known_work', 'work_disposition']) if (b[field] !== undefined) {
     const value = JSON.stringify(b[field]);
     const bad = scrubError(field, value); if (bad) { res.status(400).json(bad); return; }
     if (needsSourceReview(value)) { res.status(400).json({ error: SOURCE_REVIEW_MESSAGE, field }); return; }
@@ -1135,7 +1151,9 @@ job.post("/result", bearer, project, assignmentMutation(async (req: any, res) =>
   const evidenceInput = optionalResearch('research_evidence',b.research_evidence,parseResearchEvidence);
   const assessmentInput = optionalResearch('research_assessment',b.research_assessment,parseResearchAssessment);
   const linkInput = optionalResearch('research_links',b.research_links,parseResearchLinks);
-  const sharedWarnings = [...evidenceInput.warnings,...assessmentInput.warnings,...linkInput.warnings];
+  const knownInput=optionalResearch('known_work',b.known_work,parseKnownWork);
+  const dispositionInput=optionalResearch('work_disposition',b.work_disposition,parseWorkDisposition);
+  const sharedWarnings = [...evidenceInput.warnings,...assessmentInput.warnings,...linkInput.warnings,...knownInput.warnings,...dispositionInput.warnings];
   const researchReport = parseResearch(b.research);
   let jobRow: any = null;
   if (b.job_id) {
@@ -1416,9 +1434,13 @@ job.post("/result", bearer, project, assignmentMutation(async (req: any, res) =>
   if (verificationPlan?.lean && !['formalize','paper','audit'].includes(rtype)) { res.status(400).json({error:'Lean profiles belong on formalize, paper or audit returns'}); return; }
   if (verificationPlan?.lean && tierForEffort(await modelTier(req.model ?? 'unknown'), effortEff).tier !== 1) { res.status(403).json({error:'Lean formalization packages require Tier 1 at high or above'}); return; }
   if (b.check_receipt !== undefined && rtype !== 'check') { res.status(400).json({ error: 'check_receipt answers a check assignment only' }); return; }
+  let knownWork=knownInput.value;
+  if(knownWork && (!jobRow || !collaborationEnabled(problem.slug) || explicitlyRequestsReview || b.patch || b.revision || b.paper || b.repo_url || b.files?.length || verificationPlan || evidenceInput.value || researchReport || Number(b.cpu_hours??0)!==0 || !(await validateWorkSources(Number(problem.id),knownWork)) || await one(`SELECT 1 FROM challenge_submissions WHERE job_id=$1 AND namespace='live'`,[jobRow.id]))) {
+    knownWork=null; sharedWarnings.push('known_work: requires an assigned unchanged comparison without new claims, scientific execution, artifacts or a review request; ordinary result handling applies');
+  }
   // Checkable work carries its own verification recipe, so the reviewer runs it instead of redoing the job.
   const recipe = typeof b.recipe_md === "string" ? b.recipe_md.trim() : "";
-  if (["break", "measure", "formalize"].includes(rtype) && recipe.length < 40 && !verificationPlan) { res.status(400).json({ error: "recipe_md is required for break, measure and formalize returns, or provide verification_plan: exact commands, inputs, expected outputs and checking cost. Do not repeat discovery." }); return; }
+  if (["break", "measure", "formalize"].includes(rtype) && recipe.length < 40 && !verificationPlan && !knownWork) { res.status(400).json({ error: "recipe_md is required for break, measure and formalize returns, or provide verification_plan: exact commands, inputs, expected outputs and checking cost. Do not repeat discovery." }); return; }
 
   // Challenge (Sep 10): what is challenged, in the person's words, and whether the objection held. Checked before anything is written.
   let target: any = null, finding: string | null = null;
@@ -1588,7 +1610,18 @@ job.post("/result", bearer, project, assignmentMutation(async (req: any, res) =>
     cites.returns = [...new Set([...refs, Number(jobRow.research_source_return_id)])];
     await q(`UPDATE returns SET cites=$2 WHERE id=$1`, [ret!.id, JSON.stringify(cites)]);
   }
-  const recordedExploration = rtype === 'check' || ((rtype === 'explore' || (rtype === 'direction' && researchReport?.proposal)) && b.request_review !== true && researchReport?.outcome !== 'result');
+  let workCheckJobId:number|null=null;
+  if(knownWork) {
+    const task=knownWork.task ?? await taskForJob(Number(problem.id),problem.slug,jobRow);
+    await q(`UPDATE returns SET known_work=$2,cites=$3 WHERE id=$1`,[ret!.id,JSON.stringify({...knownWork,task}),JSON.stringify({...cites,returns:[...new Set([...(cites.returns??[]),...knownWork.predecessor_returns])]})]);
+    workCheckJobId=await queueWorkCheck(Number(problem.id),problem.slug,laneId,task,knownWork,{source_return_id:Number(ret!.id),author_model:req.model,allow_covered:Boolean(knownWork.task) || !challengeTrackOfJob(problem.slug,jobRow) || /:study:/.test(String(jobRow.origin_key??''))});
+  }
+  const operationalComparison=Boolean(jobRow?.work_check) && !explicitlyRequestsReview && !verificationPlan && !evidenceInput.value && !researchReport && !b.patch && !b.revision && !b.paper;
+  if(dispositionInput.value) {
+    if(!operationalComparison)sharedWarnings.push('work_disposition: scientific claims or review requests use ordinary intake; no dispatch authority recorded');
+    else sharedWarnings.push(...await saveWorkDisposition(Number(ret!.id),Number(problem.id),jobRow,dispositionInput.value,await isTrusted(Number(problem.id),uid,req.user!.handle,{model:req.model,effort:effortEff})));
+  }
+  const recordedExploration = Boolean(knownWork || operationalComparison) || rtype === 'check' || ((rtype === 'explore' || (rtype === 'direction' && researchReport?.proposal)) && b.request_review !== true && researchReport?.outcome !== 'result');
   if (recordedExploration) await q(`UPDATE returns SET status = 'recorded', final_rung = 'recorded' WHERE id = $1`, [ret!.id]);
   const canonicalClaim = !recordedExploration && verificationPlan ? await foldExactClaim(Number(ret!.id)) : null;
   if (canonicalClaim?.status === 'rejected' && researchProgress) {
@@ -1656,7 +1689,7 @@ job.post("/result", bearer, project, assignmentMutation(async (req: any, res) =>
     }
   }
   if (recordedExploration) {
-    res.json({ ok: true, return_id: Number(ret!.id), status: "recorded", research: researchProgress, reviews_requested: 0, files: attached, tokens, warnings,
+    res.json({ ok: true, return_id: Number(ret!.id), status: "recorded", work_check_job_id:workCheckJobId, research: researchProgress, reviews_requested: 0, files: attached, tokens, warnings,
       note: `Exploration is recorded without review. Elevate a claim when it deserves verification: POST ${BASE()}/projects/${problem.slug}/return/${ret!.id}/request-review { "note": "<what deserves verification>" }.` });
     return;
   }
