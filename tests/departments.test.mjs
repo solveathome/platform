@@ -453,3 +453,35 @@ test('reconciliation exposes a never-submitted attempt, its eventual receipt, an
   assert.ok(['released','cancelled'].includes(ended.attempt.status));assert.deepEqual(ended.attempt.receipt,released);
   assert.equal(ended.attempt.receipt.return_id,undefined,'release is not a submitted research result');
 });
+
+test('a fresh department launch takes a targeted challenge with consent, exact retry and attempt fencing',async()=>{
+  const {id,credential}=await account(),did=(await bootstrap(random(),credential)).department_id;
+  const target=await w.one(`INSERT INTO returns(problem_id,type,user_id,model,provider,report_md,transcript,status) VALUES($1,'source',$2,'gpt-6.1-sol','openai','A disputed comparison.','fixture','accepted') RETURNING id`,[w.pid,v.id]);
+  const words='The comparison counts final iterates against all baseline outputs; inspect the units and full work budget.';
+  const body={agreed:true,ai:{max_assignments:1,subagents:false,max_hours_per_assignment:.5,transcript_mode:'summary'},compute:{cpu_hours:0},transcript_preapproved:true,
+    input:{tangent:{kind:'challenge',about:`return #${target.id}`,says:words}}};
+  const headers={'x-department':did,'x-launch-id':random()};
+  const count=async()=>Number((await w.one(`SELECT count(*) n FROM sessions WHERE problem_id=$1 AND user_id=$2`,[w.pid,id])).n);
+  await call('/start',{credential,headers,body:{...body,agreed:false},status:400});assert.equal(await count(),0);
+  await call('/start',{credential:otherToken,headers,body,status:403});assert.equal(await count(),0);
+  const run=await call('/start',{credential,headers,body});
+  assert.equal(run.type,'challenge');assert.equal(run.department_id,did);assert.equal(run.direction,null);
+  assert.match(run.brief_md,new RegExp(`return #${target.id}`));assert.ok(run.brief_md.includes(words));
+  const stored=await w.one(`SELECT a.department_id,a.run_id,a.scheduled,a.session_id,s.input,s.max_jobs FROM assignment_attempts a JOIN sessions s ON s.id=a.session_id WHERE a.id=$1`,[run.attempt_id]);
+  assert.equal(stored.department_id,did);assert.equal(stored.run_id,run.run_id);assert.equal(stored.session_id,run.session);
+  assert.equal(stored.scheduled,false);assert.equal(stored.max_jobs,1);assert.equal(stored.input.tangent.says,words);
+  const replay=await call('/start',{credential,headers,body});assert.equal(replay.attempt_id,run.attempt_id);assert.equal(replay.brief_md,run.brief_md);assert.equal(await count(),1);
+  await call('/start',{credential,headers,body:{...body,input:{tangent:{...body.input.tangent,says:'A different objection.'}}},status:409});
+  await call('/start',{credential,headers,body:{...body,ai:{...body.ai,max_assignments:2}},status:409});assert.equal(await count(),1);
+  const result={job_id:run.job_id,type:'challenge',target:{kind:'return',ref:String(target.id)},human_md:words,finding:'partial',report_md:'The synthetic comparison needs a consistent denominator; no cryptanalytic claim follows.',transcript:'Scripted fixture with no model inference.',transcript_approved:true};
+  await call('/result',{credential,run,body:result,status:400});
+  await call('/result',{credential,run,headers:{'x-attempt':random()},body:result,status:409});
+  const receipt=await call('/result',{credential,run,headers:{'x-attempt':run.attempt_id},body:result});
+  const returned=await call(`/return/${receipt.return_id}`,{credential});assert.equal(returned.type,'challenge');assert.deepEqual(returned.target,result.target);
+  assert.equal((await w.one(`SELECT department_id,run_id FROM returns WHERE id=$1`,[receipt.return_id])).department_id,did);
+  await call('/start',{credential,run,status:409});await call('/start',{credential,headers,body,status:409});
+  assert.equal(await count(),1,'the ended launch cannot become a replacement run');
+  const direction=await call(`/departments/${did}/directions`,{credential,body:{words:'Keep a persistent source investigation.'}});
+  await call('/start',{credential,headers:{'x-department':did,'x-launch-id':random(),'x-direction-id':direction.direction_id},body,status:409});
+  assert.equal(await count(),1,'an objection cannot silently displace a persistent direction');
+});

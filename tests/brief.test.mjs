@@ -5,6 +5,7 @@ import { compactDepartmentBrief, protocolSections } from "../src/lib/department-
 import { GUIDANCE_VERSION, taskGuidance } from "../src/lib/research-guidance.ts";
 import { tangentJob } from "../src/lib/tangent.ts";
 import { ARTIFACT_PACKAGING_GUIDANCE, EFFORT_GUIDANCE, FRAMEWORK_GUIDANCE_VERSION, FRAMEWORK_RECHECK_HOURS, WORKER_ISOLATION_RECOMMENDATION, workspaceSections } from "../src/lib/workspace-guidance.ts";
+import { WORK_DISPOSITION_GUIDANCE } from "../src/lib/work-disposition-format.ts";
 import { createHash } from "node:crypto";
 import { MODEL_IDENTITY_GUIDANCE } from "../src/lib/model-id.ts";
 import { LOG_LOCATIONS } from "../src/lib/tokens.ts";
@@ -12,6 +13,16 @@ import { readdirSync, readFileSync } from "node:fs";
 
 const job = { id: 78, type: "audit", title: "Audit: beta2-note", brief_md: "paper.slug: beta2-note\n\nAudit it.", git_ref: "main", compute_hint: {}, budget_hours: 3, release_count: 1, last_release_note: "expired: the agent did not return or release it", lane_slug: null, repo_url: "https://example.org/r", expires_at: null };
 const session = { id: "s1", jobs: 1, max: 1, maxHours: 2, compute: "not offered", transcriptPreapproved: true };
+
+test('full and compact reviews retain legacy nomination and fair-comparison obligations',()=>{
+ const issued={...job,type:'review',brief_md:'Review the scoped claim and its captured evidence.\n'+WORK_DISPOSITION_GUIDANCE};
+ const full=renderBrief(issued,'https://x.test/projects/p',session);
+ for(const text of [full,compactDepartmentBrief(full,issued,session,null)]) {
+  assert.match(text,/optional work_check/);assert.match(text,/counted observation unit/);assert.match(text,/denominator\/sample/);
+  assert.match(text,/solve\/inverse operations/);assert.match(text,/Candidate-input verification validates the submitted input only/);
+ }
+ assert.match(full,/optional research_assessment and work_check/);assert.match(full,/cannot emit an authoritative work_disposition/);
+});
 
 test('served artifact guidance preserves empty process logs and repairs packaging without losing science',()=>{
   for(const slug of ['md5','twin-primes','another-project']) {

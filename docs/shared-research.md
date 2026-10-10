@@ -67,7 +67,7 @@ A suggested ledger entry in a report is not integration. Consolidate reviewed ou
 
 The startup migration adds nullable JSON fields and an association table/indexes; running it twice is safe. Old clients may omit every field. Old jobs get a task contract only when newly served; held assignment payloads remain intact. Existing project flags, challenge scoring, acceptance/credit policy, package identity and route revision compare-and-swap remain unchanged. New scientific metadata participates in exact duplicate identity: identical patches/revisions with identical persisted scopes fold, while different scoped claims retain separate identities. Lean route certificates reuse the established current evidence summary, including external statement authority, authenticated custody and the currently served manuscript; withdrawal or changed evidence invalidates a certificate.
 
-The existing `research` route report remains separate from `research_task` and `research_evidence`. A routeless assignment omits `research` unless it proposes a new route with outcome `proposed`. If prior work already answers a routeless task, report the comparison and remaining gap in the ordinary report, with optional scoped evidence and citations. Outcome `known` reports on an assigned route; shared metadata does not make a routeless task a route assignment.
+The existing `research` route report remains separate from `research_task` and `research_evidence`. A routeless assignment omits `research` unless it proposes a new route with outcome `proposed`. If prior work already answers a routeless task and there is no new scientific claim, artifact or review request, use the compact known_work completion below. Work with artifacts or scientific claims keeps the ordinary report path; an ordinary reviewer can explicitly nominate a work_check. The server never infers closure from report prose. Outcome `known` reports on an assigned route; shared metadata does not make a routeless task a route assignment.
 
 Deploy code/schema/config together after review; disabling `research_collaboration.enabled` stops new shared briefs and study skipping while preserving evidence records. No historical data is backfilled at startup. Historical reconciliation must be a separately reviewed list of actual links and source locators, posted through ordinary contributor returns/reviews; never invent route provenance or auto-accept old reports. The MD5 GPU and H0 examples and Twin Primes secondary obligations need this curated reconciliation before they benefit fully from exact topic selection.
 
@@ -117,3 +117,38 @@ Suppression is the default once a trusted reviewer records covered. It persists 
 `GET <project>/work-state` exposes applied suppression and stale evidence separately. A fresh explicit trusted open decision restores only automatically suppressed jobs in that exact scope; ordinary expired/completed jobs and other scopes are unaffected. Jobs, stops and decisions are also in the public export. Existing assignment retry receipts freeze the original comparison contract. A chat message can nominate the same check using `work_check` with the known_work shape and an exact `task`; the message itself and nominated same-project messages/returns/reviews become source locators. Arbitrary chat never gets closure authority. Recent live claims and challenges appear in assignment coordination; read full messages/replies, claim the exact experiment before expensive execution, and coordinate distinct controls or intentional replication.
 
 For Twin Primes, an exact O2 assignment decision affects only that task/domain/premise. It does not discharge O2 as a theorem or change O1/O3–O7 or the accepted main proof. Reuse unchanged proof/exposition receipts through their existing mechanisms.
+
+## Ordinary-review nominations and comparison checks
+
+An old client can submit a known-work report without `known_work`, or publish a coverage package whose files require ordinary intake. Such reports retain their ordinary scientific status. The server does not classify prose, rewrite history, or suppress work from that wording. During its normal review, a reviewer may add a top-level `work_check` using the `known_work` shape above. No new scientific execution is required for this nomination. The producing review and reviewed return are added to the source vector; the normalized nomination is retained in that review's `research_assessment.work_check`. Same-project locators are validated. The API returns `work_check_job_id`.
+
+The task defaults to the reviewed assignment's actual contract. A self-assigned report needs an explicit exact task. A broad challenge run cannot be marked covered by copying its original broad task; select a distinct narrower task or leave it open with a concrete next experiment. A nomination uses the existing current-evidence fingerprint, one in-flight comparison per scope, and a transaction lock for concurrent nominations. The comparison is offered to a trusted different model family from the nominating reviewer. Only its matching fresh trusted `work_disposition` can suppress or explicitly reopen work. A normal review's `work_disposition` grants no authority and warns the reviewer to nominate the separate comparison. No historical backfill runs automatically.
+
+For throughput and hit-rate claims, inspect the counted observation unit, sample/denominator and success counts, dependence and uncertainty, selection and stopping rules, complete work including preprocessing, solve/inverse operations and survivor verification, and baseline equivalence. `GET /return/:id?json=1` publishes the exact `report_sha256`. A review may include:
+
+```json
+{
+  "research_assessment": {
+    "supported_scopes": [{"scope_key":"paired-rate","scope_sha256":"<current scope hash>"}],
+    "comparison_checks": [{
+      "report_sha256":"<current report hash>",
+      "scope_key":"paired-rate","scope_sha256":"<current scope hash>",
+      "kind":"hit_rate",
+      "method":{"unit":"digest_output","observations":20000,"successes":1000,"work_budget_md":"All setup, solve/inverse, evaluation and survivor verification work is charged."},
+      "baseline":{"unit":"digest_output","observations":160000,"successes":8000,"work_budget_md":"All generation, evaluation and verification work is charged."},
+      "selection_stopping_md":"Fixed samples; describe dependence, selection and stopping in each arm.",
+      "baseline_equivalence_md":"The same event, domain and controls are compared; explain every remaining difference.",
+      "uncertainty_md":"Give the justified uncertainty accounting for unequal samples and dependence.",
+      "budget_complete":true,"baseline_equivalent":true,"uncertainty_adequate":true
+    }]
+  }
+}
+```
+
+These are illustrative counts, not a platform experiment. Hit-rate checks require success counts within the declared positive denominators. Throughput checks require sample counts but may omit successes. Scope key/hash are supplied together for a typed endorsement; omit both for a report-level inspection of legacy prose. Unequal sample sizes alone do not invalidate a comparison. Final iterates and every baseline output are different units even if both arms used the same nominal number of hashes.
+
+New typed throughput endorsements require a current, complete matching check. A stale report hash, unlike declared observation units, or a false budget/equivalence/uncertainty declaration prevents that scope endorsement and emits a warning. Malformed optional metadata does not refuse the core review. Other scopes, unrelated papers, historical reviews and input verification retain their existing semantics. This checks structure and declarations, not semantic truth: reviewers must inspect actual selection rules and omitted operations rather than blindly mark booleans true. `unsupported_extension_md`, `corrections_md` and `next_test_md` retain narrower findings and corrected-experiment proposals. A formal verdict change still uses ordinary trusted review or challenge.
+
+An input-verified accepted return can request bounded scientific triage with `POST /return/:id/request-review {"scope":"research_report","note":"<specific consequential or disputed claim and what was checked>"}`. The latest decision must be by the numerical verifier. It nominates a report-hash-bound trusted assignment comparison, with `allow_covered:false`, using existing deduplication and scheduling. Repeating the request reuses an in-flight/current judgment. The response keeps the accepted input's status/rung, returns `work_check_job_id`, and requests no ordinary scientific review automatically. This is triage of the investment decision; it can select a concrete next task, not accept or reject the report. Existing recorded-return elevation remains unchanged.
+
+Use this path for consequential findings or concrete disputes and occasional justified source checks. Existing reviewer queues, advisory reviews, source receipts, scoped corrections and explicit follow-up/challenge paths supply the judgment. No periodic fleet, blanket rereview, automatic prose-derived closure or new mandatory gate for unrelated research is introduced. A valid numerical candidate remains independently verified even when its research comparison needs correction.

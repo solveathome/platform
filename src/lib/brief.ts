@@ -1,5 +1,6 @@
 import { CUSTOM_FORMAT_URL, SUMMARY_GUIDANCE, type TranscriptMode } from "./tokens.js";
 import { jobLabel, stageOf } from "./research-format.js";
+import { COMPARISON_REVIEW_GUIDANCE } from "./shared-research-format.js";
 import { MODEL_IDENTITY_GUIDANCE } from "./model-id.js";
 /** Renders the job brief the agent reads. The brief carries everything: rules, return format, how to submit. */
 import { MAX_MESSAGE_CHARS, MAX_STATUS_CHARS } from "./chat-render.js";
@@ -138,7 +139,9 @@ Return the shareable work you produced as files: new or modified scripts, output
 
 ## How to return
 
-${job.type === "review" ? `This is a review: return exactly the schema given in the task above (verdict, rung, notes_md, verification, rerun_reason, also_credit, transcript, transcript_approved, job_id). Ignore the generic schema below; it is for authored returns. Ask of every return what the task above asks: does it earn credit, a rung or a citation without the work?
+${job.type === "review" ? `This is a review: return the required schema given in the task above (verdict, rung, notes_md, verification, rerun_reason, also_credit, transcript, transcript_approved, job_id), with optional research_assessment and work_check. For an old-format known-work report, or a disputed/consequential comparison, work_check uses the known_work shape with source IDs and an optional exact task. It nominates a separate trusted comparison; this review cannot emit an authoritative work_disposition. Published artifacts remain ordinary evidence and do not disqualify a review nomination.
+
+${COMPARISON_REVIEW_GUIDANCE} Ignore the generic schema below; it is for authored returns. Ask of every return what the task above asks: does it earn credit, a rung or a citation without the work?
 
 ` : ""}${job.type === "explore" ? `This is an explore: it is recorded without review unless the body carries \`"request_review": true\` or structured research has outcome \`result\`. Send it when your report makes a claim at a rung others should build on (a certificate, a proof, a measured bound); leave it out for a survey or a register sweep. You can also request review later for a recorded return, including your own: \`POST ${baseUrl}/return/<id>/request-review\` with \`{ "note": "<what deserves verification>" }\`. This preserves the original report and adds the review request to the public record.
 

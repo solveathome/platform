@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto';
 import { one, q } from '../db/index.js';
 import { readProjectConfig } from './projects.js';
 import { decide } from './consensus.js';
-import { scopeHash, parseResearchTask, type ResearchTask, type ResearchTopic, type ResearchLink, type ResearchAssessment, type ResearchEvidence } from './shared-research-format.js';
+import { scopeHash, reportHash, comparisonProblems, parseResearchTask, type ResearchTask, type ResearchTopic, type ResearchLink, type ResearchAssessment, type ResearchEvidence } from './shared-research-format.js';
 
 export const collaborationEnabled = (slug: string) => readProjectConfig(slug)?.research_collaboration?.enabled === true;
 const uniqueIds = (ids: any[]) => [...new Set(ids.map(Number).filter(x=>Number.isSafeInteger(x)&&x>0))];
@@ -45,11 +45,22 @@ export async function saveResearchEvidence(returnId: number, problemId: number, 
 }
 export async function saveResearchAssessment(reviewId: number, problemId: number, returnId: number, assessment: ResearchAssessment | null): Promise<string[]> {
   if (!assessment) return [];
-  const source=await one(`SELECT research_evidence FROM returns WHERE id=$1 AND problem_id=$2`,[returnId,problemId]);
+  const source=await one(`SELECT research_evidence,report_md FROM returns WHERE id=$1 AND problem_id=$2`,[returnId,problemId]);
   const warnings: string[]=[];
+  const currentReport=reportHash(source?.report_md??'');
+  for(const check of assessment.comparison_checks??[]) {
+    const problems=comparisonProblems(check,currentReport);
+    if(problems.length)warnings.push(`research_assessment comparison: ${problems.join(', ')}; no comparison endorsement recorded`);
+  }
   const supported=assessment.supported_scopes.filter(ref=>{
     const scope=source?.research_evidence?.scopes?.find((s:any)=>s.key===ref.scope_key);
-    if (scope && scopeHash(scope)===ref.scope_sha256) return true;
+    if (scope && scopeHash(scope)===ref.scope_sha256) {
+      const checks=assessment.comparison_checks?.filter(c=>c.scope_key===ref.scope_key&&c.scope_sha256===ref.scope_sha256)??[];
+      if(scope.kind==='throughput' || checks.length) {
+        if(!checks.length || checks.some(check=>comparisonProblems(check,currentReport).length)) {warnings.push(`research_assessment: ${ref.scope_key} requires current complete comparison checks; no endorsement recorded`);return false;}
+      }
+      return true;
+    }
     warnings.push(`research_assessment: ${ref.scope_key} does not match the current exact scope hash; no endorsement recorded`);return false;
   });
   await q(`UPDATE reviews SET research_assessment=$2 WHERE id=$1 AND return_id=$3`,[reviewId,JSON.stringify({...assessment,supported_scopes:supported}),returnId]);

@@ -1,7 +1,7 @@
 import { queueWorkCheck, queueWorkReconsiderations, validateWorkSources, saveWorkDisposition, retireCoveredWork, queueWorkNextTasks, workState, workCoordination } from '../lib/work-disposition.js';
 import { parseKnownWork, parseWorkDisposition, workScopeHash, WORK_DISPOSITION_GUIDANCE, WORK_DISPOSITION_VERSION } from '../lib/work-disposition-format.js';
 import { collaborationEnabled, taskForJob, researchContext, contextMarkdown, saveResearchEvidence, saveResearchAssessment, saveResearchLinks, researchAuthority, activeLinkSQL } from '../lib/shared-research.js';
-import { SHARED_RESEARCH_VERSION, SHARED_RESEARCH_GUIDANCE, taskMarkdown, optionalResearch, parseResearchEvidence, parseResearchAssessment, parseResearchLinks } from '../lib/shared-research-format.js';
+import { SHARED_RESEARCH_VERSION, SHARED_RESEARCH_GUIDANCE, reportHash, parseResearchTask, taskMarkdown, optionalResearch, parseResearchEvidence, parseResearchAssessment, parseResearchLinks } from '../lib/shared-research-format.js';
 import { JOB_CONTEXT_COLUMNS, JOB_CONTEXT_JOINS, jobPresentation } from "../lib/job-presentation.js";
 import {parseDeferral, recordDeferral, deferralHistory, deferralBrief} from '../lib/operational-blockers.js';
 import {handoffHistory, handoffBrief, pendingHandoffs} from '../lib/job-handoffs.js';
@@ -285,7 +285,7 @@ ${ENDED_LAUNCH_GUIDANCE}
     else await q(`UPDATE jobs SET status='queued' WHERE id=$1`,[recovery.job_id]);
     agent.jobId=Number(recovery.job_id);
   }
-  const tangentFirst = !session.department_id && Number(session.jobs) === 0 && settings.input?.tangent ? await synthesizeTangent(req, session, settings.input.tangent as Tangent) : null;
+  const tangentFirst = !session.direction_id && !recovery && Number(session.jobs) === 0 && settings.input?.tangent ? await synthesizeTangent(req, session, settings.input.tangent as Tangent) : null;
   const need = tier === 1 ? await backlogFor(agent) : { reviews: 0, research: 0, blocked_reviews: 0 };
   const runOfReviews = Math.min(4, Math.max(1, Math.ceil(need.reviews / Math.max(1, need.research))));
   const preferResearch = tier === 1 && agent.reviewStreak >= runOfReviews;
@@ -921,11 +921,21 @@ async function openSession(req: any, o: OpenOpts): Promise<{ session: any; membe
   try { capabilities = parseCapabilities(req.header("x-capabilities") ?? req.body?.capabilities); }
   catch (error: any) { return { error: error.message, status: 400 }; }
   const binding = await runBinding(req);
+  // A person's targeted objection is a first assignment, with the same folder
+  // ownership and attempt fencing as queue work. It cannot replace a saved
+  // direction or an explicitly recovered attempt.
+  const departmentChallenge = binding && o.via === "body" && o.input?.tangent?.kind === "challenge";
+  if (departmentChallenge && (binding.direction_id || binding.recovery_attempt_id)) return { error: "A targeted challenge needs a fresh general run; it cannot replace a persistent direction or recovery. Keep X-Department and use fresh consent and X-Launch-ID.", status: 409 };
   if (launchKey) {
     const existing = await one(`SELECT * FROM sessions WHERE problem_id = $1 AND user_id = $2 AND launch_key = $3`, [req.project.id, req.user.id, launchKey]);
     if (existing) {
       if ((existing.department_id ?? null)!==(binding?.department_id ?? null) || (existing.direction_id ?? null)!==(binding?.direction_id ?? null)) return {error:'launch ID belongs to a different folder or direction',status:409};
       if (existing.model !== (req.model ?? null)) return { error: "this launch ID belongs to a different model; use a fresh ID for a different agent", status: 409 };
+      if (binding && (departmentChallenge || existing.input?.tangent?.kind === "challenge")
+          && (existing.registered_via !== o.via || !isDeepStrictEqual(existing.input, o.input)
+            || existing.max_jobs !== o.maxJobs || !isDeepStrictEqual(existing.ai, o.ai) || !isDeepStrictEqual(existing.compute, o.compute))) {
+        return { error: "This challenge launch already has different settings or an objection. Retry its original registration unchanged; a new instruction needs a fresh X-Launch-ID.", status: 409 };
+      }
       // A guarded registration with new choices is a new paste, not a retry.
       // Legacy retries still replay their original limits; never silently lift a cap.
       if (req.header("x-instruction-url")) {
@@ -962,7 +972,7 @@ async function openSession(req: any, o: OpenOpts): Promise<{ session: any; membe
     [sessionId, req.project.id, req.user!.id, req.model ?? null, JSON.stringify(o.ai), o.compute ? JSON.stringify(o.compute) : null, o.input ? JSON.stringify(o.input) : null, o.maxJobs, req.effort ?? null, o.endsIn, o.via, JSON.stringify(capabilities), launchKey, researchContact(capabilities) ? randomBytes(12).toString("hex") : null]);
   if (o.via === "mcp" && req.oauth) await q(`UPDATE sessions SET oauth_grant_id = $2 WHERE id = $1`, [sessionId, req.oauth.grantId]);
   if(binding) {
-    const updated=await one(`UPDATE sessions SET department_id=$2,run_id=$3,direction_id=$4,recovery_attempt_id=$5,input=NULL WHERE id=$1 RETURNING *`,[sessionId,binding.department_id,publicId('run'),binding.direction_id,binding.recovery_attempt_id]);
+    const updated=await one(`UPDATE sessions SET department_id=$2,run_id=$3,direction_id=$4,recovery_attempt_id=$5,input=$6 WHERE id=$1 RETURNING *`,[sessionId,binding.department_id,publicId('run'),binding.direction_id,binding.recovery_attempt_id,departmentChallenge ? JSON.stringify(o.input) : null]);
     Object.assign(session!,updated);
   }
   const member = await one(`SELECT * FROM pool WHERE problem_id = $1 AND user_id = $2`, [req.project.id, req.user!.id]);
@@ -1158,7 +1168,7 @@ job.post("/result", bearer, project, assignmentMutation(async (req: any, res) =>
     if (typeof b[field] === "string" && needsSourceReview(b[field])) { res.status(400).json({ error: `${SOURCE_REVIEW_MESSAGE} The check tripped in "${field}" on this line: "${sourceReviewHit(b[field]) ?? "?"}". Paraphrase with a locator (page, theorem number) instead of transcribing.`, field, at: sourceReviewHit(b[field]) }); return; }
   }
   // Structured public text has the same publication and secret rules as ordinary reports.
-  for (const field of ['research', 'verification_plan', 'check_receipt', 'lean_statement_review', 'lean_execution_review', 'paper_exposition_review', 'research_evidence', 'research_assessment', 'research_links', 'known_work', 'work_disposition']) if (b[field] !== undefined) {
+  for (const field of ['research', 'verification_plan', 'check_receipt', 'lean_statement_review', 'lean_execution_review', 'paper_exposition_review', 'research_evidence', 'research_assessment', 'research_links', 'known_work', 'work_disposition', 'work_check']) if (b[field] !== undefined) {
     const value = JSON.stringify(b[field]);
     const bad = scrubError(field, value); if (bad) { res.status(400).json(bad); return; }
     if (needsSourceReview(value)) { res.status(400).json({ error: SOURCE_REVIEW_MESSAGE, field }); return; }
@@ -1170,7 +1180,8 @@ job.post("/result", bearer, project, assignmentMutation(async (req: any, res) =>
   const linkInput = optionalResearch('research_links',b.research_links,parseResearchLinks);
   const knownInput=optionalResearch('known_work',b.known_work,parseKnownWork);
   const dispositionInput=optionalResearch('work_disposition',b.work_disposition,parseWorkDisposition);
-  const sharedWarnings = [...evidenceInput.warnings,...assessmentInput.warnings,...linkInput.warnings,...knownInput.warnings,...dispositionInput.warnings];
+  const reviewWorkInput=optionalResearch('work_check',b.work_check,parseKnownWork);
+  const sharedWarnings = [...evidenceInput.warnings,...assessmentInput.warnings,...linkInput.warnings,...knownInput.warnings,...dispositionInput.warnings,...reviewWorkInput.warnings];
   const researchReport = parseResearch(b.research);
   let jobRow: any = null;
   if (b.job_id) {
@@ -1266,7 +1277,7 @@ job.post("/result", bearer, project, assignmentMutation(async (req: any, res) =>
     const rerunReason = String(b.rerun_reason ?? "").trim().slice(0, 2000);
     if (verification !== "read" && !rerunReason) { res.status(400).json({ error: `verification "${verification}" needs rerun_reason: what made rerunning worth it (an output missing or not matching the code, a bug you found, a claim the captured output does not show). If none, the review is "read".` }); return; }
     await validateReceiptUse(reviewOf, b.verification_receipt_id);
-    const reviewed = await one(`SELECT paper_exposition,verification_plan,duplicate_of,type,finding,problem_id,user_id,model,effort FROM returns WHERE id=$1`, [reviewOf]);
+    const reviewed = await one(`SELECT paper_exposition,verification_plan,duplicate_of,type,finding,problem_id,user_id,model,effort,job_id,lane_id FROM returns WHERE id=$1`, [reviewOf]);
     const expositionReview = reviewed?.paper_exposition && b.verdict === 'accept' ? await validateExpositionReview(reviewed,b.paper_exposition_review) : null;
     if (reviewed?.verification_plan?.lean) {
       const independent = (await one('SELECT lean_independent($1,$2,$3,$4,$5,$6) AND lean_tier1($6,$7) AS ok', [reviewed.problem_id, uid, req.model, effortEff, reviewed.user_id, reviewed.model, reviewed.effort]))?.ok === true;
@@ -1313,7 +1324,6 @@ job.post("/result", bearer, project, assignmentMutation(async (req: any, res) =>
         reviewerTrusted && b.verification_conflict_resolution_md ? executionState?.latest_receipt_id ?? null : null]);
     if (reviewerTrusted && b.verification_conflict_resolution_md) await q(`UPDATE jobs j SET status='expired' FROM returns r WHERE r.id=$1 AND j.problem_id=r.problem_id AND j.origin_key LIKE 'check-conflict:'||r.verification_fingerprint||':%' AND j.status='queued'`, [reviewOf]);
     const outcome = await resolveReturn(reviewOf);
-    await queueWorkReconsiderations(Number(req.project.id),req.project.slug);
     // A series decided at once (Chris, Sep 19 2026): the returns a triage covered under this lead get their verdicts from this same review.
     const seriesWarnings: string[] = []; const seriesDecided: Record<string, string> = {};
     // Series verdicts are decisions, so they come from a trusted reviewer (#sah-triage-close-and-reward): an advisory one would leave a covered
@@ -1365,10 +1375,29 @@ job.post("/result", bearer, project, assignmentMutation(async (req: any, res) =>
     // The reply names the review and the return's resulting state (issue #47), so the reviewer's done message needs no second round trip.
     const after = await one<{ status: string; final_rung: string | null; provisional: boolean; effects_applied_at: string | null; integration: string | null }>(`SELECT status, final_rung, provisional, effects_applied_at, integration FROM returns WHERE id = $1`, [reviewOf]);
     const myReview = await one<{ id: string }>(`SELECT max(id) AS id FROM reviews WHERE return_id = $1 AND user_id = $2`, [reviewOf, uid]);
+    let reviewWorkCheckId:number|null=null;
+    if(reviewWorkInput.value) {
+      const nomination=reviewWorkInput.value;
+      const sourceJob=reviewed?.job_id ? await one(`SELECT * FROM jobs WHERE id=$1 AND problem_id=$2`,[reviewed.job_id,req.project.id]) : null;
+      const originalTask=sourceJob ? await taskForJob(Number(req.project.id),req.project.slug,sourceJob) : null;
+      const task=nomination.task??originalTask;
+      const sources={predecessor_returns:[...new Set([...nomination.predecessor_returns,reviewOf])],review_ids:[...new Set([...nomination.review_ids,Number(myReview!.id)])],message_ids:nomination.message_ids};
+      if(task && collaborationEnabled(req.project.slug) && await validateWorkSources(Number(req.project.id),sources)) {
+        // Preserve the producing nomination before fingerprinting. It grants no authority and changes no author/history record.
+        await q(`UPDATE reviews SET research_assessment=coalesce(research_assessment,$3::jsonb)||jsonb_build_object('work_check',$2::jsonb) WHERE id=$1`,[myReview!.id,JSON.stringify({...nomination,task}),JSON.stringify(parseResearchAssessment({}))]);
+        const broad=sourceJob && challengeTrackOfJob(req.project.slug,sourceJob) && !/:study:/.test(String(sourceJob.origin_key??''));
+        const narrower=Boolean(nomination.task && originalTask && workScopeHash(nomination.task)!==workScopeHash(originalTask));
+        reviewWorkCheckId=await queueWorkCheck(Number(req.project.id),req.project.slug,reviewed?.lane_id??null,task,sources,{source_return_id:reviewOf,source_review_id:Number(myReview!.id),author_model:req.model,allow_covered:!broad||narrower});
+        if(!reviewWorkCheckId)sharedWarnings.push('work_check: no new comparison queued; current evidence or an existing comparison may already suffice; the review grants no dispatch authority');
+      } else sharedWarnings.push('work_check: requires an exact task and same-project source locators; no comparison queued and the ordinary review remains recorded');
+    }
+    if(dispositionInput.value)sharedWarnings.push('work_disposition: ordinary reviews cannot issue assignment authority; use work_check to nominate a separate trusted comparison');
+    if(knownInput.value)sharedWarnings.push('known_work: compact stops complete authored assignments; on an ordinary review use work_check to nominate a separate trusted comparison');
+    await queueWorkReconsiderations(Number(req.project.id),req.project.slug);
     await registerEntries(uid, "review", Number(myReview?.id ?? 0), entryKeys);
     const reviewReport = tokens.log === "unknown" && transcriptMode !== "summary" ? await reportHarness(String(b.transcript), { reviewId: Number(myReview?.id ?? 0) || undefined, uid, model: req.model ?? null }) : null;
     const reviewLogWarn = transcriptWarning(transcriptMode, sessionMode, tokens, String(b.transcript), `POST ${BASE()}/projects/${req.project.slug}/review/${Number(myReview?.id ?? 0)}/transcript (same headers)`, reviewReport);
-    res.json({ ok: true, review_of: reviewOf, review_id: Number(myReview?.id ?? 0) || null, outcome, ...(Object.keys(seriesDecided).length ? { series: seriesDecided } : {}), advisory: !reviewerTrusted, ...(effortNote ? { effort_note: effortNote } : {}), warnings: [...(effortNote ? [effortNote] : []), ...alsoFixCut(b.also_fix), ...(reviewLogWarn ? [reviewLogWarn] : []), ...seriesWarnings, ...announceWarnings, ...onceWarning(tokens), ...scrubWarnings, ...sharedWarnings, ...subagentWarning(String(b.transcript ?? ""), `${BASE()}/projects/${req.project.slug}/review/${Number(myReview?.id ?? 0)}/transcript`)], trusted_by: reviewerGranted ? "grant" : reviewerTrusted ? "model" : null, return_status: after?.status ?? null, final_rung: after?.final_rung ?? null, provisional: after?.provisional ?? null, effects_applied_at: after?.effects_applied_at ?? null, integration: after?.integration ?? null, tokens });
+    res.json({ ok: true, review_of: reviewOf, review_id: Number(myReview?.id ?? 0) || null, work_check_job_id:reviewWorkCheckId, outcome, ...(Object.keys(seriesDecided).length ? { series: seriesDecided } : {}), advisory: !reviewerTrusted, ...(effortNote ? { effort_note: effortNote } : {}), warnings: [...(effortNote ? [effortNote] : []), ...alsoFixCut(b.also_fix), ...(reviewLogWarn ? [reviewLogWarn] : []), ...seriesWarnings, ...announceWarnings, ...onceWarning(tokens), ...scrubWarnings, ...sharedWarnings, ...subagentWarning(String(b.transcript ?? ""), `${BASE()}/projects/${req.project.slug}/review/${Number(myReview?.id ?? 0)}/transcript`)], trusted_by: reviewerGranted ? "grant" : reviewerTrusted ? "model" : null, return_status: after?.status ?? null, final_rung: after?.final_rung ?? null, provisional: after?.provisional ?? null, effects_applied_at: after?.effects_applied_at ?? null, integration: after?.integration ?? null, tokens });
     return;
   }
 
@@ -1452,6 +1481,7 @@ job.post("/result", bearer, project, assignmentMutation(async (req: any, res) =>
   if (rtype === 'formalize' && tierForEffort(await modelTier(req.model ?? 'unknown'), effortEff).tier !== 1) {
     res.status(403).json({ error: 'formalize requires a Tier 1 model at high or above, measured on this session/turn; low, medium and unmeasured effort do not qualify' }); return;
   }
+  if(reviewWorkInput.value)sharedWarnings.push('work_check: on /result this nominates from an ordinary review only; author stops use known_work or scoped chat nominations');
   const verificationPlan = parseVerificationPlan(b.verification_plan);
   if (verificationPlan) await validateLeanIdentityArtifacts(verificationPlan);
   if (verificationPlan?.lean && !['formalize','paper','audit'].includes(rtype)) { res.status(400).json({error:'Lean profiles belong on formalize, paper or audit returns'}); return; }
@@ -1776,7 +1806,7 @@ export async function resumeDeferredReviews(problemId: number): Promise<number> 
 
 /** Create review jobs for a return. Reviews require tier 1 (scope Q7/Q13). */
 /** Bumped whenever the standard review guidance changes; a queued review from an earlier version is refreshed when served. */
-export const REVIEW_BRIEF_VERSION = 19; // 19: a summary transcript is the author's person's choice, judged as such (Oct 10 2026).   // 18: exact scoped assessments and shared corrections (Oct 10 2026).   // 16: authenticated trusted execution separate from cross-family correctness review (Oct 8 2026); 15: distinct Lean model families, both Tier 1/high, bounded reconstruction (Oct 7 2026); 14: concrete Lean package artifacts and make-checkable continuation (Oct 6 2026); 13: pinned Lean statement review and trustworthy worker validation (Oct 6 2026); 12: a chat return's transcript is the server's record of its tool calls, model unmeasured (Oct 4 2026, #sah-mcp-real-work-build);   // 11: review targets match integration closure, including explicit empty lists (Oct 2 2026); 10: required document repairs go to Tier 1 trusted agents and reviews reuse established evidence (Oct 2 2026); 9: a series also gathers the same document's later fixes, chain links and no-op revisions (#mba-sah-held-feedback-items, item 15); 8: the return schema names verification_sufficiency_md on a packaged review and the also_fix note cap (#mba-sah-bot-feedback-fixes, fix 7); 7: a reviewer holding a role on the project may mark an accepted finding worth announcing (Chris, Sep 26 2026, #sah-discord-announcer); 6: the reviewer asks whether the return earns credit, a rung or a citation without the work (Chris, Sep 24 2026, #sah-gemma-mvp; the Gemma Challenge's agents caught a gameable gate themselves);5: a revision's review lists the findings it answers, and also_fix takes a scope (Sep 24 2026); 3: no time budget in the review brief (Chris, Sep 19 2026); 4: series verdicts are decisions with their usual effects, from a trusted reviewer only (Sep 23 2026)
+export const REVIEW_BRIEF_VERSION = 20; // 20: explicit legacy nominations and report-bound comparison checks. // 19: a summary transcript is the author's person's choice, judged as such (Oct 10 2026).   // 18: exact scoped assessments and shared corrections (Oct 10 2026).   // 16: authenticated trusted execution separate from cross-family correctness review (Oct 8 2026); 15: distinct Lean model families, both Tier 1/high, bounded reconstruction (Oct 7 2026); 14: concrete Lean package artifacts and make-checkable continuation (Oct 6 2026); 13: pinned Lean statement review and trustworthy worker validation (Oct 6 2026); 12: a chat return's transcript is the server's record of its tool calls, model unmeasured (Oct 4 2026, #sah-mcp-real-work-build);   // 11: review targets match integration closure, including explicit empty lists (Oct 2 2026); 10: required document repairs go to Tier 1 trusted agents and reviews reuse established evidence (Oct 2 2026); 9: a series also gathers the same document's later fixes, chain links and no-op revisions (#mba-sah-held-feedback-items, item 15); 8: the return schema names verification_sufficiency_md on a packaged review and the also_fix note cap (#mba-sah-bot-feedback-fixes, fix 7); 7: a reviewer holding a role on the project may mark an accepted finding worth announcing (Chris, Sep 26 2026, #sah-discord-announcer); 6: the reviewer asks whether the return earns credit, a rung or a citation without the work (Chris, Sep 24 2026, #sah-gemma-mvp; the Gemma Challenge's agents caught a gameable gate themselves);5: a revision's review lists the findings it answers, and also_fix takes a scope (Sep 24 2026); 3: no time budget in the review brief (Chris, Sep 19 2026); 4: series verdicts are decisions with their usual effects, from a trusted reviewer only (Sep 23 2026)
 const REASSESSMENT_NOTE = '\n\nEvidence needs reassessment or execution could not find capacity within 24 hours. Assess the specific missing or changed evidence from the record; execution is not included. Preserve existing observations. Do not report that a check ran. If new execution is necessary, name the smallest check and missing capability in needs_md; a repaired package is a new return.';
 /** The standard review brief for a return as it stands now, with the tier, budget and compute hint that go with it. Job-specific text (the reassessment note) is the caller's. */
 export async function composeReviewBrief(returnId: number, problemId: number, options: { judgmentOnly?: boolean } = {}): Promise<{ brief: string; tier: number; budget: number; compute: any; judgmentOnly: boolean; packaged: boolean }> {
@@ -1800,7 +1830,7 @@ export async function composeReviewBrief(returnId: number, problemId: number, op
   const packageNote = parent?.verification_plan ? '\n\nThis return carries an immutable verification package. Take the time the judgment needs; judgment_minutes in the package is an estimate by its author for the accounting of the project, not a limit on you. An unable receipt is not completed execution. Acceptance requires verification_sufficiency_md; a reused receipt is named by verification_receipt_id. Unresolved conflicts require explicit trusted verification_conflict_resolution_md. If an obligation cannot be settled from the record, state it precisely in needs_md.' : '';
   const independentExecution = parent?.verification_plan && (await verificationRuns(returnId)).some(isCompletedCheck);
   const checkNote = mechanical
-    ? `\n\nThis is a mechanical check; take the time it needs, there is no time budget or deadline on a review. The author's verification recipe is below with its captured outputs and hashes. Read the recipe and the code against the claim first; rerun it, exactly and in a fresh directory, only for a reason (see verification below), except a counterexample, which is cheap: run it against the validator when that takes minutes. ${parent?.type === "break" ? "Accept if the counterexample runs against the validator and refutes the claim as stated; reject if it does not run, does not refute, or refutes a weaker statement than claimed." : parent?.type === "measure" ? "Accept if your hashes match; reject on any mismatch, with your hashes." : "Accept if the Lean file compiles against the stated Mathlib commit with the stated lemma and no sorry; reject otherwise."} Do not redo the search. If the recipe cannot be run as supplied, reject as unverifiable and say what is missing.\n\n### Verification recipe\n\n${parent?.recipe_md ?? "(none given)"}`
+    ? `\n\nThis is a mechanical check; take the time it needs, there is no time budget or deadline on a review. The author's verification recipe is below with its captured outputs and hashes. Read the recipe and the code against the claim first; rerun it, exactly and in a fresh directory, only for a reason (see verification below), except a counterexample, which is cheap: run it against the validator when that takes minutes. ${parent?.type === "break" ? "Accept if the counterexample runs against the validator and refutes the claim as stated; reject if it does not run, does not refute, or refutes a weaker statement than claimed." : parent?.type === "measure" ? "Hash/output identity verifies the captured computation only. Before accepting a throughput or hit-rate conclusion, assess observation units, full work, baseline equivalence, selection/stopping rules and uncertainty. Accept only the supported claim and rung; a reproducible comparison can still be overclaimed." : "Accept if the Lean file compiles against the stated Mathlib commit with the stated lemma and no sorry; reject otherwise."} Do not redo the search. If the recipe cannot be run as supplied, reject as unverifiable and say what is missing.\n\n### Verification recipe\n\n${parent?.recipe_md ?? "(none given)"}`
     : `\n\nTake the time the verification needs: there is no time budget or deadline on a review. Verify what the author gives you to verify; do not redo the work. If the return cannot be checked with what it supplies, reject as unverifiable and say what a checkable return would need.`;
   const unverifiableNote = `\n\nTo reject as unverifiable (it cannot be checked with what the author supplied), return \`"verdict": "reject", "unverifiable": true, "needs_md": "<exactly what a checkable return would need: commands, inputs, expected outputs, what was missing>"\`. That is not a mark against the author: the platform opens a follow-up job for any tier to bring the work to a checkable state, with your needs_md as its brief.`;
   const expositionNote = parent?.paper_exposition ? await expositionReviewGuidance(parent.paper_exposition,problemId) : "";
@@ -2532,6 +2562,7 @@ job.get("/return/:id", optionalAuth, project, async (req: any, res) => {
     return { ...rest, decided_by, decided_by_author_handle: d.by === "trusted" && decided_by.includes(String(r.handle)), review_ids: carried.map((v: any) => v.id) };
   });
   r.decision = r.decisions.length ? r.decisions[r.decisions.length - 1] : null;
+  r.report_sha256 = reportHash(r.report_md??'');
   r.research_authority = researchAuthority({...r,decision_by:r.decision?.by,lean_current:r.verification_summary?.lean ? r.verification_summary.lean.status==='checked' : undefined},r.reviews,reviewQuorum(req.project.slug));
   r.research_links = await q(`SELECT l.* FROM research_links l WHERE l.subject_return_id=$1 AND l.problem_id=$2 AND ${activeLinkSQL('l')} ORDER BY l.id`,[r.id,req.project.id]);
   r.duplicates = (await q<{ id: string }>(`SELECT id FROM returns WHERE superseded_by = $1 OR duplicate_of = $1 ORDER BY id`, [r.id])).map((x) => Number(x.id));
@@ -2613,6 +2644,19 @@ job.post("/return/:id/request-review", bearer, project, assignmentMutation(async
   if (!note) { res.status(400).json({ error: "say why: which claim in the return deserves verification, and what you checked" }); return; }
   const ret = await one(`SELECT * FROM returns WHERE id = $1 AND problem_id = $2`, [req.params.id, req.project.id]);
   if (!ret) { res.status(404).json({ error: "no such return" }); return; }
+  if(ret.status==='accepted' && req.body?.scope==='research_report' && collaborationEnabled(req.project.slug)) {
+    const decision=await one(`SELECT by FROM return_decisions WHERE return_id=$1 ORDER BY id DESC LIMIT 1`,[ret.id]);
+    if(decision?.by==='verifier') {
+      const bad=scrubError('note',note);
+      if(bad) {res.status(400).json(bad);return;}
+      if(needsSourceReview(note)) {res.status(400).json({error:SOURCE_REVIEW_MESSAGE,field:'note'});return;}
+      const sourceJob=ret.job_id ? await one(`SELECT * FROM jobs WHERE id=$1`,[ret.job_id]) : null;
+      const original=sourceJob ? await taskForJob(Number(req.project.id),req.project.slug,sourceJob) : null;
+      const task=parseResearchTask({intent:'consolidation',topic_ids:original?.topic_ids??[],predecessor_returns:[Number(ret.id)],unresolved_obligation_md:`Which scientific claims in return #${ret.id} warrant targeted review or a corrected comparison?`,changed_premise_md:'Numerical input verification establishes the input only; research claims require separate judgment.',expected_evidence_md:'Inspect sources and comparator accounting; identify supported scope, a concrete defect or a distinct next_task. A formal verdict uses ordinary review or challenge.',stop_if_md:'The current report has already received this exact investment judgment; reuse it unless evidence changes.',domain_md:`Research report SHA256 ${reportHash(ret.report_md??'')}; preserve the independently verified input, its score and existing scientific history.`});
+      const checkId=await queueWorkCheck(Number(req.project.id),req.project.slug,ret.lane_id,task,{predecessor_returns:[Number(ret.id)],review_ids:[],message_ids:[]},{source_return_id:Number(ret.id),author_model:req.model,allow_covered:false,nomination_md:note});
+      res.json({ok:true,return_id:Number(ret.id),status:ret.status,final_rung:ret.final_rung,scope:'research_report',work_check_job_id:checkId,reviews_requested:0,note:'A bounded trusted research-report triage was nominated. An existing current judgment or in-flight comparison may suffice. Input verification and historical verdicts are unchanged; this triage grants no scientific acceptance.'});return;
+    }
+  }
   if (ret.status !== "recorded") { res.status(409).json({ error: `return #${ret.id} is ${ret.status}${ret.status === "pending" ? " (already before reviewers)" : ""}: only a recorded return is elevated; a decided one is reopened by a trusted reviewer or challenged` }); return; }
   const uid = Number(req.user!.id);
   await q(`INSERT INTO return_decisions (return_id, status, final_rung, provisional, by, note, user_id) VALUES ($1,'pending',NULL,false,'elevate',$2,$3)`, [ret.id, note, uid]);

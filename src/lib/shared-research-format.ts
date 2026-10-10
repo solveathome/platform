@@ -1,12 +1,14 @@
 import { createHash } from 'node:crypto';
 import { withoutTimeAllowance } from './research-format.js';
 
-export const SHARED_RESEARCH_VERSION = 'shared-research-v3';
+export const SHARED_RESEARCH_VERSION = 'shared-research-v4';
 export type ResearchIntent = 'new' | 'extend' | 'replication' | 'repair' | 'consolidation' | 'source';
 export type ResearchTask = { schema: 'research-task-v1'; topic_ids: string[]; intent: ResearchIntent; predecessor_returns: number[]; unresolved_obligation_md: string; changed_premise_md: string; expected_evidence_md: string; stop_if_md: string; domain_md: string };
 export type ResearchScope = { key: string; statement_md: string; domain_md: string; assumptions_md: string; kind: 'witness' | 'throughput' | 'finite' | 'restricted_fact' | 'method' | 'negative'; artifact_sha256: string[]; transfer_conditions_md: string; settles_topic?: string; negative?: { kind: 'unresolved' | 'attempt_failed' | 'claim_refuted' | 'scoped_obstruction'; evidence_md: string; revisit_when_md: string } };
 export type ResearchEvidence = { schema: 'research-evidence-v1'; topic_ids: string[]; scopes: ResearchScope[] };
-export type ResearchAssessment = { schema: 'research-assessment-v1'; supported_scopes: { scope_key: string; scope_sha256: string }[]; unsupported_extension_md: string; corrections_md: string; next_test_md: string; reopen_when_md: string };
+export type ComparisonArm = { unit: string; observations: number; successes?: number; work_budget_md: string };
+export type ComparisonCheck = { report_sha256: string; scope_key?: string; scope_sha256?: string; kind: 'throughput' | 'hit_rate'; method: ComparisonArm; baseline: ComparisonArm; selection_stopping_md: string; baseline_equivalence_md: string; uncertainty_md: string; budget_complete: boolean; baseline_equivalent: boolean; uncertainty_adequate: boolean };
+export type ResearchAssessment = { schema: 'research-assessment-v1'; supported_scopes: { scope_key: string; scope_sha256: string }[]; unsupported_extension_md: string; corrections_md: string; next_test_md: string; reopen_when_md: string; comparison_checks?: ComparisonCheck[] };
 export type ResearchLink = { subject_return_id: number; scope_key?: string; route_id?: number; topic_id?: string; relation: 'bears_on' | 'addresses' | 'contradicts' | 'reuses' | 'replicates'; rationale_md: string; supersedes_id?: number };
 export type ResearchTopic = { id: string; lane?: string; study?: string; paper?: string; claim_id?: string; question_md: string; domain_md: string };
 
@@ -46,8 +48,27 @@ export function parseResearchEvidence(raw: any): ResearchEvidence {
 }
 export function parseResearchAssessment(raw: any): ResearchAssessment {
   const x = object(raw);
-  return { schema: 'research-assessment-v1', supported_scopes: list(x.supported_scopes ?? [], 12).map(s => ({ scope_key: tag(s.scope_key), scope_sha256: hash(s.scope_sha256) })), unsupported_extension_md: text(x.unsupported_extension_md), corrections_md: text(x.corrections_md), next_test_md: text(x.next_test_md), reopen_when_md: text(x.reopen_when_md) };
+  return { schema: 'research-assessment-v1', supported_scopes: list(x.supported_scopes ?? [], 12).map(s => ({ scope_key: tag(s.scope_key), scope_sha256: hash(s.scope_sha256) })), unsupported_extension_md: text(x.unsupported_extension_md), corrections_md: text(x.corrections_md), next_test_md: text(x.next_test_md), reopen_when_md: text(x.reopen_when_md), ...(x.comparison_checks !== undefined ? {comparison_checks:list(x.comparison_checks,12).map(parseComparisonCheck)} : {}) };
 }
+export const reportHash = (report: string) => createHash('sha256').update(report).digest('hex');
+export function parseComparisonCheck(raw:any):ComparisonCheck {
+  const x=object(raw), kind=choice(x.kind,['throughput','hit_rate']);
+  const arm=(raw:any):ComparisonArm=>{
+    const a=object(raw);
+    if(!Number.isSafeInteger(a.observations) || a.observations<1)throw Error('comparison observations must be positive integers');
+    if(a.successes!==undefined && (!Number.isSafeInteger(a.successes) || a.successes<0 || a.successes>a.observations))throw Error('comparison successes must be between zero and observations');
+    if(kind==='hit_rate' && a.successes===undefined)throw Error('hit-rate comparisons need successes and denominators for both arms');
+    return {unit:tag(a.unit),observations:a.observations,...(a.successes!==undefined?{successes:a.successes}:{}),work_budget_md:text(a.work_budget_md,true)};
+  };
+  for(const k of ['budget_complete','baseline_equivalent','uncertainty_adequate'])if(typeof x[k]!=='boolean')throw Error(`comparison ${k} must be an explicit boolean`);
+  if((x.scope_key===undefined)!==(x.scope_sha256===undefined))throw Error('comparison scope_key and scope_sha256 must be supplied together');
+  return {report_sha256:hash(x.report_sha256),...(x.scope_key!==undefined?{scope_key:tag(x.scope_key),scope_sha256:hash(x.scope_sha256)}:{}),kind,method:arm(x.method),baseline:arm(x.baseline),selection_stopping_md:text(x.selection_stopping_md,true),baseline_equivalence_md:text(x.baseline_equivalence_md,true),uncertainty_md:text(x.uncertainty_md,true),budget_complete:x.budget_complete,baseline_equivalent:x.baseline_equivalent,uncertainty_adequate:x.uncertainty_adequate};
+}
+/** Checks declarations, not experiment semantics. Unequal sample sizes can be valid; unlike observation units cannot be endorsed. */
+export function comparisonProblems(check:ComparisonCheck,reportSha:string):string[] {
+  return [check.report_sha256!==reportSha?'stale report hash':null,check.method.unit!==check.baseline.unit?'different counted observation units':null,!check.budget_complete?'incomplete full work budget':null,!check.baseline_equivalent?'baseline equivalence not established':null,!check.uncertainty_adequate?'uncertainty not adequate':null].filter((s):s is string=>Boolean(s));
+}
+export const COMPARISON_REVIEW_GUIDANCE = `For a throughput or hit-rate claim, inspect the same counted observation unit in both arms, denominator/sample and success counts, dependence, selection and stopping rules, complete work budgets including preprocessing, solve/inverse operations and survivor verification, baseline equivalence and uncertainty. Unequal sample sizes are allowed only with an appropriate normalized comparison and uncertainty; final iterates and every baseline output are different observation units. Candidate-input verification validates the submitted input only. On review submit research_assessment.comparison_checks:[{report_sha256:<GET /return/:id report_sha256>,scope_key?,scope_sha256?,kind:"throughput|hit_rate",method:{unit,observations,successes:<required for hit_rate>,work_budget_md},baseline:{unit,observations,successes,work_budget_md},selection_stopping_md,baseline_equivalence_md,uncertainty_md,budget_complete,baseline_equivalent,uncertainty_adequate}]. Scope key/hash are paired when endorsing a typed claim. New throughput scope endorsements require a current complete check; declared mismatches or missing work block that endorsement. The checklist cannot establish semantic truth. Narrow unsupported claims in corrections/unsupported_extension_md, select the justified verdict/rung, and nominate only a specific disputed or consequential comparison or corrected experiment; reuse existing evidence. Unrelated papers need no benchmark checklist. Existing verdict changes use the ordinary review mechanism; no automatic retrospective downgrade or fleet-wide rerun.`;
 export function parseResearchLinks(raw: any): ResearchLink[] {
   return list(raw).map(v => { const x=object(v); const out: ResearchLink={subject_return_id:id(x.subject_return_id),relation:choice(x.relation,['bears_on','addresses','contradicts','reuses','replicates']),rationale_md:text(x.rationale_md,true)};
     if (x.scope_key !== undefined) out.scope_key=tag(x.scope_key);

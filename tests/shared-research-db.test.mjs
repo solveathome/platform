@@ -22,13 +22,14 @@ test('HTTP evidence/review linkage reaches later assignments; pending and correc
  const a=await w.actor('author','gpt-6-astra'),r1=await w.actor('reviewer','claude-fable-5-1',{trusted:true}),r2=await w.actor('reviewer2','gpt-6-astra',{trusted:true});
  const result=await a.submit({type:'direction',research_evidence:evidence,cites:{returns:[]}});
  const read=await w.read(`/return/${result.return_id}`);assert.equal(read.research_evidence.scopes[0].kind,'throughput');
- await r1.submit({type:'review',return_id:result.return_id,verdict:'accept',rung:'measured',research_assessment:assessment,notes_md:'Scoped benchmark only.'});
+ const checkedAssessment={...assessment,comparison_checks:[{report_sha256:read.report_sha256,scope_key:'h0-gate',scope_sha256:scopeHash(scope),kind:'throughput',method:{unit:'candidate',observations:100,work_budget_md:'All fixture setup and evaluation charged.'},baseline:{unit:'candidate',observations:100,work_budget_md:'Matched fixture setup and evaluation charged.'},selection_stopping_md:'Fixed matched counts.',baseline_equivalence_md:'Same fixture stream and controls.',uncertainty_md:'A bounded fixture declaration, not a real benchmark.',budget_complete:true,baseline_equivalent:true,uncertainty_adequate:true}]};
+ await r1.submit({type:'review',return_id:result.return_id,verdict:'accept',rung:'measured',research_assessment:checkedAssessment,notes_md:'Scoped benchmark only.'});
  assert.notEqual((await w.read(`/return/${result.return_id}`)).research_authority.scopes[0].research_status,'accepted');
- await r2.submit({type:'review',return_id:result.return_id,verdict:'accept',rung:'measured',research_assessment:assessment,notes_md:'Exact restricted statement.'});
+ await r2.submit({type:'review',return_id:result.return_id,verdict:'accept',rung:'measured',research_assessment:checkedAssessment,notes_md:'Exact restricted statement.'});
  assert.equal((await w.read(`/return/${result.return_id}`)).research_authority.scopes[0].research_status,'accepted');
  const route=await a.submit({type:'direction',research:proposal('New gate obligation')});
  const r3=await w.actor('association-reviewer','claude-opus-5-5',{trusted:true});
- await r3.submit({type:'review',return_id:result.return_id,verdict:'accept',rung:'measured',research_assessment:assessment,notes_md:'Exact restricted statement.',research_links:[{subject_return_id:result.return_id,route_id:route.research.route_id,relation:'addresses',rationale_md:'The old return answers part of this gate.'}]});
+ await r3.submit({type:'review',return_id:result.return_id,verdict:'accept',rung:'measured',research_assessment:checkedAssessment,notes_md:'Exact restricted statement.',research_links:[{subject_return_id:result.return_id,route_id:route.research.route_id,relation:'addresses',rationale_md:'The old return answers part of this gate.'}]});
  const assignment=await w.take(a,j=>Number(j.research_route_id)===route.research.route_id);
  assert.match(assignment.brief_md,/Condition on the chaining value/);assert.match(assignment.brief_md,/Throughput only/);
  assert.ok(assignment.research_context.items.some(i=>i.id===result.return_id));

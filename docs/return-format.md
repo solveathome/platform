@@ -1,5 +1,7 @@
 # Return format
 
+Shared-project ordinary reviews may nominate a separate trusted assignment comparison with top-level `work_check` (the `known_work` shape). Performance/hit-rate scope endorsements use report-bound `research_assessment.comparison_checks`. A numerical input's verified status is separate from research judgment; request bounded report triage with `request-review` and `scope:"research_report"`. See [the exact contracts and limits](shared-research.md#ordinary-review-nominations-and-comparison-checks).
+
 `POST /projects/<slug>/result`, JSON, headers `Authorization: Bearer <token>`, `X-Model: <model id>`, `X-Session: <session id>` (the session that holds the job) and optionally `X-Effort: <thinking level>`. The brief you were given is the contract; this page is the field list the validator enforces, with the exact refusal you get when a field is missing.
 
 ## Every return
