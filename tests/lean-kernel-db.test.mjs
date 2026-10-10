@@ -11,7 +11,7 @@ import {leanFixture,digest} from './fixtures/lean.mjs';
 
 if (!process.env.TEST_DATABASE_URL) throw new Error('Set TEST_DATABASE_URL to a disposable database.');
 process.env.DATABASE_URL=process.env.TEST_DATABASE_URL;
-const temp=mkdtempSync(join(tmpdir(),'lean-kernel-db-'));process.env.FILES_DIR=join(temp,'files');
+const temp=mkdtempSync(join(tmpdir(),'lean-kernel-db-'));process.env.FILES_DIR=join(temp,'files');process.env.PROJECTS_DIR=join(temp,'projects');
 const {q,one,pool,migrate}=await import('../src/db/index.ts');
 const {modelTier}=await import('../src/lib/auth.ts');
 const {TERMS_VERSION}=await import('../src/lib/terms.ts');
@@ -40,6 +40,8 @@ after(async()=>{
     await q(`DELETE FROM file_refs WHERE ref_type='return' AND ref_id IN(SELECT id FROM returns WHERE problem_id=$1)`,[pid]);
     await q(`UPDATE returns SET job_id=NULL WHERE problem_id=$1`,[pid]);
     await q(`DELETE FROM jobs WHERE problem_id=$1`,[pid]);
+    await q(`DELETE FROM research_routes WHERE problem_id=$1`,[pid]);
+    await q(`DELETE FROM papers WHERE problem_id=$1`,[pid]);
     await q(`DELETE FROM returns WHERE problem_id=$1`,[pid]);
     await q(`DELETE FROM assignment_attempts WHERE problem_id=$1`,[pid]);
     await q(`DELETE FROM sessions WHERE problem_id=$1`,[pid]);
@@ -149,4 +151,35 @@ test('mathematical/source changes invalidate kernel review; stronger comparator-
  const {proof,review}=await kernelSubject();for(const mutate of [s=>s.manuscript.sha256=digest('math change'),s=>s.claims[0].assumptions.push('hidden assumption'),s=>s.source_artifacts[0].sha256=digest('source change'),s=>s.semantic_dependencies[0].revision='f'.repeat(40)]){const p=clone(proof.verification_plan);mutate(p.lean.scientific_identity);const changed=await ret(p);assert.equal(await sqlScience(changed),false);assert.ok((await dispatchReasons(changed)).some(r=>/statement|science/i.test(r)));}
  await q(`UPDATE reviews SET effort='medium' WHERE id=$1`,[review.id]);assert.deepEqual(await science(proof),[false,false]);await q(`UPDATE reviews SET effort='high' WHERE id=$1`,[review.id]);
  const {proof:strong}=await reviewed();const plan=clone(strong.verification_plan);plan.lean.execution_review_id=null;const blocked=await ret(plan);assert.equal(await sqlExecution(blocked),false);assert.equal(await leanExecutionReviewed(blocked),false);assert.ok((await dispatchReasons(blocked)).some(r=>/execution.*review|execution.*contract/i.test(r)));
+});
+
+
+test('current Lean authority invalidates route certificates on external statement, custody and manuscript changes',async()=>{
+ const {proof,review}=await kernelSubject();const f=await kernelReceipt(proof),id=await f.submit();
+ await q(`INSERT INTO reviews(return_id,user_id,model,provider,verdict,notes_md,trusted,effort,verification_receipt_id,verification_sufficiency_md) VALUES($1,$2,$3,'fixture','accept','Synthetic judgment',true,'high',$4,$5)`,[proof.id,owner,OTHER,id,'Synthetic assessment of mathematical claim match and correctness, replay source/object custody, axiom closure, isolation, controls and explicit limits.']);
+ const p=proof.verification_plan.lean;
+ const paper=await one(`INSERT INTO papers(problem_id,slug,title,current_file_sha) VALUES($1,$2,'Synthetic manuscript',$3) RETURNING id`,[pid,p.paper_slug,p.manuscript_sha256]);
+ mkdirSync(join(process.env.PROJECTS_DIR,slug),{recursive:true});writeFileSync(join(process.env.PROJECTS_DIR,slug,'project.json'),JSON.stringify({slug,research_collaboration:{enabled:true,topics:[]}}));
+ const {stepInputVector,holdForStepCheck}=await import('../src/lib/research.ts');
+ const {verificationSummary}=await import('../src/lib/verification.ts');
+ assert.equal((await verificationSummary(Number(proof.id))).lean.status,'checked');
+ const route=await one(`INSERT INTO research_routes(problem_id,origin_return_id,title,contribution_md,prior_art_md,uncertainty_md,state,next_step) VALUES($1,$2,'Gate','C','P','U','active',$3) RETURNING *`,[pid,proof.id,JSON.stringify({question:'Is the remaining gate open?',method:'Inspect the evidence.',success:'Gate holds.',failure:'Gate fails.',budget_hours:.5})]);
+ await q('UPDATE returns SET research_route_id=$2 WHERE id=$1',[proof.id,route.id]);
+ const cert=await stepInputVector(pid,Number(route.id));
+ assert.deepEqual(await stepInputVector(pid,Number(route.id)),cert,'unchanged authority reuses certificate');
+ const job=await one(`INSERT INTO jobs(problem_id,type,title,brief_md,min_tier,budget_hours,purpose,research_stage,research_route_id,research_source_return_id,step_checked_through,step_checked_vector) VALUES($1,'explore','Pursuit','Pursuit',1,.5,'discovery','pursue',$2,$3,$3,$4) RETURNING *`,[pid,route.id,proof.id,JSON.stringify(cert)]);
+ await q('UPDATE reviews SET needs_reassessment=true WHERE id=$1',[review.id]);
+ assert.equal((await verificationSummary(Number(proof.id))).lean.status,'no_proof');
+ assert.notDeepEqual(await stepInputVector(pid,Number(route.id)),cert);
+ const held=await holdForStepCheck(job);assert.equal(Number(held.step_check_of),Number(job.id));
+ await q('UPDATE reviews SET needs_reassessment=false WHERE id=$1',[review.id]);
+ assert.deepEqual(await stepInputVector(pid,Number(route.id)),cert,'restoring unchanged authority restores its scientific digest');
+ await q(`DELETE FROM file_refs WHERE ref_type='return' AND ref_id=$1 AND file_sha=$2`,[f.result.id,f.raw.lean.custody_sha256]);
+ assert.notDeepEqual(await stepInputVector(pid,Number(route.id)),cert);
+ await q(`INSERT INTO file_refs(file_sha,ref_type,ref_id) VALUES($1,'return',$2)`,[f.raw.lean.custody_sha256,f.result.id]);
+ assert.deepEqual(await stepInputVector(pid,Number(route.id)),cert);
+ const changed='Synthetic manuscript: changed claim.';await uploadArtifacts([['changed.md',changed]]);
+ await q(`UPDATE papers SET current_file_sha=$2 WHERE id=$1`,[paper.id,digest(changed)]);
+ assert.equal((await verificationSummary(Number(proof.id))).lean.status,'stale');
+ assert.notDeepEqual(await stepInputVector(pid,Number(route.id)),cert);
 });

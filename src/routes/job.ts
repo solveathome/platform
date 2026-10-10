@@ -1562,7 +1562,8 @@ job.post("/result", bearer, project, assignmentMutation(async (req: any, res) =>
   // the spot, unpaid, linked both ways, no review slot; a duplicate of a pending one is labelled and folded when that one is accepted.
   const ph = patchHash(b.patch); const revSha = rtype === "audit" ? String(b.revision?.file ?? "").toLowerCase() || null : null; const revPath = rtype === "audit" ? revisions.safeRel(String(b.revision?.path ?? "")) : null;
   if (ph) await q(`UPDATE returns SET patch_hash = $2 WHERE id = $1`, [ret!.id, ph]);
-  const twin = !evidenceInput.value && !researchReport && !verificationPlan && (ph || revSha) ? await one<{ id: string; status: string }>(`SELECT id, status FROM returns WHERE problem_id = $1 AND id <> $2 AND status IN ('accepted','pending') AND NOT provisional
+  const twin = !researchReport && !verificationPlan && (ph || revSha) ? await one<{ id: string; status: string }>(`SELECT id, status FROM returns WHERE problem_id = $1 AND id <> $2 AND status IN ('accepted','pending') AND NOT provisional
+      AND research_evidence IS NOT DISTINCT FROM (SELECT research_evidence FROM returns WHERE id=$2)
       AND (($3::text IS NOT NULL AND patch_hash = $3) OR ($4::text IS NOT NULL AND revision_sha = $4 AND revision_path = $5)) ORDER BY (status = 'accepted') DESC, id LIMIT 1`, [problem.id, ret!.id, ph, revSha, revPath]) : null;
   if (twin && twin.status === "accepted") {
     await q(`UPDATE returns SET status = 'superseded', superseded_by = $2, final_rung = NULL WHERE id = $1`, [ret!.id, twin.id]);

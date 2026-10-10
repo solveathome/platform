@@ -152,14 +152,22 @@ export async function stepCandidates(problemId: number, routeId: number, through
 /** Certificates include changed assessments on old returns, not just newer return IDs. No textual similarity inference. */
 export async function stepInputVector(problemId:number,routeId:number): Promise<any> {
   const associations=await associatedReturns(problemId,routeId);
-  const rows=await q(`SELECT r.id,r.status,r.provisional,r.final_rung,r.research_evidence,r.verification_fingerprint FROM returns r WHERE r.problem_id=$1 AND NOT ${unchangedComparison('r')} AND
+  const rows=await q(`SELECT r.id,r.status,r.provisional,r.final_rung,r.research_evidence,r.verification_fingerprint,(r.verification_plan ? 'lean') AS lean FROM returns r WHERE r.problem_id=$1 AND NOT ${unchangedComparison('r')} AND
     (r.id=ANY($3::bigint[]) OR r.id IN(SELECT id FROM (${stepEvidenceSQL()}) evidence) OR r.research_route_id=$2 OR EXISTS(SELECT 1 FROM research_links l WHERE l.subject_return_id=r.id AND l.problem_id=$1 AND l.route_id=$2 AND ${activeLinkSQL('l')})) ORDER BY r.id`,[problemId,routeId,associations]);
   const ids=rows.map(r=>Number(r.id));
   const reviews=await q(`SELECT id,return_id,verdict,rung,trusted,needs_reassessment,notes_md,research_assessment,verification_receipt_id,verification_conflict_through FROM reviews WHERE return_id=ANY($1::bigint[]) ORDER BY id`,[ids]);
   const history=await q(`SELECT id FROM review_history WHERE return_id=ANY($1::bigint[]) ORDER BY id`,[ids]);
   const links=await q(`SELECT l.id,l.subject_return_id,l.scope_key,l.relation,l.provenance_return_id,l.provenance_review_id FROM research_links l WHERE l.problem_id=$1 AND l.route_id=$2 AND ${activeLinkSQL('l')} ORDER BY l.id`,[problemId,routeId]);
   const findings=await q(`SELECT id,status,resolved_by_return_id,resolved_sha FROM findings WHERE problem_id=$1 AND (return_id=ANY($2::bigint[]) OR review_id=ANY($3::bigint[])) ORDER BY id`,[problemId,ids,reviews.map(r=>Number(r.id))]);
-  return {version:1,sha256:createHash('sha256').update(JSON.stringify({rows,reviews,history,links,findings})).digest('hex')};
+  // Lean authority also depends on separately reviewed statements, authenticated
+  // execution/custody and the currently served manuscript. Reuse the same current
+  // summary as the shared brief; selected returns' own reviews are insufficient.
+  const lean=[];
+  for (const row of rows) if (row.lean) {
+    const {verificationSummary}=await import('./verification.js');
+    lean.push({return_id:Number(row.id),summary:(await verificationSummary(Number(row.id)))?.lean??null});
+  }
+  return {version:2,sha256:createHash('sha256').update(JSON.stringify({rows,reviews,history,links,findings,lean})).digest('hex')};
 }
 async function sharedStepVector(row:any):Promise<any|null> {
   const p=await one(`SELECT slug FROM problems WHERE id=$1`,[row.problem_id]);

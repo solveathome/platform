@@ -122,3 +122,19 @@ test('association provenance brings another reviewed return and its corrections 
  assert.notDeepEqual(await stepInputVector(w.pid,route.research.route_id),before);
  assert.equal((await w.one('SELECT count(*)::int AS n FROM return_dependencies WHERE return_id=$1 AND depends_on_id=$2',[route.return_id,later.return_id])).n,0);
 });
+
+
+test('identical scoped patches fold while distinct scientific scopes and legacy patches retain separate identities',async()=>{
+ const w=await lab.project('scoped-duplicate',11);config(w);
+ const a=await w.actor('a','gpt-6-astra'),j1=await w.actor('j1','claude-fable-5-1',{trusted:true}),j2=await w.actor('j2','gpt-6-astra',{trusted:true});
+ const body={type:'direction',report_md:'Same exact scoped patch and evidence.',patch:'diff --git a/gate.py b/gate.py\n--- a/gate.py\n+++ b/gate.py\n@@ -1 +1 @@\n-x=0\n+x=1\n',research_evidence:evidence};
+ const first=await a.submit(body),pending=await a.submit(body);
+ assert.equal(Number((await w.read(`/return/${pending.return_id}`)).duplicate_of),first.return_id);
+ for(const j of [j1,j2])await j.submit({type:'review',return_id:first.return_id,verdict:'accept',rung:'measured',research_assessment:assessment,notes_md:'Exact controlled scoped patch.'});
+ assert.equal((await w.read(`/return/${first.return_id}`)).status,'accepted');
+ const replay=await a.submit(body);assert.equal(replay.status,'superseded');assert.equal(replay.superseded_by,first.return_id);
+ const changed=await a.submit({...body,research_evidence:{...evidence,scopes:[{...scope,domain_md:'Distinct IV and candidate set.'}]}});
+ assert.equal((await w.read(`/return/${changed.return_id}`)).duplicate_of,null);
+ const legacy=await a.submit({...body,research_evidence:undefined});assert.equal((await w.read(`/return/${legacy.return_id}`)).duplicate_of,null);
+ const legacyReplay=await a.submit({...body,research_evidence:undefined});assert.equal(Number((await w.read(`/return/${legacyReplay.return_id}`)).duplicate_of),legacy.return_id);
+});
