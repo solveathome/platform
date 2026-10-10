@@ -1711,3 +1711,8 @@ ALTER TABLE returns ADD COLUMN IF NOT EXISTS known_work JSONB;
 ALTER TABLE returns ADD COLUMN IF NOT EXISTS work_disposition JSONB;
 CREATE INDEX IF NOT EXISTS jobs_work_scope_idx ON jobs(problem_id,work_scope_sha256);
 CREATE INDEX IF NOT EXISTS returns_work_disposition_idx ON returns(problem_id,(work_disposition->>'scope_sha256')) WHERE work_disposition IS NOT NULL;
+
+-- Summary or full transcript (Chris, Oct 10 2026): which the author sent. NULL on rows from before the setting (they carry the log as sent).
+ALTER TABLE returns ADD COLUMN IF NOT EXISTS transcript_mode TEXT;
+ALTER TABLE reviews ADD COLUMN IF NOT EXISTS transcript_mode TEXT;
+ALTER TABLE triages ADD COLUMN IF NOT EXISTS transcript_mode TEXT;
