@@ -10,24 +10,29 @@
  *   --backup    change nothing; write the affected rows as JSON lines ({table, id, transcript}) to stdout, logs to stderr
  */
 import { q, pool } from "../src/db/index.js";
-import { findHarnessId, redactHarnessIds, redactHomePaths } from "../src/lib/files.js";
+import { findHarnessId, findHomePath, redactHarnessIds, redactHomePaths } from "../src/lib/files.js";
 
 const backup = process.argv.includes("--backup"), dryRun = backup || process.argv.includes("--dry-run");
 const log = (s: string) => (backup ? console.error : console.log)(s);
 const PATTERN = String.raw`"(atis|ownerAccountUuid|ownerOrganizationUuid|bridgeSessionId|accountUuid|organizationUuid)"\s*:\s*"(v1\.[0-9a-f]{16}\.|[0-9a-f]{8}-[0-9a-f]{4}-)`;
 // A cheap superset of what redactHomePaths replaces; the function decides.
 const HOME = String.raw`(/Users|/home)/[A-Za-z0-9._-]|[A-Za-z]:\\+Users\\+`;
-let changed = 0, homes = 0;
+let changed = 0, homes = 0, still = 0;
 for (const table of ["returns", "reviews"] as const) {
-  const rows = await q<{ id: string; transcript: string; slug: string | null }>(
+  const rows = await q<{ id: string; transcript: string; slug: string | null; ids_hit: boolean }>(
     table === "returns"
-      ? `SELECT r.id, r.transcript, p.slug FROM returns r JOIN problems p ON p.id = r.problem_id WHERE r.transcript ~ $1 OR r.transcript ~ $2 ORDER BY r.id`
-      : `SELECT v.id, v.transcript, NULL AS slug FROM reviews v WHERE v.transcript ~ $1 ORDER BY v.id`, table === "returns" ? [PATTERN, HOME] : [PATTERN]);
+      ? `SELECT r.id, r.transcript, p.slug, r.transcript ~ $1 AS ids_hit FROM returns r JOIN problems p ON p.id = r.problem_id WHERE r.transcript ~ $1 OR r.transcript ~ $2 ORDER BY r.id`
+      : `SELECT v.id, v.transcript, NULL AS slug, true AS ids_hit FROM reviews v WHERE v.transcript ~ $1 ORDER BY v.id`, table === "returns" ? [PATTERN, HOME] : [PATTERN]);
   for (const r of rows) {
-    const ids = redactHarnessIds(r.transcript);
+    // Harness values only on the rows their own pattern selects, as before; a row the home pattern brings in keeps them as stored
+    // (the pages and the dump redact them when they serve).
+    const ids = r.ids_hit ? redactHarnessIds(r.transcript) : { text: r.transcript, n: 0 };
     if (ids.n && findHarnessId(ids.text)) log(`${table} #${r.id}: still flagged after redaction: ${findHarnessId(ids.text)}`);
     // Only a published return's transcript is public; reviews keep theirs as stored.
     const home = table === "returns" ? redactHomePaths(ids.text) : { text: ids.text, n: 0 };
+    // What the intake's own detector still sees after the pass, with the name masked: the check that none remain.
+    const left = table === "returns" ? findHomePath(home.text) : null;
+    if (left) { still++; log(`${table} #${r.id}: home path still found: ${left.replace(/((?:Users|home)[\/\\]+)[^\/\\\s]+/, "$1<name>").slice(0, 60)}`); }
     if (!ids.n && !home.n) continue;
     if (backup) console.log(JSON.stringify({ table, id: Number(r.id), transcript: r.transcript }));
     if (!dryRun) await q(`UPDATE ${table} SET transcript = $2 WHERE id = $1`, [r.id, home.text]);
@@ -35,5 +40,5 @@ for (const table of ["returns", "reviews"] as const) {
     log(`${table} #${r.id}: ${ids.n} harness value(s), ${home.n} home path(s)${dryRun ? " (dry run)" : " redacted"}${r.slug ? `; purge https://solveathome.org/projects/${r.slug}/return/${r.id}/transcript` : ""}`);
   }
 }
-log(`scan-transcripts: ${changed} transcript(s) ${dryRun ? "would change" : "changed"}, ${homes} with home paths`);
+log(`scan-transcripts: ${changed} transcript(s) ${dryRun ? "would change" : "changed"}, ${homes} with home paths; ${still} return(s) where a home path is still found`);
 await pool.end();

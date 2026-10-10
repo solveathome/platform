@@ -151,6 +151,13 @@ test('home paths: only the user prefix becomes ~, in plain text, JSON strings an
     ['file:///Users/ann/x and (/home/bob/y)', 'file://~/x and (~/y)'],
     ['https://x.org/home/page /usr/home/ann/ http://h/Users/ann', 'https://x.org/home/page /usr/home/ann/ http://h/Users/ann'],
     ['/Users/Shared/data', '/Users/Shared/data'],
+    ['{"cwd": "../../Users/ann/proj"}', '{"cwd": "../..~/proj"}'],
+    ['bash: ./Users/ann/run.sh', 'bash: .~/run.sh'],
+    ['cd /tmp && .//Users/ann/x', 'cd /tmp && ./~/x'],
+    ['<local-path> xYz9/home/ann/.local/share/f', '<local-path> xYz9~/.local/share/f'],
+    ['stdout:\\n/c/Users/ann/x and /mnt/d/Users/bob/y', 'stdout:\\n~/x and ~/y'],
+    ['mounted at /run/host_mark/Users/ann/proj', 'mounted at ~/proj'],
+    ['done\\r\\nC:\\\\Users\\\\ann\\\\AppData and C:/Users/bob/z', 'done\\r\\n~\\\\AppData and ~/z'],
     ['"C:\\\\\\\\Users\\\\\\\\bob\\\\\\\\y"', '"~\\\\\\\\y"'],
   ];
   for (const [input, want] of cases) assert.equal(redactHomePaths(input).text, want, input);

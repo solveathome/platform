@@ -120,10 +120,13 @@ export function findHarnessId(text: unknown): string | null {
 
 /**
  * A user's home prefix, as written in a log: /Users/<name>, /home/<name>, C:\Users\<name> (also with the doubled backslashes of a JSON
- * string, or more when it is nested), at the start of a path: not inside a URL or a longer path, but after a JSON \n escape. Home folders that name no person
+ * string, or more when it is nested), also as Git Bash (/c/Users/<name>), WSL (/mnt/c/Users/<name>), Docker Desktop's host mount
+ * (/run/host_mark/Users/<name>) and C:/Users/<name> write it; at the start of a path, not inside a URL or another path, but after a JSON
+ * \n escape or a relative ./, ../ or .//; a home folder followed by a dot-directory (/home/<name>/.local) whatever precedes it. The whole
+ * prefix becomes ~. Home folders that name no person
  * (macOS's /Users/Shared) are left alone.
  */
-const HOME_PREFIX = /(?:(?<![A-Za-z0-9._~\/-])|(?<=\\[ntr])|(?<=file:\/\/))(?:\/Users|\/home)\/(?!Shared(?![A-Za-z0-9._-]))[A-Za-z0-9._-]+(?![A-Za-z0-9._-])|(?<![A-Za-z0-9])[A-Za-z]:\\+Users\\+[A-Za-z0-9._ -]*[A-Za-z0-9._-](?![A-Za-z0-9._-])/g;
+const HOME_PREFIX = /(?:(?<![A-Za-z0-9._~\/-])|(?<=\\[ntr])|(?<=file:\/\/)|(?<=\.\/?)|(?=(?:\/Users|\/home)\/[A-Za-z0-9._-]+\/\.[A-Za-z]))(?:(?:\/mnt)?\/[A-Za-z](?=\/Users\/)|\/run\/host_mark(?=\/Users\/))?(?:\/Users|\/home)\/(?!Shared(?![A-Za-z0-9._-]))[A-Za-z0-9._-]+(?![A-Za-z0-9._-])|(?:(?<![A-Za-z0-9])|(?<=\\[ntr]))[A-Za-z]:(?:\\+|\/)Users(?:\\+|\/)[A-Za-z0-9._ -]*[A-Za-z0-9._-](?![A-Za-z0-9._-])/g;
 /**
  * Replace each home prefix with ~ and keep the rest of the path (Chris, Oct 10 2026, card 1255: "scrub those home paths but otherwise not
  * do anything"): /Users/ann/proj/x.py becomes ~/proj/x.py. Used by the nightly scan, the transcript pages and the dump.
