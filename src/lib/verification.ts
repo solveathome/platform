@@ -188,13 +188,14 @@ export async function identicalClaim(ret: any): Promise<any> {
     AND prior.finding IS NOT DISTINCT FROM $10 AND prior.paper_slug IS NOT DISTINCT FROM $11
     AND prior.author_rung IS NOT DISTINCT FROM $12
     AND (prior.research->>'evidence_md') IS NOT DISTINCT FROM $13
+    AND prior.research_evidence IS NOT DISTINCT FROM $14::jsonb
     AND (SELECT array_agg(file_sha ORDER BY file_sha) FROM file_refs WHERE ref_type='return' AND ref_id=prior.id)
       IS NOT DISTINCT FROM (SELECT array_agg(file_sha ORDER BY file_sha) FROM file_refs WHERE ref_type='return' AND ref_id=$2)
     AND (SELECT array_agg(depends_on_id ORDER BY depends_on_id) FROM return_dependencies WHERE return_id=prior.id)
       IS NOT DISTINCT FROM (SELECT array_agg(depends_on_id ORDER BY depends_on_id) FROM return_dependencies WHERE return_id=$2)
     ORDER BY prior.id LIMIT 1`, [ret.problem_id,ret.id,ret.verification_fingerprint,ret.type,ret.report_md,
       ret.patch,ret.revision_sha,ret.revision_path,ret.target ? JSON.stringify(ret.target) : null,
-      ret.finding,ret.paper_slug,ret.author_rung,ret.research?.evidence_md ?? null]);
+      ret.finding,ret.paper_slug,ret.author_rung,ret.research?.evidence_md ?? null,ret.research_evidence ? JSON.stringify(ret.research_evidence) : null]);
 }
 /** authenticated is server ingress context, never a field from check_receipt. */
 export async function saveCheckReceipt(ret: any, job: any, raw: any, authenticated?: { userId: number; sessionId: string | null }): Promise<number> {

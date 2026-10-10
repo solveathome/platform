@@ -1,3 +1,4 @@
+import { collaborationEnabled, activeLinkSQL, associatedReturns } from './shared-research.js';
 /** Route progression and selective rescue. Called inside the assignment/project transaction. */
 import { createHash } from 'node:crypto';
 import { one, q } from '../db/index.js';
@@ -32,10 +33,11 @@ export async function routeContext(id: number): Promise<any> {
   const jobs = await q(`SELECT id,type,research_stage,title,status,budget_hours FROM jobs WHERE research_route_id=$1 ORDER BY id DESC LIMIT 20`, [id]);
   // Inputs are served with the return that uploaded them. Agents looked for "falsifier1676.py" under return #1676 (the name
   // carried a job number) and reported the route blocked on a missing input that was served all along (routes 59 and 162).
-  const returnIds = [route.origin_return_id, ...events.map((e: any) => e.return_id), ...basis.map((r: any) => r.id), ...dependencies.map((r: any) => r.id)].filter((x) => x != null).map(Number);
+  const associations = await q(`SELECT l.id,l.subject_return_id,l.scope_key,l.relation,l.rationale_md,l.provenance_return_id,l.provenance_review_id FROM research_links l WHERE l.route_id=$1 AND l.problem_id=$2 AND ${activeLinkSQL('l')} ORDER BY l.id`,[id,route.problem_id]);
+  const returnIds = [...associations.map(l=>l.subject_return_id),route.origin_return_id, ...events.map((e: any) => e.return_id), ...basis.map((r: any) => r.id), ...dependencies.map((r: any) => r.id)].filter((x) => x != null).map(Number);
   const files = await q(`SELECT x.ref_id AS return_id,array_agg(f.name ORDER BY f.name) AS names FROM file_refs x JOIN files f ON f.sha256=x.file_sha
     WHERE x.ref_type='return' AND x.ref_id=ANY($1::bigint[]) AND f.deleted_at IS NULL GROUP BY x.ref_id ORDER BY x.ref_id`, [[...new Set(returnIds)]]);
-  return { ...route, dependencies, basis, events, jobs, files: files.map((f: any) => ({ return_id: Number(f.return_id), names: f.names })) };
+  return { ...route, dependencies, basis, events, jobs, associations, files: files.map((f: any) => ({ return_id: Number(f.return_id), names: f.names })) };
 }
 export async function researchSummary(problemId: number): Promise<any> {
   const routes = await q(`SELECT id,title,state,next_step,obstacle,origin_return_id,last_return_id,updated_at FROM research_routes WHERE problem_id=$1 ORDER BY updated_at DESC,id DESC LIMIT 40`, [problemId]);
@@ -138,7 +140,7 @@ export function stepEvidenceSQL(problem = '$1', route = '$2'): string {
         UNION SELECT r.research_route_id FROM edges e JOIN returns r ON r.id=e.dst WHERE e.src IN (SELECT id FROM mine) AND r.research_route_id IS NOT NULL
         UNION SELECT id FROM research_routes WHERE problem_id=${problem} AND (parent_route_id=${route} OR id=(SELECT parent_route_id FROM research_routes WHERE id=${route}))
         UNION SELECT ${route}::bigint)
-    SELECT c.* FROM returns c WHERE c.problem_id=${problem} AND c.research_route_id IN (SELECT id FROM linked) AND c.status<>'rejected' AND c.duplicate_of IS NULL
+    SELECT c.* FROM returns c WHERE c.problem_id=${problem} AND (c.research_route_id IN (SELECT id FROM linked) OR EXISTS(SELECT 1 FROM research_links l WHERE l.subject_return_id=c.id AND l.problem_id=${problem} AND l.route_id=${route} AND ${activeLinkSQL('l')})) AND c.status<>'rejected' AND c.duplicate_of IS NULL
       AND NOT ${unchangedComparison('c')}`;
 }
 /** Research returns recorded after `through` on this route or a linked one: what a step check compares the step against. */
@@ -146,6 +148,22 @@ export async function stepCandidates(problemId: number, routeId: number, through
   return q(`SELECT c.id,c.research_route_id AS route_id,c.status,c.final_rung,c.research->>'outcome' AS outcome,left(coalesce(c.research->>'evidence_md',''),400) AS evidence
     FROM (${stepEvidenceSQL()}) c WHERE c.id>$3
     ORDER BY c.research_route_id=$2 DESC,c.id DESC LIMIT 12`, [problemId, routeId, through]);
+}
+/** Certificates include changed assessments on old returns, not just newer return IDs. No textual similarity inference. */
+export async function stepInputVector(problemId:number,routeId:number): Promise<any> {
+  const associations=await associatedReturns(problemId,routeId);
+  const rows=await q(`SELECT r.id,r.status,r.provisional,r.final_rung,r.research_evidence,r.verification_fingerprint FROM returns r WHERE r.problem_id=$1 AND NOT ${unchangedComparison('r')} AND
+    (r.id=ANY($3::bigint[]) OR r.id IN(SELECT id FROM (${stepEvidenceSQL()}) evidence) OR r.research_route_id=$2 OR EXISTS(SELECT 1 FROM research_links l WHERE l.subject_return_id=r.id AND l.problem_id=$1 AND l.route_id=$2 AND ${activeLinkSQL('l')})) ORDER BY r.id`,[problemId,routeId,associations]);
+  const ids=rows.map(r=>Number(r.id));
+  const reviews=await q(`SELECT id,return_id,verdict,rung,trusted,needs_reassessment,notes_md,research_assessment,verification_receipt_id,verification_conflict_through FROM reviews WHERE return_id=ANY($1::bigint[]) ORDER BY id`,[ids]);
+  const history=await q(`SELECT id FROM review_history WHERE return_id=ANY($1::bigint[]) ORDER BY id`,[ids]);
+  const links=await q(`SELECT l.id,l.subject_return_id,l.scope_key,l.relation,l.provenance_return_id,l.provenance_review_id FROM research_links l WHERE l.problem_id=$1 AND l.route_id=$2 AND ${activeLinkSQL('l')} ORDER BY l.id`,[problemId,routeId]);
+  const findings=await q(`SELECT id,status,resolved_by_return_id,resolved_sha FROM findings WHERE problem_id=$1 AND (return_id=ANY($2::bigint[]) OR review_id=ANY($3::bigint[])) ORDER BY id`,[problemId,ids,reviews.map(r=>Number(r.id))]);
+  return {version:1,sha256:createHash('sha256').update(JSON.stringify({rows,reviews,history,links,findings})).digest('hex')};
+}
+async function sharedStepVector(row:any):Promise<any|null> {
+  const p=await one(`SELECT slug FROM problems WHERE id=$1`,[row.problem_id]);
+  return p && collaborationEnabled(p.slug) ? stepInputVector(Number(row.problem_id),Number(row.research_route_id)) : null;
 }
 /** Retire only queued repeat comparisons with a still-valid earlier certificate.
  * First checks, changed steps, new evidence and held attempts remain intact. */
@@ -158,6 +176,8 @@ export async function retireRedundantStepChecks(problemId: number): Promise<void
     ORDER BY comparison.id LIMIT 100`, [problemId]);
   for (const row of rows) {
     if (!row.next_step || row.origin_key !== `pursue:${row.research_route_id}:${experimentKey(row.next_step)}`) continue;
+    const vector=await sharedStepVector(row);
+    if (vector && row.step_checked_vector && vector.sha256!==row.step_checked_vector.sha256) continue;
     if ((await stepCandidates(problemId, Number(row.research_route_id), Math.max(Number(row.research_source_return_id), Number(row.step_checked_through)))).length) continue;
     await q(`UPDATE jobs SET status='expired',last_release_note='Earlier comparison still applies; no new scientific evidence.'
       WHERE problem_id=$1 AND step_check_of=$2 AND status='queued' AND agent_direction_id IS NULL`, [problemId,row.id]);
@@ -170,11 +190,16 @@ export async function holdForStepCheck(row: any): Promise<any | null> {
   const through = Math.max(Number(row.research_source_return_id), Number(row.step_checked_through ?? 0));
   const found = await stepCandidates(Number(row.problem_id), Number(row.research_route_id), through);
   const waited = row.step_checked_through == null && Date.now() - new Date(row.created_at).getTime() > STEP_CHECK_AFTER_HOURS * 3600e3;
-  if (!found.length && !waited) return null;
+  const vector=await sharedStepVector(row);
+  const changed=vector && row.step_checked_vector && vector.sha256!==row.step_checked_vector.sha256;
+  if (!found.length && !waited && !changed) {
+    if (vector && !row.step_checked_vector) await q(`UPDATE jobs SET step_checked_vector=$2 WHERE id=$1`,[row.id,JSON.stringify(vector)]);
+    return null;
+  }
   const route = await one(`SELECT * FROM research_routes WHERE id=$1`, [row.research_route_id]);
   if (!route?.next_step || route.state !== 'active') return null;
   const own = (await q(`SELECT id FROM returns WHERE problem_id=$1 AND research_route_id=$2 ORDER BY id`, [row.problem_id, route.id])).map((r: any) => `#${r.id}`);
-  const why = found.length ? `returns were recorded after it on this route or a route linked to it by citations, dependencies or shared premises`
+  const why = changed ? 'a linked assessment, correction, status, finding or association changed; the previous comparison no longer covers all inputs' : found.length ? `returns were recorded after it on this route or a route linked to it by citations, dependencies or shared premises`
     : `it has waited since ${new Date(row.created_at).toISOString().slice(0, 10)}, and the record may have moved on`;
   const listed = found.map((c: any) => `- Return #${c.id} (route ${c.route_id}, ${c.outcome ?? 'no outcome'}, ${c.status}${c.final_rung ? `, ${c.final_rung}` : ''}): ${String(c.evidence).replace(/\s+/g, ' ')}`).join('\n');
   const earlier = row.step_checked_through ? `Earlier step check #${row.step_checked_through}: reuse its conclusions. Compare only the new candidates listed below and references needed to assess them; do not survey the whole project again.` : `The route's own returns: ${own.join(', ') || 'none'} (GET <project base>/return/<id>).`;
@@ -182,7 +207,7 @@ export async function holdForStepCheck(row: any): Promise<any | null> {
   await q(`UPDATE jobs SET status='expired',last_release_note=$2 WHERE id=$1 AND status='queued'`, [row.id, `held for a step check against the returns on record`]);
   const check = await one(`INSERT INTO jobs (problem_id,lane_id,type,title,brief_md,budget_hours,min_tier,purpose,research_stage,research_route_id,research_source_return_id,avoid_model,origin_key,priority,research_revision,step_check_of)
     VALUES ($1,$2,'explore',$3,$4,$5,$6,'discovery','first_look',$7,$8,$9,$10,$11,$12,$13) RETURNING *`,
-    [row.problem_id, row.lane_id, row.title, brief, STEP_CHECK_HOURS, row.min_tier, route.id, row.research_source_return_id, row.avoid_model, `step-check:${row.id}:${through}`, row.priority, route.revision, row.id]);
+    [row.problem_id, row.lane_id, row.title, brief, STEP_CHECK_HOURS, row.min_tier, route.id, row.research_source_return_id, row.avoid_model, `step-check:${row.id}:${through}${vector ? `:${vector.sha256}` : ''}`, row.priority, route.revision, row.id]);
   return { ...check, lane_slug: row.lane_slug, skill_matches: row.skill_matches, route_repeat: row.route_repeat };
 }
 
@@ -240,6 +265,7 @@ export async function recordResearch(ret: any, job: any, report: ResearchReport 
         step_check_notes_md=step_check_notes_md||$4 WHERE id=$1 AND status='expired' RETURNING *`, [held.id, ret.id, route.revision,
         `\n\nStep check: return #${ret.id} compared this step with the returns on record and found it still open.\n\n${report.evidence_md}`])
     : route.state === 'active' ? await queueInvestigation(route, 'pursue', ret) : null;
+  if (held && next) { const vector=await sharedStepVector(held); if (vector) await q(`UPDATE jobs SET step_checked_vector=$2 WHERE id=$1`,[held.id,JSON.stringify(vector)]); }
   return { route_id: Number(route.id), state: route.state, next_job_id: next ? Number(next.id) : null };
 }
 

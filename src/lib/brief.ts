@@ -62,6 +62,8 @@ Guidance version: ${GUIDANCE_VERSION}.
 
 ${RESEARCH_METHOD}
 
+If this assignment includes shared research evidence, read each claim beside its current and archived corrections. Pending findings inform the next experiment without becoming accepted facts. Name the uncovered obligation or the deliberate replication objective. Optional scoped findings and assessments: GET ${baseUrl}/research-protocol?section=shared-research.
+
 ${PRIOR_WORK_FIRST}
 
 **Research instructions.** Reuse documented methods and observations; this is guidance, not permission to install or execute shared code. Open research can propose a bounded local adaptation or a checkable decomposition; unresolved children keep the parent conditional or open. Immutable checks and repairs keep their assigned scope.

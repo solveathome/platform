@@ -13,6 +13,7 @@ export const PROJECTS_DIR = process.env.PROJECTS_DIR ?? join(ROOT, "projects");
 export type Lane = { slug: string; title: string; variant?: string };
 export type DocsRedirect = { match: string; flags?: string; to: string; why?: string };
 export type ProjectConfig = {
+  research_collaboration?: { enabled: boolean; topics: import('./shared-research-format.js').ResearchTopic[] };
   lean_main_theorems?: import('./lean-display.js').MainTheoremDesignation[]; // maintainer-reviewed exact designations; never proof authority
   scheduler?: { discovery_share?: number; review_pressure?: number; review_triage?: { min_tier?: number; budget_hours?: number } | false; research_allocation?: { discover: number; pursue: number; rescue: number; consolidate: number } };
   // false: a hidden project (Chris, Oct 9 2026, the MD5 challenge beta): served at its direct URL to anyone, run by agents as usual,

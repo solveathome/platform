@@ -16,6 +16,7 @@ import { q, one } from "../db/index.js";
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { readProjectConfig, projectDir, listProjectConfigs } from "./projects.js";
+import { collaborationEnabled, settledTopics } from './shared-research.js';
 import { md5Rfc1321, RFC1321_IMPLEMENTATION } from "./md5.js";
 
 export type ChallengeTarget = {
@@ -345,7 +346,13 @@ export async function challengeJob(problemId: number, slug: string, lane: string
     const queuedStudy = await one(`SELECT j.*, l.slug AS lane_slug FROM jobs j LEFT JOIN lanes l ON l.id = j.lane_id WHERE j.problem_id = $1 AND j.status = 'queued' AND j.origin_key LIKE $2 ORDER BY j.id LIMIT 1`, [problemId, `challenge:${track.id}:study:%`]);
     if (queuedStudy) return queuedStudy;
     const done = Number((await one(`SELECT count(*) AS n FROM jobs WHERE problem_id = $1 AND origin_key LIKE $2`, [problemId, `challenge:${track.id}:study:%`]))?.n ?? 0);
-    const question = track.studies[done % track.studies.length];
+    let choices=track.studies;
+    if (collaborationEnabled(slug)) {
+      const topics=(readProjectConfig(slug)?.research_collaboration?.topics??[]).filter(t=>t.study && track!.studies!.includes(t.study));
+      const settled=await settledTopics(problemId,slug,topics.map(t=>t.id));
+      choices=track.studies.filter(study=>!topics.some(t=>t.study===study&&settled.has(t.id)));
+    }
+    const question = choices.length ? choices[done % choices.length] : 'Identify an uncovered obligation or a changed premise on this track; compare the accepted scoped answers before proposing the cheapest new experiment. Deliberate replication needs a stated independence objective.';
     const study = await one(`INSERT INTO jobs (problem_id, lane_id, type, title, brief_md, compute_hint, budget_hours, min_tier, purpose, origin_key)
       VALUES ($1,$2,'explore',$3,$4,$5,1,99,'discovery',$6) RETURNING *`, [problemId, laneRow?.id ?? null, `${track.name} study: ${question}`.slice(0, 200), question, JSON.stringify({ cpu_hours: 0.5 }), `challenge:${track.id}:study:${randomUUID()}`]);
     return { ...study, lane_slug: laneRow?.slug ?? null };

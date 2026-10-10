@@ -1662,3 +1662,44 @@ CREATE INDEX IF NOT EXISTS returns_paper_exposition_idx ON returns(problem_id,pa
 -- with another tier-1 model family. One review per person per family; the app keeps one per person on every other project.
 CREATE UNIQUE INDEX IF NOT EXISTS reviews_return_user_family_idx ON reviews (return_id, user_id, coalesce(lean_model_family(model), model));
 ALTER TABLE reviews DROP CONSTRAINT IF EXISTS reviews_return_id_user_id_key;
+
+-- Shared collaboration is optional, additive metadata; it never changes a historical verdict.
+ALTER TABLE jobs ADD COLUMN IF NOT EXISTS research_task JSONB;
+ALTER TABLE jobs ADD COLUMN IF NOT EXISTS step_checked_vector JSONB;
+ALTER TABLE assignment_attempts ADD COLUMN IF NOT EXISTS research_context JSONB;
+ALTER TABLE returns ADD COLUMN IF NOT EXISTS research_evidence JSONB;
+ALTER TABLE reviews ADD COLUMN IF NOT EXISTS research_assessment JSONB;
+CREATE TABLE IF NOT EXISTS research_links (
+  id BIGSERIAL PRIMARY KEY,
+  problem_id BIGINT NOT NULL REFERENCES problems(id) ON DELETE CASCADE,
+  subject_return_id BIGINT NOT NULL REFERENCES returns(id) ON DELETE CASCADE,
+  scope_key TEXT,
+  route_id BIGINT REFERENCES research_routes(id) ON DELETE CASCADE,
+  topic_id TEXT,
+  relation TEXT NOT NULL CHECK (relation IN ('bears_on','addresses','contradicts','reuses','replicates')),
+  rationale_md TEXT NOT NULL,
+  provenance_return_id BIGINT REFERENCES returns(id) ON DELETE CASCADE,
+  provenance_review_id BIGINT, -- preserved when an assessment is archived/replaced; checked on insertion
+  supersedes_id BIGINT REFERENCES research_links(id) ON DELETE CASCADE,
+  identity_key TEXT NOT NULL UNIQUE,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  CHECK (route_id IS NOT NULL OR topic_id IS NOT NULL),
+  CHECK (num_nonnulls(provenance_return_id,provenance_review_id)=1)
+);
+CREATE INDEX IF NOT EXISTS research_links_route_idx ON research_links(problem_id,route_id,id);
+CREATE INDEX IF NOT EXISTS research_links_topic_idx ON research_links(problem_id,topic_id,id);
+CREATE INDEX IF NOT EXISTS research_links_subject_idx ON research_links(subject_return_id,id);
+CREATE INDEX IF NOT EXISTS research_links_supersedes_idx ON research_links(supersedes_id);
+CREATE INDEX IF NOT EXISTS returns_research_topics_idx ON returns USING gin ((research_evidence->'topic_ids'));
+CREATE OR REPLACE FUNCTION research_link_project_guard() RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+  IF NOT EXISTS(SELECT 1 FROM returns WHERE id=NEW.subject_return_id AND problem_id=NEW.problem_id)
+    OR (NEW.route_id IS NOT NULL AND NOT EXISTS(SELECT 1 FROM research_routes WHERE id=NEW.route_id AND problem_id=NEW.problem_id))
+    OR (NEW.provenance_return_id IS NOT NULL AND NOT EXISTS(SELECT 1 FROM returns WHERE id=NEW.provenance_return_id AND problem_id=NEW.problem_id))
+    OR (NEW.provenance_review_id IS NOT NULL AND NOT EXISTS(SELECT 1 FROM reviews v JOIN returns r ON r.id=v.return_id WHERE v.id=NEW.provenance_review_id AND r.problem_id=NEW.problem_id))
+    OR (NEW.supersedes_id IS NOT NULL AND NOT EXISTS(SELECT 1 FROM research_links WHERE id=NEW.supersedes_id AND problem_id=NEW.problem_id))
+  THEN RAISE EXCEPTION 'research link must remain within its project'; END IF;
+  RETURN NEW;
+END $$;
+DROP TRIGGER IF EXISTS research_link_project_guard_trigger ON research_links;
+CREATE TRIGGER research_link_project_guard_trigger BEFORE INSERT ON research_links FOR EACH ROW EXECUTE FUNCTION research_link_project_guard();

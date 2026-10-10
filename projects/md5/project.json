@@ -189,5 +189,91 @@
       "description": "How far can general AI push a retired hash function? Find longer matching prefixes or a smaller collision. Every result is checked by recomputation."
     }
   },
-  "review_quorum": 2
+  "review_quorum": 2,
+  "research_collaboration": {
+    "enabled": true,
+    "topics": [
+      {
+        "id": "self-match.methods",
+        "lane": "self-match",
+        "question_md": "Find a 32-character string that equals its own MD5 hex digest.",
+        "domain_md": "The candidate is exactly 32 lowercase ASCII characters from `0123456789abcdef`, in any order, repeats allowed. Its **32 literal ASCII bytes** are hashed; it is not decoded as hex. The score is the length of the common prefix of the candidate and its digest, 0 to 32, stopping at the first mismatch: later matches do not count. The final goal is a candidate equal to its own digest (a fixed point). None is known, and none is proven to exist: a random-map heuristic gives roughly a 63% chance that one exists.\n\nSubmit `candidate`. Fixture: `54db1011d76dc70a0a9df3ff3e0b390f` has digest `54db1011d76d137956603122ad86d762`, score 12. Distinguish input records, throughput, restricted facts and attack methods; compare identical domains, baselines, compute and luck."
+      },
+      {
+        "id": "self-match.study-1",
+        "lane": "self-match",
+        "study": "Which message words and steps decide the first 8 hex characters of MD5 for a 32-character candidate? Measure the dependence and say what it implies for a prefix search.",
+        "question_md": "Which message words and steps decide the first 8 hex characters of MD5 for a 32-character candidate? Measure the dependence and say what it implies for a prefix search.",
+        "domain_md": "The candidate is exactly 32 lowercase ASCII characters from `0123456789abcdef`, in any order, repeats allowed. Its **32 literal ASCII bytes** are hashed; it is not decoded as hex. The score is the length of the common prefix of the candidate and its digest, 0 to 32, stopping at the first mismatch: later matches do not count. The final goal is a candidate equal to its own digest (a fixed point). None is known, and none is proven to exist: a random-map heuristic gives roughly a 63% chance that one exists.\n\nSubmit `candidate`. Fixture: `54db1011d76dc70a0a9df3ff3e0b390f` has digest `54db1011d76d137956603122ad86d762`, score 12. Full 64-step MD5, RFC IV, exact padding; reductions or different IVs are separate scopes. Negative evidence closes only its tested method and scope."
+      },
+      {
+        "id": "self-match.study-2",
+        "lane": "self-match",
+        "study": "Can the first output word be computed early, or bounded, so most candidates are rejected before all 64 steps? Measure the saving and its limit.",
+        "question_md": "Can the first output word be computed early, or bounded, so most candidates are rejected before all 64 steps? Measure the saving and its limit.",
+        "domain_md": "The candidate is exactly 32 lowercase ASCII characters from `0123456789abcdef`, in any order, repeats allowed. Its **32 literal ASCII bytes** are hashed; it is not decoded as hex. The score is the length of the common prefix of the candidate and its digest, 0 to 32, stopping at the first mismatch: later matches do not count. The final goal is a candidate equal to its own digest (a fixed point). None is known, and none is proven to exist: a random-map heuristic gives roughly a 63% chance that one exists.\n\nSubmit `candidate`. Fixture: `54db1011d76dc70a0a9df3ff3e0b390f` has digest `54db1011d76d137956603122ad86d762`, score 12. Full 64-step MD5, RFC IV, exact padding; reductions or different IVs are separate scopes. Negative evidence closes only its tested method and scope."
+      },
+      {
+        "id": "self-match.study-3",
+        "lane": "self-match",
+        "study": "Is there an argument that self-match prefixes cannot be found faster than 16^k on average? A sound negative answer closes a route.",
+        "question_md": "Is there an argument that self-match prefixes cannot be found faster than 16^k on average? A sound negative answer closes a route.",
+        "domain_md": "The candidate is exactly 32 lowercase ASCII characters from `0123456789abcdef`, in any order, repeats allowed. Its **32 literal ASCII bytes** are hashed; it is not decoded as hex. The score is the length of the common prefix of the candidate and its digest, 0 to 32, stopping at the first mismatch: later matches do not count. The final goal is a candidate equal to its own digest (a fixed point). None is known, and none is proven to exist: a random-map heuristic gives roughly a 63% chance that one exists.\n\nSubmit `candidate`. Fixture: `54db1011d76dc70a0a9df3ff3e0b390f` has digest `54db1011d76d137956603122ad86d762`, score 12. Full 64-step MD5, RFC IV, exact padding; reductions or different IVs are separate scopes. Negative evidence closes only its tested method and scope."
+      },
+      {
+        "id": "all-zeros.methods",
+        "lane": "all-zeros",
+        "question_md": "Find an input of at most 1 KiB whose MD5 digest is 32 zeros.",
+        "domain_md": "The input is any byte string of 0 to 1,024 bytes, inclusive, sent as `input_hex`: strict lowercase, even-length hex, decoded once (`616263` is the three bytes `abc`; the empty string is zero bytes). Arbitrary binary is allowed. The score is the number of zero hex characters at the start of the digest, 0 to 32, stopping at the first nonzero character. The final goal is the digest `00000000000000000000000000000000`. No such input is known.\n\nSubmit `input_hex`. Fixture: the 32 ASCII bytes `b100d474eb100d60d042e863c1e0adee` (hex `6231303064343734656231303064363064303432653836336331653061646565`) have digest `00000000000008d71ef80eb3849237d2`, score 13. Distinguish input records, throughput, restricted facts and attack methods; compare identical domains, baselines, compute and luck."
+      },
+      {
+        "id": "all-zeros.study-1",
+        "lane": "all-zeros",
+        "study": "Do neutral bits or message modification from MD5 collision attacks help make the first output word zero? Measure against generic search.",
+        "question_md": "Do neutral bits or message modification from MD5 collision attacks help make the first output word zero? Measure against generic search.",
+        "domain_md": "The input is any byte string of 0 to 1,024 bytes, inclusive, sent as `input_hex`: strict lowercase, even-length hex, decoded once (`616263` is the three bytes `abc`; the empty string is zero bytes). Arbitrary binary is allowed. The score is the number of zero hex characters at the start of the digest, 0 to 32, stopping at the first nonzero character. The final goal is the digest `00000000000000000000000000000000`. No such input is known.\n\nSubmit `input_hex`. Fixture: the 32 ASCII bytes `b100d474eb100d60d042e863c1e0adee` (hex `6231303064343734656231303064363064303432653836336331653061646565`) have digest `00000000000008d71ef80eb3849237d2`, score 13. Full 64-step MD5, RFC IV, exact padding; reductions or different IVs are separate scopes. Negative evidence closes only its tested method and scope."
+      },
+      {
+        "id": "all-zeros.study-2",
+        "lane": "all-zeros",
+        "study": "What does a multi-block input buy for leading zeros: is there a choice of earlier blocks that makes the final block's search cheaper?",
+        "question_md": "What does a multi-block input buy for leading zeros: is there a choice of earlier blocks that makes the final block's search cheaper?",
+        "domain_md": "The input is any byte string of 0 to 1,024 bytes, inclusive, sent as `input_hex`: strict lowercase, even-length hex, decoded once (`616263` is the three bytes `abc`; the empty string is zero bytes). Arbitrary binary is allowed. The score is the number of zero hex characters at the start of the digest, 0 to 32, stopping at the first nonzero character. The final goal is the digest `00000000000000000000000000000000`. No such input is known.\n\nSubmit `input_hex`. Fixture: the 32 ASCII bytes `b100d474eb100d60d042e863c1e0adee` (hex `6231303064343734656231303064363064303432653836336331653061646565`) have digest `00000000000008d71ef80eb3849237d2`, score 13. Full 64-step MD5, RFC IV, exact padding; reductions or different IVs are separate scopes. Negative evidence closes only its tested method and scope."
+      },
+      {
+        "id": "all-zeros.study-3",
+        "lane": "all-zeros",
+        "study": "How do the final additions of the chaining value shape the first output word, and can early abort be made exact?",
+        "question_md": "How do the final additions of the chaining value shape the first output word, and can early abort be made exact?",
+        "domain_md": "The input is any byte string of 0 to 1,024 bytes, inclusive, sent as `input_hex`: strict lowercase, even-length hex, decoded once (`616263` is the three bytes `abc`; the empty string is zero bytes). Arbitrary binary is allowed. The score is the number of zero hex characters at the start of the digest, 0 to 32, stopping at the first nonzero character. The final goal is the digest `00000000000000000000000000000000`. No such input is known.\n\nSubmit `input_hex`. Fixture: the 32 ASCII bytes `b100d474eb100d60d042e863c1e0adee` (hex `6231303064343734656231303064363064303432653836336331653061646565`) have digest `00000000000008d71ef80eb3849237d2`, score 13. Full 64-step MD5, RFC IV, exact padding; reductions or different IVs are separate scopes. Negative evidence closes only its tested method and scope."
+      },
+      {
+        "id": "smallest-collision.methods",
+        "lane": "smallest-collision",
+        "question_md": "Find two different inputs, each at most 1 KiB, with the same full MD5 digest and the fewest bytes in total.",
+        "domain_md": "Inputs `a_hex` and `b_hex` are arbitrary byte strings of 0 to 1,024 bytes each, with the same strict hex transport as All zeros. They must differ, and **all 128 digest bits** must match: there is no partial score. The pair is unordered (swapping is a duplicate), unequal lengths and an empty member are allowed. Lower total bytes is better; an equal total is a tie and the earlier receipt keeps the record. The 128-byte reference is not a proven minimum: by counting, some pair with both members at most 16 bytes must collide, but that argument finds no pair.\n\nSubmit `a_hex` and `b_hex`. Fixture: Marc Stevens' 64-byte single-block pair, digest `008ee33a9d58b51cfeb425b0959121c9`, 64 + 64 = 128 bytes. Distinguish input records, throughput, restricted facts and attack methods; compare identical domains, baselines, compute and luck."
+      },
+      {
+        "id": "smallest-collision.study-1",
+        "lane": "smallest-collision",
+        "study": "Where does the single-block MD5 collision attack (Xie and Feng; Stevens) spend its work, and what would a 64 + 64 search cost at a laptop budget?",
+        "question_md": "Where does the single-block MD5 collision attack (Xie and Feng; Stevens) spend its work, and what would a 64 + 64 search cost at a laptop budget?",
+        "domain_md": "Inputs `a_hex` and `b_hex` are arbitrary byte strings of 0 to 1,024 bytes each, with the same strict hex transport as All zeros. They must differ, and **all 128 digest bits** must match: there is no partial score. The pair is unordered (swapping is a duplicate), unequal lengths and an empty member are allowed. Lower total bytes is better; an equal total is a tie and the earlier receipt keeps the record. The 128-byte reference is not a proven minimum: by counting, some pair with both members at most 16 bytes must collide, but that argument finds no pair.\n\nSubmit `a_hex` and `b_hex`. Fixture: Marc Stevens' 64-byte single-block pair, digest `008ee33a9d58b51cfeb425b0959121c9`, 64 + 64 = 128 bytes. Full 64-step MD5, RFC IV, exact padding; reductions or different IVs are separate scopes. Negative evidence closes only its tested method and scope."
+      },
+      {
+        "id": "smallest-collision.study-2",
+        "lane": "smallest-collision",
+        "study": "Can two inputs of unequal length, or a member shorter than one block, collide under full MD5 padding? What does the padding force?",
+        "question_md": "Can two inputs of unequal length, or a member shorter than one block, collide under full MD5 padding? What does the padding force?",
+        "domain_md": "Inputs `a_hex` and `b_hex` are arbitrary byte strings of 0 to 1,024 bytes each, with the same strict hex transport as All zeros. They must differ, and **all 128 digest bits** must match: there is no partial score. The pair is unordered (swapping is a duplicate), unequal lengths and an empty member are allowed. Lower total bytes is better; an equal total is a tie and the earlier receipt keeps the record. The 128-byte reference is not a proven minimum: by counting, some pair with both members at most 16 bytes must collide, but that argument finds no pair.\n\nSubmit `a_hex` and `b_hex`. Fixture: Marc Stevens' 64-byte single-block pair, digest `008ee33a9d58b51cfeb425b0959121c9`, 64 + 64 = 128 bytes. Full 64-step MD5, RFC IV, exact padding; reductions or different IVs are separate scopes. Negative evidence closes only its tested method and scope."
+      },
+      {
+        "id": "smallest-collision.study-3",
+        "lane": "smallest-collision",
+        "study": "What limits collision length to whole blocks in known attacks, and is there a route below 128 bytes in total?",
+        "question_md": "What limits collision length to whole blocks in known attacks, and is there a route below 128 bytes in total?",
+        "domain_md": "Inputs `a_hex` and `b_hex` are arbitrary byte strings of 0 to 1,024 bytes each, with the same strict hex transport as All zeros. They must differ, and **all 128 digest bits** must match: there is no partial score. The pair is unordered (swapping is a duplicate), unequal lengths and an empty member are allowed. Lower total bytes is better; an equal total is a tie and the earlier receipt keeps the record. The 128-byte reference is not a proven minimum: by counting, some pair with both members at most 16 bytes must collide, but that argument finds no pair.\n\nSubmit `a_hex` and `b_hex`. Fixture: Marc Stevens' 64-byte single-block pair, digest `008ee33a9d58b51cfeb425b0959121c9`, 64 + 64 = 128 bytes. Full 64-step MD5, RFC IV, exact padding; reductions or different IVs are separate scopes. Negative evidence closes only its tested method and scope."
+      }
+    ]
+  }
 }

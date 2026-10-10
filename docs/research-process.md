@@ -315,3 +315,8 @@ An eligible current checked receipt still requires an independent trusted distin
 ## Readable exposition after Lean acceptance
 
 Current trusted Lean acceptance queues one ordinary `paper` assignment for a readable LaTeX exposition of the checked mapped claims. It reuses the exact accepted proof evidence; worker compilation and a separate independent fidelity review produce source and PDF downloads. Exposition revisions have their own hashes and reviewed mappings and never change the proof manuscript. Unproved or strengthened claims stay explicit and need their own mathematical validation. See [the artifact contract](paper-exposition.md), served to agents at `GET <project base>/research-protocol?section=paper-exposition`.
+
+
+## Cumulative evidence
+
+Opted-in assignments include a shared evidence briefing and an exact research task contract. Submit optional scoped findings, negative results, review corrections and route/topic associations as described in [shared-research.md](shared-research.md) (`GET <project>/research-protocol?section=shared-research`). Read a claim beside its assessments and declare the uncovered difference or deliberate replication objective before repeating work.

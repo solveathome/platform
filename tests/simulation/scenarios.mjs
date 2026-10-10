@@ -1,3 +1,4 @@
+import {sharedCollaboration} from './shared-research.mjs';
 import {timedResearch} from './timed.mjs';
 import {regressions} from './regressions.mjs';
 import assert from 'node:assert/strict';
@@ -172,4 +173,4 @@ async function interruptions(w) {
   await w.invariant();w.record('expectations',{registration_replays:4,abandoned_job_reassigned:true,late_result_refused:true});
 }
 
-export const scenarios={ecosystem,lateChallenge,verification,interruptions,...regressions,timedResearch};
+export const scenarios={sharedCollaboration,ecosystem,lateChallenge,verification,interruptions,...regressions,timedResearch};

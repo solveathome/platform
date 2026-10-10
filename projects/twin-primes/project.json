@@ -117,5 +117,66 @@
         }
       ]
     }
-  ]
+  ],
+  "research_collaboration": {
+    "enabled": true,
+    "topics": [
+      {
+        "id": "kk-lower-bound.main",
+        "paper": "kk-lower-bound",
+        "claim_id": "main_eq1",
+        "question_md": "Preserve the accepted mapped main theorem and distinguish manuscript versions and exposition fidelity.",
+        "domain_md": "Survivor-gap lower bound, full cutoff, integers, crossing gaps, quantifiers and logarithms, sufficient A=12. This is not twin-prime infinitude. Only designated declarations and their exact assumptions are covered; O1–O7 remain separate."
+      },
+      {
+        "id": "kk-lower-bound.o1",
+        "paper": "kk-lower-bound",
+        "claim_id": "O1",
+        "question_md": "Prime harmonic asymptotic",
+        "domain_md": "Prime harmonic asymptotic with constant and o(1) remainder; distinguish finite bounds and asymptotic equality."
+      },
+      {
+        "id": "kk-lower-bound.o2",
+        "paper": "kk-lower-bound",
+        "claim_id": "O2",
+        "question_md": "Uniform smooth-number asymptotic",
+        "domain_md": "Two-variable uniform smooth-number asymptotic, including u <= Z^(1-epsilon); do not transfer a fixed-u theorem without a uniformity bridge."
+      },
+      {
+        "id": "kk-lower-bound.o3",
+        "paper": "kk-lower-bound",
+        "claim_id": "O3",
+        "question_md": "Arbitrary fixed A > 4 route",
+        "domain_md": "Every fixed A > 4; the accepted main proof uses sufficient A=12. The general-A extension remains separate."
+      },
+      {
+        "id": "kk-lower-bound.o4",
+        "paper": "kk-lower-bound",
+        "claim_id": "O4",
+        "question_md": "Dyadic prime-count asymptotic",
+        "domain_md": "Dyadic prime-count asymptotic with coefficient 1/2; an eventual y/(3 log y) lower bound does not prove equality."
+      },
+      {
+        "id": "kk-lower-bound.o5",
+        "paper": "kk-lower-bound",
+        "claim_id": "O5",
+        "question_md": "Sieve input",
+        "domain_md": "The quoted general sieve input and external one-class statement; distinguish accepted finite dimension-4, CRT and covering results."
+      },
+      {
+        "id": "kk-lower-bound.o6",
+        "paper": "kk-lower-bound",
+        "claim_id": "O6",
+        "question_md": "Two-sided density and Euler estimates",
+        "domain_md": "Two-sided density and Euler estimates; a finite one-sided bound does not close this obligation."
+      },
+      {
+        "id": "kk-lower-bound.o7",
+        "paper": "kk-lower-bound",
+        "claim_id": "O7",
+        "question_md": "Equation (28) constant",
+        "domain_md": "The exact constant in equation (28), with its hypotheses and parameter ranges."
+      }
+    ]
+  }
 }
