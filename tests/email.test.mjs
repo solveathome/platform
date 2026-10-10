@@ -165,6 +165,7 @@ test('a record is compared with the published best in the track\'s own direction
   assert.match(U.againstPublished(lower, 120, {value: 128, credit: 'Ref'}).text, /beyond the best published result we verified \(128 bytes, Ref\)/);
   assert.equal(U.againstPublished(higher, 13, null).text, '');
   assert.match(U.recordFacts(higher, {value: 5, previous: null}, null).before, /first verified result on this track/);
+  assert.match(U.recordFacts(higher, {value: 5, previous: null, count: 3}, null).before, /^3 records in a row, starting with the first verified result/);
   assert.match(U.recordFacts(higher, {value: 5, previous: 4}, '@ada').before, /^Up from 4 of 32, the platform best before it \(@ada\)/);
 });
 

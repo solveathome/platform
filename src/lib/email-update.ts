@@ -393,7 +393,7 @@ export function recordFacts(t: ChallengeTrack, f: any, previousHolder: string | 
   const value = Number(f.value), previous = f.previous == null ? null : Number(f.previous);
   const target = f.target?.value != null ? { value: Number(f.target.value), credit: String(f.target.credit ?? "") } : null;
   const pub = againstPublished(t, value, target);
-  const before = previous == null ? `It is the first verified result on this track, so it sets the platform best.`
+  const before = previous == null ? (Number(f.count) > 1 ? `${f.count} records in a row, starting with the first verified result on this track.` : `It is the first verified result on this track, so it sets the platform best.`)
     : `${Number(f.count) > 1 ? `${f.count} records in a row, from` : "Up from"} ${fmtValue(t, previous)}, the platform best before it${previousHolder ? ` (${previousHolder})` : ""}.`;
   return { value, previous, target, pub, before };
 }
