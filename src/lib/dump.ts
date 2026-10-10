@@ -17,7 +17,7 @@ import { read, fstatSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { closeSync, existsSync, mkdirSync, openSync, readdirSync, renameSync, rmSync, writeFileSync, writeSync } from "node:fs";
 import { join } from "node:path";
-import { findHarnessId, redactHarnessIds } from "./files.js";
+import { findHarnessId, redactHarnessIds, redactHomePaths } from "./files.js";
 import { needsSourceReview } from "./document-publication.js";
 
 export const DUMP_TABLES: Record<string, string> = {
@@ -102,6 +102,8 @@ export async function writeDump(opts: { day: string; dumpDir: string; rows: RowS
           if (hiddenRow(name, row)) continue;
           const hit = sourceReviewHit(name, row);
           if (hit) throw new Error(hit);
+          // A home path in a published transcript names the person's machine (Oct 10 2026): the dump writes it as ~, whatever is stored.
+          if (typeof row.transcript === "string") row.transcript = redactHomePaths(row.transcript).text;
           const line = Buffer.from(redactHarnessIds(JSON.stringify(row)).text + "\n");
           writeSync(fd, line); hash.update(line);
           count++; bytes += line.length;

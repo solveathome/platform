@@ -118,6 +118,22 @@ export function findHarnessId(text: unknown): string | null {
   return hit.first ? `${hit.first} (line 1)` : null;
 }
 
+/**
+ * A user's home prefix, as written in a log: /Users/<name>, /home/<name>, C:\Users\<name> (also with the doubled backslashes of a JSON
+ * string, or more when it is nested), at the start of a path: not inside a URL or a longer path, but after a JSON \n escape. Home folders that name no person
+ * (macOS's /Users/Shared) are left alone.
+ */
+const HOME_PREFIX = /(?:(?<![A-Za-z0-9._~\/-])|(?<=\\[ntr])|(?<=file:\/\/))(?:\/Users|\/home)\/(?!Shared(?![A-Za-z0-9._-]))[A-Za-z0-9._-]+(?![A-Za-z0-9._-])|(?<![A-Za-z0-9])[A-Za-z]:\\+Users\\+[A-Za-z0-9._ -]*[A-Za-z0-9._-](?![A-Za-z0-9._-])/g;
+/**
+ * Replace each home prefix with ~ and keep the rest of the path (Chris, Oct 10 2026, card 1255: "scrub those home paths but otherwise not
+ * do anything"): /Users/ann/proj/x.py becomes ~/proj/x.py. Used by the nightly scan, the transcript pages and the dump.
+ */
+export function redactHomePaths(text: string): { text: string; n: number } {
+  let n = 0;
+  const out = String(text ?? "").replace(HOME_PREFIX, () => { n++; return "~"; });
+  return { text: out, n };
+}
+
 /** Replace every harness identifier value with [REDACTED], keeping the JSON line intact (the nightly scan and the one-off cleanup of Sep 11 2026). */
 export function redactHarnessIds(text: string): { text: string; n: number } {
   const whole = scrubIdentifiers(String(text ?? ""));
