@@ -1,5 +1,5 @@
 import { needsSourceReview, SOURCE_REVIEW_MESSAGE } from '../lib/document-publication.js';
-import { queueWorkCheck } from '../lib/work-disposition.js';
+import { queueWorkCheck, queueWorkReconsiderations } from '../lib/work-disposition.js';
 import { parseKnownWork } from '../lib/work-disposition-format.js';
 import { optionalResearch } from '../lib/shared-research-format.js';
 import { assignmentMutation } from "../lib/assignments.js";
@@ -272,5 +272,6 @@ async function postHandler(req: any, res: any): Promise<void> {
     if(n.task) workCheckId=await queueWorkCheck(Number(req.project.id),req.project.slug,req.channel.lane_id??null,n.task,{...n,message_ids:[...new Set([...n.message_ids,Number(m!.id)])]},{source_message_id:Number(m!.id),author_model:req.model});
     if(!n.task || !workCheckId)nomination.warnings.push('work_check: no new comparison queued (requires an exact task and same-project sources, or an existing comparison already suffices); chat grants no dispatch authority');
   }
+  if(nomination.value)await queueWorkReconsiderations(Number(req.project.id),req.project.slug);
   res.json({ ok: true, id: Number(m!.id), path: req.channel.path, files: attached,work_check_job_id:workCheckId,warnings:nomination.warnings });
 }

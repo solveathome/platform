@@ -13,7 +13,7 @@ const task=(source,topic='self-match.study-2')=>parseResearchTask({intent:'exten
 const stop=source=>({predecessor_returns:[source],review_ids:[],message_ids:[],comparison_md:'The predecessor already performed exactly this comparison; no new scientific work.',remaining_gap_md:'Different corpora remain open.',reopen_when_md:'Changed corpus or independent replication objective.'});
 async function job(w,t,extra={}){return w.one(`INSERT INTO jobs(problem_id,type,title,brief_md,min_tier,budget_hours,priority,research_task,work_scope_sha256,origin_key) VALUES($1,'explore',$2,$2,99,0.1,10,$3,$4,$5) RETURNING *`,[w.pid,t.unresolved_obligation_md,JSON.stringify(t),workScopeHash(t),extra.origin??null]);}
 const decision=(check,extra={})=>({decision:'covered',scope_sha256:check.scope_sha256,input_sha256:check.input_sha256,rationale_md:'The cited source and its corrections cover only this unchanged experiment.',reopen_when_md:'Changed premises, source corrections or deliberate replication.',...extra});
-test('compact stop, deduplicated trusted comparison, exact suppression and correction reopening through HTTP',async()=>{
+test('compact stop, deduplicated trusted comparison, exact suppression and only explicit fresh trusted reopening through HTTP',async()=>{
  const w=await lab.project('operational-md5',81),slug=config(w);const a=await w.actor('author','gpt-6-astra'),judge=await w.actor('judge','claude-fable-5-1',{trusted:true});
  const prior=await a.submit({type:'direction'}),t=task(prior.return_id),first=await job(w,t),second=await job(w,t);
  await w.take(a,j=>Number(j.job_id)===Number(first.id));
@@ -27,14 +27,35 @@ test('compact stop, deduplicated trusted comparison, exact suppression and corre
  const {retireCoveredWork,currentWorkDisposition,queueWorkCheck}=await import('../src/lib/work-disposition.ts');
  await w.q("UPDATE returns SET created_at=created_at-interval '7 days' WHERE id=$1",[verdict.return_id]);
  assert.ok(await currentWorkDisposition(w.pid,workScopeHash(t)),'age alone cannot reopen unchanged covered work');
+ await a.request('/chat/messages',{method:'POST',body:{body_md:'An arbitrary comment without a scoped nomination.'}});
+ assert.equal((await currentWorkDisposition(w.pid,workScopeHash(t))).evidence_current,true);
+ assert.equal((await w.one("SELECT count(*)::int AS n FROM jobs WHERE problem_id=$1 AND work_check IS NOT NULL AND status='queued'",[w.pid])).n,0);
+ await a.request(`/return/${verdict.return_id}/request-review`,{method:'POST',body:{note:'Inspect the operational record; this does not reopen its assignment.'}});
+ assert.equal((await currentWorkDisposition(w.pid,workScopeHash(t))).work_disposition.decision,'covered');
+ const unrelatedExpiry=await job(w,t);await w.q("UPDATE jobs SET status='expired',last_release_note='A different expiry reason.' WHERE id=$1",[unrelatedExpiry.id]);
  const duplicate=await job(w,t);await retireCoveredWork(w.pid,slug);assert.equal((await w.one('SELECT status FROM jobs WHERE id=$1',[duplicate.id])).status,'expired');
  const replica=await job(w,{...t,intent:'replication'}),changed=await job(w,{...t,changed_premise_md:'Different candidate corpus.'});await retireCoveredWork(w.pid,slug);
  for(const j of [replica,changed])assert.equal((await w.one('SELECT status FROM jobs WHERE id=$1',[j.id])).status,'queued');
  assert.equal(await queueWorkCheck(w.pid,slug,null,t,stop(prior.return_id),{}),null);
  await judge.submit({type:'review',return_id:prior.return_id,verdict:'reject',reject_reason:'overclaimed',notes_md:'This old statement also excludes nonlinear filters, which the corpus cannot establish.'});
- assert.equal(await currentWorkDisposition(w.pid,workScopeHash(t)),null);
- const reopened=await job(w,t);await retireCoveredWork(w.pid,slug);assert.equal((await w.one('SELECT status FROM jobs WHERE id=$1',[reopened.id])).status,'queued');
- assert.ok((await w.read('/work-state')).decisions.every(d=>!d.current));await w.invariant();
+ let active=await currentWorkDisposition(w.pid,workScopeHash(t));assert.equal(active.work_disposition.decision,'covered');assert.equal(active.evidence_current,false);
+ const suppressed=await job(w,t);await retireCoveredWork(w.pid,slug);assert.equal((await w.one('SELECT status FROM jobs WHERE id=$1',[suppressed.id])).status,'expired');
+ const state=await w.read('/work-state');assert.ok(state.decisions.some(d=>d.suppressed&&d.needs_reconsideration&&!d.evidence_current));
+ const checks=await w.q("SELECT * FROM jobs WHERE problem_id=$1 AND work_check IS NOT NULL AND status='queued'",[w.pid]);assert.equal(checks.length,1);assert.equal(checks[0].work_check.base_decision_return_id,verdict.return_id);
+ const unauthorized=await a.submit({type:'direction',work_disposition:decision(checks[0].work_check,{decision:'open'})});assert.match(unauthorized.warnings.join('\n'),/no dispatch authority/);
+ const judge2=await w.actor('reconsider','claude-fable-5-1',{trusted:true}),held=await w.take(judge2,j=>Boolean(j.work_check));
+ await w.q('UPDATE returns SET report_md=report_md || $2 WHERE id=$1',[prior.return_id,' Another correction arrives during the held comparison.']);
+ const stale=await judge2.submit({work_disposition:decision(held.work_check,{decision:'open'})});assert.match(stale.warnings.join('\n'),/ineffective/);
+ assert.equal((await currentWorkDisposition(w.pid,workScopeHash(t))).work_disposition.decision,'covered');
+ const judge3=await w.actor('obsolete-base','claude-fable-5-1',{trusted:true}),obsolete=await w.take(judge3,j=>Boolean(j.work_check));
+ await w.fault('An obsolete comparison carries a superseded decision base.',"UPDATE jobs SET work_check=jsonb_set(work_check,'{base_decision_return_id}','null'::jsonb) WHERE id=$1",[obsolete.job_id]);
+ const superseded=await judge3.submit({work_disposition:decision(obsolete.work_check,{decision:'open'})});assert.match(superseded.warnings.join('\n'),/superseded/);
+ assert.equal((await currentWorkDisposition(w.pid,workScopeHash(t))).work_disposition.decision,'covered');
+ const judge4=await w.actor('explicit-reopen','claude-fable-5-1',{trusted:true}),fresh=await w.take(judge4,j=>Boolean(j.work_check));
+ const opened=await judge4.submit({work_disposition:decision(fresh.work_check,{decision:'open'})});assert.equal(opened.status,'recorded');
+ active=await currentWorkDisposition(w.pid,workScopeHash(t));assert.equal(active.work_disposition.decision,'open');assert.equal(active.evidence_current,true);
+ assert.equal((await w.one('SELECT status FROM jobs WHERE id=$1',[suppressed.id])).status,'queued');assert.equal((await w.one('SELECT status FROM jobs WHERE id=$1',[unrelatedExpiry.id])).status,'expired');assert.equal((await w.read('/return/'+prior.return_id)).status,'pending');
+ await w.invariant();
 });
 test('chat nominates scoped evidence without authority; stale or untrusted dispositions cannot suppress work',async()=>{
  const w=await lab.project('chat-investment',52);config(w);const a=await w.actor('a','gpt-6-astra'),j=await w.actor('j','claude-fable-5-1',{trusted:true});
@@ -62,7 +83,7 @@ test('reviewer readiness and reviews-only dispatch include bounded judgments, th
  await queueWorkCheck(w.pid,slug,null,{...t,unresolved_obligation_md:'A different exact comparison.'},stop(prior.return_id),{author_model:a.model});
  assert.equal((await j.request('/ready?work=reviews')).work_comparisons,undefined);
  const second=await j.start();assert.equal(second.type,'review');await w.finish(j);
- assert.equal((await j.request('/ready?work=reviews')).work_comparisons,1);
+ assert.ok((await j.request('/ready?work=reviews')).work_comparisons>=1);
  const third=await j.start();assert.ok(third.work_check);
  const scientific=await j.submit({request_review:true,work_disposition:decision(third.work_check),research_evidence:{topic_ids:t.topic_ids,scopes:[{key:'new-claim',statement_md:'A separately proposed finite observation.',domain_md:'Fixture only.',kind:'finite',artifact_sha256:[]}]}});
  assert.equal(scientific.status,'pending');assert.match(scientific.warnings.join('\n'),/ordinary intake/);assert.equal((await w.read(`/return/${scientific.return_id}`)).work_disposition,null);await w.invariant();

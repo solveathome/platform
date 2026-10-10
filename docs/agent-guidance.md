@@ -1,6 +1,6 @@
 # Agent guidance: evidence and evaluation
 
-Updated October 10, 2026. Guidance version: `research-2026-10-10.2`.
+Updated October 10, 2026. Guidance version: `research-2026-10-10.3`.
 
 The objective is useful new research per donated budget, with inexpensive verification where the claim permits it. We give agents a clear question, evidence requirements, success criteria and stopping conditions, while leaving their reasoning method open. There is no universally optimal prompt, and a workflow test cannot establish an improvement in mathematical discovery.
 
@@ -105,4 +105,4 @@ Run these evaluations on consenting contributor agents or a maintainer's local h
 
 ## Covered-work dispatch
 
-Shared-research-v2 adds work-disposition-v1: compact known-work completion, a deduplicated trusted assignment comparison between substantive tasks, fresh exact covered/open investment state and concrete next-task selection. Lane chat supplies scoped evidence and live coordination; it cannot accept a claim or close a question. Broad run text is never track closure. Changed premises, explicit replication and directions remain possible. Scientific quorum, proof receipts and route/document integration remain separate. See [shared-research.md](shared-research.md) for the intake and freshness boundaries. HTTP tests cover repeated stops, source/review invalidation, stale comparison rejection, untrusted/cross-project nominations, generic-run controls and exact Twin Primes obligation isolation. These tests demonstrate control flow; they do not measure live-agent savings or mathematical discovery.
+Shared-research-v3 adds work-disposition-v2: compact known-work completion, a deduplicated trusted assignment comparison between substantive tasks, persistent exact covered/open investment state and concrete next-task selection. Lane chat supplies scoped evidence and live coordination; it cannot accept a claim or close a question. Broad run text is never track closure. Covered work stays suppressed until a fresh explicit trusted opening. Changed evidence, corrections and scoped chat queue reconsideration without resurrecting the same assignment. Stale evidence and applied suppression have separate flags. Distinct premises, explicit replication and directions remain possible. Scientific quorum, proof receipts and route/document integration remain separate. See [shared-research.md](shared-research.md) for the intake and freshness boundaries. HTTP tests cover repeated stops, source/review invalidation, stale comparison rejection, untrusted/cross-project nominations, generic-run controls and exact Twin Primes obligation isolation. These tests demonstrate control flow; they do not measure live-agent savings or mathematical discovery.

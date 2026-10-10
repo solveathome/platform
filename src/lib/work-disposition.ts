@@ -35,18 +35,19 @@ export async function queueWorkCheck(problemId:number,slug:string,laneId:number|
   const origin=`work-check:${scope}:${input}`;
   const existing=await one(`SELECT id FROM jobs WHERE problem_id=$1 AND work_check->>'scope_sha256'=$2 AND status IN ('queued','assigned') ORDER BY id LIMIT 1`,[problemId,scope]);
   if(existing)return Number(existing.id);
-  const check={schema:'work-check-v1',scope_sha256:scope,input_sha256:input,sources,allow_covered:request.allow_covered!==false,source_return_id:request.source_return_id??null,source_message_id:request.source_message_id??null,author_model:request.author_model??null};
-  const brief=`Compare this exact assignment with its predecessors and corrections before further investment. This is an assignment decision, not scientific acceptance. Read the cited messages and the lane's current claims; chat is evidence only. Nomination: return #${request.source_return_id??'none'}, message #${request.source_message_id??'none'}. Use existing packages and the cheapest source check; do not repeat large experiments.\n\nQuestion: ${task.unresolved_obligation_md}\nDomain: ${task.domain_md}\nPremise: ${task.changed_premise_md}\nReturns: ${sources.predecessor_returns.join(', ')}; reviews: ${sources.review_ids.join(', ')||'none nominated'}; messages: ${sources.message_ids.join(', ')||'none nominated'}.\n\n${check.allow_covered ? 'Covered means only this unchanged obligation need not be dispatched again.' : 'This is a broad run: it cannot be marked covered. Select a concrete distinct next_task or leave it open.'}\nReturn work_disposition:{decision:"covered|open",scope_sha256:"${scope}",input_sha256:"${input}",rationale_md,reopen_when_md,next_task?:<research-task-v1>}. Name replication explicitly. Sources changed since assignment make this decision stale; it grants no scientific authority.`;
+  const check={schema:'work-check-v2',scope_sha256:scope,input_sha256:input,sources,allow_covered:request.allow_covered!==false,source_return_id:request.source_return_id??null,source_message_id:request.source_message_id??null,author_model:request.author_model??null,base_decision_return_id:prior ? Number(prior.id) : null};
+  const brief=`Compare this exact assignment with its predecessors and corrections before further investment. This is an assignment decision, not scientific acceptance. Read the cited messages and the lane's current claims; chat is evidence only. Nomination: return #${request.source_return_id??'none'}, message #${request.source_message_id??'none'}. Use existing packages and the cheapest source check; do not repeat large experiments.\n\nQuestion: ${task.unresolved_obligation_md}\nDomain: ${task.domain_md}\nPremise: ${task.changed_premise_md}\nReturns: ${sources.predecessor_returns.join(', ')}; reviews: ${sources.review_ids.join(', ')||'none nominated'}; messages: ${sources.message_ids.join(', ')||'none nominated'}.\n\n${check.allow_covered ? 'Covered means only this unchanged obligation need not be dispatched again.' : 'This is a broad run: it cannot be marked covered. Select a concrete distinct next_task or leave it open.'}\nReturn work_disposition:{decision:"covered|open",scope_sha256:"${scope}",input_sha256:"${input}",rationale_md,reopen_when_md,next_task?:<research-task-v1>}. Name replication explicitly. Only a fresh trusted open decision explicitly reopens this exact scope. Changed evidence or chat requests reconsideration and never removes prior suppression. A changed source snapshot or superseded base decision makes this response ineffective; it grants no scientific authority.`;
   const row=await one(`INSERT INTO jobs(problem_id,lane_id,type,title,brief_md,budget_hours,min_tier,requires_trust,purpose,origin_key,research_task,work_check,work_scope_sha256,compute_hint)
     VALUES($1,$2,'explore',$3,$4,0.1,1,true,'work',$5,$6,$7,$8,'{}') RETURNING id`,[problemId,laneId,`Assignment comparison: ${task.unresolved_obligation_md}`.slice(0,200),brief,origin,JSON.stringify({...task,intent:'consolidation'}),JSON.stringify(check),scope]);
   return Number(row!.id);
 }
 export async function currentWorkDisposition(problemId:number,scope:string):Promise<any|null> {
-  const row=await one(`SELECT r.id,r.created_at,r.work_disposition FROM returns r WHERE r.problem_id=$1 AND r.status='recorded'
-    AND r.work_disposition->>'scope_sha256'=$2 AND r.work_disposition->>'trusted'='true' ORDER BY r.id DESC LIMIT 1`,[problemId,scope]);
+  const row=await one(`SELECT r.id,r.created_at,r.work_disposition FROM returns r WHERE r.problem_id=$1
+    AND r.work_disposition->>'scope_sha256'=$2 AND r.work_disposition->>'trusted'='true' AND r.work_disposition->>'effective'='true' ORDER BY r.id DESC LIMIT 1`,[problemId,scope]);
   if(!row)return null;
   const d=row.work_disposition;
-  if(d.input_sha256!==await workInputHash(problemId,scope,d.sources))return null;
+  row.evidence_current=d.input_sha256===await workInputHash(problemId,scope,d.sources);
+  row.needs_reconsideration=d.decision==='covered' && !row.evidence_current;
   return row;
 }
 export async function saveWorkDisposition(returnId:number,problemId:number,job:any,d:WorkDisposition|null,trusted:boolean):Promise<string[]> {
@@ -54,12 +55,31 @@ export async function saveWorkDisposition(returnId:number,problemId:number,job:a
   const check=job?.work_check;
   if(!check || !trusted || d.scope_sha256!==check.scope_sha256 || d.input_sha256!==check.input_sha256 || (d.decision==='covered'&&!check.allow_covered))return ['work_disposition: no matching trusted exact assignment; no dispatch authority recorded'];
   if(d.next_task && (workScopeHash(d.next_task)===d.scope_sha256 || !d.next_task.predecessor_returns.length || !(await validateWorkSources(problemId,{predecessor_returns:d.next_task.predecessor_returns,review_ids:[],message_ids:[]}))))return ['work_disposition: next_task must name same-project predecessors and a distinct obligation or explicit changed premise; no dispatch authority recorded'];
+  const current=await currentWorkDisposition(problemId,check.scope_sha256);
   const fresh=await workInputHash(problemId,check.scope_sha256,check.sources)===check.input_sha256;
-  await q(`UPDATE returns SET work_disposition=$2 WHERE id=$1`,[returnId,JSON.stringify({...d,schema:'work-disposition-v1',trusted:true,sources:check.sources,allow_covered:check.allow_covered,work_check_job_id:Number(job.id),task:job.research_task})]);
-  return fresh ? [] : ['work_disposition: evidence changed during the comparison; recorded as stale and cannot suppress dispatch'];
+  const matchingBase=(current ? Number(current.id) : null)===(check.base_decision_return_id??null);
+  const effective=fresh && matchingBase;
+  await q(`UPDATE returns SET work_disposition=$2 WHERE id=$1`,[returnId,JSON.stringify({...d,schema:'work-disposition-v2',trusted:true,effective,base_decision_return_id:check.base_decision_return_id??null,sources:check.sources,allow_covered:check.allow_covered,work_check_job_id:Number(job.id),task:job.research_task})]);
+  if(effective && d.decision==='open')await q(`UPDATE jobs SET status='queued',last_release_note=$3 WHERE problem_id=$1 AND work_scope_sha256=$2 AND status='expired'
+    AND last_release_note LIKE 'Exact obligation covered by assignment decision return #%'
+    AND agent_direction_id IS NULL`,[problemId,check.scope_sha256,`Explicitly reopened by trusted assignment decision return #${returnId}; scientific acceptance unchanged.`]);
+  return effective ? [] : ['work_disposition: stale evidence or superseded base decision; recorded as ineffective and cannot reopen or replace existing suppression'];
+}
+/** Changed evidence queues trusted reconsideration; it never resurrects a covered assignment. */
+export async function queueWorkReconsiderations(problemId:number,slug:string):Promise<void> {
+  if(!collaborationEnabled(slug))return;
+  const scopes=await q(`SELECT DISTINCT work_disposition->>'scope_sha256' AS scope FROM returns WHERE problem_id=$1
+    AND work_disposition->>'effective'='true' AND work_disposition->>'decision'='covered' ORDER BY scope LIMIT 50`,[problemId]);
+  for(const {scope} of scopes) {
+    const current=await currentWorkDisposition(problemId,scope);
+    if(!current?.needs_reconsideration)continue;
+    const row=await one(`SELECT lane_id FROM returns WHERE id=$1`,[current.id]),d=current.work_disposition;
+    await queueWorkCheck(problemId,slug,row?.lane_id??null,parseResearchTask(d.task),d.sources,{allow_covered:d.allow_covered,source_return_id:Number(current.id)});
+  }
 }
 export async function retireCoveredWork(problemId:number,slug:string):Promise<void> {
   if(!collaborationEnabled(slug))return;
+  await queueWorkReconsiderations(problemId,slug);
   const jobs=await q(`SELECT j.*,l.slug AS lane_slug FROM jobs j LEFT JOIN lanes l ON l.id=j.lane_id WHERE j.problem_id=$1 AND j.status='queued' AND j.work_check IS NULL
     AND j.agent_direction_id IS NULL AND j.type IN ('explore','measure','source','formalize','paper','break') ORDER BY j.id LIMIT 100`,[problemId]);
   for(const job of jobs) {
@@ -74,7 +94,7 @@ export async function queueWorkNextTasks(problemId:number,slug:string):Promise<v
   if(!collaborationEnabled(slug))return;
   for(const row of await q(`SELECT id,work_disposition,lane_id FROM returns WHERE problem_id=$1 AND work_disposition ? 'next_task' ORDER BY id DESC LIMIT 30`,[problemId])) {
     const current=await currentWorkDisposition(problemId,row.work_disposition.scope_sha256);
-    if(!current || Number(current.id)!==Number(row.id))continue;
+    if(!current || !current.evidence_current || Number(current.id)!==Number(row.id))continue;
     const task=parseResearchTask(row.work_disposition.next_task),origin=`work-next:${row.id}`;
     if(await one(`SELECT 1 FROM jobs WHERE problem_id=$1 AND origin_key=$2`,[problemId,origin]))continue;
     await q(`INSERT INTO jobs(problem_id,lane_id,type,title,brief_md,budget_hours,min_tier,purpose,origin_key,research_task,work_scope_sha256,compute_hint)
@@ -83,7 +103,14 @@ export async function queueWorkNextTasks(problemId:number,slug:string):Promise<v
 }
 export async function workState(problemId:number):Promise<any[]> {
   const rows=await q(`SELECT id,lane_id,created_at,work_disposition FROM returns WHERE problem_id=$1 AND work_disposition IS NOT NULL ORDER BY id DESC LIMIT 50`,[problemId]);
-  for(const row of rows)row.current=Number((await currentWorkDisposition(problemId,row.work_disposition.scope_sha256))?.id)===Number(row.id);
+  for(const row of rows) {
+    const active=await currentWorkDisposition(problemId,row.work_disposition.scope_sha256);
+    row.active_operational_decision=Number(active?.id)===Number(row.id);
+    row.evidence_current=row.active_operational_decision && Boolean(active?.evidence_current);
+    row.current=row.evidence_current;
+    row.suppressed=row.active_operational_decision && row.work_disposition.decision==='covered';
+    row.needs_reconsideration=row.suppressed && !row.evidence_current;
+  }
   return rows.map(r=>({...r,id:Number(r.id)}));
 }
 export async function workCoordination(problemId:number,laneId:number|null):Promise<string> {

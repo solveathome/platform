@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
 import { withoutTimeAllowance } from './research-format.js';
 
-export const SHARED_RESEARCH_VERSION = 'shared-research-v2';
+export const SHARED_RESEARCH_VERSION = 'shared-research-v3';
 export type ResearchIntent = 'new' | 'extend' | 'replication' | 'repair' | 'consolidation' | 'source';
 export type ResearchTask = { schema: 'research-task-v1'; topic_ids: string[]; intent: ResearchIntent; predecessor_returns: number[]; unresolved_obligation_md: string; changed_premise_md: string; expected_evidence_md: string; stop_if_md: string; domain_md: string };
 export type ResearchScope = { key: string; statement_md: string; domain_md: string; assumptions_md: string; kind: 'witness' | 'throughput' | 'finite' | 'restricted_fact' | 'method' | 'negative'; artifact_sha256: string[]; transfer_conditions_md: string; settles_topic?: string; negative?: { kind: 'unresolved' | 'attempt_failed' | 'claim_refuted' | 'scoped_obstruction'; evidence_md: string; revisit_when_md: string } };

@@ -1,4 +1,4 @@
-import { queueWorkCheck, validateWorkSources, saveWorkDisposition, retireCoveredWork, queueWorkNextTasks, workState, workCoordination } from '../lib/work-disposition.js';
+import { queueWorkCheck, queueWorkReconsiderations, validateWorkSources, saveWorkDisposition, retireCoveredWork, queueWorkNextTasks, workState, workCoordination } from '../lib/work-disposition.js';
 import { parseKnownWork, parseWorkDisposition, workScopeHash, WORK_DISPOSITION_GUIDANCE, WORK_DISPOSITION_VERSION } from '../lib/work-disposition-format.js';
 import { collaborationEnabled, taskForJob, researchContext, contextMarkdown, saveResearchEvidence, saveResearchAssessment, saveResearchLinks, researchAuthority, activeLinkSQL } from '../lib/shared-research.js';
 import { SHARED_RESEARCH_VERSION, SHARED_RESEARCH_GUIDANCE, taskMarkdown, optionalResearch, parseResearchEvidence, parseResearchAssessment, parseResearchLinks } from '../lib/shared-research-format.js';
@@ -1291,6 +1291,7 @@ job.post("/result", bearer, project, assignmentMutation(async (req: any, res) =>
         reviewerTrusted && b.verification_conflict_resolution_md ? executionState?.latest_receipt_id ?? null : null]);
     if (reviewerTrusted && b.verification_conflict_resolution_md) await q(`UPDATE jobs j SET status='expired' FROM returns r WHERE r.id=$1 AND j.problem_id=r.problem_id AND j.origin_key LIKE 'check-conflict:'||r.verification_fingerprint||':%' AND j.status='queued'`, [reviewOf]);
     const outcome = await resolveReturn(reviewOf);
+    await queueWorkReconsiderations(Number(req.project.id),req.project.slug);
     // A series decided at once (Chris, Sep 19 2026): the returns a triage covered under this lead get their verdicts from this same review.
     const seriesWarnings: string[] = []; const seriesDecided: Record<string, string> = {};
     // Series verdicts are decisions, so they come from a trusted reviewer (#sah-triage-close-and-reward): an advisory one would leave a covered
@@ -1688,6 +1689,7 @@ job.post("/result", bearer, project, assignmentMutation(async (req: any, res) =>
       await enqueueReply(Number(answer!.id),Number(ask.message_id),Number(req.project.id));
     }
   }
+  await queueWorkReconsiderations(Number(problem.id),problem.slug);
   if (recordedExploration) {
     res.json({ ok: true, return_id: Number(ret!.id), status: "recorded", work_check_job_id:workCheckJobId, research: researchProgress, reviews_requested: 0, files: attached, tokens, warnings,
       note: `Exploration is recorded without review. Elevate a claim when it deserves verification: POST ${BASE()}/projects/${problem.slug}/return/${ret!.id}/request-review { "note": "<what deserves verification>" }.` });
