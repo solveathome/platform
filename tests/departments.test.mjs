@@ -72,7 +72,12 @@ test('sibling directions and general mode remain separate; exact launch retries 
   for(const run of [one,two,general])assert.match(run.brief_md,/self-review your local framework/);
   assert.match(general.brief_md,/Ordinary queue/);assert.doesNotMatch(general.brief_md,/alpha|beta/);
   const replay=await call(one.query,{headers:one.launchHeaders});assert.equal(replay.attempt_id,one.attempt_id);assert.equal(replay.brief_md,one.brief_md);
-  assert.ok(one.brief_md.length<6000,`effective brief should be compact (${one.brief_md.length})`);
+  // Every compact brief now retains the core isolation recommendation; keep the original budget for everything else.
+  const {WORKER_ISOLATION_RECOMMENDATION}=await import('../src/lib/workspace-guidance.ts');
+  const isolation=`${WORKER_ISOLATION_RECOMMENDATION} Practical controls: \`${w.origin}${w.base}/department-protocol?section=execution\`.\n\n`;
+  assert.ok(one.brief_md.includes(isolation));
+  const compactLength=one.brief_md.replace(isolation,'').length;
+  assert.ok(compactLength<6000,`effective brief apart from core isolation should be compact (${compactLength})`);
   await call('/run/context',{run:one,headers:{'x-department':remote},status:403});
   const before=await w.one(`SELECT count(*)::int n FROM sessions WHERE problem_id=$1`,[w.pid]);
   await call('/start',{headers:{'x-department':dep,'x-launch-id':random(),'x-direction-id':direction.direction_id},status:409});

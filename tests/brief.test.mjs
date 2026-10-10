@@ -4,7 +4,7 @@ import { renderBrief, exploreContinuation } from "../src/lib/brief.ts";
 import { compactDepartmentBrief, protocolSections } from "../src/lib/department-protocol.ts";
 import { GUIDANCE_VERSION, taskGuidance } from "../src/lib/research-guidance.ts";
 import { tangentJob } from "../src/lib/tangent.ts";
-import { EFFORT_GUIDANCE, FRAMEWORK_GUIDANCE_VERSION, FRAMEWORK_RECHECK_HOURS, WORKER_ISOLATION_RECOMMENDATION, workspaceSections } from "../src/lib/workspace-guidance.ts";
+import { ARTIFACT_PACKAGING_GUIDANCE, EFFORT_GUIDANCE, FRAMEWORK_GUIDANCE_VERSION, FRAMEWORK_RECHECK_HOURS, WORKER_ISOLATION_RECOMMENDATION, workspaceSections } from "../src/lib/workspace-guidance.ts";
 import { createHash } from "node:crypto";
 import { MODEL_IDENTITY_GUIDANCE } from "../src/lib/model-id.ts";
 import { LOG_LOCATIONS } from "../src/lib/tokens.ts";
@@ -12,6 +12,45 @@ import { readdirSync, readFileSync } from "node:fs";
 
 const job = { id: 78, type: "audit", title: "Audit: beta2-note", brief_md: "paper.slug: beta2-note\n\nAudit it.", git_ref: "main", compute_hint: {}, budget_hours: 3, release_count: 1, last_release_note: "expired: the agent did not return or release it", lane_slug: null, repo_url: "https://example.org/r", expires_at: null };
 const session = { id: "s1", jobs: 1, max: 1, maxHours: 2, compute: "not offered", transcriptPreapproved: true };
+
+test('served artifact guidance preserves empty process logs and repairs packaging without losing science',()=>{
+  for(const slug of ['md5','twin-primes','another-project']) {
+    const base=`https://x.test/projects/${slug}`,sections=protocolSections(base);
+    for(const type of ['explore','measure','check','review']) {
+      const issued={...job,type},full=renderBrief(issued,base,session);
+      assert.equal(full.split(ARTIFACT_PACKAGING_GUIDANCE).length-1,1);
+      const compact=compactDepartmentBrief(full,issued,session,null);
+      assert.match(compact,/cached protocol's evidence, publication and applicable files sections before submitting/);
+      assert.ok(compact.includes(FRAMEWORK_GUIDANCE_VERSION),'cached file guidance is tied to the current framework version');
+    }
+    for(const text of [sections.files,sections.publication_safety]) {
+      assert.ok(text.includes(ARTIFACT_PACKAGING_GUIDANCE));
+      assert.match(text,/present zero-byte log in a nonempty artifact manifest/);
+      assert.match(text,/SHA-256 of the original bytes/);
+      assert.match(text,/observed exit status \(or explicit unknown\)/);
+      assert.match(text,/uploaded:false and how to reconstruct the empty log/);
+      assert.match(text,/link the hashes of any separate scientific outputs/);
+      assert.match(text,/diagnostic role from the producing command and output contract/);
+      assert.match(text,/stdout\/stderr suffix alone is insufficient/);
+      assert.match(text,/Unknown empty artifacts still fail preflight/);
+      assert.match(text,/present empty file from a missing file/);
+      assert.match(text,/Never fabricate log content, add placeholder bytes to the original/);
+      assert.match(text,/cannot replace a required result, input or execution receipt/);
+      assert.match(text,/Checkpoint completed science and the original failure/);
+      assert.match(text,/inspect current assignment ownership, receipts and the exact request journal before recovery/);
+      assert.match(text,/preserved valid outputs and actual usage/);
+      assert.match(text,/Revalidate required artifacts, hashes, manifest references, evidence consistency, request schema and exact outbound privacy checks before publication/);
+      assert.match(text,/Missing or invalid required results remain a blocker/);
+      assert.match(text,/Changed immutable verification packages need a new fingerprint/);
+      assert.match(text,/frozen request bytes and retry identities unchanged/);
+      assert.match(text,/Do not launch a replacement worker or repeat science to bypass an outstanding assignment or uncertain request/);
+    }
+    assert.doesNotMatch(sections.files,/stdout is the artifact/,'stdout is not always the scientific result');
+    assert.match(sections.acceptance,/successful compute fixture with a present empty stdout or stderr/);
+    assert.match(sections.acceptance,/Missing required scientific output still fails preflight/);
+    assert.match(sections.acceptance,/without rerunning the science or duplicating a receipt/);
+  }
+});
 
 test('isolation is a concise core recommendation in every full and compact worker brief',()=>{
   assert.ok(WORKER_ISOLATION_RECOMMENDATION.split(/\s+/).length<=65,'keep practical setup detail in the shared protocol');
