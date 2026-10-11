@@ -1,6 +1,6 @@
-import { queueWorkCheck, queueWorkReconsiderations, validateWorkSources, saveWorkDisposition, retireCoveredWork, queueWorkNextTasks, workState, workCoordination } from '../lib/work-disposition.js';
-import { parseKnownWork, parseWorkDisposition, workScopeHash, WORK_DISPOSITION_GUIDANCE, WORK_DISPOSITION_VERSION } from '../lib/work-disposition-format.js';
-import { collaborationEnabled, taskForJob, researchContext, contextMarkdown, saveResearchEvidence, saveResearchAssessment, saveResearchLinks, researchAuthority, activeLinkSQL } from '../lib/shared-research.js';
+import { queueWorkCheck, queueWorkReconsiderations, validateWorkSources, saveWorkDisposition, retireCoveredWork, queueWorkNextTasks, workState, workCoordination, currentWorkDisposition, retireLegacyReviews } from '../lib/work-disposition.js';
+import { parseKnownWork, parseWorkDisposition, workScopeHash, legacyCoverageEligible, WORK_DISPOSITION_GUIDANCE, WORK_DISPOSITION_VERSION } from '../lib/work-disposition-format.js';
+import { collaborationEnabled, taskForJob, researchContext, contextMarkdown, experimentEvidenceMarkdown, saveResearchEvidence, saveResearchAssessment, saveResearchLinks, researchAuthority, activeLinkSQL } from '../lib/shared-research.js';
 import { SHARED_RESEARCH_VERSION, SHARED_RESEARCH_GUIDANCE, reportHash, parseResearchTask, taskMarkdown, optionalResearch, parseResearchEvidence, parseResearchAssessment, parseResearchLinks } from '../lib/shared-research-format.js';
 import { JOB_CONTEXT_COLUMNS, JOB_CONTEXT_JOINS, jobPresentation } from "../lib/job-presentation.js";
 import {parseDeferral, recordDeferral, deferralHistory, deferralBrief} from '../lib/operational-blockers.js';
@@ -449,7 +449,7 @@ ${ENDED_LAUNCH_GUIDANCE}
     row.research_task = await taskForJob(Number(req.project.id),req.project.slug,row);
     await q(`UPDATE jobs SET research_task=$2,work_scope_sha256=$3 WHERE id=$1`,[row.id,JSON.stringify(row.research_task),row.work_check?.scope_sha256 ?? workScopeHash(row.research_task)]);
     sharedContext = await researchContext(Number(req.project.id),req.project.slug,row,row.research_task);
-    row.brief_md += taskMarkdown(row.research_task) + contextMarkdown(sharedContext,`${BASE()}/projects/${req.project.slug}`) + `\n\n${SHARED_RESEARCH_GUIDANCE}\n\n${WORK_DISPOSITION_GUIDANCE}` + await workCoordination(Number(req.project.id),row.lane_id??null);
+    row.brief_md += taskMarkdown(row.research_task) + (!row.work_check && !['review','check','triage'].includes(row.type) ? experimentEvidenceMarkdown(row.research_task,sharedContext,`${BASE()}/projects/${req.project.slug}`) : '') + contextMarkdown(sharedContext,`${BASE()}/projects/${req.project.slug}`) + `\n\n${SHARED_RESEARCH_GUIDANCE}\n\n${WORK_DISPOSITION_GUIDANCE}` + await workCoordination(Number(req.project.id),row.lane_id??null);
   }
   let md = chat ? renderChatBrief(row, `${BASE()}/projects/${req.project.slug}`, { id: String(session.id), host: String(req.oauth?.host ?? "other"), handle: req.user!.handle }) : renderBrief(row, `${BASE()}/projects/${req.project.slug}`, sess);
   if (!chat) {
@@ -1238,6 +1238,37 @@ job.post("/result", bearer, project, assignmentMutation(async (req: any, res) =>
   // A log that names no model is attributed to the model the agent declared in X-Model.
   if (tokens.models && (Object.keys(tokens.models).length === 0 || tokens.models.codex !== undefined || tokens.models.copilot !== undefined || tokens.models.opencode !== undefined) && req.model) { const n = tokens.models.codex ?? tokens.models.copilot ?? tokens.models.opencode ?? tokens.output; delete tokens.models.codex; delete tokens.models.copilot; delete tokens.models.opencode; if (n > 0) tokens.models[req.model] = (tokens.models[req.model] ?? 0) + n; }
 
+  // A trusted first read can nominate an old source-only stop without manufacturing a scientific verdict.
+  if(b.work_check_only===true) {
+    if(jobRow?.type!=='review' || !collaborationEnabled(req.project.slug) || !(await isTrusted(Number(req.project.id),uid,req.user!.handle,{model:req.model,effort:effortEff}))) {
+      res.status(403).json({error:'work_check_only requires a held trusted review assignment; anyone else may nominate scoped evidence in chat'});return;
+    }
+    const source=await one(`SELECT * FROM returns WHERE id=$1 AND problem_id=$2`,[jobRow.parent_return_id,req.project.id]);
+    const nomination=reviewWorkInput.value;
+    if(!legacyCoverageEligible(source) || !nomination || !(await validateWorkSources(Number(req.project.id),nomination))
+      || b.verdict!==undefined || dispositionInput.value || evidenceInput.value || assessmentInput.value || researchReport || b.patch || b.revision || b.paper || b.files?.length || b.verification_plan || b.repo_url || Number(b.cpu_hours??0)!==0
+      || await one(`SELECT 1 FROM challenge_submissions WHERE job_id=$1 AND namespace='live'`,[source?.job_id])) {
+      res.status(400).json({error:'work_check_only needs an explicit valid source comparison of a source-only unchanged legacy assignment, without a scientific verdict, new claim or execution; use ordinary review for those'});return;
+    }
+    const sourceJob=source.job_id ? await one(`SELECT * FROM jobs WHERE id=$1`,[source.job_id]) : null;
+    if(!sourceJob) {res.status(400).json({error:'legacy closure triage needs the original assignment contract'});return;}
+    const original=await taskForJob(Number(req.project.id),req.project.slug,sourceJob),task=nomination.task??original;
+    const same=workScopeHash(task)===workScopeHash(original);
+    const allowCovered=!same || !challengeTrackOfJob(req.project.slug,sourceJob) || /:study:/.test(String(sourceJob.origin_key??''));
+    const ret=await one(`INSERT INTO returns(job_id,problem_id,lane_id,type,user_id,model,provider,report_md,transcript,cpu_hours,status,final_rung,session,effort,tokens,transcript_mode,known_work,cites)
+      VALUES($1,$2,$3,'explore',$4,$5,$6,$7,$8,0,'recorded','recorded',$9,$10,$11,$12,$13,$14) RETURNING id`,
+      [jobRow.id,req.project.id,source.lane_id,uid,req.model??'unknown',req.provider??'unknown',b.report_md,b.transcript,jobRow.assigned_session??xs,effortEff,JSON.stringify(tokens),transcriptMode,JSON.stringify({...nomination,task,legacy_return_id:Number(source.id)}),JSON.stringify({returns:[Number(source.id),...nomination.predecessor_returns]})]);
+    await registerEntries(uid,'return',Number(ret!.id),entryKeys);
+    await credit.payTokens({id:Number(ret!.id),user_id:uid,model:req.model??null,provider:req.provider??null,problem_id:Number(req.project.id),lane_id:source.lane_id===null?null:Number(source.lane_id),tokens});
+    const checkId=await queueWorkCheck(Number(req.project.id),req.project.slug,source.lane_id,task,{...nomination,predecessor_returns:[...new Set([Number(source.id),...nomination.predecessor_returns])]},{source_return_id:Number(ret!.id),author_model:req.model,allow_covered:allowCovered,legacy_return_id:same&&allowCovered?Number(source.id):null,nomination_md:nomination.comparison_md});
+    if(!checkId && same && allowCovered) {
+      const active=await currentWorkDisposition(Number(req.project.id),workScopeHash(task));
+      if(active?.evidence_current && active.work_disposition.decision==='covered')await retireLegacyReviews(Number(req.project.id),Number(source.id),Number(active.id));
+    }
+    await q(`UPDATE jobs SET status='returned' WHERE id=$1`,[jobRow.id]);
+    await endIfCapped(jobRow.assigned_session);
+    res.json({ok:true,return_id:Number(ret!.id),status:'recorded',triage_of:Number(source.id),source_status:source.status,work_check_job_id:checkId,reviews_requested:0,tokens,warnings:sharedWarnings,note:'Trusted legacy closure triage recorded without a scientific verdict. Only a fresh effective covered assignment decision can retire queued reviews of the exact whole legacy assignment; narrower triage leaves its broader review open.'});return;
+  }
   // Review job: record the review and try to decide the parent return.
   if (jobRow?.type === "review" || (!jobRow && b.type === "review")) {
     if (!["accept", "reject"].includes(b.verdict)) { res.status(400).json({ error: "verdict must be accept|reject" }); return; }
@@ -1665,9 +1696,9 @@ job.post("/result", bearer, project, assignmentMutation(async (req: any, res) =>
   }
   let workCheckJobId:number|null=null;
   if(knownWork) {
-    const task=knownWork.task ?? await taskForJob(Number(problem.id),problem.slug,jobRow);
+    const originalTask=await taskForJob(Number(problem.id),problem.slug,jobRow),task=knownWork.task ?? originalTask;
     await q(`UPDATE returns SET known_work=$2,cites=$3 WHERE id=$1`,[ret!.id,JSON.stringify({...knownWork,task}),JSON.stringify({...cites,returns:[...new Set([...(cites.returns??[]),...knownWork.predecessor_returns])]})]);
-    workCheckJobId=await queueWorkCheck(Number(problem.id),problem.slug,laneId,task,knownWork,{source_return_id:Number(ret!.id),author_model:req.model,allow_covered:Boolean(knownWork.task) || !challengeTrackOfJob(problem.slug,jobRow) || /:study:/.test(String(jobRow.origin_key??''))});
+    workCheckJobId=await queueWorkCheck(Number(problem.id),problem.slug,laneId,task,knownWork,{source_return_id:Number(ret!.id),author_model:req.model,allow_covered:workScopeHash(task)!==workScopeHash(originalTask) || !challengeTrackOfJob(problem.slug,jobRow) || /:study:/.test(String(jobRow.origin_key??''))});
   }
   const operationalComparison=Boolean(jobRow?.work_check) && !explicitlyRequestsReview && !verificationPlan && !evidenceInput.value && !researchReport && !b.patch && !b.revision && !b.paper;
   if(dispositionInput.value) {
@@ -1806,7 +1837,7 @@ export async function resumeDeferredReviews(problemId: number): Promise<number> 
 
 /** Create review jobs for a return. Reviews require tier 1 (scope Q7/Q13). */
 /** Bumped whenever the standard review guidance changes; a queued review from an earlier version is refreshed when served. */
-export const REVIEW_BRIEF_VERSION = 20; // 20: explicit legacy nominations and report-bound comparison checks. // 19: a summary transcript is the author's person's choice, judged as such (Oct 10 2026).   // 18: exact scoped assessments and shared corrections (Oct 10 2026).   // 16: authenticated trusted execution separate from cross-family correctness review (Oct 8 2026); 15: distinct Lean model families, both Tier 1/high, bounded reconstruction (Oct 7 2026); 14: concrete Lean package artifacts and make-checkable continuation (Oct 6 2026); 13: pinned Lean statement review and trustworthy worker validation (Oct 6 2026); 12: a chat return's transcript is the server's record of its tool calls, model unmeasured (Oct 4 2026, #sah-mcp-real-work-build);   // 11: review targets match integration closure, including explicit empty lists (Oct 2 2026); 10: required document repairs go to Tier 1 trusted agents and reviews reuse established evidence (Oct 2 2026); 9: a series also gathers the same document's later fixes, chain links and no-op revisions (#mba-sah-held-feedback-items, item 15); 8: the return schema names verification_sufficiency_md on a packaged review and the also_fix note cap (#mba-sah-bot-feedback-fixes, fix 7); 7: a reviewer holding a role on the project may mark an accepted finding worth announcing (Chris, Sep 26 2026, #sah-discord-announcer); 6: the reviewer asks whether the return earns credit, a rung or a citation without the work (Chris, Sep 24 2026, #sah-gemma-mvp; the Gemma Challenge's agents caught a gameable gate themselves);5: a revision's review lists the findings it answers, and also_fix takes a scope (Sep 24 2026); 3: no time budget in the review brief (Chris, Sep 19 2026); 4: series verdicts are decisions with their usual effects, from a trusted reviewer only (Sep 23 2026)
+export const REVIEW_BRIEF_VERSION = 21; // 21: trusted source-only legacy closure triage without a scientific verdict. // 20: explicit legacy nominations and report-bound comparison checks. // 19: a summary transcript is the author's person's choice, judged as such (Oct 10 2026).   // 18: exact scoped assessments and shared corrections (Oct 10 2026).   // 16: authenticated trusted execution separate from cross-family correctness review (Oct 8 2026); 15: distinct Lean model families, both Tier 1/high, bounded reconstruction (Oct 7 2026); 14: concrete Lean package artifacts and make-checkable continuation (Oct 6 2026); 13: pinned Lean statement review and trustworthy worker validation (Oct 6 2026); 12: a chat return's transcript is the server's record of its tool calls, model unmeasured (Oct 4 2026, #sah-mcp-real-work-build);   // 11: review targets match integration closure, including explicit empty lists (Oct 2 2026); 10: required document repairs go to Tier 1 trusted agents and reviews reuse established evidence (Oct 2 2026); 9: a series also gathers the same document's later fixes, chain links and no-op revisions (#mba-sah-held-feedback-items, item 15); 8: the return schema names verification_sufficiency_md on a packaged review and the also_fix note cap (#mba-sah-bot-feedback-fixes, fix 7); 7: a reviewer holding a role on the project may mark an accepted finding worth announcing (Chris, Sep 26 2026, #sah-discord-announcer); 6: the reviewer asks whether the return earns credit, a rung or a citation without the work (Chris, Sep 24 2026, #sah-gemma-mvp; the Gemma Challenge's agents caught a gameable gate themselves);5: a revision's review lists the findings it answers, and also_fix takes a scope (Sep 24 2026); 3: no time budget in the review brief (Chris, Sep 19 2026); 4: series verdicts are decisions with their usual effects, from a trusted reviewer only (Sep 23 2026)
 const REASSESSMENT_NOTE = '\n\nEvidence needs reassessment or execution could not find capacity within 24 hours. Assess the specific missing or changed evidence from the record; execution is not included. Preserve existing observations. Do not report that a check ran. If new execution is necessary, name the smallest check and missing capability in needs_md; a repaired package is a new return.';
 /** The standard review brief for a return as it stands now, with the tier, budget and compute hint that go with it. Job-specific text (the reassessment note) is the caller's. */
 export async function composeReviewBrief(returnId: number, problemId: number, options: { judgmentOnly?: boolean } = {}): Promise<{ brief: string; tier: number; budget: number; compute: any; judgmentOnly: boolean; packaged: boolean }> {

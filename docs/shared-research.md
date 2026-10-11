@@ -4,9 +4,11 @@ Research is cumulative when a worker reads a claim beside its corrections, knows
 
 ## Assignment contract and evidence
 
-Projects opt in through `research_collaboration` in `project.json`. Topic IDs describe exact study questions or paper obligations; lane evidence is explicitly labelled only potentially relevant. Each new assignment carries `research_task` (intent, topic IDs, predecessors, unresolved obligation, changed premise, expected evidence, stop rule and exact domain), `research_context` and `shared_research_version`. The saved assignment payload is reused on retries; new judgments do not silently change a held task. An immutable input vector on the assignment attempt explains the evidence visible at dispatch. Public exports include job IDs and times, never attempt/session bindings.
+Projects opt in through `research_collaboration` in `project.json`. Topic IDs describe exact study questions or paper obligations; lane evidence is explicitly labelled only potentially relevant. Each new assignment carries `research_task` (intent, topic IDs, predecessors, unresolved obligation, changed premise, expected evidence, stop rule and exact domain; optional `contribution_md`, `decision_criterion_md`, `replication_objective_md` and `comparison_plan_md`), `research_context` and `shared_research_version`. The saved assignment payload is reused on retries; new judgments do not silently change a held task. An immutable input vector on the assignment attempt explains the evidence visible at dispatch. Public exports include job IDs and times, never attempt/session bindings.
 
 Briefs show current and archived corrections alongside the claim, pending and recorded results, immutable artifact hashes and in-flight jobs. Public contexts contain a controlled projection without transcripts or worker bindings, prioritize corrections, and cap copied prose at 12,000 characters with full-record locators. Inline scientific text is included whole or replaced by a locator to its full record, never truncated into a stronger theorem. At most 40 results are shown; an omission flag warns that this is not a complete literature survey. Lane fallback is not semantic equivalence and never suppresses a distinct experiment.
+
+Experiment briefs identify the unanswered contribution and a prospective decision criterion, and list predecessor evidence beside its corrections. When the contract is broad or no predecessors are declared, the worker must select the bounded contribution before execution; the evidence shortlist is a set of locators, not fabricated dependencies or established novelty. Performance comparisons name the current optimized baseline, equivalent legal domains and observation units, hardware/compiler, corpus, stopping rule, complete setup/preprocessing/rejection/verification costs, dependence and uncertainty. Timing, probability/yield and numerical records remain distinct.
 
 If an obligation is already answered, return a comparison and the remaining gap. Intentional replication names what independent implementation, seed, hardware, baseline or semantic review it contributes. Human direction and existing consent remain authoritative. All models may propose or investigate; existing Tier 1/trust/Lean policies govern acceptance.
 
@@ -112,11 +114,43 @@ Trusted Tier 1 sessions receive these short `explore` comparisons between substa
 
 Use `open` for unresolved questions, optionally with a complete `next_task` research contract naming same-project predecessors and a distinct obligation or changed premise. The next task is queued at most once per decision and can request normal scientific review when it produces a claim. A generic run may only be left open or redirected to such a next task. The assignment scope hash includes exact topic IDs, question, domain and changed premise; matching lane/paper labels or paragraph text alone has no closure effect. An explicit replication contract bypasses covered dispatch.
 
-Suppression is the default once a trusted reviewer records covered. It persists until a fresh trusted reviewer explicitly records open for the same scope and the current applied decision base. Changed source versions, reviews/history, findings, artifacts, nominated chat messages/replies and new scientific evidence queue trusted reconsideration; they never reopen the old assignment automatically. Work-state separately reports active_operational_decision, evidence_current, suppressed and needs_reconsideration. Stale scientific evidence is never portrayed as current acceptance. A comparison made from stale issued inputs or a superseded decision base is recorded as ineffective and cannot reopen or replace suppression. Age, ordinary elevation/review of the record and arbitrary chat do not remove suppression. This does not automatically backfill old reports, infer scientific acceptance or reconcile historical routes. To nominate historical work, use a present-tense comparison with its actual locators.
+Suppression is the default once a trusted reviewer records covered. It persists until a fresh trusted reviewer explicitly records open for the same scope and the current applied decision base. Changed source versions, reviews/history, findings, artifacts, nominated explicitly nominated chat evidence and new scientific evidence queue trusted reconsideration; they never reopen the old assignment automatically. Work-state separately reports active_operational_decision, evidence_current, suppressed and needs_reconsideration. Stale scientific evidence is never portrayed as current acceptance. A comparison made from stale issued inputs or a superseded decision base is recorded as ineffective and cannot reopen or replace suppression. Age, ordinary elevation/review of the record and arbitrary chat do not remove suppression. This does not automatically backfill old reports, infer scientific acceptance or reconcile historical routes. To nominate historical work, use a present-tense comparison with its actual locators.
 
 `GET <project>/work-state` exposes applied suppression and stale evidence separately. A fresh explicit trusted open decision restores only automatically suppressed jobs in that exact scope; ordinary expired/completed jobs and other scopes are unaffected. Jobs, stops and decisions are also in the public export. Existing assignment retry receipts freeze the original comparison contract. A chat message can nominate the same check using `work_check` with the known_work shape and an exact `task`; the message itself and nominated same-project messages/returns/reviews become source locators. Arbitrary chat never gets closure authority. Recent live claims and challenges appear in assignment coordination; read full messages/replies, claim the exact experiment before expensive execution, and coordinate distinct controls or intentional replication.
 
 For Twin Primes, an exact O2 assignment decision affects only that task/domain/premise. It does not discharge O2 as a theorem or change O1/O3–O7 or the accepted main proof. Reuse unchanged proof/exposition receipts through their existing mechanisms.
+
+## Material evidence and legacy closure triage
+
+New comparisons use `work-check-v3` and `input_version:material-evidence-v1`. Their `material_evidence` records content hashes and `input_delta` names changed evidence entries. Report content, exact evidence/verification versions, scientific review judgments and corrections, source authority, findings and artifacts remain material. Citation/admission bookkeeping, token/transcript metadata, nomination-only assessment changes and identical re-archives do not trigger another comparison. Administrative stops/decisions resolve to their predecessor evidence rather than becoming fresh science. Only exact-assignment returns and named sources enter the automatic fingerprint; topic or lane association alone is not equivalence. A distinct source or message can still be explicitly nominated. Replies are coordination until nominated. A changed fingerprint queues a bounded delta check and never lifts suppression.
+
+Reordering set-like scope metadata and equivalent numeric IDs does not change the material snapshot. A nomination preserves the sources of the prior exact decision. Real archived review IDs remain same-project provenance; archived judgments do not acquire acceptance authority. A bounded administrative lineage that omits a scientific source cannot establish a new current baseline: name the scientific sources directly.
+
+Nominations received during an in-flight comparison accumulate separately from its frozen issued input. If they change the material basis, that unexamined response is ineffective and completion queues at most one fresh comparison. Repeated nominations neither create parallel comparisons nor lift suppression.
+
+Existing v2 checks and decisions keep their original input rules. No historical decision is rewritten or retrospectively accepted. If an old decision is stale under its original rules, one new comparison may establish a material baseline; an unavailable historical snapshot is not represented as proof that nothing changed.
+
+A trusted reviewer holding an ordinary review assignment can identify an old source-only stop using this alternative response:
+
+```json
+{
+  "job_id": "<held review assignment>",
+  "report_md": "Short exact comparison and remaining gap.",
+  "work_check_only": true,
+  "work_check": {
+    "predecessor_returns": ["<same-project predecessor id>"],
+    "review_ids": [], "message_ids": [],
+    "comparison_md": "Only unchanged predecessor evidence is restated.",
+    "remaining_gap_md": "The distinct unresolved contribution remains open.",
+    "reopen_when_md": "A concrete correction or named independent validation objective."
+  },
+  "transcript": "<this assignment's actual summary or log>"
+}
+```
+
+Use integer IDs in the payload. Omit `verdict` and `rung`. This records a new operational nomination and token usage without inserting a scientific review or changing the old return's status. It requires a held trusted review, a valid original assignment, same-project sources and an eligible source-only legacy return: zero scientific execution, no new scientific metadata, witness, proof, patch or revision. Existing administrative comparison files are allowed as source evidence. Eligibility does not classify prose or grant authority; the reviewer explicitly nominates the exact task. Ordinary scientific review remains available for new claims and justified validation.
+
+The task defaults to the actual old assignment. A distinct narrower task may be nominated, but copying a broad challenge contract cannot make it coverable. Only a fresh effective trusted covered decision for the **whole exact legacy assignment** retires its queued ordinary reviews. It does not cancel held reviews or rewrite historical scientific status. A narrower decision leaves the broader review and question open. Pending old returns therefore stay pending even when their duplicate review investment is retired; work-state carries the operational decision. An open or ineffective comparison retires no review. No legacy records are nominated automatically from free text.
 
 ## Ordinary-review nominations and comparison checks
 

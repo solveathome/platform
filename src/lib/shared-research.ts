@@ -185,6 +185,11 @@ export function boundResearchContext(context:ResearchContext,limit=12000):Resear
   return context;
 }
 
+export function experimentEvidenceMarkdown(task:ResearchTask,context:ResearchContext,base:string):string {
+  const selected=context.items.slice(0,8);
+  return `\n\nPredecessor evidence to compare before selecting the experiment (locators, not claimed dependencies):\n${selected.length ? selected.map(item=>`- Return #${item.id}: ${base}/return/${item.id}; ${item.relevant_by}; ${item.status}${item.provisional?', provisional':''}; corrections/reviews ${item.reviews.map(r=>`#${r.id}${r.archived?' (archived)':''}`).join(', ')||'none supplied'}.`).join('\n') : '- None delivered. Establish the relevant sources before claiming a new contribution.'}\n${context.omitted||context.items.length>8?'This is a bounded shortlist; read the full research_context and source records before relying on it.\n':''}${task.predecessor_returns.length?'Declared predecessors remain the explicit task locators.':'No formal predecessors are declared. Select and name the evidence actually used; the shortlist does not fabricate lineage.'}\n`;
+}
+
 export function contextMarkdown(context: ResearchContext, base: string, limit=6000): string {
   let used=0;
   const body:string[]=[];
