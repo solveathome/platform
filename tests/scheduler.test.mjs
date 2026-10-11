@@ -898,3 +898,46 @@ test('additive prerequisite migration leaves legacy chronology unknown and times
     assert.equal((await one('SELECT created_at FROM job_correction_prerequisites WHERE finding_id=$1',[ids[0].id])).created_at,null);
   });
 });
+
+test('portable priority: explicit transferable work beats device-only tuning without text classification',async()=>{
+  const device=await queued({type:'explore'}),portable=await queued({type:'explore'});
+  await q(`UPDATE jobs SET research_task=$2 WHERE id=$1`,[device.id,JSON.stringify({progress:{kind:'device_benchmark',rationale_md:'Timing on device A.'}})]);
+  await q(`UPDATE jobs SET research_task=$2 WHERE id=$1`,[portable.id,JSON.stringify({progress:{kind:'algorithmic',rationale_md:'Fewer operations independently of implementation.'}})]);
+  const a={problemId:pid,slug,sessionId:'portable-fixture',uid,tier:2,model:'gpt-6-sol',provider:'openai',trusted:false,granted:false,lane:null,cpuHours:4,ramGb:8,hasGpu:false,disk:1,maxHours:2,reviewStreak:0,capabilities:{}};
+  const picked=await selectJob(a,false);assert.equal(Number(picked.id),Number(portable.id));assert.equal(picked.progress_bonus,8);
+  await q(`UPDATE jobs SET status='returned' WHERE id=$1`,[portable.id]);assert.equal(Number((await selectJob(a,false)).id),Number(device.id),'device work stays eligible');
+});
+test('portable priority: age and essential validation retain scheduling access; old clients remain neutral',async()=>{
+  const device=await queued({type:'explore',age:15}),portable=await queued({type:'explore'});
+  await q(`UPDATE jobs SET research_task=$2 WHERE id=$1`,[device.id,JSON.stringify({progress:{kind:'device_benchmark',rationale_md:'A specific timing uncertainty.'}})]);
+  await q(`UPDATE jobs SET research_task=$2 WHERE id=$1`,[portable.id,JSON.stringify({progress:{kind:'mathematical',rationale_md:'A reusable theorem.'}})]);
+  const a={problemId:pid,slug,sessionId:'portable-fixture',uid,tier:2,model:'gpt-6-sol',provider:'openai',trusted:false,granted:false,lane:null,cpuHours:4,ramGb:8,hasGpu:false,disk:1,maxHours:2,reviewStreak:0,capabilities:{}};
+  assert.equal(Number((await selectJob(a,false)).id),Number(device.id),'waiting time can exceed the bounded preference');
+  await q(`UPDATE jobs SET status='returned' WHERE id=$1`,[device.id]);
+  const check=await queued({type:'check'});await q(`UPDATE jobs SET research_task=$2 WHERE id=$1`,[check.id,JSON.stringify({progress:{kind:'algorithmic',rationale_md:'Claim cannot change validation ordering.'}})]);
+  const picked=await selectJob(a,false);assert.equal(Number(picked.id),Number(check.id));assert.equal(picked.progress_bonus,0);
+  await q(`UPDATE jobs SET status='returned' WHERE id=ANY($1)`,[[check.id,portable.id]]);
+  const old=await queued({type:'explore'}),legacy=await selectJob(a,false);assert.equal(Number(legacy.id),Number(old.id));assert.equal(legacy.progress_kind,'unspecified');assert.equal(legacy.progress_bonus,0);
+});
+test('portable priority: current trusted classifications correct claims, conflict stays neutral and stale votes have no preference',async()=>{
+  const step={question:'Improve evaluation.',method:'An explicit construction.',success:'Fewer operations.',failure:'Unsound.',budget_hours:0.5,compute:{cpu_hours:0,ram_gb:2,disk_gb:1},required_tools:[],required_sources:[],progress:{kind:'algorithmic',rationale_md:'Claimed transferable method.'}};
+  const source=await one(`INSERT INTO returns(problem_id,type,user_id,model,provider,report_md,transcript,status,research) VALUES($1,'explore',$2,'gpt-6-astra','openai','Source.','t','recorded',$3) RETURNING id`,[pid,other,JSON.stringify({outcome:'progress',next_step:step})]);
+  const j=await queued({type:'explore'});await q(`UPDATE jobs SET research_source_return_id=$2 WHERE id=$1`,[j.id,source.id]);
+  const a={problemId:pid,slug,sessionId:'portable-fixture',uid,tier:2,model:'gpt-6-sol',provider:'openai',trusted:false,granted:false,lane:null,cpuHours:4,ramGb:8,hasGpu:false,disk:1,maxHours:2,reviewStreak:0,capabilities:{}};
+  const {saveResearchAssessment}=await import('../src/lib/shared-research.ts'),{parseResearchAssessment}=await import('../src/lib/shared-research-format.ts');
+  const v=await one(`INSERT INTO reviews(return_id,user_id,model,provider,verdict,rung,trusted,notes_md) VALUES($1,$2,'claude-fable-5-1','anthropic','accept','measured',false,'Scoped fact.') RETURNING id`,[source.id,uid]);
+  const {nextStepHash}=await import('../src/lib/research-progress.ts');
+  const classify=async(id,kind,hash=createHash('sha256').update('Source.').digest('hex'))=>saveResearchAssessment(Number(id),pid,Number(source.id),parseResearchAssessment({next_step_progress:{kind,rationale_md:'Explicit allocation judgment, not scientific acceptance.',report_sha256:hash,next_step_sha256:nextStepHash(step)}}));
+  await classify(v.id,'mathematical');assert.equal((await selectJob(a,false)).progress_bonus,8,'untrusted vote cannot add reviewed preference');
+  const route=await one(`INSERT INTO research_routes(problem_id,origin_return_id,title,contribution_md,prior_art_md,uncertainty_md,state,next_step) VALUES($1,$2,'Classification fixture','c','p','u','active',$3) RETURNING id`,[pid,source.id,JSON.stringify(step)]);
+  await q('UPDATE returns SET research_route_id=$2 WHERE id=$1',[source.id,route.id]);
+  const {stepInputVector}=await import('../src/lib/research.ts');const vector=await stepInputVector(pid,Number(route.id));
+  await classify(v.id,'algorithmic');assert.deepEqual(await stepInputVector(pid,Number(route.id)),vector,'classification-only edits cannot create stale-step comparisons');
+  await q('UPDATE reviews SET trusted=true WHERE id=$1',[v.id]);assert.equal((await selectJob(a,false)).progress_bonus,12);
+  await classify(v.id,'device_benchmark');assert.equal((await selectJob(a,false)).progress_bonus,0,'trusted correction overrides the author claim');
+  const v2=await one(`INSERT INTO reviews(return_id,user_id,model,provider,verdict,rung,trusted,notes_md) VALUES($1,$2,'gpt-6-sol','openai','accept','measured',true,'Different classification.') RETURNING id`,[source.id,other]);await classify(v2.id,'algorithmic');
+  const disputed=await selectJob(a,false);assert.equal(disputed.progress_kind,'disputed');assert.equal(disputed.progress_bonus,0);
+  await q(`UPDATE returns SET report_md='Changed.' WHERE id=$1`,[source.id]);assert.equal((await selectJob(a,false)).progress_bonus,8,'stale report classifications cannot add a reviewed preference');
+  const warnings=await classify(v.id,'mathematical');assert.match(warnings.join(' '),/current report hash/);assert.equal((await one('SELECT research_assessment FROM reviews WHERE id=$1',[v.id])).research_assessment.next_step_progress,undefined);
+  await q(`UPDATE returns SET status='rejected' WHERE id=$1`,[source.id]);assert.equal((await selectJob(a,false)).progress_bonus,0,'a rejected source cannot use its own claim for a boost');
+});

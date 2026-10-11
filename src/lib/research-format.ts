@@ -1,3 +1,4 @@
+import { parseProgress, type ResearchProgress } from './research-progress.js';
 /** Structured research reports are investment proposals, never mathematical verdicts. */
 // The first bounded step on a new route is a first look (Chris, Sep 25 2026, #sah-route-triage-title: "If this was not a triage task, it should
 // not show up as such"): it was called triage, a name that belongs to the review bookkeeping job. Rows from before read 'triage'.
@@ -22,7 +23,7 @@ export function ids(raw: any, field: string, max = 20): number[] {
   if (!Array.isArray(raw) || raw.length > max || raw.some(x => !Number.isSafeInteger(x) || x < 1)) bad(`${field} must contain at most ${max} positive integer ids`);
   return [...new Set(raw)];
 }
-export type NextStep = { question: string; method: string; success: string; failure: string; budget_hours: number; compute: { cpu_hours: number; ram_gb: number; disk_gb: number }; required_tools: string[]; required_sources: string[] };
+export type NextStep = { progress?:ResearchProgress; question: string; method: string; success: string; failure: string; budget_hours: number; compute: { cpu_hours: number; ram_gb: number; disk_gb: number }; required_tools: string[]; required_sources: string[] };
 export function tags(raw: any, field: string): string[] {
   if (!Array.isArray(raw) || raw.length > 20 || raw.some(x => typeof x !== 'string' || !/^[a-z0-9][a-z0-9_.:+/-]{0,79}$/.test(x))) bad(`${field} must contain at most 20 lowercase capability identifiers`);
   return [...new Set(raw)] as string[];
@@ -33,7 +34,7 @@ export function tags(raw: any, field: string): string[] {
  * the whole transcript, about a megabyte a time. The rendered route page calls these "Next experiment", "Continue if" and
  * "Stop this attempt if", which are reasonable names to guess and are not the API's, so the skeleton goes in the refusal too.
  */
-export const NEXT_STEP_SHAPE = 'next_step: {"question": "the discriminating question, <=1000 chars", "method": "how it is run, <=4000", "success": "what a positive result looks like, <=2000", "failure": "what stops this attempt, <=2000", "budget_hours": 0.1-4 (your estimate for the accounting of the portfolio; never a limit on the taker). Say what to do, never when or how fast: a leading time allowance ("Within one hour, ...") is removed, "compute": {"cpu_hours": 0-32, "ram_gb": 0-32, "disk_gb": 0-10} (optional), "required_tools": [], "required_sources": []}';
+export const NEXT_STEP_SHAPE = 'next_step: {"question": "the discriminating question, <=1000 chars", "method": "how it is run, <=4000", "success": "what a positive result looks like, <=2000", "failure": "what stops this attempt, <=2000", "budget_hours": 0.1-4 (your estimate for the accounting of the portfolio; never a limit on the taker). Say what to do, never when or how fast: a leading time allowance ("Within one hour, ...") is removed, "compute": {"cpu_hours": 0-32, "ram_gb": 0-32, "disk_gb": 0-10} (optional), "required_tools": [], "required_sources": [], "progress": {"kind":"mathematical|algorithmic|device_benchmark|validation","rationale_md":"specific transferable contribution or scoped benchmark/check"} (optional)}';
 export const OBSTACLE_SHAPE = `obstacle: {"kind": "${OBSTACLES.join('|')}", "statement": "the exact obstruction", "assumptions": "what it rests on", "evidence": "what shows it", "revisit_when": "the condition that reopens it"}`;
 
 /** Runs every field check, then refuses once with everything that was wrong and the shape that is accepted. */
@@ -73,6 +74,7 @@ export function nextStep(raw: any): NextStep {
     compute: () => ({ cpu_hours: amount(c.cpu_hours ?? 0, 'compute.cpu_hours', 0, 32), ram_gb: amount(c.ram_gb ?? 2, 'compute.ram_gb', 0, 32), disk_gb: amount(c.disk_gb ?? 1, 'compute.disk_gb', 0, 10) }),
     required_tools: () => tags(x.required_tools ?? [], 'next_step.required_tools'),
     required_sources: () => tags(x.required_sources ?? [], 'next_step.required_sources'),
+    ...(x.progress!==undefined ? {progress:()=>parseProgress(x.progress)} : {}),
   });
 }
 export type ResearchReport = {

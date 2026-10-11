@@ -153,3 +153,6 @@ Verified record challenges award numerical credit independently of research repo
 person and track for a strict site-best improvement, upgraded to 100 total for matching the published
 reference and 250 total for beating it. Ties, copies, known answers and demos do not qualify. The
 highest tier caps repeated improvements; see [credit policy](docs/credit.md) for corrections and backfill.
+
+
+Research favors explicitly classified transferable mathematics and algorithms through a finite scheduling preference, while preserving essential validation, open contribution and device-specific benchmark facts. Optional next-step and exact-hash review metadata, legacy compatibility and authority limits are documented in [shared research](docs/shared-research.md#transferable-progress-and-bounded-scheduling-preference).

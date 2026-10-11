@@ -1,3 +1,4 @@
+import { researchProgressSql } from './research-progress.js';
 import {deferralEligibility, INDEX_PREREQUISITES_SQL} from './operational-blockers.js';
 import {HANDOFF_ELIGIBILITY_SQL} from './job-handoffs.js';
 import { q, one } from "../db/index.js";
@@ -177,7 +178,7 @@ function eligibility(a: SchedulingAgent, omitCompute = false, sameKindOnly = fal
     `(coalesce(j.compute_hint->>'mathlib_cache','false') IN ('false','0','') OR ${p(a.disk)} >= 10)`,
     `coalesce((j.compute_hint->>'disk_gb')::numeric,0) <= ${p(a.disk)}`,
   ].join(" AND ")]; labeled.push(compute); clauses.push(compute[1]); }
-  return { values, p, labeled, where: clauses.join("\n AND "), joins: `FROM jobs j LEFT JOIN lanes l ON l.id = j.lane_id LEFT JOIN returns pr ON pr.id = j.parent_return_id LEFT JOIN returns er ON er.id=j.evidence_return_id LEFT JOIN model_tiers amt ON amt.model = pr.model` };
+  return { values, p, labeled, where: clauses.join("\n AND "), joins: `FROM jobs j LEFT JOIN lanes l ON l.id = j.lane_id LEFT JOIN returns pr ON pr.id = j.parent_return_id LEFT JOIN returns er ON er.id=j.evidence_return_id LEFT JOIN model_tiers amt ON amt.model = pr.model LEFT JOIN returns research_source ON research_source.id=j.research_source_return_id AND research_source.problem_id=j.problem_id` };
 }
 
 /**
@@ -231,7 +232,7 @@ function routeRepeatSql(uid: string, model: string): string {
 export async function selectJob(a: SchedulingAgent, preferResearch: boolean, discoveryOnly = false, bucket?: ResearchBucket, checkedJudgment = false, reviewsOnly = false, triageOnly = false, requiredCorrectionOnly = false): Promise<any> {
   const e = eligibility(a);
   const skills = e.p(a.capabilities.skills ?? []), provider = e.p(a.provider), uid = e.p(a.uid);
-  const routeRepeat = routeRepeatSql(uid, e.p(a.model));
+  const routeRepeat = routeRepeatSql(uid, e.p(a.model)), progress=researchProgressSql();
   const typeOrder = a.tier === 1
     ? preferResearch
       ? ["paper", "explore", "direction", "break", "audit", "review", "curate", "source", "formalize", "measure"]
@@ -246,8 +247,8 @@ export async function selectJob(a: SchedulingAgent, preferResearch: boolean, dis
   // Every non-age term is bounded; one point per waiting day eventually lifts older work.
   return one(`SELECT j.*, l.slug AS lane_slug, (${REQUIRED_CORRECTION_SQL}) AS required_correction,
     (SELECT count(*) FROM unnest(CASE WHEN cardinality(j.preferred_skills) > 0 THEN j.preferred_skills ELSE ${DEFAULT_SKILLS} END) tag WHERE tag = ANY(${skills}::text[])) AS skill_matches,
-    ${routeRepeat} AS route_repeat
-    ${e.joins} WHERE ${e.where} ${bucketFilter} ${discoveryOnly ? "AND j.purpose = 'discovery' AND j.type IN ('explore','direction','break','measure','formalize','source')" : ""}
+    ${routeRepeat} AS route_repeat, ${progress.kind} AS progress_kind, ${progress.basis} AS progress_basis, ${progress.bonus} AS progress_bonus
+    ${e.joins} ${progress.joins} WHERE ${e.where} ${bucketFilter} ${discoveryOnly ? "AND j.purpose = 'discovery' AND j.type IN ('explore','direction','break','measure','formalize','source')" : ""}
     ORDER BY CASE WHEN pr.id IS NOT NULL AND pr.user_id = ${uid} THEN 1 ELSE 0 END,
     CASE WHEN j.research_stage='first_look' AND (
       j.created_at < now()-interval '1 hour' OR
@@ -256,7 +257,7 @@ export async function selectJob(a: SchedulingAgent, preferResearch: boolean, dis
         ORDER BY started_at DESC,id DESC LIMIT 3) recent WHERE recent.research_stage='pursue')=3
     ) THEN 0 ELSE 1 END,
     (
-      j.priority * 10 + extract(epoch FROM (now() - j.created_at)) / 86400
+      j.priority * 10 + (${progress.bonus}) + extract(epoch FROM (now() - j.created_at)) / 86400
       + CASE WHEN j.requires_trust AND EXISTS (SELECT 1 FROM findings f WHERE f.job_id=j.id AND f.status='open' AND f.scope<>'advisory') THEN 20 ELSE 0 END
       + CASE WHEN pr.id IS NOT NULL AND (
           EXISTS (SELECT 1 FROM research_dependencies d WHERE d.return_id=pr.id)

@@ -1,3 +1,4 @@
+import { nextStepHash, withoutProgressAssessment } from './research-progress.js';
 import { createHash } from 'node:crypto';
 import { one, q } from '../db/index.js';
 import { readProjectConfig } from './projects.js';
@@ -25,7 +26,7 @@ export async function taskForJob(problemId: number, slug: string, job: any): Pro
   const route=job.research_route_id ? await one(`SELECT next_step,uncertainty_md FROM research_routes WHERE id=$1 AND problem_id=$2`,[job.research_route_id,problemId]) : null;
   const step=route?.next_step;
   const intent=job.follow_up_of || job.type==='audit' ? 'repair' : job.type==='source' ? 'source' : job.type==='paper' || job.research_stage==='consolidate' ? 'consolidation' : sourceIds.length ? 'extend' : 'new';
-  return parseResearchTask({intent,topic_ids:[...new Set([...topics.map(t=>t.id),...(source?.research_evidence?.topic_ids??[])])],predecessor_returns:sourceIds,
+  return parseResearchTask({intent,...(step?.progress?{progress:step.progress}:{}),topic_ids:[...new Set([...topics.map(t=>t.id),...(source?.research_evidence?.topic_ids??[])])],predecessor_returns:sourceIds,
     unresolved_obligation_md:step?.question ?? (job.research_stage==='first_look' ? route?.uncertainty_md : null) ?? topics.find(t=>t.study)?.question_md ?? job.title,
     changed_premise_md:intent==='repair' ? 'Address the named correction without repeating unchanged evidence.' : sourceIds.length ? 'Resolve the uncovered obligation; preserve supported earlier statements and corrections.' : 'Establish the exact uncovered difference from existing research before substantial work.',
     expected_evidence_md:step?.success ?? 'An attributable scoped claim, source, measured comparison or negative result with its cheapest decisive check.',
@@ -45,9 +46,12 @@ export async function saveResearchEvidence(returnId: number, problemId: number, 
 }
 export async function saveResearchAssessment(reviewId: number, problemId: number, returnId: number, assessment: ResearchAssessment | null): Promise<string[]> {
   if (!assessment) return [];
-  const source=await one(`SELECT research_evidence,report_md FROM returns WHERE id=$1 AND problem_id=$2`,[returnId,problemId]);
+  const source=await one(`SELECT research_evidence,report_md,research FROM returns WHERE id=$1 AND problem_id=$2`,[returnId,problemId]);
   const warnings: string[]=[];
   const currentReport=reportHash(source?.report_md??'');
+  const declaredProgress=assessment.next_step_progress;
+  const next_step_progress=declaredProgress && source?.research?.next_step && declaredProgress.report_sha256===currentReport && declaredProgress.next_step_sha256===nextStepHash(source.research.next_step) ? {...declaredProgress,next_step:source.research.next_step} : undefined;
+  if(declaredProgress && !next_step_progress)warnings.push('research_assessment: next_step_progress needs the current report hash and exact next-step hash; classification not recorded');
   for(const check of assessment.comparison_checks??[]) {
     const problems=comparisonProblems(check,currentReport);
     if(problems.length)warnings.push(`research_assessment comparison: ${problems.join(', ')}; no comparison endorsement recorded`);
@@ -63,7 +67,7 @@ export async function saveResearchAssessment(reviewId: number, problemId: number
     }
     warnings.push(`research_assessment: ${ref.scope_key} does not match the current exact scope hash; no endorsement recorded`);return false;
   });
-  await q(`UPDATE reviews SET research_assessment=$2 WHERE id=$1 AND return_id=$3`,[reviewId,JSON.stringify({...assessment,supported_scopes:supported}),returnId]);
+  await q(`UPDATE reviews SET research_assessment=$2 WHERE id=$1 AND return_id=$3`,[reviewId,JSON.stringify({...assessment,supported_scopes:supported,next_step_progress}),returnId]);
   return warnings;
 }
 
@@ -158,7 +162,7 @@ export async function researchContext(problemId: number, slug: string, job: any,
     item.lean_summary=lean;
   }
   const digest=(value:any)=>createHash('sha256').update(JSON.stringify(value??null)).digest('hex');
-  const input_vector={returns:items.map(r=>[r.id,r.status,r.final_rung,r.provisional,r.decision_by,digest(r.research_evidence),r.lean_current??null]),reviews:reviews.map(r=>[Number(r.id),r.verdict,r.rung,r.trusted,r.needs_reassessment,digest([r.notes_md,r.research_assessment])]),history:history.map(h=>Number(h.id)),findings:findings.map(f=>[Number(f.id),f.status,f.resolved_by_return_id,f.resolved_sha]),links:links.map(l=>Number(l.id))};
+  const input_vector={returns:items.map(r=>[r.id,r.status,r.final_rung,r.provisional,r.decision_by,digest(r.research_evidence),r.lean_current??null]),reviews:reviews.map(r=>[Number(r.id),r.verdict,r.rung,r.trusted,r.needs_reassessment,digest([r.notes_md,withoutProgressAssessment(r.research_assessment)])]),history:history.map(h=>Number(h.id)),findings:findings.map(f=>[Number(f.id),f.status,f.resolved_by_return_id,f.resolved_sha]),links:links.map(l=>Number(l.id))};
   return boundResearchContext({schema:'research-context-v1',topic_ids:topicIds,items,jobs,findings,input_vector,omitted});
 }
 

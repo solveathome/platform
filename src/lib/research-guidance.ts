@@ -1,10 +1,11 @@
+import { PORTABLE_PROGRESS_GUIDANCE } from './research-progress.js';
 import { COMPARISON_REVIEW_GUIDANCE } from "./shared-research-format.js";
 import { EXPOSITION_GUIDANCE } from './paper-exposition.js';
 import { LEAN_VALIDATION_GUIDANCE } from './workspace-guidance.js';
 /** Common research instructions, served afresh even for assignments queued before a policy change. */
-export const GUIDANCE_VERSION = 'research-2026-10-11.1';
+export const GUIDANCE_VERSION = 'research-2026-10-11.2';
 
-export const RESEARCH_METHOD = `**Goal and method.** Advance the project's goal with a useful, attributable result or a precise account of what remains unresolved. Define the question, success criterion and decisive uncertainty before substantial work; choose your own reasoning method within this assignment's scope. For an open research question, compare plausible alternatives only where they could change the next experiment. Prefer the smallest observation that distinguishes them. A routine lookup or execution receipt needs no hypothesis tree.
+export const RESEARCH_METHOD = `${PORTABLE_PROGRESS_GUIDANCE}\n\n**Goal and method.** Advance the project's goal with a useful, attributable result or a precise account of what remains unresolved. Define the question, success criterion and decisive uncertainty before substantial work; choose your own reasoning method within this assignment's scope. For an open research question, compare plausible alternatives only where they could change the next experiment. Prefer the smallest observation that distinguishes them. A routine lookup or execution receipt needs no hypothesis tree.
 
 **Evidence and stopping.** Ground factual claims in sources actually inspected and execution claims in observed tool results. Distinguish cited facts, new derivations and conjectures; give explicit assumptions, scope and remaining gaps. Revise a conclusion when specific evidence warrants it. Repeating an answer, a majority vote or agreement with yourself does not establish correctness. Complete the assigned checks, then stop when the success criterion is met, a decisive obstacle is found or the budget is exhausted; further checking needs a concrete unresolved issue. Missing evidence is a useful reported limitation, never an invented result. Before reporting a named input as missing, look for it among the files served with the route's returns and the returns it cites: a file lives with the return that uploaded it, and a number in its name is usually the job it was made under, not a return id. Name the places searched.
 

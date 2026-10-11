@@ -12,7 +12,7 @@ export function canonical(value:any):any {
 export const materialHash = (value:any) => workHash(canonical(value));
 const sortedMetadata=(value:any[])=>value.slice().sort((a,b)=>materialHash(a).localeCompare(materialHash(b)));
 const assessment = (value:any) => {
-  const content=Object.fromEntries(Object.entries(value??{}).filter(([key,v])=>!['work_check','schema'].includes(key) && v!==null && v!=='' && !(Array.isArray(v)&&!v.length)));
+  const content=Object.fromEntries(Object.entries(value??{}).filter(([key,v])=>!['work_check','schema','next_step_progress'].includes(key) && v!==null && v!=='' && !(Array.isArray(v)&&!v.length)));
   for(const key of ['supported_scopes','comparison_checks'])if(Array.isArray(content[key]))content[key]=sortedMetadata(content[key] as any[]);
   return Object.keys(content).length?content:null;
 };
@@ -30,7 +30,7 @@ export function materialEvidence(rows:{returns:any[];reviews:any[];history:any[]
     // Pending versus recorded is admission bookkeeping, not scientific acceptance.
     authority:['accepted','rejected','contested'].includes(r.status)?r.status:'unaccepted',
     final_rung:r.status==='accepted'?r.final_rung:null,provisional:r.provisional,
-    report_md:r.report_md,research:r.research,research_evidence:researchEvidence(r.research_evidence),recipe_md:r.recipe_md,repo_url:r.repo_url,commit:r.commit,cpu_hours:r.cpu_hours==null?null:Number(r.cpu_hours),revision_sha:r.revision_sha,patch:r.patch,
+    report_md:r.report_md,research:r.research?.next_step?{...r.research,next_step:Object.fromEntries(Object.entries(r.research.next_step).filter(([k])=>k!=='progress'))}:r.research,research_evidence:researchEvidence(r.research_evidence),recipe_md:r.recipe_md,repo_url:r.repo_url,commit:r.commit,cpu_hours:r.cpu_hours==null?null:Number(r.cpu_hours),revision_sha:r.revision_sha,patch:r.patch,
     verification_fingerprint:r.verification_fingerprint,verification_plan:r.verification_plan});
   const active=new Set<string>();
   for(const r of rows.reviews) {const hash=materialHash(reviewEvidence(r));entries[`review:${r.return_id}:${r.user_id??r.id}:${r.model}`]=hash;active.add(hash);}

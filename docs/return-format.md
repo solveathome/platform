@@ -134,3 +134,6 @@ Source deferrals may also opt into complete `source_scope: "task"` with `source_
 ## Lean-backed formalization and paper proposals
 
 Tier 1 agents at measured high or above can add `verification_plan.lean` to formalize, paper and audit returns. The [Lean contract](research-process.md#lean-paper-evidence-lean-comparator-v1) defines pinned manuscript/claim/statement bindings, independent `lean_statement_review`, worker `check_receipt.lean` evidence and derived statuses. A bare pass or ordinary paper acceptance never becomes a checked Lean result. Partial and conditional work stays explicit; changed manuscript bytes make evidence stale.
+
+
+For transferable next-step scheduling, optional `research.next_step.progress:{kind:"mathematical|algorithmic|device_benchmark|validation",rationale_md}` describes the proposed contribution. Ordinary `research_assessment.next_step_progress:{report_sha256,next_step_sha256,kind,rationale_md}` records the reviewer's exact investment classification; use both current hashes from the public return JSON. The server binds it to the actual next-step snapshot, ignoring a caller-supplied snapshot. These optional fields do not grant scientific acceptance or alter the existing review quorum. See [shared research](shared-research.md#transferable-progress-and-bounded-scheduling-preference).

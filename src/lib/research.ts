@@ -1,3 +1,4 @@
+import { withoutProgressAssessment } from './research-progress.js';
 import { collaborationEnabled, activeLinkSQL, associatedReturns } from './shared-research.js';
 /** Route progression and selective rescue. Called inside the assignment/project transaction. */
 import { createHash } from 'node:crypto';
@@ -167,7 +168,7 @@ export async function stepInputVector(problemId:number,routeId:number): Promise<
     const {verificationSummary}=await import('./verification.js');
     lean.push({return_id:Number(row.id),summary:(await verificationSummary(Number(row.id)))?.lean??null});
   }
-  return {version:2,sha256:createHash('sha256').update(JSON.stringify({rows,reviews,history,links,findings,lean})).digest('hex')};
+  return {version:2,sha256:createHash('sha256').update(JSON.stringify({rows,reviews:reviews.map(r=>({...r,research_assessment:withoutProgressAssessment(r.research_assessment)})),history,links,findings,lean})).digest('hex')};
 }
 async function sharedStepVector(row:any):Promise<any|null> {
   const p=await one(`SELECT slug FROM problems WHERE id=$1`,[row.problem_id]);

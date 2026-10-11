@@ -139,3 +139,28 @@ test('identical scoped patches fold while distinct scientific scopes and legacy 
  const legacy=await a.submit({...body,research_evidence:undefined});assert.equal((await w.read(`/return/${legacy.return_id}`)).duplicate_of,null);
  const legacyReplay=await a.submit({...body,research_evidence:undefined});assert.equal(Number((await w.read(`/return/${legacyReplay.return_id}`)).duplicate_of),legacy.return_id);
 });
+
+test('explicit progress classifications bind exact reports and next steps without changing evidence authority; both projects receive generic guidance',async()=>{
+ const {nextStepHash}=await import('../src/lib/research-progress.ts');
+ for(const template of ['md5','twin-primes']) {
+  const w=await lab.project('portable-'+template,template==='md5'?57:58);config(w,template);
+  const a=await w.actor('author','gpt-6-astra'),judge=await w.actor('judge','claude-fable-5-1',{trusted:true}),advisory=await w.actor('advisory','gpt-6-sol');
+  const report=proposal('Portable finite constraint');report.next_step.progress={kind:'algorithmic',rationale_md:'A reusable reduction in counted evaluations.'};
+  const origin=await a.submit({type:'direction',research:report});
+  await w.take(a,j=>Number(j.research_route_id)===origin.research.route_id && j.research_stage==='first_look');
+  const ret=await a.submit({request_review:true,research:{route_id:origin.research.route_id,outcome:'promising',evidence_md:'A synthetic finite constraint remains worth testing, not an executed result.',next_step:report.next_step}});const current=await w.read(`/return/${ret.return_id}`);
+  assert.equal(current.next_step_sha256,nextStepHash(current.research.next_step));
+  const declared={report_sha256:current.report_sha256,next_step_sha256:current.next_step_sha256,kind:'device_benchmark',rationale_md:'The proposed next step times one platform; no portable work reduction is established.',next_step:{forged:true}};
+  const advised=await advisory.submit({type:'review',return_id:ret.return_id,verdict:'accept',rung:'heuristic',trusted:true,research_assessment:{next_step_progress:{...declared,kind:'mathematical'}}});assert.equal((await w.read(`/review/${advised.review_id}`)).trusted,false);
+  const review=await judge.submit({type:'review',return_id:ret.return_id,verdict:'accept',rung:'heuristic',research_assessment:{next_step_progress:declared}});
+  const assessed=await w.read(`/review/${review.review_id}`);assert.deepEqual(assessed.research_assessment.next_step_progress.next_step,current.research.next_step);
+  const assignment=await w.take(a,j=>Number(j.research_route_id)===ret.research.route_id);
+  assert.equal(assignment.research_task.progress.kind,'algorithmic','the original declared contract is retained beside correction evidence');
+  assert.equal(assignment.assignment_reason.progress_preference.bonus,0);assert.equal(assignment.assignment_reason.progress_preference.scientific_authority,false);
+  assert.match(assignment.brief_md,/fewer operations or trials/);assert.match(assignment.brief_md,/Do not require everyone to own reference hardware/);
+  const staleJudge=await w.actor('stale-judge','claude-opus-5-5',{trusted:true});
+  const stale=await staleJudge.submit({type:'review',return_id:ret.return_id,verdict:'accept',rung:'heuristic',research_assessment:{next_step_progress:{...declared,next_step_sha256:'0'.repeat(64)}}});assert.match(stale.warnings.join(' '),/exact next-step hash/);
+  assert.equal((await w.read(`/return/${ret.return_id}`)).research_evidence,null,'classification does not fabricate supported scientific scopes');
+  await a.submit({research:{route_id:ret.research.route_id,outcome:'known',prior_art_md:'The fixture source covers this specific synthetic step.',evidence_md:'No execution or device claim.'}});await w.invariant();
+ }
+});
