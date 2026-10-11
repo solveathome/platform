@@ -140,6 +140,24 @@ export function redactHomePaths(text: string): { text: string; n: number } {
   return { text: out, n };
 }
 
+/** Content-addressed bytes keep their hashes: an uploaded file and a served research document are never rewritten. */
+const RAW_PATHS = /^\/files(?:\/|$)|^\/projects\/[^/]+\/docs(?:\/|$)/;
+/**
+ * Every page, JSON answer and markdown brief the site serves goes out with home paths as ~ (Oct 11 2026, ask 1821): stored text that
+ * cannot change (a verification package, an execution receipt) and anything written between the nightly scans. Plain text (a
+ * transcript download) and raw files are left to their own routes.
+ */
+export function servedHomePaths(req: { method: string; path: string }, res: any, next: () => void): void {
+  if ((req.method !== "GET" && req.method !== "HEAD") || RAW_PATHS.test(req.path)) { next(); return; }
+  const send = res.send.bind(res);
+  res.send = (body: unknown) => {
+    const type = String(res.getHeader("Content-Type") ?? "");
+    if (typeof body === "string" && (!type || /html|json|markdown/.test(type))) body = redactHomePaths(body).text;
+    return send(body);
+  };
+  next();
+}
+
 /** Replace every harness identifier value with [REDACTED], keeping the JSON line intact (the nightly scan and the one-off cleanup of Sep 11 2026). */
 export function redactHarnessIds(text: string): { text: string; n: number } {
   const whole = scrubIdentifiers(String(text ?? ""));

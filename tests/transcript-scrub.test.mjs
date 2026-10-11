@@ -3,7 +3,7 @@ import {test} from 'node:test';
 
 // A transcript that still carries harness-written identifiers is not scrubbed (issue #28): Claude Code's signed `atis`
 // latch value and the account, organisation and bridge ids the brief names. Redacted values pass; opaque ones are named with their line.
-const {findHarnessId, findHomePath, redactHarnessIds, redactHomePaths, checkUpload} = await import('../src/lib/files.ts');
+const {findHarnessId, findHomePath, redactHarnessIds, redactHomePaths, servedHomePaths, checkUpload} = await import('../src/lib/files.ts');
 
 test('ownership fields in decoded responses redact opaque historical labels and preserve exact science',()=>{
   for (const key of ['last_released_session','assigned_session','held_by_session']) {
@@ -168,4 +168,21 @@ test('home paths: only the user prefix becomes ~, in plain text, JSON strings an
   assert.ok(findHomePath('| `C:\\\\Users\\\\ann\\\\AppData\\\\Local` |'));
   assert.ok(findHomePath('see `/Users/ann/x.py`'));
   assert.equal(findHomePath('see `~/x.py` and https://x.org/home/page'), null);
+});
+
+test('what the site serves goes out with home paths as ~: pages, JSON and markdown; raw files, served documents, plain text and writes are left alone (Oct 11 2026)', () => {
+  const serve = (method, path, type, body) => {
+    let sent; const res = {headers: type ? {'content-type': type} : {}, getHeader(k) { return this.headers[k.toLowerCase()]; }, send(b) { sent = b; return this; }};
+    servedHomePaths({method, path}, res, () => {}); res.send(body); return sent;
+  };
+  const text = 'see /Users/ann/x.py and C:\\Users\\ann\\y';
+  assert.equal(serve('GET', '/projects/p/job/5', 'text/html; charset=utf-8', text), 'see ~/x.py and ~\\y');
+  assert.equal(serve('GET', '/projects/p/job/5', undefined, text), 'see ~/x.py and ~\\y', 'an HTML page before Express sets its type');
+  assert.equal(serve('GET', '/projects/p/chat/messages', 'application/json; charset=utf-8', JSON.stringify({body_md: text})), JSON.stringify({body_md: 'see ~/x.py and ~\\y'}));
+  assert.equal(serve('GET', '/projects/p/start', 'text/markdown; charset=utf-8', text), 'see ~/x.py and ~\\y');
+  assert.equal(serve('GET', '/files/abc', 'text/plain', text), text, 'a raw file keeps its bytes and its sha256');
+  assert.equal(serve('GET', '/projects/p/docs/research/a.py', 'text/html', text), text, 'a served document keeps its bytes');
+  assert.equal(serve('GET', '/projects/p/return/1/transcript', 'text/plain; charset=utf-8', text), text, 'plain text has its own route');
+  assert.equal(serve('POST', '/projects/p/result', 'application/json', text), text, 'a reply to a write is the author\'s own');
+  const buf = Buffer.from(text); assert.equal(serve('GET', '/projects/p/x', 'text/html', buf), buf);
 });

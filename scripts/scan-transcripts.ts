@@ -8,8 +8,8 @@
  * that still names a home folder (/Users/<name>, /home/<name>, C:\Users\<name>) gets the prefix replaced by ~, nothing else.
  *   --dry-run   change nothing; print what would change
  *   --backup    change nothing; write the affected rows as JSON lines ({table, id, transcript}) to stdout, logs to stderr
- * Patches and reports (Oct 11 2026, ask 1818, same rule): a return's patch and report_md get the same treatment; their backup lines
- * are {table, id, patch} or {table, id, report_md}. patch_hash stays the hash of the patch as submitted, so the same change sent again
+ * Other published text (Oct 11 2026, asks 1818 and 1821, same rule): a return's patch, report_md, recipe_md and file notes, job briefs
+ * and chat messages get the same treatment; their backup lines are {table, id, <field>}. patch_hash stays the hash of the patch as submitted, so the same change sent again
  * is still recognised as a duplicate.
  */
 import pg from "pg";
@@ -50,24 +50,29 @@ for (const table of ["returns", "reviews"] as const) {
     log(`${table} #${r.id}: ${ids.n} harness value(s), ${home.n} home path(s)${dryRun ? " (dry run)" : " redacted"}${r.slug ? `; purge https://solveathome.org/projects/${r.slug}/return/${r.id}/transcript` : ""}`);
   }
 }
-let fields = 0, fieldRows = 0, fieldStill = 0;
-const fieldRowsFound = await q<{ id: string; slug: string; patch: string | null; report_md: string | null }>(
-  `SELECT r.id, p.slug, r.patch, r.report_md FROM returns r JOIN problems p ON p.id = r.problem_id WHERE ${["patch", "report_md"].map((f) => `strpos(coalesce(r.${f}, ''), '/Users/') > 0 OR strpos(coalesce(r.${f}, ''), '/home/') > 0 OR strpos(coalesce(r.${f}, ''), 'Users' || chr(92)) > 0`).join(" OR ")} ORDER BY r.id`);
-for (const r of fieldRowsFound) {
-  let rowChanged = false;
-  for (const field of ["patch", "report_md"] as const) {
-    const value = r[field]; if (typeof value !== "string") continue;
-    const home = redactHomePaths(value);
+// Other stored text that is published (Oct 11 2026, asks 1818 and 1821). file_notes is the server's own note about an uploaded file: its
+// sha256 keys the file, which is never rewritten, so only the note text changes. Verification packages and execution receipts are
+// immutable evidence and stay as stored; the pages and the dump serve them redacted.
+const FIELDS: { table: "returns" | "jobs" | "messages"; field: string; json?: boolean }[] = [
+  { table: "returns", field: "patch" }, { table: "returns", field: "report_md" }, { table: "returns", field: "recipe_md" },
+  { table: "returns", field: "file_notes", json: true }, { table: "jobs", field: "brief_md" }, { table: "messages", field: "body_md" },
+];
+let fields = 0, fieldStill = 0; const fieldRows = new Set<string>();
+for (const { table, field, json } of FIELDS) {
+  const col = json ? `${field}::text` : field;
+  const rows = await q<{ id: string; value: string }>(`SELECT id, ${col} AS value FROM ${table} WHERE strpos(coalesce(${col}, ''), '/Users/') > 0 OR strpos(coalesce(${col}, ''), '/home/') > 0 OR strpos(coalesce(${col}, ''), 'Users' || chr(92)) > 0 ORDER BY id`);
+  let n = 0;
+  for (const r of rows) {
+    const home = redactHomePaths(r.value);
     const left = findHomePath(home.text);
-    if (left) { fieldStill++; log(`returns #${r.id} ${field}: home path still found: ${left.replace(/((?:Users|home)[\/\\]+)[^\/\\\s]+/, "$1<name>").slice(0, 60)}`); }
+    if (left) { fieldStill++; log(`${table} #${r.id} ${field}: home path still found: ${left.replace(/((?:Users|home)[\/\\]+)[^\/\\\s]+/, "$1<name>").slice(0, 60)}`); }
     if (!home.n) continue;
-    if (backup) console.log(JSON.stringify({ table: "returns", id: Number(r.id), [field]: value }));
-    if (!dryRun) await q(`UPDATE returns SET ${field} = $2 WHERE id = $1`, [r.id, home.text]);
-    fields++; rowChanged = true;
-    log(`returns #${r.id} ${field}: ${home.n} home path(s)${dryRun ? " (dry run)" : " redacted"}; https://solveathome.org/projects/${r.slug}/return/${r.id}`);
+    if (backup) console.log(JSON.stringify({ table, id: Number(r.id), [field]: json ? JSON.parse(r.value) : r.value }));
+    if (!dryRun) await q(`UPDATE ${table} SET ${field} = $2${json ? "::jsonb" : ""} WHERE id = $1`, [r.id, home.text]);
+    fields++; n++; fieldRows.add(`${table}#${r.id}`);
   }
-  if (rowChanged) fieldRows++;
+  log(`scan-transcripts: ${table}.${field}: ${n} ${dryRun ? "would change" : "changed"}`);
 }
 log(`scan-transcripts: ${changed} transcript(s) ${dryRun ? "would change" : "changed"}, ${homes} with home paths; ${still} return(s) where a home path is still found`);
-log(`scan-transcripts: ${fields} patch/report field(s) in ${fieldRows} return(s) ${dryRun ? "would change" : "changed"}; ${fieldStill} field(s) where a home path is still found`);
+log(`scan-transcripts: ${fields} other field(s) in ${fieldRows.size} row(s) ${dryRun ? "would change" : "changed"}; ${fieldStill} field(s) where a home path is still found`);
 await batch.end(); await pool.end();

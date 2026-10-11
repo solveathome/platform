@@ -21,6 +21,7 @@ import { terms } from "./routes/terms.js";
 import { papers } from "./routes/papers.js";
 import { sequences } from "./routes/sequences.js";
 import { filesRouter } from "./routes/files.js";
+import { servedHomePaths } from "./lib/files.js";
 import { bigBody } from "./lib/body-limits.js";
 import { docs } from "./routes/docs.js";
 import { projects } from "./routes/projects.js";
@@ -86,6 +87,8 @@ app.use("/assets", express.static(join(PUBLIC_DIR, "assets"), { index: false, ma
 // The API answers on the same URLs as the pages; a JSON body is never a search result (#sah-seo-optimize).
 app.use((_req, res, next) => { const json = res.json.bind(res); res.json = ((body: any) => { res.setHeader("X-Robots-Tag", "noindex"); return json(body); }) as any; next(); });
 app.use((req, res, next) => { if (noindexPath(req.path)) res.setHeader("X-Robots-Tag", "noindex"); next(); });
+// After the page cache, so what it stores is already redacted: home paths in anything served are written as ~ (src/lib/files.ts).
+app.use(servedHomePaths);
 app.use(seo);
 // Body limits by route (src/lib/body-limits.ts): big parsers only for a known token, and only for requests that carry a body.
 app.use("/projects/:slug/result", bigBody("50mb"));
