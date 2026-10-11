@@ -40,7 +40,8 @@ export function findSecret(text: unknown): string | null {
 /** A local home path (a transcript that was not scrubbed), or null. */
 export function findHomePath(text: unknown): string | null {
   const t = String(text ?? "");
-  const m = /(?:^|[\s"'(=:])((?:\/Users|\/home|C:\\Users)[\/\\][A-Za-z0-9._-]+[\/\\][^\s"')]{0,80})/.exec(t);
+  // A backtick opens a path in markdown, and a JSON string doubles the backslashes of C:\Users (Oct 11 2026: reports #1082 and #1562).
+  const m = /(?:^|[\s"'(=:`])((?:\/Users|\/home|C:\\+Users)[\/\\]+[A-Za-z0-9._-]+[\/\\]+[^\s"')`]{0,80})/.exec(t);
   if (!m) return null;
   const line = t.slice(0, m.index).split("\n").length;
   return `${m[1]} (line ${line})`;
@@ -127,6 +128,8 @@ export function findHarnessId(text: unknown): string | null {
  * (macOS's /Users/Shared) are left alone.
  */
 const HOME_PREFIX = /(?:(?<![A-Za-z0-9._~\/-])|(?<=\\[ntr])|(?<=file:\/\/)|(?<=\.\/?)|(?=(?:\/Users|\/home)\/[A-Za-z0-9._-]+\/\.[A-Za-z]))(?:(?:\/mnt)?\/[A-Za-z](?=\/Users\/)|\/run\/host_mark(?=\/Users\/))?(?:\/Users|\/home)\/(?!Shared(?![A-Za-z0-9._-]))[A-Za-z0-9._-]+(?![A-Za-z0-9._-])|(?:(?<![A-Za-z0-9])|(?<=\\[ntr]))[A-Za-z]:(?:\\+|\/)Users(?:\\+|\/)[A-Za-z0-9._ -]*[A-Za-z0-9._-](?![A-Za-z0-9._-])/g;
+/** The fields of a published return whose home paths are written as ~ wherever they are served: the dump, the return page and JSON, the nightly scan. */
+export const HOME_SCRUBBED = ["transcript", "patch", "report_md"] as const;
 /**
  * Replace each home prefix with ~ and keep the rest of the path (Chris, Oct 10 2026, card 1255: "scrub those home paths but otherwise not
  * do anything"): /Users/ann/proj/x.py becomes ~/proj/x.py. Used by the nightly scan, the transcript pages and the dump.

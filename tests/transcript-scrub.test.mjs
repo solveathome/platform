@@ -163,4 +163,9 @@ test('home paths: only the user prefix becomes ~, in plain text, JSON strings an
   for (const [input, want] of cases) assert.equal(redactHomePaths(input).text, want, input);
   const r = redactHomePaths('/Users/a/x /Users/a/y'); assert.equal(r.n, 2);
   for (const [input] of cases.slice(0, 6)) assert.equal(findHomePath(redactHomePaths(input).text), null, input);
+  // The detector sees a path a markdown backtick opens and the doubled backslashes of a JSON string (Oct 11 2026: reports #1082, #1562).
+  assert.ok(findHomePath('the prefix `C:\\Users\\ann\\AppData` and'));
+  assert.ok(findHomePath('| `C:\\\\Users\\\\ann\\\\AppData\\\\Local` |'));
+  assert.ok(findHomePath('see `/Users/ann/x.py`'));
+  assert.equal(findHomePath('see `~/x.py` and https://x.org/home/page'), null);
 });

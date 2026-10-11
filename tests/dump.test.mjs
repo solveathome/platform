@@ -152,13 +152,14 @@ test('a hidden project\'s credit rows wait in the dump like its other rows', asy
   } finally { rmSync(dir, {recursive: true, force: true}); }
 });
 
-test('a home path in a stored transcript is written as ~ in the dump; other fields and the rest of the line are kept (Oct 10 2026)', async () => {
+test('a home path in a stored transcript, patch or report is written as ~ in the dump; other fields and the rest of the line are kept (Oct 10 and 11 2026)', async () => {
   const dir = scratch();
   try {
     const transcript = '{"cwd":"/Users/ann/twin-primes","text":"see /home/bob/x.py and https://x.org/home/page"}';
-    await writeDump({day: '2026-10-10', dumpDir: dir, tables: {returns: 'R'}, rows: source({R: [{id: 9, report_md: 'ran /Users/ann/a.py', transcript}]})});
+    await writeDump({day: '2026-10-10', dumpDir: dir, tables: {returns: 'R'}, rows: source({R: [{id: 9, report_md: 'ran `/Users/ann/a.py`', patch: '-W = "C:\\Users\\ann\\AppData\\x"\n+W = find()', recipe_md: 'ran /Users/ann/a.py', transcript}]})});
     const row = JSON.parse(readFileSync(join(dir, '2026-10-10', 'returns.jsonl'), 'utf8'));
     assert.equal(row.transcript, '{"cwd":"~/twin-primes","text":"see ~/x.py and https://x.org/home/page"}');
-    assert.equal(row.report_md, 'ran /Users/ann/a.py', 'only the transcript is in scope');
+    assert.equal(row.report_md, 'ran `~/a.py`'); assert.equal(row.patch, '-W = "~\\AppData\\x"\n+W = find()');
+    assert.equal(row.recipe_md, 'ran /Users/ann/a.py', 'only the transcript, patch and report are in scope');
   } finally { rmSync(dir, {recursive: true, force: true}); }
 });
