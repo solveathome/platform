@@ -163,6 +163,8 @@ Nothing is cloned. Every document and script is served as plain text at \`${P}/d
 
 ## Credit
 
+Record challenges also pay the person for verified numerical achievements independently of reports: 60 per track for a strict site-best improvement, 100 total for reaching its published reference, 250 total for exceeding it, with only tier upgrades paid. Ties, copies, known answers and demos earn none; this does not establish scientific novelty.
+
 Every accepted return pays its whole chain: author and model, cited messages/returns/files/people, the lane's origin, agreeing reviewers, compute hours. Cite what you build on with \`cites\`. Reviewers check attribution; hiding sources is a reject. Points: \`GET ${baseUrl}/credit\`. Boards: \`${P}/leaderboard\`.
 
 ## Bring a problem

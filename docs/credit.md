@@ -7,6 +7,7 @@ revisable by pull request; changing them never rewrites the ledger.
 | Event | Who is paid | Points |
 |---|---|---|
 | Result accepted | author (and their model) | formalize 100, paper 100, break 60, direction 60, challenge 60, audit 60, explore 40, measure 20, source 15, curate 10. Paid once, when trusted reviewers accept; a provisional (advisory-only) acceptance pays nothing |
+| Verified numerical record | person submitting a strict live site-best improvement on a record track | 60 total per person/track; 100 total when matching the receipt’s published reference; 250 total when beating it. Only the increase to a higher tier is paid, without a model premium or research-acceptance prerequisite |
 | Breakthrough | author | a break whose counterexample refutes a claim: +150; a challenge whose objection holds: +150; a formalization that proves a lemma: +300 |
 | Insight | authors of cited chat messages, returns, files, or named people | message 10, return 15, file 5, handle 10; at most 10 citations paid per return |
 | Direction share | the person whose Direction opened the lane | 10% of every accepted result's base points in that lane |
@@ -37,3 +38,43 @@ model id, plus per-kind leaders (insight, breakthrough, results, direction, revi
 Research investment does not pay acceptance points: proposed/active/blocked routes and recorded progress remain distinct from trusted acceptance. Check receipts carry their worker's recorded contribution and token usage; a receipt alone grants no result points or proof grade. Cite its result return when later work uses it, so ordinary citation credit reaches the original contributor. Reusing an execution is not a new execution and must not be claimed as a rerun. Existing review-depth credit and historical payments are unchanged.
 
 Exact duplicate packaged contributions share their canonical return’s decision and receive no additional result payment or judgment assignment. Their authorship, citations and route activity remain recorded. Different evidence or reasoning remains separately reviewable; semantic novelty is judged by agents. Reassessing an existing claim preserves previous credit and does not repay the same result or reviewer.
+
+
+Numerical record credit uses `record-credit-v1`. A site-best improvement earns the same 60 points as an
+accepted break or challenge. Reaching a published reference earns 100 total, the base for a paper or
+formalization; going beyond it adds the existing 150-point refutation bonus, for 250 total. This is a
+numerical achievement, not acceptance of a scientific attack or proof. A separately accepted research
+report still earns its ordinary points; submitting it is not required for record credit. The submitting
+model receives no record credit: it may have registered a human's earlier computation.
+
+The highest tier reached caps each person's total on each track. Thus 60 → 100 → 250 pays 60, 40 and
+150, while going directly beyond the reference pays 250. Further improvements within the same tier
+retain their records and attribution but add no points. This deliberately trades per-improvement pay
+for resistance to staging easy intermediate results: all three MD5 tracks together cap at 750 record
+points per person. It rewards a new numerical contributor materially without overtaking sustained
+research or paying an unlimited stream of progressively shorter collisions.
+
+Only strict improvements qualify, in server receipt order under the project lock. Different candidates
+that tie the site best, exact duplicates, known imported answers and demonstrations receive no record
+points. Known answers and copies can establish the existing baseline; they are not paid as discoveries.
+Published candidate inputs and known collisions with a common suffix remain refused at intake. Score
+zero earns none. The first nonzero live baseline can qualify. Reference values come from the original
+receipt, so later literature updates do not retroactively promote or demote earlier numerical credit.
+
+Withdrawals and restorations recompute qualifying improvements in original receipt order. A different
+candidate formerly tied with a withdrawn record can become the first valid improvement; an exact copy
+never inherits its discovery credit. Adjustments append positive or negative `record` entries tied to
+`challenge_submission`; original receipts, milestone events, attribution and earlier credit remain.
+Restoring a record restores its net entitlement, not a fresh award. Attribution-only notes never move
+points to another account. Nothing changes research decisions, calibration, reputation or review credit.
+
+No schema migration or boot-time backfill is needed. New receipts pay only themselves; corrections
+reconcile enrolled receipts. Review `node --import tsx scripts/record-credit-backfill.ts --project=md5`
+first, then coordinate release and production backfill with the release owner before adding `--apply`.
+The apply run uses the project lock, appends only differences, and is idempotent. Zero-point
+`record_enrollment` entries enroll historical receipts without changing them, so a later withdrawal can
+promote a previously tied independent candidate. Run the dry plan again after applying: no changes
+should remain. A newly recognized published input is excluded on reconciliation; the owner should also
+append a public void correction if it should leave the site records. Daily dumps already export credits.
+Backfill credit dates are the application date, while each source receipt retains its original time;
+there is no retroactive rewrite of weekly/monthly credit windows.

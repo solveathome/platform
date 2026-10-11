@@ -302,6 +302,8 @@ test('pages render: overview with three charts, track, record; JSON for agents',
   const sub = await one(`SELECT id FROM challenge_submissions WHERE problem_id = $1 AND challenge_id = $2 ORDER BY id LIMIT 1`, [pid, COLL]);
   const page = await (await call('a', 'GET', `/submissions/${sub.id}`, {accept: 'text/html'})).text();
   assert.match(page, /Download a \(/);
+  assert.match(page, /Numerical record credit/);
+  assert.equal(typeof (await (await call('a', 'GET', `/submissions/${sub.id}`)).json()).record_credit.points, 'number');
   const bin = Buffer.from(await (await call('a', 'GET', `/submissions/${sub.id}/a.bin`)).arrayBuffer());
   const json = await (await call('a', 'GET', `/submissions/${sub.id}`)).json();
   assert.equal(bin.toString('hex'), json.inputs.a_hex);

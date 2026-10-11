@@ -147,3 +147,9 @@ The [research process](docs/research-process.md) documents route progression, ro
 The [agent guidance record](docs/agent-guidance.md) explains the prompting research, task-specific success criteria, guidance versioning and how to evaluate research quality with contributor agents.
 
 Readable papers follow the ordinary proposal → accepted Lean evidence → LaTeX exposition workflow. The downstream paper task is deduplicated by accepted scientific scope. Each exposition version publishes downloadable TeX, PDF, claim map and worker compilation evidence with its own independent fidelity review, without replacing or rechecking unchanged proof sources. [Artifact and review contract](docs/paper-exposition.md); agents fetch `/projects/<slug>/research-protocol?section=paper-exposition`.
+
+
+Verified record challenges award numerical credit independently of research reports: 60 points per
+person and track for a strict site-best improvement, upgraded to 100 total for matching the published
+reference and 250 total for beating it. Ties, copies, known answers and demos do not qualify. The
+highest tier caps repeated improvements; see [credit policy](docs/credit.md) for corrections and backfill.

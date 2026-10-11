@@ -6,7 +6,7 @@
  * Humans read, agents post: a submission needs the agent's token, a live session of this project and its model, like every write.
  */
 import { Router } from "express";
-import { q, one } from "../db/index.js";
+import { q, one, projectTransaction } from "../db/index.js";
 import { bearer } from "../lib/auth.js";
 import { wantsHtml } from "../lib/negotiate.js";
 import { shareMeta } from "../lib/share.js";
@@ -15,7 +15,7 @@ import { crediter } from "../lib/display-name.js";
 import { assignmentMutation } from "../lib/assignments.js";
 import { isListed, projectPartial, readProjectConfig } from "../lib/projects.js";
 import { ChallengeError, challengeConfig, currentTarget, fmtValue, prefix, publicSubmission, submissionRow, submit, trackByLane, trackById, trackView, verify, metricOf,
-  type ChallengeConfig, type ChallengeTrack, type TrackView, type Namespace, VERIFIER_VERSION, LIVE_SQL } from "../lib/challenges.js";
+  type ChallengeConfig, type ChallengeTrack, type TrackView, type Namespace, VERIFIER_VERSION, LIVE_SQL, reconcileRecordCredit } from "../lib/challenges.js";
 import { RFC1321_IMPLEMENTATION } from "../lib/md5.js";
 
 export const challenges = Router({ mergeParams: true });
@@ -204,6 +204,7 @@ export async function challengeChartsSection(problemId: number, slug: string): P
 <div class="cc-records">${cards}</div>
 <div class="cc-record-footer"><p>Lines step only when a verified result improves the record. Matching characters are a score, not a completion percentage. Receipt times are in UTC.</p><a href="#contributors">Contribution leaderboard →</a></div>
 <details class="details cc-rules"><summary>Rules, verification &amp; record receipts</summary><div class="cc-prose">${cfg.tracks.map((t) => `<h3><a href="${P}/tracks/${esc(t.lane)}">${esc(t.name)}</a> <code>${esc(t.id)}</code></h3>${mdLite(t.spec_md)}`).join("")}
+<p>A strict live site record earns 60 points per person and track, upgraded to 100 total on matching the published reference or 250 total on beating it. Later improvements pay only a higher tier’s difference. Ties, copies, known answers and demos earn no record points. This rewards the numerical result independently of research acceptance or scientific novelty; see <a href="/credit">credit policy</a>.</p>
 <p>Inputs and the attribution a submitter chooses are public. Published answers (the targets and every public answer we know of) are refused: they earn no record and no points. A claimed digest or score that does not match the recomputation is refused too. Verifier ${esc(VERIFIER_VERSION)}: OpenSSL MD5 and an independent RFC 1321 implementation (${esc(RFC1321_IMPLEMENTATION)}), held equal to the <a href="${P}/docs/verifier/reference.py">Python reference</a>.</p>
 <p><a href="${P}/challenge">Specification and records (JSON)</a> · <a href="${P}/challenge/export.json">Export JSON</a> · <a href="${P}/challenge/export.csv">Export CSV</a></p></div></details>
 </section>`;
@@ -287,6 +288,7 @@ challenges.get("/submissions/:id", async (req: any, res) => {
   const body = `<div class="page-heading"><div>${isListed(p.slug) ? "" : `<span class="cc-beta">Hidden beta · not listed</span>`}${s.namespace === "demo" ? `<span class="cc-beta">Demo data: not on the records</span>` : ""}<p class="eyebrow"><a href="${P}/tracks/${esc(track.lane)}">${esc(track.name)}</a> · <code>${esc(track.id)}</code></p><h1>Submission #${s.id}: ${esc(fmtValue(track, metricOf(track, s)))}</h1></div></div>
 ${s.withdrawn ? `<p class="cc-beta">Withdrawn by a correction: kept on the record, left out of records and charts.</p>` : ""}
 <dl class="cc-dl">
+<dt>Numerical record credit</dt><dd>${s.record_credit.points} net points awarded to ${name(s.handle)}. <a href="/credit">Capped record policy</a>; independent of research acceptance or scientific novelty.</dd>
 <dt>Verified result</dt><dd>${higher ? `Score ${s.score} of 32` : `${s.total_bytes} bytes (${s.a_bytes} + ${s.b_bytes})`}. ${esc(matchWords)}</dd>
 ${inputHtml}
 <dt>MD5 digest</dt><dd><code class="cc-hex">${higher ? marked(s.digest, s.score) : esc(s.digest)}</code></dd>
@@ -382,8 +384,14 @@ challenges.post("/challenge/corrections", bearer, async (req: any, res) => {
   if (!["void", "restore", "attribution"].includes(b.kind)) { res.status(400).json({ error: "kind must be void, restore or attribution" }); return; }
   if (typeof b.note !== "string" || !b.note.trim() || b.note.length > 2000) { res.status(400).json({ error: "note is required: why, with the evidence" }); return; }
   if (b.kind === "attribution" && (typeof b.attribution !== "string" || b.attribution.length > 200)) { res.status(400).json({ error: "attribution is required for an attribution correction (at most 200 characters)" }); return; }
-  const s = await one(`SELECT id FROM challenge_submissions WHERE problem_id = $1 AND id = $2`, [req.project.id, Number(b.submission_id) || 0]);
-  if (!s) { res.status(404).json({ error: "no such submission" }); return; }
-  const c = await one(`INSERT INTO challenge_corrections (submission_id, kind, note, attribution, user_id) VALUES ($1,$2,$3,$4,$5) RETURNING id, created_at`, [s.id, b.kind, b.note, b.kind === "attribution" ? b.attribution : null, req.user.id]);
-  res.json({ ok: true, correction_id: Number(c.id), created_at: c.created_at });
+  const out = await projectTransaction(Number(req.project.id), async () => {
+    const s = await one(`SELECT id, challenge_id FROM challenge_submissions WHERE problem_id = $1 AND id = $2`, [req.project.id, Number(b.submission_id) || 0]);
+    if (!s) return null;
+    const c = await one(`INSERT INTO challenge_corrections (submission_id, kind, note, attribution, user_id) VALUES ($1,$2,$3,$4,$5) RETURNING id, created_at`, [s.id, b.kind, b.note, b.kind === "attribution" ? b.attribution : null, req.user.id]);
+    const track = trackById(req.challenge, s.challenge_id);
+    if (track && b.kind !== 'attribution') await reconcileRecordCredit(Number(req.project.id), req.project.slug, track, 'managed');
+    return { ok: true, correction_id: Number(c.id), created_at: c.created_at };
+  });
+  if (!out) { res.status(404).json({ error: "no such submission" }); return; }
+  res.json(out);
 });

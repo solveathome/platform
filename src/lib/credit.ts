@@ -10,6 +10,7 @@ import { unlistedSlugs } from "./projects.js";
 
 export const POINTS = {
   result: { formalize: 100, break: 60, measure: 20, source: 15, explore: 40, direction: 60, challenge: 60, curate: 10, consolidate: 50, paper: 100, audit: 60, review: 0 } as Record<string, number>,
+  record: { site: 60, matched: 100, exceeded: 250 }, // capped per person/track: break base; formalize base; formalize + refutation bonus
   breakthrough: { refuted: 150, proven: 300 } as Record<string, number>,   // a break that refutes; a formalization that proves
   insight_cited_message: 10,        // your chat message was cited by an accepted return
   cited_return: 15,                 // your earlier return was built on
@@ -133,7 +134,7 @@ export async function leaderboard(problemId: number | null, w: Window, limit = 5
   const tokensByModel = await q(`SELECT r.model, sum((r.tokens->>'output')::numeric) AS output_tokens, sum((r.tokens->>'input')::numeric + (r.tokens->>'cache_read')::numeric + (r.tokens->>'cache_write')::numeric) AS input_tokens
     FROM returns r WHERE r.tokens IS NOT NULL AND ${tokenWhere} GROUP BY r.model ORDER BY output_tokens DESC NULLS LAST LIMIT ${limit}`, params);
   const byKind: Record<string, any[]> = {};
-  for (const kind of ["insight", "breakthrough", "result", "integrated", "direction", "review", "compute", "tokens"]) {
+  for (const kind of ["insight", "breakthrough", "result", "record", "integrated", "direction", "review", "compute", "tokens"]) {
     byKind[kind] = await q(`SELECT u.handle, sum(c.points) AS points, count(*) AS events FROM credits c JOIN users u ON u.id = c.user_id WHERE c.kind = '${kind}' AND ${where} GROUP BY u.handle ORDER BY points DESC LIMIT 10`, params);
   }
   return { window: w, humans, models, tokens, tokens_by_model: tokensByModel, by_kind: byKind, points: POINTS };

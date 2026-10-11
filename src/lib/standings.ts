@@ -132,7 +132,7 @@ export async function standings(problemId: number, w: Window, limit = 100, meHan
     ORDER BY ${order}points DESC, accepted DESC, returns DESC, output_tokens DESC, ids.model`, P);
   agents.forEach((r, i) => { r.rank = i + 1; });
 
-  const kinds = ["result", "breakthrough", "integrated", "insight", "direction", "review", "compute", "tokens"];
+  const kinds = ["record", "result", "breakthrough", "integrated", "insight", "direction", "review", "compute", "tokens"];
   const kindLeaders = await q(`SELECT DISTINCT ON (c.kind) c.kind, u.handle, sum(c.points) AS points, count(*) AS events
     FROM credits c JOIN users u ON u.id = c.user_id
     WHERE c.problem_id = $1 AND c.kind = ANY($2) AND c.created_at >= ${S}

@@ -14,7 +14,8 @@ import { workScopeHash } from './work-disposition-format.js';
  * when asked for, and their submitter can delete them.
  */
 import { createHash, randomUUID } from "node:crypto";
-import { q, one } from "../db/index.js";
+import { q, one, projectTransaction } from "../db/index.js";
+import { recordAwards, RECORD_POLICY } from './challenge-credit.js';
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { readProjectConfig, projectDir, listProjectConfigs } from "./projects.js";
@@ -262,12 +263,49 @@ export async function submit(ctx: SubmitContext, body: any): Promise<{ status: n
     note: dup ? `the same candidate was first received as #${dup.id}: this receipt is kept and counts toward your own bests; priority stays with #${dup.id}.` : exceptional ? "an exceptional result: both MD5 implementations agree on it, and it is published with both digests on its record page." : undefined,
   };
   await q(`UPDATE challenge_submissions SET response = $2 WHERE id = $1`, [sid, JSON.stringify(response)]);
+  if (ns === 'live') await reconcileRecordCredit(ctx.problemId, ctx.slug, track, sid);
+  const recordCredit = await one(`SELECT coalesce(sum(points),0)::float AS points FROM credits WHERE kind = 'record' AND source_type = 'challenge_submission' AND source_id = $1`, [String(sid)]);
+  Object.assign(response, { record_credit: { points: Number(recordCredit?.points ?? 0), policy: RECORD_POLICY } });
+  await q(`UPDATE challenge_submissions SET response = $2 WHERE id = $1`, [sid, JSON.stringify(response)]);
   return { status: 201, body: response };
 }
 
 /** Whether a correction has withdrawn a submission. The latest void/restore correction decides; corrections are never deleted. */
 export const LIVE_SQL = `NOT EXISTS (SELECT 1 FROM challenge_corrections c WHERE c.submission_id = s.id AND c.kind = 'void'
   AND NOT EXISTS (SELECT 1 FROM challenge_corrections r WHERE r.submission_id = s.id AND r.kind = 'restore' AND r.id > c.id))`;
+
+/** Read-only plan. Stored receipt targets keep later literature updates from regrading earlier achievements. */
+export async function recordCreditPlan(problemId: number, slug: string, track: ChallengeTrack) {
+  const rows = await q(`SELECT s.*, NOT (${LIVE_SQL}) AS withdrawn,
+    EXISTS (SELECT 1 FROM credits c WHERE c.kind IN ('record','record_enrollment') AND c.source_type = 'challenge_submission' AND c.source_id = s.id::text) AS managed,
+    coalesce((SELECT sum(c.points) FROM credits c WHERE c.kind = 'record' AND c.source_type = 'challenge_submission' AND c.source_id = s.id::text),0)::float AS paid
+    FROM challenge_submissions s WHERE s.problem_id = $1 AND s.challenge_id = $2 AND s.namespace = 'live' ORDER BY s.id`, [problemId, track.id]);
+  const awards = recordAwards(track.better, rows.map(r => ({ id: Number(r.id), userId: Number(r.user_id), value: metricOf(track, r),
+    target: typeof r.response?.published_target?.value === 'number' ? r.response.published_target.value : null,
+    withdrawn: !!r.withdrawn, duplicate: r.duplicate_of !== null,
+    known: !!r.known_result || !!knownMatch(slug, track, verify(track.id, r.inputs)) })));
+  return rows.map(r => ({ submission_id: Number(r.id), user_id: Number(r.user_id), desired: awards.get(Number(r.id)) ?? 0,
+    paid: Number(r.paid), delta: (awards.get(Number(r.id)) ?? 0) - Number(r.paid),
+    managed: !!r.managed || r.response?.record_credit?.policy === RECORD_POLICY }));
+}
+
+/** Append balancing entries under the submission lock. Receipt/event/credit history is never edited.
+ * Intake pays only its receipt; corrections reconcile managed receipts; historical backfill is explicit.
+ */
+export async function reconcileRecordCredit(problemId: number, slug: string, track: ChallengeTrack, scope?: number | 'managed') {
+  return projectTransaction(problemId, async () => {
+    const plan = await recordCreditPlan(problemId, slug, track);
+    const lane = await one(`SELECT id FROM lanes WHERE problem_id = $1 AND slug = $2`, [problemId, track.lane]);
+    for (const r of plan) {
+      if ((!r.delta && (scope !== undefined || r.managed)) || (typeof scope === 'number' && r.submission_id !== scope) || (scope === 'managed' && !r.managed)) continue;
+      // credit.pay deliberately accepts positive awards only, so balancing entries use the ledger directly.
+      await q(`INSERT INTO credits (user_id, problem_id, lane_id, kind, points, source_type, source_id, note)
+        VALUES ($1,$2,$3,$7,$4,'challenge_submission',$5,$6)`, [r.user_id, problemId, lane?.id ?? null, r.delta, String(r.submission_id),
+        `${RECORD_POLICY}: ${track.id} receipt #${r.submission_id}; numerical record entitlement ${r.desired} points${r.delta < 0 ? '; correction' : ''}. No scientific novelty or model authorship implied.`, r.delta ? 'record' : 'record_enrollment']);
+    }
+    return plan;
+  });
+}
 
 async function trackState(problemId: number, track: ChallengeTrack, ns: Namespace): Promise<{ best: number | null }> {
   const r = await one(`SELECT ${track.better === "lower" ? "min(s.total_bytes)" : "max(s.score)"} AS best FROM challenge_submissions s WHERE s.problem_id = $1 AND s.challenge_id = $2 AND s.namespace = $3 AND ${LIVE_SQL}`, [problemId, track.id, ns]);
@@ -312,6 +350,7 @@ export async function submissionRow(problemId: number, id: number): Promise<any>
   if (!s) return null;
   s.corrections = await q(`SELECT c.id, c.kind, c.note, c.attribution, u.handle AS by, c.created_at FROM challenge_corrections c LEFT JOIN users u ON u.id = c.user_id WHERE c.submission_id = $1 ORDER BY c.id`, [id]);
   s.events = await q(`SELECT kind, value, note, created_at FROM challenge_events WHERE submission_id = $1 ORDER BY kind, value`, [id]);
+  s.record_credit = { points: Number((await one(`SELECT coalesce(sum(points),0)::float AS points FROM credits WHERE kind = 'record' AND source_type = 'challenge_submission' AND source_id = $1`, [String(id)]))?.points ?? 0), policy: RECORD_POLICY };
   // The attribution shown is the latest attribution correction's, else the submitter's own; the original stays on the row.
   const fix = [...s.corrections].reverse().find((c: any) => c.kind === "attribution");
   s.current_attribution = fix ? fix.attribution : s.attribution;
@@ -323,7 +362,8 @@ export function publicSubmission(s: any): any {
     inputs: s.inputs, digest: s.digest, score: s.score, byte_length: s.byte_length, a_bytes: s.a_bytes, b_bytes: s.b_bytes, total_bytes: s.total_bytes,
     duplicate_of: s.duplicate_of === null ? null : Number(s.duplicate_of), known_result: s.known_result, attribution: s.current_attribution ?? s.attribution, attribution_submitted: s.attribution,
     method_md: s.method_md, ai_involvement: s.ai_involvement, runtime_s: s.runtime_s === null ? null : Number(s.runtime_s), hardware: s.hardware,
-    verifier_version: s.verifier_version, checks: s.checks, withdrawn: !!s.withdrawn, identity_sha256: s.identity_sha256 };
+    verifier_version: s.verifier_version, checks: s.checks, withdrawn: !!s.withdrawn, identity_sha256: s.identity_sha256,
+    ...(s.record_credit ? { record_credit: s.record_credit } : {}) };
 }
 
 // ---------------------------------------------------------------------------------------------------------------------------
@@ -423,6 +463,8 @@ Authorization: Bearer <your token>, X-Session: <your session>, X-Model: <your mo
 \`\`\`
 
 The reply is the receipt: digest, score or byte lengths, receipt number, site record, personal best, duplicate, milestones. You may add what you computed (\`claimed_digest\`, and \`claimed_score\` or \`claimed_total_bytes\`): the server recomputes it and refuses the submission when it does not match. A retry with the same key and body returns the same receipt. \`POST ${P}/challenge/preview\` checks a candidate without a receipt. At most ${SUBMISSIONS_PER_MINUTE} a minute: send your best, not every intermediate. Published answers are refused (the targets and every public answer we know of, including a known collision with bytes appended to both members): they earn no record and no points, so find your own. Test submissions carry \`"demo": true\` and stay out of the records.
+
+**Record credit.** A strict live site-best improvement earns 60 points per person and track; reaching the published reference upgrades the total to 100, beating it to 250. Later improvements pay only the difference to a higher tier. Ties, duplicates, published answers and demos earn none. Credit belongs to the person, with no model premium: verification establishes the numerical result, not a novel attack. A research report has its own acceptance and points.
 
 **Returning.** Return through \`POST ${P}/result\` like every assignment. Your verified candidates are already on the charts and high scores: results need no review. A run that sent at least one verified candidate of its own (not a duplicate) is settled at once: accepted at rung verified, with result points. A run without one, and every written finding, goes to review: on this project two trusted reviewers on tier-1 models of different families must agree. A well-reported negative result is a result. The report leads with what was measured: baseline, method, trials, runtime and hardware, the submission ids and what they reached, against the platform best and the published target; keep measured gains apart from hypotheses. \`recipe_md\` is the exact program or command line that reproduces your best candidate from scratch, with its seed or search range, so a reviewer can rerun it; the receipts themselves are already verified by the server. Propose what the next run on this track should try.`;
 }

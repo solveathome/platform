@@ -23,8 +23,8 @@ const dateLong = (d) => new Date(d).toLocaleDateString("en-GB", { day: "numeric"
 const MILESTONES = [100, 500, 1000, 5000, 10000, 50000, 100000];
 const LADDER = ["proven", "verified", "measured", "heuristic", "conjectured", "refuted"];
 const RUNG_TEXT = { proven: "a proof accepted by trusted review", verified: "a finite computation ran and matched, range stated", measured: "finite observations, range stated", heuristic: "an argument that predicts, not proves", conjectured: "a statement with evidence, no proof", refuted: "the bottom rung for the claim, 150 points for the agent that broke it" };
-const KIND = { result: "Result accepted", breakthrough: "Breakthrough", review: "Review matched the outcome", insight: "Cited by later work", direction: "Direction", formalize: "Formalized", tokens: "Tokens counted", compute: "Compute", file: "File used", answer: "Answer useful", lane_origin: "Lane origin", integrated: "Revision integrated", curation: "Curation" };
-const LEGEND = { result: "Results accepted", review: "Reviews matching the outcome", tokens: "Tokens contributed", breakthrough: "Breakthroughs", integrated: "Revisions integrated", insight: "Cited by later work", direction: "Directions", formalize: "Formalizations", file: "Files used", compute: "Compute", answer: "Answers marked useful", lane_origin: "Lanes opened", curation: "Curation" };
+const KIND = {record: "Verified record", record_enrollment: "Record policy enrollment", result: "Result accepted", breakthrough: "Breakthrough", review: "Review matched the outcome", insight: "Cited by later work", direction: "Direction", formalize: "Formalized", tokens: "Tokens counted", compute: "Compute", file: "File used", answer: "Answer useful", lane_origin: "Lane origin", integrated: "Revision integrated", curation: "Curation" };
+const LEGEND = {record: "Verified records", result: "Results accepted", review: "Reviews matching the outcome", tokens: "Tokens contributed", breakthrough: "Breakthroughs", integrated: "Revisions integrated", insight: "Cited by later work", direction: "Directions", formalize: "Formalizations", file: "Files used", compute: "Compute", answer: "Answers marked useful", lane_origin: "Lanes opened", curation: "Curation" };
 const STATUS = { pending: "awaiting review", contested: "contested", accepted: "accepted", rejected: "rejected", recorded: "recorded", superseded: "superseded" };
 // What a route job was and what it found (#sah-route-triage-title): the stage names the work, the outcome what it produced.
 const STAGE = { first_look: "first look", pursue: "pursuit", rescue: "rescue" };
@@ -186,12 +186,13 @@ SA.json(location.pathname).then((d) => {
 
   // Ledger: eight latest, the rest behind a summary.
   const src = (c) => { const P = c.project ? `/projects/${encodeURIComponent(c.project)}` : ""; const id = esc(String(c.source_id ?? ""));
+    if (c.source_type === "challenge_submission" && P) return `<a href="${P}/submissions/${id}">record receipt #${id}</a>`;
     if (c.source_type === "return" && P) return `<a href="${P}/return/${id}">return #${id}</a>`;
     if (c.source_type === "review" && P && c.review_of) return `review of <a href="${P}/return/${esc(String(c.review_of))}">return #${esc(String(c.review_of))}</a>`;
     if (c.source_type === "message" && P) return `message ${id}`;
     if (c.source_type === "file") return `<a href="/files/${id}">file ${id.slice(0, 12)}…</a>`;
     return c.source_type ? `${esc(c.source_type)} ${id}` : ""; };
-  const pts = (v) => Number(v) === 0 ? `<span class="muted">0</span>` : `+${n2(v)}`;
+  const pts = (v) => Number(v) === 0 ? `<span class="muted">0</span>` : `${Number(v) > 0 ? "+" : ""}${n2(v)}`;
   const note = (c) => { const t = String(c.note ?? ""); return t.startsWith("{") ? `<span class="muted">transcript counted</span>` : esc(t); };
   const lrow = (c) => `<tr><td class="date">${esc(dateShort(c.created_at))}</td><td>${esc(KIND[c.kind] ?? c.kind)}, ${src(c)}</td><td class="num">${pts(c.points)}</td><td class="muted">${esc(c.model ?? "")}</td><td class="muted">${note(c)}</td></tr>`;
   const ledger = d.credit?.ledger ?? [];
