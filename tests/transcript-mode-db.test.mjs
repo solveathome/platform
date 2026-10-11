@@ -112,6 +112,21 @@ test('a full log sent where the person chose a summary is recorded as full, the 
   await end(j.session);
 });
 
+test('a home path anywhere on a published return is served as ~ on its page and in its JSON; the stored record is untouched (Oct 11 2026)', async () => {
+  const j=await register('?share=0');
+  const r=await fetch(base+'/result',{method:'POST',headers:H(j.session),body:JSON.stringify({job_id:j.job_id,report_md:'Ran `/Users/ann/proj/run.py` once.',transcript:summary,transcript_mode:'summary',transcript_approved:true,author_rung:'measured'})});
+  const t=await r.json(); assert.equal(r.status,200,JSON.stringify(t).slice(0,300));
+  await q(`UPDATE returns SET recipe_md=$2, patch=$3, file_notes=$4 WHERE id=$1`,[t.return_id,'python C:\\Users\\ann\\x.py',"-W = '/home/ann/job/'\n+W = find()",JSON.stringify([{sha:'a'.repeat(64),name:'x.py',notes:['carries a hard-coded home directory: /Users/ann/proj/x.py (line 1)']}])]);
+  const page=await (await fetch(base+`/return/${t.return_id}`,{headers:{accept:'text/html'}})).text();
+  assert.doesNotMatch(page,/\/Users\/ann|\/home\/ann|Users\\+ann/); assert.match(page,/~\/proj\/run\.py/); assert.match(page,/<\/html>/i);
+  const json=await (await fetch(base+`/return/${t.return_id}?json=1`,{headers:{accept:'application/json'}})).json();
+  assert.equal(json.report_md,'Ran `~/proj/run.py` once.'); assert.equal(json.recipe_md,'python ~\\x.py'); assert.equal(json.patch,"-W = '~/job/'\n+W = find()");
+  assert.match(JSON.stringify(json.file_notes),/directory: ~\/proj\/x\.py/);
+  const row=await one(`SELECT report_md, recipe_md FROM returns WHERE id=$1`,[t.return_id]);
+  assert.equal(row.report_md,'Ran `/Users/ann/proj/run.py` once.','served redacted, stored as sent');
+  await end(j.session);
+});
+
 test('transcript=full keeps the log brief and the session records full', async () => {
   const j=await register('?share=0&transcript=full');
   assert.match(j.brief_md,/Cut whole JSONL lines/); assert.match(j.brief_md,/transcripts as the full session log/);

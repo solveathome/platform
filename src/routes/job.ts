@@ -2571,7 +2571,8 @@ job.get("/return/:id", optionalAuth, project, async (req: any, res) => {
   r.cited_messages = citedIds.length ? (await q(`SELECT m.id, c.path AS channel_path, u.handle, m.model, m.kind, left(m.body_md, 600) AS body_md, m.created_at FROM messages m JOIN channels c ON c.id = m.channel_id JOIN users u ON u.id = m.user_id WHERE m.id = ANY($1) AND c.problem_id = $2 ORDER BY m.id`, [citedIds, req.project.id])).map((m: any) => ({ ...m, id: Number(m.id), url: `/projects/${req.project.slug}/chat/messages/${m.id}` })) : [];
   // pg returns bigint and numeric as strings (issue #25): ids and hours are numbers to a client.
   for (const k of Object.keys(r)) if (typeof r[k] === "string" && /(^|_)id$|cpu_hours|^weight$/.test(k) && /^-?\d+(\.\d+)?$/.test(r[k])) r[k] = Number(r[k]);
-  res.type("application/json").send(redactHarnessIds(JSON.stringify(r)).text);
+  // Home paths anywhere in a published return (recipe, file notes, verification package) are served as ~ (Oct 11 2026); the stored record is untouched.
+  res.type("application/json").send(redactHomePaths(redactHarnessIds(JSON.stringify(r)).text).text);
 });
 
 
@@ -2621,8 +2622,9 @@ async function returnPage(req: any, res: any): Promise<void> {
   }
   const body = quorumLine + challenged + targetLine + human + dupList + researchRecord + (await md(r.report_md)) + (evidenceRecord ? await md(evidenceRecord) : "") + fixList + (r.patch ? `<h2>Patch</h2><pre><code>${escHtml(r.patch)}</code></pre>` : "") + dlist;
   const firstLine = String(r.report_md ?? "").split("\n").map((l: string) => l.replace(/^[#>*\s-]+/, "").trim()).find((l: string) => l.length > 20) ?? "";
-  res.type("text/html").send(page({ title: `Return #${r.id}`, dataPage: "return", type: "article", description: plainDescription(`${r.type} by ${creditText(r)} (${r.model}), ${r.status}${r.final_rung ? `, ${r.final_rung}` : ""}. ${firstLine}`),
-    ld: [{ "@type": "CreativeWork", "@id": abs(`${P}/return/${r.id}`), url: abs(`${P}/return/${r.id}`), name: plainDescription(r.job_title ?? `${r.type} return #${r.id}`, 110), description: plainDescription(firstLine), genre: `research result (${r.type})`, creativeWorkStatus: r.status, author: { "@type": "Person", name: creditText(r), url: abs(`/@${r.handle}`) }, dateCreated: new Date(r.created_at).toISOString(), inLanguage: "en", license: "https://creativecommons.org/licenses/by/4.0/", isPartOf: { "@type": "ResearchProject", name: req.project.name, url: abs(P) } }], path: `${P}/return/${r.id}`, crumbs: `<a href="${P}">${escHtml(req.project.name)}</a><span>/ results /</span>#${r.id}`, eyebrow: "Result", heading: r.job_title ?? `${r.type} return #${r.id}`, meta, aside, body }));
+  // Home paths anywhere on a published return page (recipe, file notes, verification package) are shown as ~ (Oct 11 2026); the record is untouched.
+  res.type("text/html").send(redactHomePaths(page({ title: `Return #${r.id}`, dataPage: "return", type: "article", description: plainDescription(`${r.type} by ${creditText(r)} (${r.model}), ${r.status}${r.final_rung ? `, ${r.final_rung}` : ""}. ${firstLine}`),
+    ld: [{ "@type": "CreativeWork", "@id": abs(`${P}/return/${r.id}`), url: abs(`${P}/return/${r.id}`), name: plainDescription(r.job_title ?? `${r.type} return #${r.id}`, 110), description: plainDescription(firstLine), genre: `research result (${r.type})`, creativeWorkStatus: r.status, author: { "@type": "Person", name: creditText(r), url: abs(`/@${r.handle}`) }, dateCreated: new Date(r.created_at).toISOString(), inLanguage: "en", license: "https://creativecommons.org/licenses/by/4.0/", isPartOf: { "@type": "ResearchProject", name: req.project.name, url: abs(P) } }], path: `${P}/return/${r.id}`, crumbs: `<a href="${P}">${escHtml(req.project.name)}</a><span>/ results /</span>#${r.id}`, eyebrow: "Result", heading: r.job_title ?? `${r.type} return #${r.id}`, meta, aside, body })).text);
 }
 /** POST /return/:id/reopen { note } : a trusted reviewer puts a decided return back before the group, with a public note. */
 job.post("/return/:id/reopen", bearer, project, assignmentMutation(async (req: any, res) => {
