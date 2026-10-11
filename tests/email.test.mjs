@@ -189,3 +189,15 @@ test('a record goes out the day it is set, alone, for weekly people and for peop
   assert.equal(U.decide({...daily, updates: 'weekly'}, [rec, verdict], [], stats(), 1).edition, 'weekly');
   assert.equal(U.decide({updates: 'off', newsletter: true, projects: false}, [rec], [], null, 3).edition, 'record');
 });
+
+test('the list under the lead starts with every record, however old, and only the rest is cut', () => {
+  const at = (h) => new Date(Date.UTC(2026, 9, 11, h)).toISOString();
+  const recs = [item('challenge_record', {happened_at: at(0), facts: {challenge_id: 'a'}}), item('challenge_record', {happened_at: at(1), facts: {challenge_id: 'b'}})];
+  const lead = item('challenge_record', {happened_at: at(2), facts: {challenge_id: 'c'}});
+  const newer = Array.from({length: 10}, (_, i) => item('cited', {happened_at: at(3 + i), facts: {return_id: i}}));
+  const {rest, more} = U.listOf([lead, ...newer, ...recs], lead);
+  assert.deepEqual(rest.slice(0, 2).map((i) => i.facts.challenge_id), ['b', 'a']);
+  assert.equal(rest.length, 8);
+  assert.equal(more, 4);
+  assert.ok(!rest.includes(lead));
+});

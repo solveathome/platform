@@ -262,6 +262,19 @@ export function pickLead(items: Item[]): Item | null {
 }
 
 /** The record edition: a person's own record, told the day it is set to anyone who allows any email, inside the one-a-day cap. */
+/**
+ * The list under the lead: records first, every one of them, then the rest newest first up to LIST_MAX. Records are never cut into
+ * "and N more" (11 Oct 2026, the first record email, outbox #28: two of its three records were older than eight later lines and were cut).
+ */
+export function listOf(items: Item[], lead: Item | null): { rest: Item[]; more: number } {
+  const newest = (a: Item, b: Item) => +new Date(b.happened_at) - +new Date(a.happened_at);
+  const others = items.filter((i) => i !== lead && i.kind !== "ask");
+  const records = others.filter((i) => i.kind === "challenge_record").sort(newest);
+  const plain = others.filter((i) => i.kind !== "challenge_record").sort(newest);
+  const room = Math.max(0, LIST_MAX - records.length);
+  return { rest: [...records, ...plain.slice(0, room)], more: Math.max(0, plain.length - room) };
+}
+
 export type Edition = "daily" | "weekly" | "letter" | "record";
 export type Composed = {
   edition: Edition; subject: string; lead: Item | null; asks: Item[]; rest: Item[]; more: number; stats: Stats | null; letters: any[];
@@ -465,14 +478,14 @@ export async function compose(userId: number, opts: { weekday: number; day: stri
   if (!d) return null;
   const lead = pickLead(d.items);
   const asks = d.items.filter((i) => i.kind === "ask" && i !== lead);
-  const others = d.items.filter((i) => i !== lead && i.kind !== "ask").sort((a, b) => +new Date(b.happened_at) - +new Date(a.happened_at));
+  const { rest, more } = listOf(d.items, lead);
   const own = d.edition === "letter" || d.edition === "record";   // a letter or a record email carries no stats and no project update
   const quiet = !own && s?.agent.last_seen && Date.now() - +new Date(s.agent.last_seen) > 14 * 86400_000 ? s.agent.last_seen : null;
   const offerLetter = !prefs.newsletter && d.items.some((i) => i.kind === "first");
   // An agent that has not been seen for three days gets one clear next step at the top: start it again.
   const idle = !own && s?.agent.last_seen && Date.now() - +new Date(s.agent.last_seen) > 3 * 86400_000 ? s.agent.last_seen : null;
   const project = !own && s?.project ? await projectUpdate(s.project.id, d.edition === "weekly" ? 7 : 1, userId) : null;
-  return { edition: d.edition, subject: "", lead, asks, rest: others.slice(0, LIST_MAX), more: Math.max(0, others.length - LIST_MAX), stats: own ? null : s, letters: d.letters, items: [...d.items, ...d.letters], quietSince: quiet, idleSince: idle, offerLetter, prefs, project, first: !last };
+  return { edition: d.edition, subject: "", lead, asks, rest, more, stats: own ? null : s, letters: d.letters, items: [...d.items, ...d.letters], quietSince: quiet, idleSince: idle, offerLetter, prefs, project, first: !last };
 }
 
 /** The small label beside a line in the list, and the eyebrow over the lead. */
