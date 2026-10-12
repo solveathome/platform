@@ -239,9 +239,9 @@ ${ENDED_LAUNCH_GUIDANCE}
     return;
   }
   // Settings are the session's: two agents of one person may run with different time and different shares of different machines.
-  const settings = { ai: session.ai ?? member?.ai ?? {}, compute: session.compute ?? null, input: session.input ?? null };
-  const offer = settings.compute?.usable ? settings.compute : parseOffer(settings.compute, Number(settings.ai?.max_hours_per_assignment ?? 2));
-  const prefs = { maxHours: Number(offer?.usable?.cpu_hours ?? 0), ramGb: Number(offer?.usable?.ram_gb ?? 0), hasGpu: !!(offer?.usable?.vram_gb), lane: settings.input?.lane ?? null };
+  const resources = sessionResources(session, member);
+  const { settings, offer } = resources;
+  const prefs = { maxHours: resources.cpuHours, ramGb: resources.ramGb, hasGpu: resources.hasGpu, lane: resources.lane };
   // Tier 1 needs a top thinking level (Chris, Sep 10): a frontier model at a lower or undeclared level judges at tier 2.
   // The session's thinking level: evidence from its own transcript wins (set at each return); until then, the latest declaration, which an
   // agent may correct after reading its session file (the registration reply says how).
@@ -255,14 +255,14 @@ ${ENDED_LAUNCH_GUIDANCE}
   // /start decides (Chris, Sep 11: nobody passes ?type=); the query string is the person's configuration, read at registration only.
   const maxHours = prefs.maxHours;
   const lane = prefs.lane;
-  const disk = diskFor(offer);
+  const disk = resources.disk;
   const uid = req.user!.id;
 
   const savedDirection = await directionFor(session);
   session.direction_snapshot = savedDirection;
   const agent: SchedulingAgent = { problemId: Number(req.project.id), slug: req.project.slug, sessionId: session.id, uid,
     tier, model: req.model ?? null, provider: req.provider ?? null, trusted, granted, lane, cpuHours: maxHours,
-    ramGb: prefs.ramGb, hasGpu: prefs.hasGpu, disk, maxHours: Number(settings.ai?.max_hours_per_assignment ?? 2),
+    ramGb: prefs.ramGb, hasGpu: prefs.hasGpu, disk, maxHours: resources.maxHours,
     directionId: session.direction_id, directionRevision: savedDirection?.revision, reviewStreak: Number(session.review_streak ?? 0), capabilities: session.capabilities ?? {},
     chatOnly: session.registered_via === "mcp" };
   const chat = session.registered_via === "mcp";
@@ -684,6 +684,15 @@ Read \`research/README.md\` (the router) first if this is your first assignment 
 
 /** A live session holds an assignment or was seen within the hour (platform issue #3: finished sessions must not count against the cap). Alias s. */
 const LIVE_SESSION = `s.ended_at IS NULL AND (s.last_seen > now() - interval '1 hour' OR EXISTS (SELECT 1 FROM jobs j WHERE j.assigned_session = s.id AND j.status = 'assigned' AND (j.expires_at IS NULL OR j.expires_at > now())))`;
+/** The handle caps /start applies before any work (live sessions at registration, assignments held across sessions), as /ready's
+ * refusal: the same limits and the same counts, so /ready never reports work a new session of this handle would be refused. */
+async function handleCapRefusal(problemId: number, uid: number): Promise<string | null> {
+  const c = await one<{ live: string; held: string }>(`SELECT (SELECT count(*) FROM sessions s WHERE ${LIVE_SESSION} AND s.problem_id = $1 AND s.user_id = $2) AS live,
+    (SELECT count(*) FROM jobs WHERE problem_id = $1 AND assigned_to = $2 AND status = 'assigned' AND (expires_at IS NULL OR expires_at > now())) AS held`, [problemId, uid]);
+  if (Number(c?.live ?? 0) >= MAX_LIVE_SESSIONS) return `this handle already has ${c!.live} live sessions (limit ${MAX_LIVE_SESSIONS}): /start would refuse a new one`;
+  if (Number(c?.held ?? 0) >= MAX_HELD_PER_HANDLE) return `this handle already holds ${c!.held} assignments (limit ${MAX_HELD_PER_HANDLE}): /start would refuse another`;
+  return null;
+}
 
 /**
  * A session whose person allowed n assignments ends when the n-th is returned or released and it holds nothing (platform issue #3).
@@ -742,6 +751,17 @@ job.get("/scheduler", bearer, project, async (req: any, res) => {
   res.json({ discovery_share: discoveryShare(req.project.slug, req.project.discovery_share), research_allocation: researchPolicy(req.project.slug, req.project.research_allocation), research_hours: await researchAllocation(Number(req.project.id)), window_days: 7, unit: "budgeted agent hours", tier1: await allocation(Number(req.project.id)) });
 });
 
+/** What a session schedules with: its person's settings, its compute offer and the disk it implies. /start reads its own session
+ * through this, and /ready reads the caller's latest session through it, so the two apply one compute rule (#sah-ready-start-review-mismatch,
+ * Oct 12 2026: /ready left the offer out and counted four Lean reviews needing 8 GB of disk that /start refused to a 5 GB worker). */
+export function sessionResources(session: any, member: any) {
+  const settings = { ai: session?.ai ?? member?.ai ?? {}, compute: session?.compute ?? null, input: session?.input ?? null };
+  const maxHours = Number(settings.ai?.max_hours_per_assignment ?? 2);
+  const offer = settings.compute?.usable ? settings.compute : parseOffer(settings.compute, maxHours);
+  return { settings, offer, cpuHours: Number(offer?.usable?.cpu_hours ?? 0), ramGb: Number(offer?.usable?.ram_gb ?? 0), hasGpu: !!(offer?.usable?.vram_gb),
+    lane: settings.input?.lane ?? null, disk: diskFor(offer), maxHours };
+}
+
 /** GET /ready?work=all|reviews : how much this agent (the bearer's handle, X-Model, X-Effort) could be handed now, in the shape a
  * scheduler that starts agents reads ({ ready, urgency, facts }). Chris's compute starts Opus 5.5 sessions with work=reviews one
  * task at a time; the project-wide queued count said 534 while none of it was review work they could take (Sep 23 2026, ask 387),
@@ -758,8 +778,18 @@ job.get("/ready", bearer, project, async (req: any, res) => {
   const tier = tierForEffort(await modelTier(req.model ?? "unknown"), req.effort ?? null).tier;
   const trusted = await isTrusted(Number(req.project.id), uid, req.user!.handle, { model: req.model, effort: req.effort });
   const granted = await isGrantedTrusted(Number(req.project.id), uid, req.user!.handle);
-  const agent: SchedulingAgent = { problemId: Number(req.project.id), slug: req.project.slug, sessionId: "", uid, tier, model: req.model ?? null,
-    provider: req.provider ?? null, trusted, granted, lane: null, cpuHours: 0, ramGb: 0, hasGpu: false, disk: 1, maxHours: 2, reviewStreak: 0, capabilities: {} };
+  // The agent a new session of this caller would be (#sah-ready-start-review-mismatch): the compute offer, declarations and department
+  // of its latest session here with this model (a compute worker re-registers the same machine each run), else the person's settings,
+  // read by /start's own sessionResources. Its department's recorded deferrals apply; a fresh session has no release history of its own.
+  const latest = await one(`SELECT * FROM sessions WHERE problem_id=$1 AND user_id=$2 AND model IS NOT DISTINCT FROM $3 AND registered_via IS DISTINCT FROM 'mcp' ORDER BY started_at DESC LIMIT 1`, [req.project.id, uid, req.model ?? null]);
+  const member = await one(`SELECT * FROM pool WHERE problem_id=$1 AND user_id=$2`, [req.project.id, uid]);
+  const r = sessionResources(latest, member);
+  const agent: SchedulingAgent = { problemId: Number(req.project.id), slug: req.project.slug, sessionId: "", deferralSessionId: latest?.id, uid, tier, model: req.model ?? null,
+    provider: req.provider ?? null, trusted, granted, lane: r.lane, cpuHours: r.cpuHours, ramGb: r.ramGb, hasGpu: r.hasGpu, disk: r.disk, maxHours: r.maxHours,
+    reviewStreak: 0, capabilities: latest?.capabilities ?? {} };
+  // /start refuses a new session at the handle's caps before it looks at any work: so does /ready, with the same limits.
+  const capped = await handleCapRefusal(Number(req.project.id), uid);
+  if (capped) { res.json({ ready: 0, urgency: "normal", reviews: 0, trusted, tier, capped: true, facts: capped }); return; }
   const workChecks=(await workComparisonDue(agent)) ? (await backlogFor({...agent,workCheckOnly:true})).research : 0;
   if (work === "reviews" && trusted) {
     const w = await reviewWorkFor(agent, !!reviewTriage(req.project.slug));
@@ -768,8 +798,11 @@ job.get("/ready", bearer, project, async (req: any, res) => {
     return;
   }
   const b = await backlogFor(agent);
-  res.json({ ready: work === "reviews" ? 0 : b.reviews + b.research + workChecks, ...(workChecks ? {work_comparisons:workChecks} : {}), urgency: "normal", reviews: b.reviews, research: b.research, trusted, tier,
-    facts: work === "reviews" ? "not a trusted reviewer at this model and thinking level: reviews only does not apply" : `${b.reviews} reviews and ${b.research} other assignments this agent may take` });
+  // With nothing queued that fits, /start still hands out one assignment it makes on the spot (a question to explore, or a record
+  // challenge's run): counted here, so a scheduler that starts agents on ready > 0 is not told 0 while /start would assign.
+  const queued = b.reviews + b.research + workChecks, made = queued === 0 ? 1 : 0;
+  res.json({ ready: work === "reviews" ? 0 : queued + made, ...(workChecks ? {work_comparisons:workChecks} : {}), urgency: "normal", reviews: b.reviews, research: b.research, ...(work !== "reviews" && made ? { made_on_request: made } : {}), trusted, tier,
+    facts: work === "reviews" ? "not a trusted reviewer at this model and thinking level: reviews only does not apply" : `${b.reviews} reviews and ${b.research} other assignments this agent may take${made ? "; none queued fits, so /start makes one (a question to explore or a challenge run)" : ""}` });
 });
 
 /** POST /sessions/:id/end { note? } : end one of this handle's sessions; its held assignment returns to the queue. */

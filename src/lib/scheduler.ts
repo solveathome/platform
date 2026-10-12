@@ -85,6 +85,8 @@ export type SchedulingAgent = {
   chatOnly?: boolean;
   /** A bounded trusted assignment judgment, separate from scientific acceptance. */
   workCheckOnly?: boolean;
+  /** /ready only: a session of the caller's department whose recorded deferrals apply, for an agent with no session of its own yet. */
+  deferralSessionId?: string;
 };
 /** What a chat model can do in a conversation: reasoning and writing, nothing that runs code. */
 export const CHAT_TYPES = ["explore", "source", "formalize", "break", "curate"] as const;
@@ -124,6 +126,7 @@ function eligibility(a: SchedulingAgent, omitCompute = false, sameKindOnly = fal
   const values: any[] = [];
   const p = (v: any) => { values.push(v); return `$${values.length}`; };
   const pid = p(a.problemId), tier = p(a.tier), sid = p(a.sessionId), uid = p(a.uid), model = p(a.model), fallback = p(a.triageFallback === true && a.trusted);
+  const deferralSid = a.deferralSessionId ? p(a.deferralSessionId) : sid;
   // Each clause carries the reason a bot is given when it asks for a job by id and cannot have it (#mba-sah-held-feedback-items, item 11).
   const labeled: Array<[string, string]> = [
     ["only assignment comparisons were requested", a.workCheckOnly ? '(j.work_check IS NOT NULL OR j.applicability_check IS NOT NULL)' : 'true'],
@@ -132,7 +135,7 @@ function eligibility(a: SchedulingAgent, omitCompute = false, sameKindOnly = fal
     ["assignment comparisons are offered between substantive tasks", `((j.work_check IS NULL AND j.applicability_check IS NULL) OR ${p(Boolean(a.jobId || a.workCheckOnly))}::boolean)`],
     ["an assignment comparison needs a different model family", `(j.work_check IS NULL OR lean_model_family(j.work_check->>'author_model') IS DISTINCT FROM lean_model_family(${model}::text))`],
     ["it requires a trusted session", `(NOT j.requires_trust OR ${p(a.trusted)}::boolean)`],
-    ["this department already recorded unchanged assignment-fit blockers; change sources/controls or explicitly direct a revisit", a.jobId || a.directionId ? 'true' : deferralEligibility(sid)],
+    ["this department already recorded unchanged assignment-fit blockers; change sources/controls or explicitly direct a revisit", a.jobId || a.directionId ? 'true' : deferralEligibility(deferralSid)],
     ["this generated index awaits its co-origin source corrections", a.jobId || a.directionId ? 'true' : INDEX_PREREQUISITES_SQL],
     ["it needs its named person or agent; see the job's handoff requirements", a.jobId || a.directionId ? 'true' : HANDOFF_ELIGIBILITY_SQL],
     ["this session released it before", `j.last_released_session IS DISTINCT FROM ${sid}::text`],
@@ -206,9 +209,11 @@ export async function backlogFor(a: SchedulingAgent) {
 }
 
 /** What a reviews-only agent could take now (Chris, Sep 23 2026, ask 387): reviews, and the triages it falls back to when none
- * waits. The same eligibility as selection, compute offer left out; a series one triage covers still counts one each. */
+ * waits. The same eligibility as selection, compute offer included: leaving it out counted Lean reviews needing 8 GB of disk that
+ * /start then refused a 5 GB worker, three times running (Oct 12 2026, #sah-ready-start-review-mismatch). A series one triage covers
+ * still counts one each. */
 export async function reviewWorkFor(a: SchedulingAgent, triage: boolean) {
-  const e = eligibility({ ...a, triageFallback: triage }, true);
+  const e = eligibility({ ...a, triageFallback: triage });
   const row = await one(`SELECT count(*) FILTER (WHERE j.type = 'review') AS reviews, count(*) FILTER (WHERE j.type = 'triage') AS triage ${e.joins} WHERE ${e.where}`, e.values);
   return { reviews: Number(row?.reviews ?? 0), triage: triage ? Number(row?.triage ?? 0) : 0 };
 }

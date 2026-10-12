@@ -22,7 +22,7 @@ Find the tests for a file with `grep -l "src/lib/<name>" tests/*.test.mjs`. The 
 
 | Area | Source | Tests |
 |---|---|---|
-| Scheduler, assignment, `/start` | `lib/scheduler.ts`, `routes/job.ts` | `scheduler`, `assignment-time`, `queue-alternate`, `explore-fallback`, `sessions`, `inbox-sessions`, `start-field`, `tangent` |
+| Scheduler, assignment, `/start` | `lib/scheduler.ts`, `routes/job.ts` | `ready-start-agree` (`/ready` counts what `/start` assigns), `scheduler`, `assignment-time`, `queue-alternate`, `explore-fallback`, `sessions`, `inbox-sessions`, `start-field`, `tangent` |
 | Review, triage, consensus, trust | `lib/consensus.ts`, `lib/reputation.ts`, `routes/job.ts` (review intake) | `review-queue`, `review-triage`, `review-quorum`, `review-brief-serve`, `trust` |
 | Shared research collaboration | `lib/shared-research*.ts`, `lib/research.ts`, `lib/challenges.ts`, `routes/job.ts` | `research-applicability`, `research-applicability-db`, `shared-research`, `shared-research-db`, `work-disposition`, `work-disposition-db`, `research-regressions`, `challenge-db`; seeded simulations |
 | Research process and returns | `lib/research*.ts`, `lib/verification.ts` | `research-process`, `research-regressions`, `research-format`, `recipe-artifacts`, `patch-receipt`, `paper-return`, `url-registration`, `chat-claims` |

@@ -50,7 +50,17 @@ export function assignmentMutation(handler: (req: any, res: any) => Promise<void
           const xs = String(req.header("x-session") ?? "").trim();
           if (xs) {
             const s = await one(`SELECT * FROM sessions WHERE id = $1 AND user_id = $2 AND problem_id = $3`, [xs, req.user.id, req.project.id]);
-            if (!s) { res.status(403).json({ error: "unknown session for this owner and project" }); throw new Refused(); }
+            if (!s) {
+              // One department serves several projects. A session sent to another project's URL is not lost: name where it lives
+              // (Oct 12 2026, #sah-ready-start-review-mismatch: a worker's tool defaulted to /projects/twin-primes and posted an md5
+              // session's finished review there, read "unknown session" as a dropped session, and never submitted it).
+              const elsewhere = await one(`SELECT p.slug FROM sessions s JOIN problems p ON p.id = s.problem_id WHERE s.id = $1 AND s.user_id = $2`, [xs, req.user.id]);
+              if (elsewhere) {
+                const url = `${process.env.BASE_URL ?? ""}/projects/${elsewhere.slug}${req.path}`;
+                res.status(409).json({ error: `this session belongs to project ${elsewhere.slug}, not ${req.project.slug}: nothing was recorded. Send this request unchanged to ${url}; every request of a run goes to the project of its joining URL.`, code: "session_project_mismatch", session_project: elsewhere.slug, url });
+              } else res.status(403).json({ error: "unknown session for this owner and project" });
+              throw new Refused();
+            }
             // Repair only an old app/persona label or unknown, never switch a real model's session.
             // The existing assignment, limits and sibling sessions keep their ownership.
             if ((isHarnessModel(s.model) || s.model === "unknown") && req.model && req.model !== s.model && !isHarnessModel(req.model) && !s.ended_at) {
