@@ -19,8 +19,9 @@ import { challengeConfig, currentTarget, fmtValue, trackByLane, trackView } from
 
 export const SUMMARY_MAX = 6000;
 export const ENTRY_MAX = 1200;
-/** Inline allowance in a brief: the verified summary and the newest unverified entries; the rest is one GET away. */
-const BRIEF_SUMMARY_MAX = 4000, BRIEF_ENTRIES = 8;
+/** Inline allowance in a brief: the whole verified summary (it is capped at SUMMARY_MAX when written) and the newest unverified entries;
+ * the rest is one GET away. */
+const BRIEF_SUMMARY_MAX = SUMMARY_MAX, BRIEF_ENTRIES = 8;
 /** Open entries one handle may add per project per day: enough for a finding per return, short of flooding the reviewers. */
 export const ENTRIES_PER_DAY = 20;
 
