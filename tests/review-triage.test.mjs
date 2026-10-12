@@ -519,10 +519,10 @@ const ready = async (who, model = 'claude-opus-5-5') => ok(await call('/ready?wo
 
 test('reviews only: with no review waiting a trusted tier-1 session skips the triage and reviews the return directly', async () => {
   const r = await askForReview();
-  assert.deepEqual(await ready(tokens.second), {ready: 1, urgency: 'normal', reviews: 0, triage: 1, trusted: true, tier: 1, facts: '0 reviews and 1 triage this agent may take (never its own model\'s returns, nor its handle\'s)'});
+  assert.deepEqual(await ready(tokens.second), {ready: 1, urgency: 'normal', reviews: 0, triage: 1, checks: 0, rescues: 0, trusted: true, tier: 1, facts: 'management work this agent may take: 0 reviews, 1 triage, 0 package checks, 0 rescues (never its own model\'s returns or blocks, nor its handle\'s)'});
   // Chris, Sep 25 2026 (#sah-tier1-skip-triage): "no need to do research > triage > validation when we can just do research > validation".
   const a = await reviewsOnly(tokens.second);
-  assert.equal(a.type, 'review', JSON.stringify(a).slice(0, 1500)); assert.equal(a.assignment_reason.policy, 'reviews only: triage skipped, trusted reviewer');
+  assert.equal(a.type, 'review', JSON.stringify(a).slice(0, 1500)); assert.equal(a.assignment_reason.policy, 'management: triage skipped, trusted reviewer');
   assert.equal(Number((await one(`SELECT parent_return_id FROM jobs WHERE id=$1`, [a.job_id])).parent_return_id), Number(r.return_id));
   assert.deepEqual((await jobsOf(r.return_id, 'triage')).map(j => j.status), ['expired'], 'the triage job is kept, expired with the reason');
   assert.equal((await q(`SELECT 1 FROM triages WHERE return_id=$1`, [r.return_id])).length, 0, 'nobody triaged it');
@@ -539,7 +539,7 @@ test('reviews only: a trusted session below tier 1 skips the triage of a return 
   const r = await askForReview();
   await q(`UPDATE returns SET type='source' WHERE id=$1`, [r.return_id]);   // a source's review is a tier-2 page check
   const a = await reviewsOnly(tokens.trusted, 'claude-opus-5');
-  assert.equal(a.type, 'review', JSON.stringify(a.assignment_reason)); assert.equal(a.assignment_reason.policy, 'reviews only: triage skipped, trusted reviewer');
+  assert.equal(a.type, 'review', JSON.stringify(a.assignment_reason)); assert.equal(a.assignment_reason.policy, 'management: triage skipped, trusted reviewer');
   assert.equal(Number((await one(`SELECT parent_return_id FROM jobs WHERE id=$1`, [a.job_id])).parent_return_id), Number(r.return_id));
   assert.equal((await q(`SELECT 1 FROM triages WHERE return_id=$1`, [r.return_id])).length, 0, 'nobody triaged it');
   await release(a);
@@ -602,10 +602,10 @@ test('reviews only: never a triage of its own model; its own handle only by gran
   await release(t);
 });
 
-test('ready: a session that is not trusted gets 0 for reviews only; work is all or reviews', async () => {
+test('ready: a session that is not trusted counts the triage it may take in management mode; work is all, manage or reviews', async () => {
   await askForReview();
   const b = await ready(tokens.second, 'claude-opus-5');
-  assert.equal(b.ready, 0); assert.equal(b.trusted, false);
+  assert.equal(b.ready, 1); assert.equal(b.triage, 1); assert.equal(b.reviews, 0); assert.equal(b.trusted, false);
   assert.equal((await call('/ready?work=everything', {who: tokens.second, model: 'claude-opus-5-5', effort: 'high'})).status, 400);
 });
 

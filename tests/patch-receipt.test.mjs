@@ -27,7 +27,7 @@ before(async () => {
   pid = Number((await one(`INSERT INTO problems(slug,name,repo_url,status_md,discovery_share) VALUES($1,'Patch receipt fixture','https://example.org/r','open',0) RETURNING id`, [slug])).id);
   await q(`INSERT INTO channels(problem_id,path,title) VALUES($1,'','Project')`, [pid]);
   mkdirSync(join(process.env.PROJECTS_DIR, slug), {recursive:true});
-  writeFileSync(join(process.env.PROJECTS_DIR, slug, 'project.json'), JSON.stringify({slug,review_notes:{patch:configured}}));
+  writeFileSync(join(process.env.PROJECTS_DIR, slug, 'project.json'), JSON.stringify({slug,review_notes:{patch:configured},scheduler:{review_triage:false}}));
   const app=express(); app.use(express.json()); app.use('/projects/:slug',job);
   server=app.listen(0,'127.0.0.1'); await new Promise(r=>server.once('listening',r));
   base=`http://127.0.0.1:${server.address().port}/projects/${slug}`;

@@ -736,24 +736,43 @@ test('no cap on new routes: an eleventh proposal from one handle in a day is rec
   assert.equal((await one(`SELECT count(*)::int AS n FROM research_routes WHERE problem_id=$1`,[pid])).n,11);
 });
 
-test('reviews only: a trusted session takes reviews and nothing else, waits when none is open; an untrusted one ignores it',async()=>{
+test('management mode: a trusted session takes reviews first, never research, and waits when none is open; work=reviews means the same',async()=>{
   const {parseInstruction}=await import('../src/routes/job.ts');
-  assert.equal(parseInstruction({work:'reviews'}).ai.reviews_only,true);
+  assert.equal(parseInstruction({work:'reviews'}).ai.work,'manage');assert.equal(parseInstruction({work:'manage'}).ai.work,'manage');assert.equal(parseInstruction({work:'manage'}).ai.reviews_only,true);
   assert.equal('reviews_only' in parseInstruction({}).ai,false,'the default leaves stored settings as they were');
-  assert.match(parseInstruction({work:'everything'}).error,/work must be one of all, reviews/);
+  assert.match(parseInstruction({work:'everything'}).error,/work must be one of all, manage, reviews/);
   await q(`INSERT INTO jobs (problem_id,type,title,brief_md,budget_hours,min_tier,priority) VALUES ($1,'source','Research waiting','Find the evidence.',1,99,10)`,[pid]);
   const get=async(who,session)=>{const u=users[who],h={authorization:`Bearer ${u.token}`,'x-model':u.model,'x-effort':'max',accept:'application/json'};
     if(session)h['x-session']=session;else h['x-launch-id']=randomUUID();
     const res=await fetch(base+'/start?share=25&work=reviews',{headers:h});return {status:res.status,retry:res.headers.get('retry-after'),body:await res.json()};};
   const idle=await get('judge');assert.equal(idle.status,200,JSON.stringify(idle.body));
   assert.equal(idle.body.state,'no_review_waiting');assert.equal(idle.body.job_id,undefined,'research is waiting, and it is not handed out');
-  assert.equal(idle.retry,'600');assert.equal(idle.body.retry_after_s,600);assert.match(idle.body.brief_md,/reviews only/);
+  assert.equal(idle.retry,'600');assert.equal(idle.body.retry_after_s,600);assert.match(idle.body.brief_md,/management work/);
   const ret=await one(`INSERT INTO returns (problem_id,type,user_id,model,provider,report_md,transcript,status) VALUES ($1,'explore',$2,'claude-opus-5','anthropic','A claim to judge.','t','pending') RETURNING id`,[pid,users.author.id]);
   const rj=await one(`INSERT INTO jobs (problem_id,type,title,brief_md,budget_hours,min_tier,parent_return_id) VALUES ($1,'review',$2,'Check it.',1,99,$3) RETURNING id`,[pid,`Review return #${ret.id}`,ret.id]);
   const busy=await get('judge',idle.body.session);assert.equal(busy.status,200,JSON.stringify(busy.body));
-  assert.equal(Number(busy.body.job_id),Number(rj.id));assert.equal(busy.body.assignment_reason.policy,'reviews only');
+  assert.equal(Number(busy.body.job_id),Number(rj.id));assert.equal(busy.body.assignment_reason.policy,'management');
+  // Any model may run it now: a session that is not a trusted reviewer gets no review and no research either.
   const other=await get('runner');assert.equal(other.status,200,JSON.stringify(other.body));
-  assert.notEqual(other.body.type,'review');assert.match(other.body.assignment_reason.reviews_only,/ignored/);
+  assert.equal(other.body.state,'no_review_waiting');assert.equal(other.body.job_id,undefined);
+});
+
+// Management mode for any model (Chris, Oct 12 2026, #sah-rescue-every-project): "Basically reviewing and keeping everything alive".
+test('management mode makes and takes rescues, takes triage and package checks, and never research, for a model that is not trusted',async()=>{
+  const manage=(who,extra='')=>call(`/start?share=50&work=manage${extra}`,{who,launch:randomUUID(),effort:'medium'});
+  const {r}=await activeRoute(),route=r.research.route_id,p=await start('author');
+  ok(await submit('author',{research:{route_id:route,outcome:'blocked',evidence_md:'Only the uniform version failed.',obstacle}},p));
+  assert.equal((await one(`SELECT count(*)::int AS n FROM jobs WHERE research_route_id=$1 AND research_stage='rescue'`,[route])).n,0,'no rescue made yet');
+  const ready=ok(await call('/ready?work=manage',{who:'runner',effort:'medium'}));assert.ok(ready.rescues>=1,JSON.stringify(ready));assert.ok(ready.ready>=1);
+  const rescue=ok(await manage('runner'));
+  assert.equal(rescue.research_stage,'rescue',JSON.stringify(rescue).slice(0,400));assert.equal(rescue.assignment_reason.policy,'management');
+  assert.equal(Number((await one(`SELECT research_route_id FROM jobs WHERE id=$1`,[rescue.job_id])).research_route_id),route);
+  // The blocking model never rescues its own block; research waiting is not handed out either.
+  await q(`INSERT INTO jobs (problem_id,type,title,brief_md,budget_hours,min_tier,priority) VALUES ($1,'source','Research waiting','Find the evidence.',1,99,10)`,[pid]);
+  const own=ok(await manage('author'));assert.equal(own.state,'no_review_waiting',JSON.stringify(own).slice(0,300));
+  // A package check is upkeep too.
+  const plan=await packageFor(),claim=await computation(plan);
+  const check=ok(await manage('astra'));assert.equal(check.type,'check',JSON.stringify(check).slice(0,300));assert.equal(Number(check.evidence_return_id ?? (await one(`SELECT evidence_return_id FROM jobs WHERE id=$1`,[check.job_id])).evidence_return_id),Number(claim.return_id));
 });
 
 test('a route brief lists the files served with its returns under the return that holds them, not a number in their name',async()=>{

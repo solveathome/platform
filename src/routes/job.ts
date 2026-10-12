@@ -24,9 +24,9 @@ import { assignmentMutation, claimAssignment, releaseAssignment } from "../lib/a
 import { parseCapabilities, researchContact, CAPABILITY_INSTRUCTIONS } from "../lib/agent-profile.js";
 import { checkInstruction, ENDED_LAUNCH_GUIDANCE, folderLaunchContract } from "../lib/launch.js";
 import { isDeepStrictEqual } from "node:util";
-import { rescueDue, backlogFor, reviewWorkFor, selectJob, selectRequiredCorrection, REQUIRED_CORRECTION_INTERVAL, whyNotEligible, computeBlocked, discoveryShare, discoveryDue, allocation, researchPolicy, researchAllocation, portfolioOrder, researchBucket, reviewPressure, reviewTriage, unmetRequirements, STALE_REQUIREMENT_HOURS, ROUTE_REPEAT_WINDOW, type SchedulingAgent } from "../lib/scheduler.js";
+import { rescueDue, upkeepFor, isManageMode, backlogFor, reviewWorkFor, selectJob, selectRequiredCorrection, REQUIRED_CORRECTION_INTERVAL, whyNotEligible, computeBlocked, discoveryShare, discoveryDue, allocation, researchPolicy, researchAllocation, portfolioOrder, researchBucket, reviewPressure, reviewTriage, unmetRequirements, STALE_REQUIREMENT_HOURS, ROUTE_REPEAT_WINDOW, type SchedulingAgent } from "../lib/scheduler.js";
 import { parseResearch, stageOf, jobLabel } from '../lib/research-format.js';
-import { stepCheckContext, recordResearch, prepareRescue, retireRedundantRescueSamples, retireRedundantStepChecks, researchBrief, routeContext, reconsiderDependents, holdForStepCheck } from '../lib/research.js';
+import { stepCheckContext, recordResearch, prepareRescue, rescueCandidates, retireRedundantRescueSamples, retireRedundantStepChecks, researchBrief, routeContext, reconsiderDependents, holdForStepCheck } from '../lib/research.js';
 import { describeNeeds, waitingFor } from '../lib/capability-shortfall.js';
 import { leanStatementBinding, leanExecutionBinding, leanScientificBinding } from '../lib/lean-verification.js';
 import { expireUntrustedLeanChecks, saveLeanStatementReview, saveLeanExecutionReview, parseLeanExecutionReview, validateLeanIdentityArtifacts, parseVerificationPlan, saveVerificationPlan, queueCheck, saveCheckReceipt, verificationRuns, verificationState, verificationBrief, judgmentBudget, validateReceiptUse, isCompletedCheck, expireWaitingChecks, checkWaitExpired, identicalClaim, verificationSummary, receiptId } from '../lib/verification.js';
@@ -349,7 +349,14 @@ ${ENDED_LAUNCH_GUIDANCE}
   // and a bot good enough to review has no need to triage): the return it would have triaged goes to review directly, and it takes
   // the review. The eligibility is the triage fallback's plus the review tier rule, so it is never its own model's return nor one
   // above its tier; a review it cannot take after all (compute) stays queued for another reviewer.
-  const reviewsOnly = settings.ai?.reviews_only === true && trusted && !recovery && !session.direction_id && !tangentFirst;
+  // Management mode (Chris, Oct 12 2026, #sah-rescue-every-project: the work flag "should choose between research and management
+  // style jobs only. Basically reviewing and keeping everything alive. We can give one opus and one sol agent this"). `work=manage`
+  // (`work=reviews` is the same, kept for the instructions already handed out) takes upkeep only, for any model: reviews first when the
+  // session is a trusted reviewer (the review-first loop below, unchanged), then triage, package checks, rescues of blocked routes,
+  // required corrections and assignment comparisons. Never discovery or pursuit; with nothing to take it holds nothing and asks again.
+  // Own-model, other-contributor, trust and capability rules are the scheduler's, as for any job.
+  const manage = isManageMode(settings.ai) && !recovery && !session.direction_id && !tangentFirst;
+  const reviewsOnly = manage && trusted;
   let triageSkipped = false;
   if (!row && !recovery && !directed && !session.direction_id && !tangentFirst && collaborationEnabled(req.project.slug)) {
     await reconsiderApplicability(Number(req.project.id),req.project.slug);
@@ -365,8 +372,14 @@ ${ENDED_LAUNCH_GUIDANCE}
       await skipTriage(waiting, `a trusted reviewer (${req.model ?? "unknown"}) reviews it directly`);
       row = await selectJob(agent, false, false, undefined, false, true); triageSkipped = !!row;
     }
+  }
+  if (manage && !row) {
+    // Rescues are made here too, so blocked routes get their second look without a general-mode start (every md5 start after
+    // db25e3d was a reviews-only session, and no rescue was made).
+    await prepareRescue(agent.problemId, agent.model, lane);
+    row = await selectJob(agent, false, false, undefined, false, false, false, false, true);
     if (!row) {
-      let md = `# solveathome / ${req.project.name}: no review waiting for you\n\nYour person set this agent to reviews only, and no review you may take is waiting right now (a model never reviews its own kind${granted ? "" : ", nor a handle its own returns"}${need.blocked_reviews ? `; ${need.blocked_reviews} wait for an agent on another model` : ""}). You hold nothing. Call \`GET ${BASE()}/projects/${req.project.slug}/start\` again with your \`X-Session\` header in ${Math.round(REVIEWS_ONLY_RETRY_S / 60)} minutes; do not start other work, your person asked for reviews.`;
+      let md = `# solveathome / ${req.project.name}: no upkeep waiting for you\n\nYour person set this agent to management work (reviews, triage, package checks, rescues of blocked routes, required corrections), and none you may take is waiting right now (a model never reviews or rescues its own kind${granted ? "" : ", nor a handle its own returns"}${need.blocked_reviews ? `; ${need.blocked_reviews} reviews wait for an agent on another model` : ""}). You hold nothing. Call \`GET ${BASE()}/projects/${req.project.slug}/start\` again with your \`X-Session\` header in ${Math.round(REVIEWS_ONLY_RETRY_S / 60)} minutes; do not start research, your person asked for management work only.`;
       if (req.justRegistered && !session.department_id) md = (await orientation(req.project, BASE(), { ...member, ...settings, capabilities: session.capabilities, contact_id: session.contact_id, session: session.id, session_max_jobs: session.max_jobs, length: lengthWords(session), disk }, true, { model: req.model ?? null, uid, trusted, tier, effort: req.effort ?? null, tier_note: tf.note }, true)) + "\n\n---\n\n" + md;
       if (inboxMd) md += `\n\n${inboxMd}`;
       res.setHeader("Retry-After", String(REVIEWS_ONLY_RETRY_S));
@@ -419,7 +432,7 @@ ${ENDED_LAUNCH_GUIDANCE}
   const stepCheck = !recovery && !directed && !session.direction_id && !tangentFirst && !chat ? await holdForStepCheck(row) : null;
   if (stepCheck) row = stepCheck;
   const unmet = row.type === 'check' ? { tools: [], sources: [] } : unmetRequirements(row, agent.capabilities);
-  const reason = { policy: row.applicability_check ? "trusted applicability screening" : row.work_check ? "trusted assignment comparison" : directed ? "requested job" : session.direction_id ? "agent direction" : tangentFirst ? "person's tangent" : triageSkipped ? "reviews only: triage skipped, trusted reviewer" : reviewsOnly ? "reviews only" : requiredCorrection ? "required correction" : trustedJudgment ? "trusted judgment" : pressed ? "review pressure" : triaged ? "review triage" : portfolio ? "research portfolio" : reserveDiscovery ? "reserved tier-1 discovery" : "eligible work by need and capability",
+  const reason = { policy: row.applicability_check ? "trusted applicability screening" : row.work_check ? "trusted assignment comparison" : directed ? "requested job" : session.direction_id ? "agent direction" : tangentFirst ? "person's tangent" : triageSkipped ? "management: triage skipped, trusted reviewer" : manage ? "management" : requiredCorrection ? "required correction" : trustedJudgment ? "trusted judgment" : pressed ? "review pressure" : triaged ? "review triage" : portfolio ? "research portfolio" : reserveDiscovery ? "reserved tier-1 discovery" : "eligible work by need and capability",
     ...(row.required_correction ? { required_correction: true, correction_interval: REQUIRED_CORRECTION_INTERVAL } : {}),
     ...(agent.hoursLeft !== null && agent.hoursLeft !== undefined ? { session_fit: `about ${Math.round(agent.hoursLeft * 60)} minutes left in this session: jobs estimated longer are passed over for one that fits. The estimate chooses the job; it is no limit on it.` } : {}),
     tier, guidance_version: GUIDANCE_VERSION, discovery_share: share, discovery_allocation: used, eligible_backlog: { reviews: need.reviews, research: need.research }, prefer_research: preferResearch,
@@ -431,7 +444,7 @@ ${ENDED_LAUNCH_GUIDANCE}
     ...(row.route_repeat ? { route_repeat: `route ${row.research_route_id} was in the last ${ROUTE_REPEAT_WINDOW} assignments of this handle and model: ranked lower to spread work across routes, and still the best eligible` } : {}),
     ...(pressure !== null ? { review_pressure: { threshold: pressure, waiting: need.reviews } } : {}),
     ...(triageCfg ? { review_triage: { min_tier: triageCfg.minTier } } : {}),
-    ...(settings.ai?.reviews_only === true && !reviewsOnly ? { reviews_only: trusted ? "not applied to this assignment (recovery, direction or tangent)" : "ignored: this session is not a trusted reviewer" } : {}),
+    ...(isManageMode(settings.ai) && !manage ? { work: "manage: not applied to this assignment (recovery, direction or tangent)" } : {}),
     ...(unmet.tools.length || unmet.sources.length ? { relaxed_requirements: unmet } : {}) };
   row = await claimAssignment(row, session, uid, tier, reason, !tangentFirst && !session.direction_id);
   if(recovery) {
@@ -784,7 +797,7 @@ async function workComparisonDue(agent:SchedulingAgent):Promise<boolean> {
 }
 job.get("/ready", bearer, project, async (req: any, res) => {
   const work = String(req.query.work ?? "all");
-  if (!["all", "reviews"].includes(work)) { res.status(400).json({ error: `work must be one of all, reviews (got "${work.slice(0, 40)}")` }); return; }
+  if (!["all", "manage", "reviews"].includes(work)) { res.status(400).json({ error: `work must be one of all, manage (reviews is the same) (got "${work.slice(0, 40)}")` }); return; }
   const uid = Number(req.user!.id);
   const tier = tierForEffort(await modelTier(req.model ?? "unknown"), req.effort ?? null).tier;
   const trusted = await isTrusted(Number(req.project.id), uid, req.user!.handle, { model: req.model, effort: req.effort });
@@ -802,18 +815,24 @@ job.get("/ready", bearer, project, async (req: any, res) => {
   const capped = await handleCapRefusal(Number(req.project.id), uid);
   if (capped) { res.json({ ready: 0, urgency: "normal", reviews: 0, trusted, tier, capped: true, facts: capped }); return; }
   const workChecks=(await workComparisonDue(agent)) ? (await backlogFor({...agent,workCheckOnly:true})).research : 0;
-  if (work === "reviews" && trusted) {
-    const w = await reviewWorkFor(agent, !!reviewTriage(req.project.slug));
-    res.json({ ready: w.reviews + w.triage + workChecks, ...(workChecks ? {work_comparisons:workChecks} : {}), urgency: "normal", reviews: w.reviews, triage: w.triage, trusted, tier,
-      facts: `${workChecks ? `${workChecks} trusted assignment comparisons; ` : ''}${w.reviews} review${w.reviews === 1 ? "" : "s"} and ${w.triage} triage${w.triage === 1 ? "" : "s"} this agent may take (never its own model's returns${granted ? "" : ", nor its handle's"})` });
+  if (work !== "all") {
+    // Management mode, for any model: what /start would hand out (reviews and the triages a trusted session reviews directly, or
+    // triage for others; package checks; queued rescues and the rescues /start makes for blocked routes; required corrections).
+    const w = trusted ? await reviewWorkFor(agent, !!reviewTriage(req.project.slug)) : { reviews: 0, triage: 0 };
+    const u = await upkeepFor(agent);
+    const rescuable = await rescueCandidates(agent.problemId, agent.model, agent.lane);
+    const other = Math.max(0, u.total - u.reviews);   // reviews (and the triages a trusted session reviews directly) are counted by reviewWorkFor
+    const ready = w.reviews + w.triage + other + rescuable + workChecks;
+    res.json({ ready, ...(workChecks ? {work_comparisons:workChecks} : {}), urgency: "normal", reviews: w.reviews, triage: trusted ? w.triage : u.triage, checks: u.checks, rescues: u.rescues + rescuable, trusted, tier,
+      facts: `management work this agent may take: ${w.reviews} review${w.reviews === 1 ? "" : "s"}, ${trusted ? w.triage : u.triage} triage, ${u.checks} package check${u.checks === 1 ? "" : "s"}, ${u.rescues + rescuable} rescue${u.rescues + rescuable === 1 ? "" : "s"}${u.corrections ? `, ${u.corrections} required correction${u.corrections === 1 ? "" : "s"}` : ""}${workChecks ? `, ${workChecks} assignment comparisons` : ""} (never its own model's returns or blocks${granted ? "" : ", nor its handle's"})` });
     return;
   }
   const b = await backlogFor(agent);
   // With nothing queued that fits, /start still hands out one assignment it makes on the spot (a question to explore, or a record
   // challenge's run): counted here, so a scheduler that starts agents on ready > 0 is not told 0 while /start would assign.
   const queued = b.reviews + b.research + workChecks, made = queued === 0 ? 1 : 0;
-  res.json({ ready: work === "reviews" ? 0 : queued + made, ...(workChecks ? {work_comparisons:workChecks} : {}), urgency: "normal", reviews: b.reviews, research: b.research, ...(work !== "reviews" && made ? { made_on_request: made } : {}), trusted, tier,
-    facts: work === "reviews" ? "not a trusted reviewer at this model and thinking level: reviews only does not apply" : `${b.reviews} reviews and ${b.research} other assignments this agent may take${made ? "; none queued fits, so /start makes one (a question to explore or a challenge run)" : ""}` });
+  res.json({ ready: queued + made, ...(workChecks ? {work_comparisons:workChecks} : {}), urgency: "normal", reviews: b.reviews, research: b.research, ...(made ? { made_on_request: made } : {}), trusted, tier,
+    facts: `${b.reviews} reviews and ${b.research} other assignments this agent may take${made ? "; none queued fits, so /start makes one (a question to explore or a challenge run)" : ""}` });
 });
 
 /** POST /sessions/:id/end { note? } : end one of this handle's sessions; its held assignment returns to the queue. */
@@ -919,7 +938,7 @@ job.post("/release", bearer, project, assignmentMutation(async (req: any, res: a
  */
 /** The person's configuration, as the query string of the instruction they pasted (Chris, Sep 12 2026). Only what differs from the defaults travels. */
 const TIMES = ["continuous", "4h", "2h", "1task"] as const;
-export const INSTRUCTION_ARGS = { time: TIMES as readonly string[], subagents: ["yes", "no"], share: SHARES.map(String), disk: DISKS.map(String), directions: ["1", "0"], work: ["all", "reviews"], transcript: TRANSCRIPT_MODES as readonly string[] };
+export const INSTRUCTION_ARGS = { time: TIMES as readonly string[], subagents: ["yes", "no"], share: SHARES.map(String), disk: DISKS.map(String), directions: ["1", "0"], work: ["all", "manage", "reviews"], transcript: TRANSCRIPT_MODES as readonly string[] };
 const DIRECTIONS_PLACEHOLDER = "Your person wrote their directions in the instruction that started you. Those words are the assignment: quote them verbatim in human_md and work from them.";
 export function parseInstruction(qs: Record<string, unknown>): { ai: any; maxJobs: number | null; endsIn: string | null; compute: ComputeOffer | null; input: any } | { error: string; valid: typeof INSTRUCTION_ARGS } {
   const pick = (k: keyof typeof INSTRUCTION_ARGS, dflt: string): string | { bad: string } => {
@@ -934,7 +953,7 @@ export function parseInstruction(qs: Record<string, unknown>): { ai: any; maxJob
     if (typeof v !== "string") return { error: v.bad, valid: INSTRUCTION_ARGS };
     got[k] = v;
   }
-  const ai = { max_hours_per_assignment: got.time === '4h' ? 4 : 2, subagents: got.subagents === "no" ? { allowed: false, max_parallel: null } : { allowed: true, max_parallel: null }, transcript_preapproved: true, transcript_mode: got.transcript, ...(got.work === "reviews" ? { reviews_only: true } : {}) };
+  const ai = { max_hours_per_assignment: got.time === '4h' ? 4 : 2, subagents: got.subagents === "no" ? { allowed: false, max_parallel: null } : { allowed: true, max_parallel: null }, transcript_preapproved: true, transcript_mode: got.transcript, ...(got.work !== "all" ? { reviews_only: true, work: "manage" } : {}) };
   return {
     ai, maxJobs: got.time === "1task" ? 1 : null, endsIn: got.time === "4h" ? "4 hours" : got.time === "2h" ? "2 hours" : null,
     compute: shareOffer(Number(got.share), Number(got.disk)),

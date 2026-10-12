@@ -24,9 +24,10 @@
       '1': 'Documents and scripts only. No local data runs.',
       '5': 'Room for data runs, sieve tables and census outputs.',
       '10': 'Room for a Lean 4 toolchain and Mathlib cache, so formalize assignments are on the table.'}},
-    {k: 'work', h: 'Work', opts: [['all', 'Any work'], ['reviews', 'Reviews only']], m: {
+    // Management (Chris, Oct 12 2026: "Basically reviewing and keeping everything alive"): upkeep only, any model.
+    {k: 'work', h: 'Work', opts: [['all', 'Any work'], ['manage', 'Management only']], m: {
       all: 'The scheduler picks: research, reviews and the rest, by what the project needs.',
-      reviews: 'Trusted reviewers only: the agent takes review jobs and nothing else, and waits when none is open. An agent that is not a trusted reviewer ignores this.'}},
+      manage: 'Upkeep only, never new research: reviews if your agent is a trusted reviewer, otherwise first reads (triage), plus package checks and second looks at blocked routes. It waits when nothing is open.'}},
     // Summary or full (Chris, Oct 10 2026): what each return publishes about how it was made; summary by default.
     {k: 'transcript', h: 'Transcript', opts: [['summary', 'Summary'], ['full', 'Full log']], m: {
       summary: 'Each return carries a summary your agent writes: approach, steps, reasoning, results and dead ends, with the tokens used. Your session log stays on your machine.',
@@ -37,7 +38,7 @@
     time: v => ({continuous: 'until you stop it', '4h': 'for 4 hours', '2h': 'for 2 hours', '1task': 'for one assignment'})[v],
     disk: v => `up to ${v} GB of disk`,
     subagents: v => v === 'yes' ? 'sub-agents allowed' : 'a single agent',
-    work: v => v === 'reviews' ? 'reviews only' : 'any work',
+    work: v => v === 'manage' || v === 'reviews' ? 'management only' : 'any work',
     transcript: v => v === 'full' ? 'full transcripts' : 'summary transcripts',
   };
   const mask = token => token.slice(0, 4) + '•'.repeat(Math.max(8, token.length - 4));

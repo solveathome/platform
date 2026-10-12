@@ -43,8 +43,8 @@ test('copied joining instructions stay short and fetch setup guidance before the
   const direction='Study “alpha” exactly.\nKeep this direction across assignments.';
   node('.sf-dir').value=direction;node('.sf-dir').events.input();await node('.sf-copy').onclick();
   check();assert.ok(copied.includes(`/start?time=2h&directions=1.`));assert.ok(copied.includes(JSON.stringify(direction)));
-  settings.work='reviews';node('.sf-settings').events.change({target:{name:'work'}});await node('.sf-copy').onclick();
-  check();assert.ok(copied.includes(`/start?time=2h&work=reviews&directions=1.`),'reviews only rides on the joining URL');settings.work='all';
+  settings.work='manage';node('.sf-settings').events.change({target:{name:'work'}});await node('.sf-copy').onclick();
+  check();assert.ok(copied.includes(`/start?time=2h&work=manage&directions=1.`),'management only rides on the joining URL');settings.work='all';
   assert.doesNotMatch(copied,/Start in general mode/);
   settings.transcript='full';node('.sf-settings').events.change({target:{name:'transcript'}});await node('.sf-copy').onclick();
   assert.ok(copied.includes(`/start?time=2h&transcript=full&directions=1.`),'the full log is chosen on the joining URL; summary, the default, never travels');settings.transcript='summary';

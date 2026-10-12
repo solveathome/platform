@@ -251,7 +251,22 @@ function routeRepeatSql(uid: string, model: string): string {
     SELECT rj.research_route_id FROM (SELECT ra.job_id FROM assignment_attempts ra WHERE ra.problem_id=j.problem_id AND ra.user_id=${uid} AND ra.model IS NOT DISTINCT FROM ${model}::text
       ORDER BY ra.started_at DESC,ra.id DESC LIMIT ${ROUTE_REPEAT_WINDOW}) recent JOIN jobs rj ON rj.id=recent.job_id WHERE rj.research_route_id IS NOT NULL))`;
 }
-export async function selectJob(a: SchedulingAgent, preferResearch: boolean, discoveryOnly = false, bucket?: ResearchBucket, checkedJudgment = false, reviewsOnly = false, triageOnly = false, requiredCorrectionOnly = false): Promise<any> {
+/** Upkeep (Chris, Oct 12 2026, #sah-rescue-every-project, management mode: "Basically reviewing and keeping everything alive"): the
+ *  work that keeps the record moving rather than extending it. Reviews and triage, package checks, rescues of blocked routes,
+ *  required corrections and trusted assignment comparisons; never discovery, a first look or pursuit. */
+export const upkeepSql = (): string => `(j.type IN ('review','triage','check') OR j.research_stage='rescue' OR j.work_check IS NOT NULL OR j.applicability_check IS NOT NULL OR ${REQUIRED_CORRECTION_SQL})`;
+/** Management mode is set by `work=manage` (stored as ai.work) or the older `work=reviews` (ai.reviews_only). */
+export function isManageMode(ai: any): boolean { return ai?.work === 'manage' || ai?.reviews_only === true; }
+/** Upkeep jobs this agent may take now, by kind: what a management-mode /start chooses from (before it makes rescues). */
+export async function upkeepFor(a: SchedulingAgent) {
+  const e = eligibility(a);
+  const row = await one(`SELECT count(*) AS total, count(*) FILTER (WHERE j.type='review') AS reviews, count(*) FILTER (WHERE j.type='triage') AS triage,
+    count(*) FILTER (WHERE j.type='check') AS checks, count(*) FILTER (WHERE j.research_stage='rescue') AS rescues, count(*) FILTER (WHERE ${REQUIRED_CORRECTION_SQL}) AS corrections
+    ${e.joins} WHERE ${e.where} AND ${upkeepSql()}`, e.values);
+  const n = (k: string) => Number(row?.[k] ?? 0);
+  return { total: n('total'), reviews: n('reviews'), triage: n('triage'), checks: n('checks'), rescues: n('rescues'), corrections: n('corrections') };
+}
+export async function selectJob(a: SchedulingAgent, preferResearch: boolean, discoveryOnly = false, bucket?: ResearchBucket, checkedJudgment = false, reviewsOnly = false, triageOnly = false, requiredCorrectionOnly = false, upkeepOnly = false): Promise<any> {
   const e = eligibility(a);
   const skills = e.p(a.capabilities.skills ?? []), provider = e.p(a.provider), uid = e.p(a.uid);
   const routeRepeat = routeRepeatSql(uid, e.p(a.model)), progress=researchProgressSql();
@@ -260,11 +275,12 @@ export async function selectJob(a: SchedulingAgent, preferResearch: boolean, dis
       ? ["paper", "explore", "direction", "break", "audit", "review", "curate", "source", "formalize", "measure"]
       : ["review", "audit", "paper", "explore", "direction", "curate", "source", "formalize", "break", "measure"]
     : ["break", "measure", "formalize", "review", "source", "curate", "paper", "explore", "direction", "audit"];
-  if (bucket === 'consolidate') typeOrder.unshift('check');
+  if (bucket === 'consolidate' || upkeepOnly) typeOrder.unshift('check');
   else if (a.tier !== 1) typeOrder.unshift('check');
-  if (a.tier !== 1) typeOrder.unshift('triage');
+  if (a.tier !== 1 || upkeepOnly) typeOrder.unshift('triage');
+  if (upkeepOnly) typeOrder.unshift('review');
   const order = e.p(typeOrder);
-  const bucketFilter = (bucket ? `AND CASE WHEN ${STAGE_SQL}='first_look' THEN 'pursue' ELSE ${STAGE_SQL} END=${e.p(bucket)}` : '') + (checkedJudgment ? ` AND ${CHECKED_JUDGMENT_SQL}` : '') + (reviewsOnly ? ` AND j.type='review'` : '') + (triageOnly ? ` AND j.type='triage'` : '') + (requiredCorrectionOnly ? ` AND ${REQUIRED_CORRECTION_SQL}` : '');
+  const bucketFilter = (bucket ? `AND CASE WHEN ${STAGE_SQL}='first_look' THEN 'pursue' ELSE ${STAGE_SQL} END=${e.p(bucket)}` : '') + (checkedJudgment ? ` AND ${CHECKED_JUDGMENT_SQL}` : '') + (reviewsOnly ? ` AND j.type='review'` : '') + (triageOnly ? ` AND j.type='triage'` : '') + (requiredCorrectionOnly ? ` AND ${REQUIRED_CORRECTION_SQL}` : '') + (upkeepOnly ? ` AND ${upkeepSql()}` : '');
   // Prioritize judgments that further research already relies on, without changing trust or eligibility.
   // Every non-age term is bounded; one point per waiting day eventually lifts older work.
   return one(`SELECT j.*, l.slug AS lane_slug, (${REQUIRED_CORRECTION_SQL}) AS required_correction,
