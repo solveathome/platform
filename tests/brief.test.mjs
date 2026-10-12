@@ -108,6 +108,9 @@ test('repair instructions use canonical verification and portable server-root ar
 
 test('a recent framework stamp at the current framework guidance version skips the startup self-test, never result checks',()=>{
   assert.equal(FRAMEWORK_RECHECK_HOURS,24);
+  // Department runs never see the orientation, so the protocol itself asks for X-Capabilities: on md5 every Opus department session
+  // declared no tools and the 8 CPU-h steps of routes 261 and 263 (python3, cc) fitted no running session (#sah-upkeep-turntaking-live-check).
+  assert.match(workspaceSections('https://x.test/projects/p').api,/Every GET \/start also sends X-Capabilities[^]*"tools":\["python3","cc"\][^]*passed over for such steps/);
   // The version follows the text: a changed framework section yields a new version, whatever server renders it.
   assert.equal(FRAMEWORK_GUIDANCE_VERSION,`framework-${createHash('sha256').update(JSON.stringify(workspaceSections('https://solveathome.invalid/projects/project'))).digest('hex').slice(0,12)}`);
   assert.notEqual(JSON.stringify(workspaceSections('https://a.test/projects/p')),JSON.stringify(workspaceSections('https://solveathome.invalid/projects/project')),'the hash base is fixed, not the serving origin');
