@@ -21,7 +21,7 @@ export async function validateWorkSources(problemId:number, sources:WorkSources)
 async function legacyWorkInputHash(problemId:number, scope:string, sources:WorkSources):Promise<string> {
   const returns=await q(`SELECT r.id,r.status,r.final_rung,r.provisional,r.report_md,r.cites,r.research,r.research_evidence,r.verification_fingerprint,r.verification_plan
     FROM returns r LEFT JOIN jobs j ON j.id=r.job_id WHERE r.problem_id=$1 AND
-    (r.id=ANY($2::bigint[]) OR ((j.work_scope_sha256=$3 OR coalesce(r.research_evidence->'topic_ids','[]'::jsonb) ?| $4::text[]) AND r.known_work IS NULL AND r.work_disposition IS NULL AND j.work_check IS NULL)) ORDER BY r.id`,[problemId,sources.predecessor_returns,scope,sources.topic_ids??[]]);
+    (r.id=ANY($2::bigint[]) OR ((j.work_scope_sha256=$3 OR coalesce(r.research_evidence->'topic_ids','[]'::jsonb) ?| $4::text[]) AND r.known_work IS NULL AND r.work_disposition IS NULL AND r.applicability_assessment IS NULL AND j.work_check IS NULL)) ORDER BY r.id`,[problemId,sources.predecessor_returns,scope,sources.topic_ids??[]]);
   const ids=returns.map(r=>Number(r.id));
   const reviews=await q(`SELECT v.id,v.return_id,v.verdict,v.rung,v.trusted,v.needs_reassessment,v.notes_md,v.research_assessment
     FROM reviews v JOIN returns r ON r.id=v.return_id WHERE r.problem_id=$1 AND (v.return_id=ANY($2::bigint[]) OR v.id=ANY($3::bigint[])) ORDER BY v.id`,[problemId,ids,sources.review_ids]);
@@ -36,11 +36,11 @@ export async function workEvidence(problemId:number,scope:string,sources:WorkSou
   const sourceIds=new Set(sources.predecessor_returns);
   const reviewIds=new Set(sources.review_ids),messageIds=new Set(sources.message_ids);
   for(let depth=0;depth<4;depth++) {
-    const administrative=await q(`SELECT r.known_work,r.work_disposition FROM returns r WHERE r.problem_id=$1 AND r.id=ANY($2::bigint[])
-      AND (r.known_work IS NOT NULL OR r.work_disposition IS NOT NULL)`,[problemId,[...sourceIds]]);
+    const administrative=await q(`SELECT r.known_work,r.work_disposition,r.applicability_assessment,coalesce(r.applicability_assessment->>'source_return_id',aj.applicability_check->>'source_return_id') AS applicability_source_id FROM returns r LEFT JOIN jobs aj ON aj.id=r.job_id WHERE r.problem_id=$1 AND r.id=ANY($2::bigint[])
+      AND (r.known_work IS NOT NULL OR r.work_disposition IS NOT NULL OR r.applicability_assessment IS NOT NULL OR aj.applicability_check IS NOT NULL)`,[problemId,[...sourceIds]]);
     const size=sourceIds.size+reviewIds.size+messageIds.size;
     for(const r of administrative) {
-      const refs=r.known_work??r.work_disposition?.sources;
+      const refs=r.known_work??r.work_disposition?.sources??(r.applicability_source_id?{predecessor_returns:[Number(r.applicability_source_id)]}:null);
       for(const id of refs?.predecessor_returns??[])if(sourceIds.size<160)sourceIds.add(Number(id));
       for(const id of refs?.review_ids??[])if(reviewIds.size<160)reviewIds.add(Number(id));
       for(const id of refs?.message_ids??[])if(messageIds.size<160)messageIds.add(Number(id));
@@ -50,17 +50,17 @@ export async function workEvidence(problemId:number,scope:string,sources:WorkSou
     if(sourceIds.size+reviewIds.size+messageIds.size===size)break;
   }
   // A bounded expansion must not silently omit a scientific predecessor and still claim current evidence.
-  const remaining=await q(`SELECT r.known_work,r.work_disposition FROM returns r WHERE r.problem_id=$1 AND r.id=ANY($2::bigint[])
-    AND (r.known_work IS NOT NULL OR r.work_disposition IS NOT NULL)`,[problemId,[...sourceIds]]);
+  const remaining=await q(`SELECT r.known_work,r.work_disposition,r.applicability_assessment,coalesce(r.applicability_assessment->>'source_return_id',aj.applicability_check->>'source_return_id') AS applicability_source_id FROM returns r LEFT JOIN jobs aj ON aj.id=r.job_id WHERE r.problem_id=$1 AND r.id=ANY($2::bigint[])
+    AND (r.known_work IS NOT NULL OR r.work_disposition IS NOT NULL OR r.applicability_assessment IS NOT NULL OR aj.applicability_check IS NOT NULL)`,[problemId,[...sourceIds]]);
   const assessed=await reviewLocators(problemId,[...reviewIds]);
   const complete=assessed.every(r=>sourceIds.has(Number(r.return_id))) && remaining.every(r=>{
-    const refs=r.known_work??r.work_disposition?.sources;
+    const refs=r.known_work??r.work_disposition?.sources??(r.applicability_source_id?{predecessor_returns:[Number(r.applicability_source_id)]}:null);
     return (refs?.predecessor_returns??[]).every((id:number)=>sourceIds.has(Number(id))) && (refs?.review_ids??[]).every((id:number)=>reviewIds.has(Number(id))) && (refs?.message_ids??[]).every((id:number)=>messageIds.has(Number(id)));
   });
   const returns=await q(`SELECT r.id,r.status,r.final_rung,r.provisional,r.report_md,r.research,r.research_evidence,r.verification_fingerprint,r.verification_plan,r.recipe_md,r.repo_url,r.commit,r.cpu_hours,r.revision_sha,r.patch
     FROM returns r LEFT JOIN jobs j ON j.id=r.job_id WHERE r.problem_id=$1
     AND (r.id=ANY($2::bigint[]) OR j.work_scope_sha256=$3)
-    AND r.known_work IS NULL AND r.work_disposition IS NULL
+    AND r.known_work IS NULL AND r.work_disposition IS NULL AND r.applicability_assessment IS NULL AND j.applicability_check IS NULL
     AND (j.work_check IS NULL OR r.research_evidence IS NOT NULL OR r.research IS NOT NULL OR r.verification_plan IS NOT NULL OR r.cpu_hours>0 OR r.patch IS NOT NULL OR r.revision_sha IS NOT NULL)
     ORDER BY r.id`,[problemId,[...sourceIds],scope]);
   const ids=returns.map(r=>Number(r.id));
@@ -70,7 +70,7 @@ export async function workEvidence(problemId:number,scope:string,sources:WorkSou
   const artifacts=await q(`SELECT ref_id,file_sha FROM file_refs WHERE ref_type='return' AND ref_id=ANY($1::bigint[]) ORDER BY ref_id,file_sha`,[ids]);
   const messages=await q(`SELECT m.user_id,m.model,m.kind,m.body_md,m.return_id FROM messages m JOIN channels c ON c.id=m.channel_id
     LEFT JOIN returns r ON r.id=m.return_id LEFT JOIN jobs j ON j.id=m.job_id WHERE c.problem_id=$1 AND m.id=ANY($2::bigint[])
-    AND r.known_work IS NULL AND r.work_disposition IS NULL AND j.work_check IS NULL`,[problemId,[...messageIds]]);
+    AND r.known_work IS NULL AND r.work_disposition IS NULL AND r.applicability_assessment IS NULL AND j.work_check IS NULL`,[problemId,[...messageIds]]);
   const evidence=materialEvidence({returns,reviews,history,findings,artifacts,messages});
   if(!complete) {
     evidence.entries['lineage:incomplete']='Bounded administrative lineage is incomplete; nominate the actual scientific sources directly.';
@@ -178,7 +178,7 @@ export async function queueWorkReconsiderations(problemId:number,slug:string):Pr
 export async function retireCoveredWork(problemId:number,slug:string):Promise<void> {
   if(!collaborationEnabled(slug))return;
   await queueWorkReconsiderations(problemId,slug);
-  const jobs=await q(`SELECT j.*,l.slug AS lane_slug FROM jobs j LEFT JOIN lanes l ON l.id=j.lane_id WHERE j.problem_id=$1 AND j.status='queued' AND j.work_check IS NULL
+  const jobs=await q(`SELECT j.*,l.slug AS lane_slug FROM jobs j LEFT JOIN lanes l ON l.id=j.lane_id WHERE j.problem_id=$1 AND j.status='queued' AND j.work_check IS NULL AND j.applicability_check IS NULL
     AND j.agent_direction_id IS NULL AND j.type IN ('explore','measure','source','formalize','paper','break') ORDER BY j.id LIMIT 100`,[problemId]);
   for(const job of jobs) {
     const task=await taskForJob(problemId,slug,job);

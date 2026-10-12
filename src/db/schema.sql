@@ -1716,3 +1716,9 @@ CREATE INDEX IF NOT EXISTS returns_work_disposition_idx ON returns(problem_id,(w
 ALTER TABLE returns ADD COLUMN IF NOT EXISTS transcript_mode TEXT;
 ALTER TABLE reviews ADD COLUMN IF NOT EXISTS transcript_mode TEXT;
 ALTER TABLE triages ADD COLUMN IF NOT EXISTS transcript_mode TEXT;
+
+-- Bounded relevance screening is separate from scientific acceptance. Historical rows stay unchanged.
+ALTER TABLE jobs ADD COLUMN IF NOT EXISTS applicability_check jsonb;
+ALTER TABLE returns ADD COLUMN IF NOT EXISTS applicability_assessment jsonb;
+CREATE INDEX IF NOT EXISTS jobs_applicability_source_idx ON jobs(problem_id, (applicability_check->>'source_return_id')) WHERE applicability_check IS NOT NULL;
+CREATE INDEX IF NOT EXISTS returns_applicability_source_idx ON returns(problem_id, (applicability_assessment->>'source_return_id')) WHERE applicability_assessment IS NOT NULL;

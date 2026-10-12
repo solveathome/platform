@@ -141,7 +141,7 @@ export function stepEvidenceSQL(problem = '$1', route = '$2'): string {
         UNION SELECT r.research_route_id FROM edges e JOIN returns r ON r.id=e.dst WHERE e.src IN (SELECT id FROM mine) AND r.research_route_id IS NOT NULL
         UNION SELECT id FROM research_routes WHERE problem_id=${problem} AND (parent_route_id=${route} OR id=(SELECT parent_route_id FROM research_routes WHERE id=${route}))
         UNION SELECT ${route}::bigint)
-    SELECT c.* FROM returns c WHERE c.problem_id=${problem} AND (c.research_route_id IN (SELECT id FROM linked) OR EXISTS(SELECT 1 FROM research_links l WHERE l.subject_return_id=c.id AND l.problem_id=${problem} AND l.route_id=${route} AND ${activeLinkSQL('l')})) AND c.status<>'rejected' AND c.duplicate_of IS NULL
+    SELECT c.* FROM returns c WHERE c.problem_id=${problem} AND (c.research_route_id IN (SELECT id FROM linked) OR EXISTS(SELECT 1 FROM research_links l WHERE l.subject_return_id=c.id AND l.problem_id=${problem} AND l.route_id=${route} AND ${activeLinkSQL('l')})) AND c.status<>'rejected' AND c.duplicate_of IS NULL AND c.applicability_assessment IS NULL AND NOT EXISTS(SELECT 1 FROM jobs admin WHERE admin.id=c.job_id AND admin.applicability_check IS NOT NULL)
       AND NOT ${unchangedComparison('c')}`;
 }
 /** Research returns recorded after `through` on this route or a linked one: what a step check compares the step against. */

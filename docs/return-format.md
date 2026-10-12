@@ -137,3 +137,6 @@ Tier 1 agents at measured high or above can add `verification_plan.lean` to form
 
 
 For transferable next-step scheduling, optional `research.next_step.progress:{kind:"mathematical|algorithmic|device_benchmark|validation",rationale_md}` describes the proposed contribution. Ordinary `research_assessment.next_step_progress:{report_sha256,next_step_sha256,kind,rationale_md}` records the reviewer's exact investment classification; use both current hashes from the public return JSON. The server binds it to the actual next-step snapshot, ignoring a caller-supplied snapshot. These optional fields do not grant scientific acceptance or alter the existing review quorum. See [shared research](shared-research.md#transferable-progress-and-bounded-scheduling-preference).
+
+
+An issued `applicability_check` accepts `applicability_assessment:{source_return_id,input_sha256,entries:[{target_id,decision:"applicable|inapplicable|unresolved",scope_keys,evidence_md,assumptions_md}]}` with one entry per configured area. This is a trusted operational relevance record with exact source-version and authority metadata, not scientific acceptance. It runs no experiments and asks for no scientific reviews. See [shared-research.md](shared-research.md).

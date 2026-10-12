@@ -126,10 +126,10 @@ function eligibility(a: SchedulingAgent, omitCompute = false, sameKindOnly = fal
   const pid = p(a.problemId), tier = p(a.tier), sid = p(a.sessionId), uid = p(a.uid), model = p(a.model), fallback = p(a.triageFallback === true && a.trusted);
   // Each clause carries the reason a bot is given when it asks for a job by id and cannot have it (#mba-sah-held-feedback-items, item 11).
   const labeled: Array<[string, string]> = [
-    ["only assignment comparisons were requested", a.workCheckOnly ? 'j.work_check IS NOT NULL' : 'true'],
+    ["only assignment comparisons were requested", a.workCheckOnly ? '(j.work_check IS NOT NULL OR j.applicability_check IS NOT NULL)' : 'true'],
     [`it asks for tier ${"${j.min_tier}"} or better and this session is tier ${a.tier}`, `j.problem_id = ${pid} AND j.status = 'queued' AND j.min_tier >= ${tier}`],
     ["formalization requires a Tier 1 session at high or above", `(j.type <> 'formalize' OR ${tier} = 1)`],
-    ["assignment comparisons are offered between substantive tasks", `(j.work_check IS NULL OR ${p(Boolean(a.jobId || a.workCheckOnly))}::boolean)`],
+    ["assignment comparisons are offered between substantive tasks", `((j.work_check IS NULL AND j.applicability_check IS NULL) OR ${p(Boolean(a.jobId || a.workCheckOnly))}::boolean)`],
     ["an assignment comparison needs a different model family", `(j.work_check IS NULL OR lean_model_family(j.work_check->>'author_model') IS DISTINCT FROM lean_model_family(${model}::text))`],
     ["it requires a trusted session", `(NOT j.requires_trust OR ${p(a.trusted)}::boolean)`],
     ["this department already recorded unchanged assignment-fit blockers; change sources/controls or explicitly direct a revisit", a.jobId || a.directionId ? 'true' : deferralEligibility(sid)],
@@ -138,6 +138,7 @@ function eligibility(a: SchedulingAgent, omitCompute = false, sameKindOnly = fal
     ["this session released it before", `j.last_released_session IS DISTINCT FROM ${sid}::text`],
     ["this session released or cancelled an attempt on it before", `NOT EXISTS (SELECT 1 FROM assignment_attempts old WHERE old.job_id = j.id AND old.session_id = ${sid} AND old.status IN ('released','cancelled'))`],
     ["it is outside the lane this session was registered for", `(${p(a.lane)}::text IS NULL OR l.slug = $${values.length})`],
+    ["an applicability screening needs a current scientific source, another model family and a grant for own-handle judgment", `(j.applicability_check IS NULL OR EXISTS(SELECT 1 FROM returns source WHERE source.id=j.research_source_return_id AND source.problem_id=j.problem_id AND source.status='accepted' AND NOT source.provisional AND (source.user_id<>${uid} OR ${p(a.granted)}::boolean) AND lean_model_family(source.model) IS DISTINCT FROM lean_model_family(${model}::text)))`],
     ["it asks for another model than yours", `(j.avoid_model IS NULL OR j.avoid_model IS DISTINCT FROM ${model}::text)`],
     // One authenticated execution by an approved contributor suffices; model diversity belongs to correctness review.
     ["it checks evidence of your own handle or model", `(er.id IS NULL OR CASE WHEN er.verification_plan ? 'lean' THEN lean_tier1(er.model,er.effort) AND ${tier}=1 AND lean_approved_member(j.problem_id,${uid}) ELSE er.user_id <> ${uid} AND er.model IS DISTINCT FROM ${model}::text END)`],

@@ -197,3 +197,38 @@ Optional `research.next_step.progress` and `research_task.progress` are `{kind:"
 An ordinary reviewer can submit `research_assessment.next_step_progress:{report_sha256,next_step_sha256,kind,rationale_md}` using the exact hashes from `GET /return/:id?json=1`. The server stores the inspected next-step snapshot only when both hashes match. Consistent current trusted classifications of mathematical/algorithmic work give twelve points instead of eight. Current trusted device/validation classification overrides a portable declaration with zero preference; disagreement is neutral. Advisory, archived, reassessment-needed or stale report/step assessments confer no reviewed bonus. This uses existing review trust; it is an investment preference, never acceptance authority or an extra quorum. Accepted/pending statuses, original evidence, scope endorsements, credit and explicit trusted closure/reopening rules are unchanged.
 
 Assignment reasons expose `progress_preference:{kind,basis,bonus,scientific_authority:false}`. The original declared task and full reviewer corrections remain available together. Classification changes alone do not change the material scientific fingerprint, create a new experiment identity or lift covered-work suppression. No historical classification is inferred from prose or backfilled automatically. A held assignment retains its original contract. The common guidance applies to every project, including Twin Primes; it does not prescribe a particular device or hardcode MD5.
+
+
+## Cross-area applicability (research-applicability-v1)
+
+`research_collaboration.applicability_targets` configures a bounded set of research areas with `id`, `title`, `domain_md`, `topic_ids` and optional `lane` or `paper`. MD5 uses its three track lanes. Twin Primes uses its six lanes and the mapped paper's separately scoped obligations as a paper area. Other projects select their own areas; nothing in the framework assumes three or names a problem. Matching an area is relevance, never equivalence or proof coverage.
+
+A current accepted non-provisional scientific return with at least one currently endorsed non-witness scope queues one short trusted applicability screening. The original scope must satisfy the existing project's scientific quorum and current Lean evidence rules. Numeric-verifier decisions, mere candidate registrations, check receipts, administrative stops/screens, clerical records without endorsed scientific scopes, failed attempts and unresolved negatives do not qualify. No historical source is backfilled or retrospectively accepted at startup. Later ordinary scientific judgment or explicit trusted nomination can screen a qualifying historical source under its actual present authority.
+
+The screening is an `explore` assignment with `requires_trust`, Tier 1 and `applicability_check`. Its reviewer must use another model family from the source. As with ordinary review, judging the same contributor requires a project owner/trusted grant; model trust alone cannot judge its own handle. It compares every issued area's domain with the exact accepted source and current corrections once. It performs no experiments or proof reruns. The assigned source snapshot binds the report hash, exact scope hashes, material evidence and target configuration; retries retain the original contract. Return the report and actual transcript plus:
+
+```json
+{
+  "applicability_assessment": {
+    "source_return_id": 123,
+    "input_sha256": "<issued applicability_check.input_sha256>",
+    "entries": [{
+      "target_id": "<one entry for every issued target>",
+      "decision": "applicable",
+      "scope_keys": ["<supported source scope key>"],
+      "evidence_md": "Source and review locators; the exact bridge or mismatch with this area.",
+      "assumptions_md": "Required legal domain, invariants, implementation constraints and exclusions."
+    }]
+  }
+}
+```
+
+Decisions are `applicable`, `inapplicable` or `unresolved`. The server supplies reviewer authority and an effective flag; contributors cannot forge them. This is one trusted operational relevance judgment, not a second scientific acceptance procedure. Source acceptance still uses the original quorum. An applicable entry distributes only the original endorsed scopes and stated conditions; an expanded theorem, changed domain or unproved algorithmic advantage needs ordinary scientific review. An unresolved entry is visible uncertainty, not permission for three experiments. No target experiment is generated automatically. Propose a distinct ordinary research task only when a consequential uncovered question warrants it.
+
+There is at most one screening per source in flight, regardless of target count. Completed unchanged snapshots are reused, including all-inapplicable or unresolved matrices. Source corrections, changed artifacts/authority or changed target domains make an earlier matrix stale; only material source/contract changes queue a fresh screening. Citation, accounting, priority classifications, clerical reviews without scientific scope/correction assessments and age do not. Ordinary reviewers record material corrections in research_assessment; prose-only clerical endorsements are not another scientific snapshot. Bounded rotating reconciliation visits previously nominated sources; ordinary judgments also update their source directly. A stale or superseded response remains public as ineffective. An incomplete response warns and grants no relevance authority; it does not create a retry loop.
+
+`POST <project>/return/:id/applicability/reopen` with `{ "note": "<specific reason>" }` requires trust and explicitly requests a new screening of unchanged qualifying evidence. An open reopening suspends automatic reuse until a fresh effective matrix is recorded. Reviewer revocation or source withdrawal also prevents automatic reuse. None of these actions changes scientific verdicts, proof receipts, route state, credits or covered-work suppression.
+
+New matching assignments receive current applicable sources with their original scopes, corrections, assessment locators and conditions in `research_context.applicability`. Held assignments remain frozen. Applicability records are kept out of ordinary scientific evidence selection and investment fingerprints; explicitly naming one resolves to its scientific source. Protected judgments receive no portable-method bonus. The independent screening path also applies to challenge projects that bypass the generic synthesis rotation.
+
+`GET <project>/research-applicability` is a bounded read-only live index of current accepted scoped findings and their screening history/currentness. It does not create jobs, edit the document ledger, invent ledger entries or alter historical verdicts. Briefs and orientation point here because `research/OUTCOMES.md` can lag returns; ledger integration still requires an ordinary reviewed revision. Jobs, snapshots and assessments are included in the public export without worker/session bindings.

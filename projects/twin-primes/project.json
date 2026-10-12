@@ -177,6 +177,66 @@
         "question_md": "Equation (28) constant",
         "domain_md": "The exact constant in equation (28), with its hypotheses and parameter ranges."
       }
+    ],
+    "applicability_targets": [
+      {
+        "id": "g2-exponent",
+        "title": "Lower the G₂ upper-bound exponent (4.27 toward 2)",
+        "lane": "g2-exponent",
+        "topic_ids": [],
+        "domain_md": "Lower the G₂ upper-bound exponent (4.27 toward 2). Preserve the source theorem, assumptions, quantifiers, computational coverage and exact artifacts; assess relevance without extending its accepted scope."
+      },
+      {
+        "id": "adversarial",
+        "title": "Break accepted lemmas: counterexample search against validators",
+        "lane": "adversarial",
+        "topic_ids": [],
+        "domain_md": "Break accepted lemmas: counterexample search against validators. Preserve the source theorem, assumptions, quantifiers, computational coverage and exact artifacts; assess relevance without extending its accepted scope."
+      },
+      {
+        "id": "formalize",
+        "title": "Lean 4 formalization of accepted lemmas",
+        "lane": "formalize",
+        "topic_ids": [],
+        "domain_md": "Lean 4 formalization of accepted lemmas. Preserve the source theorem, assumptions, quantifiers, computational coverage and exact artifacts; assess relevance without extending its accepted scope."
+      },
+      {
+        "id": "measure",
+        "title": "Extend numbered measurement scripts to larger ranges",
+        "lane": "measure",
+        "topic_ids": [],
+        "domain_md": "Extend numbered measurement scripts to larger ranges. Preserve the source theorem, assumptions, quantifiers, computational coverage and exact artifacts; assess relevance without extending its accepted scope."
+      },
+      {
+        "id": "infinitude",
+        "title": "Routes toward infinitude not in the refuted registry",
+        "lane": "infinitude",
+        "topic_ids": [],
+        "domain_md": "Routes toward infinitude not in the refuted registry. Preserve the source theorem, assumptions, quantifiers, computational coverage and exact artifacts; assess relevance without extending its accepted scope."
+      },
+      {
+        "id": "finiteness-structure",
+        "title": "What structure a finite twin count would force (disproof-shaped lane)",
+        "lane": "finiteness-structure",
+        "topic_ids": [],
+        "domain_md": "What structure a finite twin count would force (disproof-shaped lane). Preserve the source theorem, assumptions, quantifiers, computational coverage and exact artifacts; assess relevance without extending its accepted scope."
+      },
+      {
+        "id": "kk-lower-bound",
+        "title": "Mapped paper claims and separate obligations",
+        "paper": "kk-lower-bound",
+        "topic_ids": [
+          "kk-lower-bound.main",
+          "kk-lower-bound.o1",
+          "kk-lower-bound.o2",
+          "kk-lower-bound.o3",
+          "kk-lower-bound.o4",
+          "kk-lower-bound.o5",
+          "kk-lower-bound.o6",
+          "kk-lower-bound.o7"
+        ],
+        "domain_md": "kk-lower-bound.main: Survivor-gap lower bound, full cutoff, integers, crossing gaps, quantifiers and logarithms, sufficient A=12. This is not twin-prime infinitude. Only designated declarations and their exact assumptions are covered; O1–O7 remain separate.\nkk-lower-bound.o1: Prime harmonic asymptotic with constant and o(1) remainder; distinguish finite bounds and asymptotic equality.\nkk-lower-bound.o2: Two-variable uniform smooth-number asymptotic, including u <= Z^(1-epsilon); do not transfer a fixed-u theorem without a uniformity bridge.\nkk-lower-bound.o3: Every fixed A > 4; the accepted main proof uses sufficient A=12. The general-A extension remains separate.\nkk-lower-bound.o4: Dyadic prime-count asymptotic with coefficient 1/2; an eventual y/(3 log y) lower bound does not prove equality.\nkk-lower-bound.o5: The quoted general sieve input and external one-class statement; distinguish accepted finite dimension-4, CRT and covering results.\nkk-lower-bound.o6: Two-sided density and Euler estimates; a finite one-sided bound does not close this obligation.\nkk-lower-bound.o7: The exact constant in equation (28), with its hypotheses and parameter ranges."
+      }
     ]
   }
 }

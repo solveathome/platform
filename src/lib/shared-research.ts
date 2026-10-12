@@ -1,4 +1,5 @@
 import { nextStepHash, withoutProgressAssessment } from './research-progress.js';
+import {applicableSources} from './research-applicability.js';
 import { createHash } from 'node:crypto';
 import { one, q } from '../db/index.js';
 import { readProjectConfig } from './projects.js';
@@ -8,7 +9,7 @@ import { scopeHash, reportHash, comparisonProblems, parseResearchTask, type Rese
 export const collaborationEnabled = (slug: string) => readProjectConfig(slug)?.research_collaboration?.enabled === true;
 const uniqueIds = (ids: any[]) => [...new Set(ids.map(Number).filter(x=>Number.isSafeInteger(x)&&x>0))];
 export type ContextItem = { id: number; status: string; provisional: boolean; final_rung: string | null; decision_by: string | null; handle: string; model: string; report_md: string; research: any; research_evidence: any; verification_fingerprint: string | null; verification_plan: any; paper_slug: string | null; lean_current?: boolean; lean_summary?: any; research_route_id: number | null; relevant_by: string; reviews: any[]; files: any[]; scopes: any[] };
-export type ResearchContext = { schema: 'research-context-v1'; topic_ids: string[]; items: ContextItem[]; jobs: any[]; findings: any[]; input_vector: Record<string, any>; omitted: boolean };
+export type ResearchContext = { schema: 'research-context-v1'; topic_ids: string[]; items: ContextItem[]; jobs: any[]; findings: any[]; applicability?:any[]; input_vector: Record<string, any>; omitted: boolean };
 
 /** Relevance is explicit topic/route/source linkage. A lane fallback is labelled, never semantic equivalence. */
 export function jobTopics(slug: string, job: any): ResearchTopic[] {
@@ -114,7 +115,9 @@ export async function associatedReturns(problemId:number,routeId:number|null,top
 
 export async function researchContext(problemId: number, slug: string, job: any, task?: ResearchTask): Promise<ResearchContext> {
   const topicIds=task?.topic_ids??job.research_task?.topic_ids??jobTopics(slug,job).map(t=>t.id);
+  const applicability=await applicableSources(problemId,slug,job,topicIds);
   let direct=uniqueIds([...(task?.predecessor_returns??[]),job.research_source_return_id,job.follow_up_of,job.parent_return_id,job.evidence_return_id]);
+  direct=uniqueIds([...direct,...applicability.map(a=>a.source_return_id)]);
   if (job.research_route_id) {
     const r=await one(`SELECT origin_return_id,last_return_id FROM research_routes WHERE id=$1 AND problem_id=$2`,[job.research_route_id,problemId]);
     const d=await q(`SELECT return_id FROM research_dependencies WHERE route_id=$1`,[job.research_route_id]);
@@ -132,7 +135,7 @@ export async function researchContext(problemId: number, slug: string, job: any,
         WHEN EXISTS(SELECT 1 FROM research_links l WHERE l.subject_return_id=r.id AND l.problem_id=$1 AND ${activeLinkSQL('l')} AND (l.route_id=$3 OR l.topic_id=ANY($4::text[]))) THEN 'explicit association'
         WHEN (r.research_evidence->'topic_ids') ?| $4 OR coalesce(j.research_task->'topic_ids','[]') ?| $4 THEN 'topic evidence'
         WHEN r.paper_slug=ANY($5::text[]) THEN 'paper evidence' WHEN r.id IN(SELECT id FROM related) THEN 'cited or dependent evidence' ELSE 'potentially relevant lane evidence' END AS relevant_by
-      FROM returns r JOIN users u ON u.id=r.user_id LEFT JOIN jobs j ON j.id=r.job_id WHERE r.problem_id=$1 AND r.duplicate_of IS NULL AND
+      FROM returns r JOIN users u ON u.id=r.user_id LEFT JOIN jobs j ON j.id=r.job_id WHERE r.problem_id=$1 AND r.duplicate_of IS NULL AND r.applicability_assessment IS NULL AND NOT EXISTS(SELECT 1 FROM jobs admin WHERE admin.id=r.job_id AND admin.applicability_check IS NOT NULL) AND
        (r.id=ANY($2::bigint[]) OR r.research_route_id=$3 OR (r.research_evidence->'topic_ids') ?| $4 OR coalesce(j.research_task->'topic_ids','[]') ?| $4 OR r.paper_slug=ANY($5::text[]) OR r.id IN(SELECT id FROM related)
         OR EXISTS(SELECT 1 FROM research_links l WHERE l.subject_return_id=r.id AND l.problem_id=$1 AND ${activeLinkSQL('l')} AND (l.route_id=$3 OR l.topic_id=ANY($4::text[]))) OR (r.lane_id=$6 AND r.type NOT IN('check','triage'))))
     SELECT c.*, (SELECT d.by FROM return_decisions d WHERE d.return_id=c.id AND NOT d.provisional ORDER BY d.id DESC LIMIT 1) AS decision_by
@@ -163,7 +166,7 @@ export async function researchContext(problemId: number, slug: string, job: any,
   }
   const digest=(value:any)=>createHash('sha256').update(JSON.stringify(value??null)).digest('hex');
   const input_vector={returns:items.map(r=>[r.id,r.status,r.final_rung,r.provisional,r.decision_by,digest(r.research_evidence),r.lean_current??null]),reviews:reviews.map(r=>[Number(r.id),r.verdict,r.rung,r.trusted,r.needs_reassessment,digest([r.notes_md,withoutProgressAssessment(r.research_assessment)])]),history:history.map(h=>Number(h.id)),findings:findings.map(f=>[Number(f.id),f.status,f.resolved_by_return_id,f.resolved_sha]),links:links.map(l=>Number(l.id))};
-  return boundResearchContext({schema:'research-context-v1',topic_ids:topicIds,items,jobs,findings,input_vector,omitted});
+  return boundResearchContext({schema:'research-context-v1',topic_ids:topicIds,items,jobs,findings,applicability,input_vector:{...input_vector,applicability:applicability.map(a=>[a.source_return_id,a.assessment_return_id,a.input_sha256])},omitted});
 }
 
 /** Bound served/saved prose without clipping mathematical sentences. Exact scope hashes and statuses survive. */
@@ -185,6 +188,7 @@ export function boundResearchContext(context:ResearchContext,limit=12000):Resear
     if(item.verification_plan) item.verification_plan={lean:item.verification_plan.lean?{policy:item.verification_plan.lean.policy}:null};
     if(item.lean_summary) item.lean_summary={status:item.lean_summary.status,label:item.lean_summary.label,policy:item.lean_summary.policy,checked_claims:item.lean_summary.checked_claims,current_evidence:item.lean_summary.current_evidence,manuscript_sha256:item.lean_summary.manuscript_sha256,statement_binding:item.lean_summary.statement_binding};
   }
+  for(const a of context.applicability??[])a.entries=a.entries.map((e:any)=>({...e,evidence_md:whole(e.evidence_md,`GET <project>/return/${a.assessment_return_id}`),assumptions_md:whole(e.assumptions_md,`GET <project>/return/${a.assessment_return_id}`)}));
   context.findings=context.findings.map(f=>({...f,note:whole(f.note,`GET <project>/finding/${f.id}`)}));
   return context;
 }
@@ -197,6 +201,7 @@ export function experimentEvidenceMarkdown(task:ResearchTask,context:ResearchCon
 export function contextMarkdown(context: ResearchContext, base: string, limit=6000): string {
   let used=0;
   const body:string[]=[];
+  for(const a of context.applicability??[])body.push(`- Current trusted applicability screening #${a.assessment_return_id} links source #${a.source_return_id} to ${a.entries.map((e:any)=>e.target_id).join(', ')}. Original supported scopes only; this does not extend scientific acceptance. Read ${base}/return/${a.assessment_return_id} for evidence and assumptions; source snapshot ${a.input_sha256}.`);
   const full=(text:string,locator:string) => { if (used+text.length<=limit) { used+=text.length;return text; } return `Complete scope/correction exceeds the inline allowance; read ${locator} before relying on it.`; };
   for (const item of context.items) {
     const url=`${base}/return/${item.id}`;

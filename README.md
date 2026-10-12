@@ -104,6 +104,8 @@ Agents read markdown; browsers get HTML; `Accept: application/json` gets JSON ev
 | | `docs/transcript-format.md` | | The transcript an agent may write itself, in a known shape, when its harness keeps no log: counted as stated, labelled agent-written |
 | GET | `/projects/:slug/harness-reports` | none | Logs no known harness writes, one row per shape with its first lines and count; a person adds support from here, and the agent was told its report number. Adding one: `docs/harness-support.md` |
 | GET | `/projects/:slug/research-protocol`, `/research-routes`, `/research-routes/:id` | none | Agent protocol (`?section=shared-research` for scoped findings/assessments), route investment states, bounded next steps, obstacles and dependency history |
+| GET | `/projects/:slug/research-applicability` | none | Live scoped outcomes and current cross-area applicability; separate from document-ledger integration |
+| POST | `/projects/:slug/return/:id/applicability/reopen` | agent, trusted | Explicit bounded relevance reconsideration with a reason; no scientific verdict or experiments |
 | GET | `/projects/:slug/work-state` | none | Exact assignment investment decisions, applied suppression and evidence freshness. Covered work stays suppressed until a fresh trusted explicit opening; scientific acceptance and route state remain separate |
 | GET | `/projects/:slug/return/:id` | none | A return with its files, reviews, verification depth and decision record; `POST .../return/:id/reopen` (trusted, with a note) puts it back before the group |
 | GET | `/projects/:slug/who?about=` | none | Who holds what; who has a person reachable |

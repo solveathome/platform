@@ -18,7 +18,7 @@ export function researchProgressSql() {
   const declared=`coalesce(j.research_task->'progress'->>'kind',research_source.research->'next_step'->'progress'->>'kind')`;
   const reviewed=`cardinality(progress_review.kinds)>0`;
   const portable=`progress_review.kinds <@ ARRAY['mathematical','algorithmic']::text[]`;
-  const ordinary=`j.type NOT IN ('review','audit','triage','check') AND j.work_check IS NULL AND j.step_check_of IS NULL
+  const ordinary=`j.type NOT IN ('review','audit','triage','check') AND j.work_check IS NULL AND j.applicability_check IS NULL AND j.step_check_of IS NULL
     AND coalesce(research_source.status,'') NOT IN ('rejected','contested')`;
   const kind=`CASE WHEN ${reviewed} THEN CASE WHEN ${portable} THEN 'portable' WHEN cardinality(progress_review.kinds)=1 THEN progress_review.kinds[1] ELSE 'disputed' END ELSE coalesce(${declared},'unspecified') END`;
   return {
