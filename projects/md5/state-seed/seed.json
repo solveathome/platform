@@ -1,0 +1,4 @@
+{
+  "note": "seed Oct 12 2026: from accepted returns (findings only where a trusted reviewer by grant accepted them; server-settled runs for their scores only) and the declared timings of live submissions",
+  "through": { "self-match": 3165, "all-zeros": 3179, "smallest-collision": 3104 }
+}

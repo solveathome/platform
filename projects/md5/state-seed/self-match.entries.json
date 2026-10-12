@@ -1,0 +1,122 @@
+[
+ {
+  "body_md": "Metal GPU kernel `selfgpu.m`: the host computes steps 0-5, each thread runs step 6 once, each candidate runs steps 7-60 with an exact early exit on the first digest word h0, and only survivors finish. 10.83 GH/s against 7.07 GH/s for a plain 64-step kernel (1.53x). It matched a CPU brute force on 16.8M candidates with 0 missing. 1800 s reached score 10 (submission #12).",
+  "source_return_id": 2639,
+  "hardware": "Apple M1 Max, 32-core GPU (Metal), host CPU idle",
+  "throughput": "10.83 GH/s (plain kernel 7.07 GH/s)"
+ },
+ {
+  "body_md": "The same `selfgpu.m` kernel, unchanged, on a base M1: 2.67 GH/s against 1.75 GH/s for the plain kernel, the same 1.53x ratio as on the M1 Max. A 7200 s run covered about 1.90e13 candidates and reached 10.",
+  "source_return_id": 2704,
+  "hardware": "Apple M1, 8-core GPU (Metal)",
+  "throughput": "2.67 GH/s"
+ },
+ {
+  "body_md": "Plain GPU search with the `selfgpu.m` kernel: 7.63e12 candidates in 3001 s reached score 11 (submission #23). Rewrites that cut op counts (round-3 XOR chaining 0.997x, XOR-form F/G 0.981x) were slower or neutral: the compiler already lowers F/G well. Profile at the ISA level before changing the kernel.",
+  "source_return_id": 2724,
+  "hardware": "Apple M1, 8-core GPU (Metal)",
+  "throughput": "2.54 GH/s; score 11 in 3001 s"
+ },
+ {
+  "body_md": "Independent Metal engine `sm2b`: its MSL is generated from the RFC 1321 definitions, bases come from SHA-256, and a failed dispatch is re-run whole. Use it on macOS with background GPU load, which aborted the plain version twice. 4.64e13 candidates in 17,664 s; best 11 (submission #179). It is 1.5% slower than `selfgpu.m`.",
+  "source_return_id": 3023,
+  "hardware": "Apple M1, 8-core GPU (Metal), macOS",
+  "throughput": "2.63 GH/s"
+ },
+ {
+  "body_md": "Vary-last-word cache on the CPU: chars 0-27 are fixed per batch and chars 28-31 (word M7) run over all 65,536 hex values. Steps 0-6 are computed once per batch, padding is folded in, the kernel stops after step 60 and scores h0 with XOR plus clz. Single thread: plain 3.78 M/s, scalar cache 14.4 M/s, 32 clang vector lanes 95.5 M/s (25.3x). Rates fall past 32 lanes. 4 threads: 327 M/s, score 9 in 2400 s.",
+  "source_return_id": 2610,
+  "hardware": "Apple M1 Max CPU, 1 thread (4 threads for the search), clang",
+  "throughput": "95.5 M/s per thread; 327 M/s on 4 threads"
+ },
+ {
+  "body_md": "64-lane autovectorised C `mirror.c`: one thread runs the vary-M7 kernel (steps 7-60, h0 exit) at 102.5 M/s against 84 M/s for full 64-step MD5, ratio 1.22 (step model 1.185). 4 threads: 8.65e11 candidates in 2455 s (352 M/s), best 9. Proven: candidates that first differ in word j share at most steps 0..j-1, so vary-M7 is the most step sharing possible without compensating words.",
+  "source_return_id": 2627,
+  "hardware": "Apple M1 Max CPU, clang 17 -O3, 1 and 4 threads",
+  "throughput": "102.5 M/s per thread; 352 M/s on 4 threads"
+ },
+ {
+  "body_md": "AVX-512 x86 engine `selfavx.c` with generated `kernel_gen.h` (`gen_kernel.py`): 16 lanes, vpternlogd for F/G/H/I, vprold. Ablation over 20 s: full MD5 4.52 GH/s, step-0..6 reuse 5.16 GH/s, reuse plus exit after step 60 5.13 GH/s (MSVC may hoist work, so the two savings cannot be attributed separately). The main run reached score 10 in 480.6 s (submission #139).",
+  "source_return_id": 2877,
+  "hardware": "AMD Ryzen 9 9950X3D (16C/32T), 24 threads, Windows 11, MSVC 19.44 /arch:AVX512",
+  "throughput": "5.09 GH/s (212 MH/s per thread)"
+ },
+ {
+  "body_md": "Exhaustive per-suffix enumeration: fixing chars 8..31 makes an 8-char self-match a fixed point of a map on 2^32 prefixes. 576 classes were enumerated in full: counts follow Poisson(1), and 198 classes provably have no 8-char match. This gives the generic rate, no speed-up, but it decides the question exactly per class.",
+  "source_return_id": 2879,
+  "hardware": "AMD Ryzen 9 9950X3D, 24 threads, AVX-512, MSVC",
+  "throughput": "2.47e12 candidates in 527.1 s (4.69 GH/s)"
+ },
+ {
+  "body_md": "Explicit prefix-state caching (steps 0-6 reused across 65,536 suffixes) against the same source recomputing it. On GCC 13.3 it gave 1.089x wall throughput, and 1.110x with -fno-semantic-interposition (8/8 pairs >= 1.05). On Apple Clang the compiler hoisted the baseline itself, so the ratio was 1.001 (#2701). Check that the compiler is not already caching before you credit the trick.",
+  "source_return_id": 2792,
+  "hardware": "AMD Ryzen 9 3900X under a hypervisor, Linux x86-64, GCC 13.3, one pinned thread",
+  "throughput": "33.5M candidates in 3.1-3.5 s per arm (about 10 M/s)"
+ },
+ {
+  "body_md": "Early h0 abort inside a scalar C hill-climb does not pay: rejecting after step 61 when the first digest hex differs (about 94% of proposals) gave a median of 0.998x the score>=4 finds per wall-second of full MD5. Proposal rate was about 65M against 62M per 20 s.",
+  "source_return_id": 2827,
+  "hardware": "Linux aarch64, gcc -O3, one thread",
+  "throughput": "about 3.2 M proposals/s; 46-50 score>=4 finds/s"
+ },
+ {
+  "body_md": "A Python H0 filter in front of hashlib is a net loss: score>=4 finds per wall-second fell to 0.087x of the unfiltered hill-climb, because partial MD5 in Python costs more than a full hashlib call. Do any filtering in compiled code.",
+  "source_return_id": 2818,
+  "hardware": "Linux aarch64, Python, one thread",
+  "throughput": "4.84 against 0.42 score>=4 finds/s"
+ },
+ {
+  "body_md": "Exact round-1 tunnels exist on the hex domain: changing X3 and solving X4'..X7' keeps the state after step 16, with 3.72 all-hex partners per base. They can only save steps 54 to 44 (1.23x ceiling), and the measured gain in scalar C was 1.024x. No two distinct hex candidates share Q17..Q48 (proven in the return).",
+  "source_return_id": 2704,
+  "hardware": "Apple M1, scalar C, one thread",
+  "throughput": "1.024x over the vary-M7 kernel"
+ },
+ {
+  "body_md": "A Klima-style Q4 tunnel would save 16 more steps per candidate, but only 0.444 hex-valid tunnel values exist per base, against 65,536 for vary-M7. It gives no throughput gain on this track.",
+  "source_return_id": 2627,
+  "hardware": "Apple M1 Max, Python yield test over 2000 bases",
+  "throughput": "0.444 usable values per base"
+ },
+ {
+  "body_md": "Score locality is refuted (pre-registered). 1,326,300 one-char neighbours of 4421 exact-h0 hits had a mean popcount(h0' xor T0) of 15.9997 (null 16, z -0.12). Near hits are no better starting points than random strings, so hill-climbs and repair schemes pay a fresh 16^k.",
+  "source_return_id": 2639,
+  "hardware": "Apple M1 Max, C study plus Python hashlib cross-check",
+  "throughput": "1.33e6 neighbours evaluated"
+ },
+ {
+  "body_md": "Terminal repair (solving X4 at its last use, step 61, so that H0 equals the target): 279 of 2^24 seeded draws were hex-legal, and none kept the target after rehashing, because X4 also enters at steps 5, 24 and 38. Throughput was 0.91x baseline.",
+  "source_return_id": 2630,
+  "hardware": "Apple M1 Max, one scalar CPU worker, clang 17 -O3",
+  "throughput": "0.91x the full-MD5 baseline"
+ },
+ {
+  "body_md": "First CUDA option for self-match, a projection only: adapt the all-zeros q9_52 CUDA harness (validated gate, hit re-check, sandbox) to vary M7 with a 7-step cache and the step-61 gate, about 54 steps per candidate. Projected about 29 G/s on an RTX 2080 Ti from the 42 G/s it measured at 37 steps. This has not been built or measured.",
+  "source_return_id": 2947,
+  "hardware": "NVIDIA RTX 2080 Ti (sm_75), CUDA 12.9 (projection)",
+  "throughput": "about 29 G candidates/s projected, unmeasured"
+ },
+ {
+  "body_md": "Nearest NVIDIA data, from the all-zeros track: a CUDA kernel running steps 24-60 per candidate (Klima Q9 tunnel) reached 42.0 G/s, and a steps 8-60 control reached 32.8 G/s. The per-step cost is directly comparable to a self-match kernel that runs steps 7-60.",
+  "source_return_id": 2906,
+  "hardware": "NVIDIA RTX 2080 Ti (sm_75, CUDA 12.9), Ryzen 9 3900X host, WSL2",
+  "throughput": "42.0 G/s (37 steps); 32.8 G/s (53 steps)"
+ },
+ {
+  "body_md": "All-zeros CUDA kernel tuning that should carry over: it is bound by the integer pipe. Pre-adding K + m and moving adds onto the FMA pipe made it 1.26x faster with 0 mismatches, and energy per candidate fell 26%.",
+  "source_return_id": 2997,
+  "hardware": "NVIDIA RTX 2080 Ti (sm_75), CUDA 12.9, WSL2",
+  "throughput": "55.4 G/s, 0.215 G candidates per J"
+ },
+ {
+  "body_md": "A pending audit of #3041 agrees with its counts. It argues that the 'excluded at 5 sigma' step compares a fixed earlier value against a new estimate, rather than two estimated samples, and that the generators' independence is assumed rather than shown. The low-k null itself is not disputed.",
+  "source_return_id": 3118,
+  "hardware": "analysis only, no hashing",
+  "throughput": "none (re-analysis of 2^29-per-arm histograms)"
+ },
+ {
+  "body_md": "The score>=10 excess question: four pre-registered fresh runs on M1 GPUs pool to 104 hits against 98.96 expected (ratio 1.05 [0.86, 1.27]), which is inconclusive. About 4.7e13 more fresh candidates, about 4.9 h on an M1 GPU, would give 80% power at 1.22.",
+  "source_return_id": 3023,
+  "hardware": "Apple M1, 8-core GPU (Metal)",
+  "throughput": "2.63 GH/s; 4.64e13 candidates in 17,664 s"
+ }
+]
