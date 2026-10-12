@@ -413,7 +413,7 @@ ${ENDED_LAUNCH_GUIDANCE}
     }
   }
   row ??= await selectJob(agent, preferResearch);
-  const reserveDiscovery = !directed && !recovery && !requiredCorrection && !session.direction_id && !portfolio && !tangentFirst && tier === 1 && discoveryDue(share, used, Math.min(agent.maxHours, Number(row?.budget_hours ?? agent.maxHours)));
+  const reserveDiscovery = !directed && !recovery && !requiredCorrection && !upkept && !session.direction_id && !portfolio && !tangentFirst && tier === 1 && discoveryDue(share, used, Math.min(agent.maxHours, Number(row?.budget_hours ?? agent.maxHours)));
   if (reserveDiscovery) row = await selectJob(agent, preferResearch, true)
     ?? await synthesizeExplore(req, session, lane, maxHours, null, true);
   if (!row) row = await synthesizeExplore(req, session, lane, maxHours, await computeBlocked(agent));
@@ -1490,7 +1490,7 @@ job.post("/result", bearer, project, assignmentMutation(async (req: any, res) =>
     await registerEntries(uid, "review", Number(myReview?.id ?? 0), entryKeys);
     const reviewReport = tokens.log === "unknown" && transcriptMode !== "summary" ? await reportHarness(String(b.transcript), { reviewId: Number(myReview?.id ?? 0) || undefined, uid, model: req.model ?? null }) : null;
     const reviewLogWarn = transcriptWarning(transcriptMode, sessionMode, tokens, String(b.transcript), `POST ${BASE()}/projects/${req.project.slug}/review/${Number(myReview?.id ?? 0)}/transcript (same headers)`, reviewReport);
-    res.json({ ok: true, review_of: reviewOf, review_id: Number(myReview?.id ?? 0) || null, work_check_job_id:reviewWorkCheckId, outcome, ...(Object.keys(seriesDecided).length ? { series: seriesDecided } : {}), advisory: !reviewerTrusted, ...(effortNote ? { effort_note: effortNote } : {}), warnings: [...(effortNote ? [effortNote] : []), ...alsoFixCut(b.also_fix), ...(reviewLogWarn ? [reviewLogWarn] : []), ...seriesWarnings, ...announceWarnings, ...onceWarning(tokens), ...scrubWarnings, ...sharedWarnings, ...subagentWarning(String(b.transcript ?? ""), `${BASE()}/projects/${req.project.slug}/review/${Number(myReview?.id ?? 0)}/transcript`)], trusted_by: reviewerGranted ? "grant" : reviewerTrusted ? "model" : null, return_status: after?.status ?? null, final_rung: after?.final_rung ?? null, provisional: after?.provisional ?? null, effects_applied_at: after?.effects_applied_at ?? null, integration: after?.integration ?? null, tokens });
+    res.json({ ok: true, review_of: reviewOf, review_id: Number(myReview?.id ?? 0) || null, work_check_job_id:reviewWorkCheckId, outcome, ...(Object.keys(seriesDecided).length ? { series: seriesDecided } : {}), advisory: !reviewerTrusted, ...(effortNote ? { effort_note: effortNote } : {}), warnings: [...(effortNote ? [effortNote] : []), ...alsoFixCut(b.also_fix), ...(reviewLogWarn ? [reviewLogWarn] : []), ...seriesWarnings, ...announceWarnings, ...onceWarning(tokens), ...scrubWarnings, ...sharedWarnings, ...subagentWarning(String(b.transcript ?? ""), `${BASE()}/projects/${req.project.slug}/review/${Number(myReview?.id ?? 0)}/transcript`)], trusted_by: reviewerTrusted ? "grant" : null, return_status: after?.status ?? null, final_rung: after?.final_rung ?? null, provisional: after?.provisional ?? null, effects_applied_at: after?.effects_applied_at ?? null, integration: after?.integration ?? null, tokens });
     return;
   }
 

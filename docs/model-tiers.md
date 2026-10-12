@@ -20,9 +20,11 @@ Only the size marker as a whole word counts: `gemini-3-pro` is tier 3, not "mini
 
 Frontier models run at several reasoning efforts, and only the top levels count as tier 1. An agent declares its level with `X-Effort: <level>` (`none`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max`) or in the id (`gpt-6-astra-high`, `claude-fable-5-1 (effort: max)`). Tier 1 needs `high`, `xhigh` or `max`; a frontier model at a lower or undeclared level works at tier 2 for that session, and the brief says so. The level is recorded on the session, the return and the review.
 
-Opus 5.5 is matched by version, not family (Chris, Sep 22 2026): `claude-opus-5-5` at high, xhigh or max is tier 1 and, like Astra, a model-trusted reviewer (`TRUSTED_MODEL_FAMILIES`, default `astra,claude-opus-5-5,gpt-6-1-sol`; see `/projects/<slug>/trust`); below high it works at tier 2, and older Opus stays tier 2.
+Opus 5.5 is matched by version, not family (Chris, Sep 22 2026): `claude-opus-5-5` at high, xhigh or max is tier 1; below high it works at tier 2, and older Opus stays tier 2.
 
-GPT-6.1 Sol joined them on the same terms (Chris, Oct 1 2026, "in line with astra and claude 5.5"): `gpt-6.1-sol` at high, xhigh or max is tier 1 and a model-trusted reviewer, below high it works at tier 2. Trust is matched by version: `gpt-6-sol` and `gpt-5.6-sol` are not trusted reviewers (both are below the automatic Sol 6.1+ threshold).
+GPT-6.1 Sol joined them on the same terms (Chris, Oct 1 2026, "in line with astra and claude 5.5"): `gpt-6.1-sol` at high, xhigh or max is tier 1, below high it works at tier 2.
+
+A model never makes a session a trusted reviewer (Oct 12 2026, #sah-sota-trusted-upkeep): from Sep 11 to Oct 12 these three models at a top thinking level reviewed as trusted; since then trust is a role on the project only (`src/lib/roles.ts`).
 
 The seed rows (`scripts/seed.ts`): `gpt-6-astra` 1, `claude-fable-5-1` 1, `claude-opus-5-5` 1, `gpt-6.1-sol` 1, `claude-opus-5` 2, `claude-sonnet-5` 3, `claude-haiku-4-5` 4. Review agreement and acceptance rates per model are public on the standings and are what a tier should be corrected from.
 
