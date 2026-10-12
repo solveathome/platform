@@ -427,6 +427,8 @@ input[type=checkbox] { accent-color: var(--fg); }
 .result-list .result-state { white-space: nowrap; font-size: .8125rem; }
 .result-list .result-state.pending { color: var(--mut); }
 .result-list .result-when { color: var(--mut); font-size: .75rem; white-space: nowrap; }
+/* A row with a title and a line under it (research routes, recorded findings): one cell in the body column, so the grid never puts the text in the id or state column. */
+.result-list .result-body { grid-column: 2; min-width: 0; display: flex; flex-direction: column; overflow-wrap: anywhere; }
 @media (max-width: 900px) {
   .st-strip { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0 1.5rem; }
   .standings-grid { grid-template-columns: 1fr; gap: 2.5rem; }
