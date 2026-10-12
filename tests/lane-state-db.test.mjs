@@ -31,7 +31,23 @@ const {ensureChallengeProjects} = await import('../src/lib/challenges.ts');
 const {ensureChannels} = await import('../src/routes/chat.ts');
 const {listProjectConfigs} = await import('../src/lib/projects.ts');
 const {isTrusted, isGrantedTrusted} = await import('../src/lib/roles.ts');
-const {lanesNeedingUpkeep, queueStateUpkeep} = await import('../src/lib/lane-state.ts');
+const {lanesNeedingUpkeep, queueStateUpkeep, insertStateSection, stateBrief} = await import('../src/lib/lane-state.ts');
+const {renderBrief, renderChatBrief} = await import('../src/lib/brief.ts');
+const {compactDepartmentBrief} = await import('../src/lib/department-protocol.ts');
+
+/** The brief contract (Chris, Oct 12 2026: "make sure this state of the art is part of the brief"): the lane's state of the art inline,
+ *  Verified before New, under the title and before the first of the brief's own sections; on md5 the Verified part opens with the
+ *  fastest method per machine. */
+function assertStateOnTop(md, kind) {
+  const at = md.indexOf('## State of the art');
+  assert.ok(at >= 0, `${kind}: no state of the art in the brief`);
+  const verified = md.indexOf('### Verified (written by trusted reviewers only)', at), fresh = md.indexOf('### New, not yet verified (anyone may add)', at);
+  assert.ok(verified > at && fresh > verified, `${kind}: Verified then New`);
+  assert.ok(md.indexOf('#### Start here: the fastest known way, by machine', verified) > verified || md.indexOf('Start here', verified) > verified || !/Verified summary version [1-9]|Version [1-9]/.test(md.slice(verified, fresh)), `${kind}: the md5 playbook opens Verified`);
+  const firstOwn = ['## Your person already decided', '## How this works from a chat', '## Rules (read before starting)', '## The task', '## Current limits and evidence']
+    .map(h => md.indexOf(h)).filter(i => i >= 0);
+  assert.ok(firstOwn.length && at < Math.min(...firstOwn), `${kind}: the state of the art sits above the brief's own sections (at ${at}, first section at ${Math.min(...firstOwn)})`);
+}
 
 const people = {};
 let server, base, pid;
@@ -131,6 +147,7 @@ test('anyone adds an unverified entry, with its source and, on md5, its hardware
 test('every brief carries its lane\'s state of the art, both sections, clearly labelled', async () => {
   const attempt = await one(`SELECT assignment_payload FROM assignment_attempts WHERE session_id = $1 ORDER BY started_at DESC LIMIT 1`, [S.c]);
   const md = attempt.assignment_payload.brief_md;
+  assertStateOnTop(md, 'track run (registration reply)');
   assert.match(md, /## State of the art: /);
   assert.match(md, /### Verified \(written by trusted reviewers only\)/);
   assert.match(md, /### New, not yet verified \(anyone may add\)/);
@@ -155,6 +172,7 @@ test('an upkeep is queued when a lane has news, offered only to a grant, and tak
   const s = await call('owner', 'GET', '/start'); const j = await s.json(); assert.equal(s.status, 200, JSON.stringify(j).slice(0, 300));
   assert.equal(j.type, 'upkeep', 'the grant takes the upkeep first');
   assert.equal(j.assignment_reason?.policy ?? (await one(`SELECT reason FROM assignment_attempts WHERE id = $1`, [j.attempt_id])).reason.policy, 'state-of-the-art upkeep');
+  assertStateOnTop(j.brief_md, 'upkeep');
   assert.match(j.brief_md, /Entry \d+/); assert.match(j.brief_md, /state_update/); assert.match(j.brief_md, /Start here: the fastest known way, by machine/);
   const summary = '#### Start here: the fastest known way, by machine\n\nTest: the AVX2 early-exit kernel of #' + S.source + ' (4.1e9 MD5/s on a 16-core Ryzen, checked against its receipts).\n\n#### Best results\n\nTest only.';
   const bad = await call('owner', 'POST', '/result', {session: j.session, body: {job_id: j.job_id, attempt_id: j.attempt_id, transcript: transcriptOf('claude-opus-5-5'), transcript_approved: true, report_md: 'Test: upkeep', state_update: {promote: [S.entry]}}});
@@ -177,4 +195,33 @@ test('a return may carry an unverified entry; a bad one is a warning, never a re
     report_md: 'Test: a run with nothing submitted.', recipe_md: 'Test: node search.mjs 1 prints nothing; rerun with the same seed.', state_entry: {body_md: 'Test: too short'}}});
   const body = await r.json(); assert.equal(r.status, 200, JSON.stringify(body).slice(0, 300));
   assert.ok(body.warnings.some(w => /state_entry not recorded/.test(w)), JSON.stringify(body.warnings));
+});
+
+test('every kind of brief carries the state of the art inline under its title: research, study, review, packaged review, triage, a job with no lane, chat, department', async () => {
+  // A verified summary on the lane, so the md5 playbook heading is there to find.
+  const lane = await one(`SELECT id, slug FROM lanes WHERE problem_id = $1 AND slug = $2`, [pid, S.lane]);
+  await q(`INSERT INTO lane_states (lane_id, problem_id, summary_md, version, through_return_id, updated_by, updated_model) VALUES ($1,$2,$3,1,0,$4,'test')
+    ON CONFLICT (lane_id) DO UPDATE SET summary_md = EXCLUDED.summary_md, version = greatest(lane_states.version, 1)`, [lane.id, pid, '#### Start here: the fastest known way, by machine\n\nTest: the AVX2 kernel.\n\n#### Best results\n\nTest.', people.owner.id]);
+  await q(`INSERT INTO lane_state_entries (problem_id, lane_id, body_md, hardware, throughput, source_return_id, user_id) VALUES ($1,$2,'Test: an open entry for the briefs, with its numbers.','Test: M1','1e8/s',$3,$4)`, [pid, lane.id, S.source, people.c.id]);
+  const pending = async (author, model, extra = {}) => Number((await one(`INSERT INTO returns (problem_id, lane_id, type, user_id, model, provider, report_md, transcript, status, verification_plan) VALUES ($1,$2,'explore',$3,$4,'p','Test: a claim','Test','pending',$5) RETURNING id`, [pid, lane.id, author, model, extra.plan ? JSON.stringify(extra.plan) : null])).id);
+  const job = async (type, fields = {}) => Number((await one(`INSERT INTO jobs (problem_id, lane_id, type, title, brief_md, min_tier, budget_hours, compute_hint, parent_return_id, origin_key, requires_trust)
+    VALUES ($1,$2,$3,$4,'Test: the task text.',99,1,'{}',$5,$6,$7) RETURNING id`, [pid, fields.laneless ? null : lane.id, type, `Test ${type} brief`, fields.parent ?? null, fields.origin ?? null, !!fields.trust])).id);
+  const take = async (who, id, model) => { const r = await call(who, 'GET', `/start?job=${id}`, {model}); const j = await r.json(); assert.equal(r.status, 200, `${id}: ${JSON.stringify(j).slice(0, 300)}`); await call(who, 'POST', '/release', {session: j.session, model, body: {job_id: j.job_id, attempt_id: j.attempt_id, note: 'Test: brief read'}}); return j; };
+  const kinds = [
+    ['explore (research, pursuit and rescue use the same path)', 'c', await job('explore'), 'claude-fable-5-1'],
+    ['challenge study', 'c', await job('explore', {origin: `challenge:md5-mirror-ascii32-v1:study:test-${tag}`}), 'claude-fable-5-1'],
+    ['review', 'owner', await job('review', {parent: await pending(people.astra.id, 'gpt-6-astra')}), 'claude-opus-5-5'],
+    ['triage', 'c', await job('triage', {parent: await pending(people.astra.id, 'gpt-6-astra')}), 'claude-fable-5-1'],
+    ['review of a packaged return (its brief is recomposed when served)', 'owner', await job('review', {parent: await pending(people.astra.id, 'gpt-6-astra', {plan: {schema_version:1,manifest:[{path:'check.py',sha256:'a'.repeat(64),role:'checker'},{path:'input.json',sha256:'b'.repeat(64),role:'target'}],targets:['input.json'],coverage_md:'Every supplied record.',comparison:'Exact integer equality.',availability:{status:'complete',details:'All bytes in manifest.',network:false,required_sources:[]},claim:'Test: the finite count is four.',scope:'The supplied finite set.',assumptions:'Exact integer arithmetic.',checker:'a'.repeat(64),inputs:['b'.repeat(64)],environment:'Python 3.12',command:'python check.py input.json',expected:'4',supports:'Counts every member.',coverage:'decisive',cost:{minutes:1,cpu_hours:0.01,ram_gb:1,judgment_minutes:15}}})}), 'claude-opus-5-5'],
+  ];
+  for (const [kind, who, id, model] of kinds) assertStateOnTop((await take(who, id, model)).brief_md, kind);
+  const laneless = await take('c', await job('explore', {laneless: true}), 'claude-fable-5-1');
+  assertStateOnTop(laneless.brief_md, 'a job with no lane');
+  assert.match(laneless.brief_md, new RegExp(`State of the art: .*\\(\`${S.lane}\`\\)`), 'a job with no lane carries every lane\'s document inline, not a link');
+  // The chat brief and a department's compact brief are built from the same served markdown.
+  const section = await stateBrief(pid, slug, Number(lane.id), `${base}/projects/${slug}`);
+  const row = {id: 1, type: 'explore', title: 'Test', brief_md: 'Test: the task.', git_ref: 'main', compute_hint: {}, budget_hours: 1, repo_url: '', attempt_id: 'a', lane_slug: S.lane};
+  assertStateOnTop(insertStateSection(renderChatBrief(row, base, {id: 's', host: 'chatgpt', handle: 'x'}), section), 'chat');
+  const full = insertStateSection(renderBrief(row, base, {id: 's', jobs: 0, max: null, maxHours: 1, compute: 'test', transcriptPreapproved: true}), section);
+  assertStateOnTop(compactDepartmentBrief(full, row, {length: 'one task', jobs: 0, max: null, compute: 'test', disk: 5, subagents: 'allowed'}, null), 'department compact');
 });

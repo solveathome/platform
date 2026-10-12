@@ -106,7 +106,7 @@ import { ABANDON_AFTER_MIN } from "../lib/liveness.js";
 import { plainDescription, notFoundPage, abs } from "../lib/seo.js";
 import { noticeChannel } from "../lib/lane-channel.js";
 import { challengeConfig, challengeJob, challengeTaskBrief, challengeTrackOfJob, challengeSlugs } from "../lib/challenges.js";
-import { addEntry, applyStateUpdate, laneBySlug, lanesNeedingUpkeep, parseStateUpdate, queueStateUpkeep, stateBrief, StateError, upkeepBrief } from "../lib/lane-state.js";
+import { addEntry, applyStateUpdate, insertStateSection, laneBySlug, lanesNeedingUpkeep, parseStateUpdate, queueStateUpkeep, stateBrief, StateError, upkeepBrief } from "../lib/lane-state.js";
 async function sweepExpired(problemId: number): Promise<void> {
   if (await one(`SELECT 1 FROM problems WHERE id = $1 AND slug = ANY($2::text[])`, [problemId, challengeSlugs()])) await settlePendingChallengeRuns(problemId);
   await expireUntrustedLeanChecks(problemId);
@@ -452,9 +452,11 @@ ${ENDED_LAUNCH_GUIDANCE}
   if (collaborationEnabled(req.project.slug) && row.type !== 'upkeep') row.research_task = await taskForJob(Number(req.project.id),req.project.slug,row);
   // A record challenge's track assignment says where the record stands now, not when the job was made (src/lib/challenges.ts).
   if (challengeTrackOfJob(req.project.slug, row)) row.brief_md = await challengeTaskBrief(row, req.project, BASE());
-  // Every brief carries its lane's state of the art, both sections; an upkeep's brief is that document and what arrived since.
+  // Every brief carries its lane's state of the art inline, both sections, right under its title (Chris, Oct 12 2026: "make sure this
+  // state of the art is part of the brief"). It is composed here and placed in the served markdown below, after every rewrite of
+  // brief_md (a packaged review's or a triage's brief is recomposed), so no kind of brief loses it. An upkeep carries every open entry.
   if (row.type === "upkeep") row.brief_md = await upkeepBrief(row, req.project, `${BASE()}/projects/${req.project.slug}`);
-  else row.brief_md += await stateBrief(Number(req.project.id), req.project.slug, row.lane_id ? Number(row.lane_id) : null, `${BASE()}/projects/${req.project.slug}`);
+  const stateSection = await stateBrief(Number(req.project.id), req.project.slug, row.lane_id ? Number(row.lane_id) : null, `${BASE()}/projects/${req.project.slug}`, row.type === "upkeep");
   const sess = { id: String(session.id), jobs: Number(session.jobs), max: session.max_jobs === null ? null : Number(session.max_jobs), length: lengthWords(session), disk, abandonAfterMin: ABANDON_AFTER_MIN, maxHours: agent.maxHours, compute: describeOffer(offer), transcriptPreapproved: settings.ai?.transcript_preapproved === true, transcriptMode: sessionTranscriptMode(settings.ai), subagents: settings.ai?.subagents?.allowed === false ? "not allowed" : settings.ai?.subagents?.max_parallel ? `allowed, up to ${settings.ai.subagents.max_parallel} at a time` : "allowed", files: await files.quota(uid).then((f) => ({ left: f.files_left, bytes_left: f.bytes_left, per_day: f.files_per_day })) };
   row.operational_deferrals = await deferralHistory(Number(row.id),session.id);
   row.handoffs = await handoffHistory(Number(row.id));
@@ -479,7 +481,7 @@ ${ENDED_LAUNCH_GUIDANCE}
   }
   row.repair_context = await repairContext(Number(req.project.id),req.project.slug,row);
   row.brief_md += repairContextMarkdown(row.repair_context);
-  let md = chat ? renderChatBrief(row, `${BASE()}/projects/${req.project.slug}`, { id: String(session.id), host: String(req.oauth?.host ?? "other"), handle: req.user!.handle }) : renderBrief(row, `${BASE()}/projects/${req.project.slug}`, sess);
+  let md = insertStateSection(chat ? renderChatBrief(row, `${BASE()}/projects/${req.project.slug}`, { id: String(session.id), host: String(req.oauth?.host ?? "other"), handle: req.user!.handle }) : renderBrief(row, `${BASE()}/projects/${req.project.slug}`, sess), stateSection);
   if (!chat) {
   { const note = unservedNote(String(row.brief_md ?? ""), req.project.slug, `${BASE()}/projects/${req.project.slug}`); if (note) md = md.replace(/\n## /, () => `\n${note}## `); }
   // The handle's own returns waiting for a verdict: who can decide them, what is settled, and where the work goes meanwhile (`ownReturnsWaitingNote`).

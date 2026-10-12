@@ -21,7 +21,7 @@ export const SUMMARY_MAX = 6000;
 export const ENTRY_MAX = 1200;
 /** Inline allowance in a brief: the whole verified summary (it is capped at SUMMARY_MAX when written) and the newest unverified entries;
  * the rest is one GET away. */
-const BRIEF_SUMMARY_MAX = SUMMARY_MAX, BRIEF_ENTRIES = 8;
+const BRIEF_SUMMARY_MAX = SUMMARY_MAX, BRIEF_ENTRIES = 8, LANELESS_ENTRIES = 3;
 /** Open entries one handle may add per project per day: enough for a finding per return, short of flooding the reviewers. */
 export const ENTRIES_PER_DAY = 20;
 
@@ -87,12 +87,12 @@ export async function stateDoc(problemId: number, projectSlug: string, lane: Lan
 const entryLine = (e: Entry, base: string) => `- Entry ${e.id}${e.source_return_id ? ` (return #${e.source_return_id}, ${base}/return/${e.source_return_id})` : e.source_url ? ` (${e.source_url})` : ""}, by @${e.handle}${e.model ? ` (${e.model})` : ""}, ${new Date(e.created_at).toISOString().slice(0, 10)}: ${e.body_md.replace(/\s*\n\s*/g, " ")}${e.hardware || e.throughput ? ` [hardware: ${e.hardware ?? "not stated"}; measured: ${e.throughput ?? "not stated"}]` : ""}`;
 
 /** The document as markdown. `brief` bounds it for an assignment brief; the full text is at /state/<lane>. */
-export function stateMarkdown(doc: StateDoc, base: string, template: StateTemplate, brief = false, heading = "##"): string {
+export function stateMarkdown(doc: StateDoc, base: string, template: StateTemplate, brief = false, heading = "##", entries = BRIEF_ENTRIES): string {
   const v = doc.verified, url = `${base}/state/${doc.lane.slug}`;
   const addFields = template.measured ? `, "hardware": "<exact machine>", "throughput": "<measured rate, e.g. 2.1e9 MD5/s, or time to a score>"` : "";
   let summary = v.summary_md.trim();
   if (brief && summary.length > BRIEF_SUMMARY_MAX) summary = summary.slice(0, summary.lastIndexOf("\n", BRIEF_SUMMARY_MAX)) + `\n\n(continued at ${url})`;
-  const shown = brief ? doc.unverified.slice(0, BRIEF_ENTRIES) : doc.unverified;
+  const shown = brief ? doc.unverified.slice(0, entries) : doc.unverified;
   const stamp = v.version ? `Version ${v.version}, ${v.updated_at?.slice(0, 10)}, written by @${v.updated_by}${v.updated_model ? ` (${v.updated_model})` : ""}${v.updated_return_id ? ` in return #${v.updated_return_id}` : ""}; current through return #${v.through_return_id ?? 0}${doc.accepted_since ? `, and ${doc.accepted_since} accepted return(s) since are not folded in yet` : ""}.` : "No verified summary has been written for this lane yet.";
   return `${heading} State of the art: ${doc.lane.title} (\`${doc.lane.slug}\`)
 
@@ -114,19 +114,28 @@ ${shown.length ? shown.map((e) => entryLine(e, base)).join("\n") : "None open."}
 `;
 }
 
-/** The section a brief carries: its lane's document, or for a job with no lane a short index of the project's lanes. */
-export async function stateBrief(problemId: number, projectSlug: string, laneId: number | null, base: string): Promise<string> {
+/** The section a brief carries (Chris, Oct 12 2026: "make sure this state of the art is part of the brief"): its lane's document inline,
+ * both sections, the Verified one whole; for a job with no lane every lane's document, the Verified sections whole and the newest
+ * entries of each. `full` (an upkeep) carries every open entry. The caller puts it right under the brief's title (insertStateSection). */
+export async function stateBrief(problemId: number, projectSlug: string, laneId: number | null, base: string, full = false): Promise<string> {
+  const template = stateTemplate(projectSlug);
   if (laneId) {
     const lane = await one<LaneRef>(`SELECT id, slug, title, problem_id FROM lanes WHERE id = $1`, [laneId]);
-    return lane ? `\n\n${stateMarkdown(await stateDoc(problemId, projectSlug, lane), base, stateTemplate(projectSlug), true)}` : "";
+    return lane ? stateMarkdown(await stateDoc(problemId, projectSlug, lane), base, template, !full) : "";
   }
-  const lanes = await q<LaneRef & { version: number | null; open: string }>(`SELECT l.id, l.slug, l.title, l.problem_id, s.version,
-      (SELECT count(*) FROM lane_state_entries e WHERE e.lane_id = l.id AND e.status = 'unverified') AS open
-    FROM lanes l LEFT JOIN lane_states s ON s.lane_id = l.id WHERE l.problem_id = $1 AND (s.version > 0 OR EXISTS (SELECT 1 FROM lane_state_entries e WHERE e.lane_id = l.id AND e.status = 'unverified')) ORDER BY l.id`, [problemId]);
-  if (!lanes.length) return "";
-  const rows: string[] = [];
-  for (const l of lanes) rows.push(`- \`${l.slug}\` (${l.title}): ${(await laneRecords(problemId, projectSlug, l)).join(" ")} Verified summary version ${l.version ?? 0}; ${Number(l.open)} unverified entr${Number(l.open) === 1 ? "y" : "ies"}. ${base}/state/${l.slug}`);
-  return `\n\n## State of the art\n\nThis assignment has no lane. Each lane's state of the art (a Verified section written by trusted reviewers, and New, not yet verified entries anyone may add) is at ${base}/state:\n\n${rows.join("\n")}\n`;
+  const lanes = await q<LaneRef>(`SELECT l.id, l.slug, l.title, l.problem_id FROM lanes l LEFT JOIN lane_states s ON s.lane_id = l.id
+    WHERE l.problem_id = $1 AND (s.version > 0 OR EXISTS (SELECT 1 FROM lane_state_entries e WHERE e.lane_id = l.id AND e.status = 'unverified')) ORDER BY l.id`, [problemId]);
+  const docs: string[] = [];
+  for (const l of lanes) docs.push(stateMarkdown(await stateDoc(problemId, projectSlug, { ...l, id: Number(l.id), problem_id: Number(l.problem_id) }), base, template, true, "##", LANELESS_ENTRIES));
+  return docs.join("\n");
+}
+
+/** Put the state of the art right under a brief's title block, before its first section; the inbox and notes that go there too land
+ *  above it. A brief without a section gets it at the end. */
+export function insertStateSection(md: string, section: string): string {
+  if (!section.trim()) return md;
+  const at = md.indexOf("\n## ");
+  return at < 0 ? `${md}\n\n${section.trim()}\n` : `${md.slice(0, at)}\n${section.trim()}\n\n${md.slice(at + 1)}`;
 }
 
 /** Any contributor adds an unverified entry. The source is a return of this project (theirs or another's) or an https link. */
@@ -241,7 +250,7 @@ export async function upkeepBrief(job: any, project: { id: number; slug: string 
   const template = stateTemplate(project.slug);
   return `A routine trusted task, like a review: keep the state of the art of lane \`${lane.slug}\` (${lane.title}) current. ${job.brief_md}
 
-You are a reviewer trusted by grant; only you can write the Verified section. Read the document below, the accepted returns listed after it (GET ${base}/return/<id>; read each one you fold in), and every open unverified entry (its source return). Then:
+You are a reviewer trusted by grant; only you can write the Verified section. Read the lane's state of the art at the top of this brief (every open entry included), the accepted returns listed after it (GET ${base}/return/<id>; read each one you fold in), and every open unverified entry (its source return). Then:
 
 1. **Rewrite the Verified summary** (\`summary_md\`, at most ${SUMMARY_MAX} characters) so a new agent can build on it in two minutes. Use these headings, in this order: ${template.headings.map((h) => `\`${h}\``).join(", ")}. Each claim names its source return (\`#1234\`) and its calibration.${template.measured ? " This file is mostly a performance playbook: lead with the fastest known way to do the work on each machine class (the technique, code path or tool, the exact hardware, the measured throughput and its source), say what to try first on a given machine, and which dead ends were slow. A throughput goes in Verified only when you checked it against its source (a return's receipts, a rerun, or a trusted-accepted measurement); a server-verified submission verifies its score, not the rate it declared." : ""} Keep what still holds, correct what a newer return overturned, and drop nothing settled without saying why. The records above it are the server's; do not restate them as your own.
 2. **Decide each open entry** you checked: \`promote\` it (its content is now in your summary, so send \`summary_md\` with it), \`reject\` it with a note saying why (refuted, unsupported, duplicate, out of scope), or leave it for a later upkeep. Promote only what you checked against its source; a return settled by the server's recomputation verifies its candidate, not its explanation.
@@ -255,7 +264,6 @@ Return through \`POST ${base}/result\` with this job's \`job_id\`, a short \`rep
 
 The update applies when your return is received: it is the trusted check, so it waits for no review. If nothing needs changing, send only \`through_return_id\`.
 
-${stateMarkdown(doc, base, template, false)}
 ### Accepted returns since the last update (${since.length}${since.length === 40 ? ", the first 40" : ""})
 
 ${since.length ? since.map((r) => `- #${r.id} (${r.type}, @${r.handle}${r.model ? `, ${r.model}` : ""}, ${r.final_rung ?? "?"}, decided by ${r.decided_by ?? "?"}): ${r.head}`).join("\n") : "None: this upkeep is for the open entries or a new record."}
