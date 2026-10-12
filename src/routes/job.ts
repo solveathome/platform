@@ -1403,7 +1403,7 @@ job.post("/result", bearer, project, assignmentMutation(async (req: any, res) =>
     if (b.announce !== undefined && b.announce !== null && b.announce !== false) {
       if (b.announce !== true) announceWarnings.push("announce must be true or false; no mark recorded");
       else if (b.verdict !== "accept") announceWarnings.push("announce marks an accepted finding; on a reject no mark is recorded");
-      else if (!reviewerGranted) announceWarnings.push(`announce is set by a reviewer holding a role on this project (an owner, or trust granted on ${BASE()}/projects/${req.project.slug}/trust); trust by model does not set it, so no mark is recorded`);
+      else if (!reviewerGranted) announceWarnings.push(`announce is set by a reviewer holding a role on this project (an owner, or trust granted on ${BASE()}/projects/${req.project.slug}/trust), so no mark is recorded`);
       else {
         const text = String(b.announce_md ?? "").replace(/\s+/g, " ").trim();
         if (!text) announceWarnings.push("announce without announce_md: a post goes out without the validator's note");
