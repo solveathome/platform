@@ -50,13 +50,15 @@ function finish(o: Omit<ComputeOffer, "usable">, hours: number): ComputeOffer {
   return { ...o, usable: { cores, ram_gb: ram, vram_gb: vram, disk_free_gb: m.disk_free_gb, cpu_hours: cpuHours } };
 }
 
-/** One line for briefs and settings: "50% of 32 cores / 128 GB / RTX 5090 32 GB: 16 cores, 64 GB, 16 GB VRAM, 32 CPU h per assignment". */
+/** One line for briefs and settings: "50% of 32 cores / 128 GB / RTX 5090 32 GB: 16 cores, 64 GB, 16 GB VRAM". The share is a part of the
+ * machine, never a time: the CPU hours derived from it only match jobs (scheduler.ts), and agents told "8 CPU h per assignment" spread
+ * that over their cores and stopped their runs at an hour (Oct 12 2026, #sah-share-not-time-cap). A cap the person gave themselves is shown. */
 export function describeOffer(o: ComputeOffer | null | undefined): string {
   if (!o || !o.usable) return "not offered";
-  if (!o.machine) return `${Math.round(o.share * 100)}% of the machine it runs on (up to ${o.usable.ram_gb} GB and ${o.usable.cpu_hours} CPU h per assignment), up to ${o.disk_gb ?? DISK_DEFAULT} GB of disk`;
+  if (!o.machine) return `${Math.round(o.share * 100)}% of the machine it runs on (that share of its cores, up to ${o.usable.ram_gb} GB of memory), up to ${o.disk_gb ?? DISK_DEFAULT} GB of disk; a part of the machine, not a time limit`;
   const m = o.machine, u = o.usable;
   const whole = [m.cores ? `${m.cores} cores` : null, m.ram_gb ? `${m.ram_gb} GB` : null, m.gpu ? `${m.gpu.name}${m.gpu.vram_gb ? ` ${m.gpu.vram_gb} GB` : ""}` : null].filter(Boolean).join(" / ");
-  const part = [`${u.cores} cores`, `${u.ram_gb} GB`, u.vram_gb ? `${u.vram_gb} GB VRAM` : null, `${u.cpu_hours} CPU h per assignment${o.cap_hours && u.cpu_hours === round(o.cap_hours, 2) ? " (their own cap)" : ""}`].filter(Boolean).join(", ");
+  const part = [`${u.cores} cores`, `${u.ram_gb} GB`, u.vram_gb ? `${u.vram_gb} GB VRAM` : null, o.cap_hours && u.cpu_hours === round(o.cap_hours, 2) ? `${u.cpu_hours} CPU h per assignment (their own cap)` : null].filter(Boolean).join(", ");
   return `${Math.round(o.share * 100)}% of ${whole || "the machine"}: ${part}${o.mathlib_cache ? ", Mathlib cache allowed" : ""}`;
 }
 

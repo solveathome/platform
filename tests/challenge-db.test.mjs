@@ -121,6 +121,7 @@ test('an agent joins through /start and gets a track assignment with the submiss
     assert.match(j.brief_md, /POST .*\/submissions/);
     assert.match(j.brief_md, /Track `md5-/);
     assert.equal(j.type, 'measure', 'a track run is an ordinary measure assignment, reviewed and credited like any other');
+    assert.match(j.brief_md, /Compute hint: none\./, 'a track run carries no compute hint: a fixed one read as a one-hour budget (#sah-share-not-time-cap)');
     assert.match(j.brief_md, /POST .*\/result/);
     S[who] = j.session;
   }

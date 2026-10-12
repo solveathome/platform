@@ -375,6 +375,7 @@ test("no timings on a task (Chris, Sep 19 2026): the brief states no time budget
   assert.doesNotMatch(loose, /Budget:|1 h/);
   const hinted = renderBrief({ ...job, compute_hint: { cpu_hours: 4 } }, "https://x.test/projects/p", session);
   assert.match(hinted, /Compute hint: `\{"cpu_hours":4\}`/);
+  assert.match(hinted, /Neither the compute hint, your person's compute share nor any estimate or budget is a time or CPU limit: work until the assignment is done or you have a result worth returning\./);
 });
 
 test("issue #5: a handed-back job says what the server knows instead of sending the agent to an empty channel", () => {

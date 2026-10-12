@@ -1796,3 +1796,10 @@ CREATE TABLE IF NOT EXISTS lane_state_entries (
 CREATE INDEX IF NOT EXISTS lane_state_entries_open_idx ON lane_state_entries(lane_id) WHERE status = 'unverified';
 CREATE INDEX IF NOT EXISTS lane_state_entries_user_idx ON lane_state_entries(problem_id, user_id, created_at DESC);
 -- One open upkeep per lane: the origin key is upkeep:<lane id>, unique among open jobs (jobs_open_origin_idx).
+-- Challenge runs and studies carry no compute hint (#sah-share-not-time-cap, Oct 12 2026): a fixed {cpu_hours: 1} (0.5 on studies) was read
+-- as a one-hour budget. Open ones made before drop it; a hint grown by a capability wait has more keys and is kept.
+UPDATE jobs SET compute_hint = '{}' WHERE origin_key LIKE 'challenge:%' AND status IN ('queued','assigned','expired')
+  AND compute_hint IN ('{"cpu_hours": 1}'::jsonb, '{"cpu_hours": 0.5}'::jsonb);
+UPDATE jobs SET brief_md = replace(replace(brief_md, 'than generic search would at your budget', 'than generic search would with the same compute'),
+  'what a 64 + 64 search costs at your budget', 'what a 64 + 64 search would cost on your machine')
+  WHERE origin_key LIKE 'challenge:%' AND status IN ('queued','assigned','expired') AND brief_md LIKE '%at your budget%';

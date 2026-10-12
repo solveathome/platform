@@ -402,7 +402,7 @@ export async function challengeJob(problemId: number, slug: string, lane: string
     }
     const question = choices.length ? choices[done % choices.length] : 'Identify an uncovered obligation or a changed premise on this track; compare the accepted scoped answers before proposing the cheapest new experiment. Deliberate replication needs a stated independence objective.';
     const study = await one(`INSERT INTO jobs (problem_id, lane_id, type, title, brief_md, compute_hint, budget_hours, min_tier, purpose, origin_key)
-      VALUES ($1,$2,'explore',$3,$4,$5,1,99,'discovery',$6) RETURNING *`, [problemId, laneRow?.id ?? null, `${track.name} study: ${question}`.slice(0, 200), question, JSON.stringify({ cpu_hours: 0.5 }), `challenge:${track.id}:study:${randomUUID()}`]);
+      VALUES ($1,$2,'explore',$3,$4,$5,1,99,'discovery',$6) RETURNING *`, [problemId, laneRow?.id ?? null, `${track.name} study: ${question}`.slice(0, 200), question, '{}', `challenge:${track.id}:study:${randomUUID()}`]);
     return { ...study, lane_slug: laneRow?.slug ?? null };
   }
   // A track run handed back (release, silence) is queued again; the next agent on that track takes it rather than a new one.
@@ -410,8 +410,10 @@ export async function challengeJob(problemId: number, slug: string, lane: string
   // (cycle 1, Oct 9 2026: the second agent on a held track got a 500 on /start). The plain key is the first beta's form.
   const queued = await one(`SELECT j.*, l.slug AS lane_slug FROM jobs j LEFT JOIN lanes l ON l.id = j.lane_id WHERE j.problem_id = $1 AND j.status = 'queued' AND j.type = 'measure' AND (j.origin_key = $2 OR j.origin_key LIKE $2 || ':%') ORDER BY j.id LIMIT 1`, [problemId, `challenge:${track.id}`]);
   if (queued) return queued;
+  // No compute hint on a run or a study (#sah-share-not-time-cap, Oct 12 2026): a fixed {cpu_hours: 1} was read as a one-hour budget and
+  // runs stopped at 3600 s. A step that turns out to need a machine says so with needs_capability; budget_hours stays an accounting estimate.
   const row = await one(`INSERT INTO jobs (problem_id, lane_id, type, title, brief_md, compute_hint, budget_hours, min_tier, purpose, origin_key)
-    VALUES ($1,$2,'measure',$3,$4,$5,1,99,'work',$6) RETURNING *`, [problemId, laneRow?.id ?? null, `${track.name}: a research run: understand the structure, then reach for the record`, track.brief_md, JSON.stringify({ cpu_hours: 1 }), `challenge:${track.id}:${randomUUID()}`]);
+    VALUES ($1,$2,'measure',$3,$4,$5,1,99,'work',$6) RETURNING *`, [problemId, laneRow?.id ?? null, `${track.name}: a research run: understand the structure, then reach for the record`, track.brief_md, '{}', `challenge:${track.id}:${randomUUID()}`]);
   return { ...row, lane_slug: laneRow?.slug ?? null };
 }
 export const challengeTrackOfJob = (slug: string, job: { origin_key?: string | null }): ChallengeTrack | null => {

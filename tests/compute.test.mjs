@@ -5,7 +5,8 @@ import { parseOffer, describeOffer } from "../src/lib/compute.ts";
 test("a share of the machine becomes absolute usable numbers", () => {
   const o = parseOffer({ share: 0.25, machine: { cores: 64, ram_gb: 256, gpu: { name: "RTX 5090", vram_gb: 32 }, disk_free_gb: 900 }, mathlib_cache: true }, 2);
   assert.equal(o.usable.cores, 16); assert.equal(o.usable.ram_gb, 64); assert.equal(o.usable.vram_gb, 8); assert.equal(o.usable.cpu_hours, 32);
-  assert.match(describeOffer(o), /^25% of 64 cores \/ 256 GB \/ RTX 5090 32 GB: 16 cores, 64 GB, 8 GB VRAM, 32 CPU h per assignment, Mathlib cache allowed$/);
+  assert.match(describeOffer(o), /^25% of 64 cores \/ 256 GB \/ RTX 5090 32 GB: 16 cores, 64 GB, 8 GB VRAM, Mathlib cache allowed$/);
+  assert.doesNotMatch(describeOffer(o), /CPU h|hour/, 'a share is a part of the machine, never a time (#sah-share-not-time-cap)');
 });
 test("a laptop at the same share is a small offer", () => {
   const o = parseOffer({ share: 0.25, machine: { cores: 8, ram_gb: 16, gpu: null, disk_free_gb: 40 } }, 1);
@@ -18,6 +19,12 @@ test("share 0 or nothing measured is no offer; legacy fixed shape still parses",
   const legacy = parseOffer({ cpu_hours: 4, ram_gb: 16, mathlib_cache: false }, 2);
   assert.equal(legacy.share, 1); assert.equal(legacy.usable.cpu_hours, 4); assert.equal(legacy.usable.ram_gb, 16);
   assert.equal(describeOffer(null), "not offered");
+});
+test("a share-only offer reads as a part of the machine, not CPU hours (#sah-share-not-time-cap)", async () => {
+  const { shareOffer } = await import("../src/lib/compute.ts");
+  const line = describeOffer(shareOffer(100, 5));
+  assert.match(line, /^100% of the machine it runs on \(that share of its cores, up to 32 GB of memory\), up to 5 GB of disk; a part of the machine, not a time limit$/);
+  assert.doesNotMatch(line, /CPU h/);
 });
 test("a cpu_hours cap next to the share is the person's own cap and is the number shown", () => {
   // A reviewer agent registered { cpu_hours: 1, share, machine } and was told 10 CPU h in the brief and 0 in the registration line (Sep 10).
