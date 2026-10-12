@@ -87,6 +87,8 @@ export type SchedulingAgent = {
   chatOnly?: boolean;
   /** A bounded trusted assignment judgment, separate from scientific acceptance. */
   workCheckOnly?: boolean;
+  /** Only a lane's state-of-the-art upkeep (src/lib/lane-state.ts): what a reviewer trusted by grant takes first at /start. */
+  upkeepOnly?: boolean;
   /** /ready only: a session of the caller's department whose recorded deferrals apply, for an agent with no session of its own yet. */
   deferralSessionId?: string;
 };
@@ -135,6 +137,9 @@ function eligibility(a: SchedulingAgent, omitCompute = false, sameKindOnly = fal
   // Each clause carries the reason a bot is given when it asks for a job by id and cannot have it (#mba-sah-held-feedback-items, item 11).
   const labeled: Array<[string, string]> = [
     ["only assignment comparisons were requested", a.workCheckOnly ? '(j.work_check IS NOT NULL OR j.applicability_check IS NOT NULL)' : 'true'],
+    ["only state-of-the-art upkeep was requested", a.upkeepOnly ? `j.type = 'upkeep'` : 'true'],
+    // Only a reviewer trusted by grant writes a lane's Verified state of the art (Chris, Oct 12 2026, #sah-sota-trusted-upkeep).
+    ["a state-of-the-art upkeep needs a reviewer trusted by grant", `(j.type <> 'upkeep' OR ${p(a.granted)}::boolean)`],
     [`it asks for tier ${"${j.min_tier}"} or better and this session is tier ${a.tier}`, `j.problem_id = ${pid} AND j.status = 'queued' AND j.min_tier >= ${tier}`],
     ["formalization requires a Tier 1 session at high or above", `(j.type <> 'formalize' OR ${tier} = 1)`],
     ["assignment comparisons are offered between substantive tasks", `((j.work_check IS NULL AND j.applicability_check IS NULL) OR ${p(Boolean(a.jobId || a.workCheckOnly))}::boolean)`],
@@ -206,8 +211,8 @@ export async function whyNotEligible(a: SchedulingAgent, jobId: number): Promise
 }
 export async function backlogFor(a: SchedulingAgent) {
   const e = eligibility(a);
-  const row = await one(`SELECT count(*) FILTER (WHERE j.type IN ('review','audit')) AS reviews,
-    count(*) FILTER (WHERE j.type NOT IN ('review','audit')) AS research ${e.joins} WHERE ${e.where}`, e.values);
+  const row = await one(`SELECT count(*) FILTER (WHERE j.type IN ('review','audit','upkeep')) AS reviews,
+    count(*) FILTER (WHERE j.type NOT IN ('review','audit','upkeep')) AS research ${e.joins} WHERE ${e.where}`, e.values);
   // Reviews this agent cannot take *only* because a model never reviews its own kind (platform issue #82). Without it the
   // scheduler records eligible_backlog.reviews = 0 while the brief prints the count waiting, and the two describe one queue:
   // "no review debt" and "review debt nobody here can serve" are not the same fact, and only the second one grows.
@@ -222,11 +227,11 @@ export async function backlogFor(a: SchedulingAgent) {
  * still counts one each. */
 export async function reviewWorkFor(a: SchedulingAgent, triage: boolean) {
   const e = eligibility({ ...a, triageFallback: triage });
-  const row = await one(`SELECT count(*) FILTER (WHERE j.type = 'review') AS reviews, count(*) FILTER (WHERE j.type = 'triage') AS triage ${e.joins} WHERE ${e.where}`, e.values);
-  return { reviews: Number(row?.reviews ?? 0), triage: triage ? Number(row?.triage ?? 0) : 0 };
+  const row = await one(`SELECT count(*) FILTER (WHERE j.type = 'review') AS reviews, count(*) FILTER (WHERE j.type = 'triage') AS triage, count(*) FILTER (WHERE j.type = 'upkeep') AS upkeep ${e.joins} WHERE ${e.where}`, e.values);
+  return { reviews: Number(row?.reviews ?? 0), triage: triage ? Number(row?.triage ?? 0) : 0, upkeep: Number(row?.upkeep ?? 0) };
 }
 
-const DEFAULT_SKILLS = `CASE j.type WHEN 'formalize' THEN ARRAY['lean','formalize'] WHEN 'measure' THEN ARRAY['python','computation'] WHEN 'source' THEN ARRAY['literature-search'] WHEN 'break' THEN ARRAY['proof-analysis','counterexamples'] WHEN 'review' THEN ARRAY['verification','proof-analysis'] WHEN 'explore' THEN ARRAY['proof-analysis','research'] ELSE ARRAY[]::text[] END`;
+const DEFAULT_SKILLS = `CASE j.type WHEN 'upkeep' THEN ARRAY['verification','research'] WHEN 'formalize' THEN ARRAY['lean','formalize'] WHEN 'measure' THEN ARRAY['python','computation'] WHEN 'source' THEN ARRAY['literature-search'] WHEN 'break' THEN ARRAY['proof-analysis','counterexamples'] WHEN 'review' THEN ARRAY['verification','proof-analysis'] WHEN 'explore' THEN ARRAY['proof-analysis','research'] ELSE ARRAY[]::text[] END`;
 /** Judgment of a packaged return that already has completed eligible execution: a bounded decision, not a review-pool task. */
 const CHECKED_JUDGMENT_SQL = `j.type='review' AND pr.verification_plan IS NOT NULL AND EXISTS (SELECT 1 FROM verification_runs v JOIN returns w ON w.id=v.result_return_id
   WHERE v.fingerprint=pr.verification_fingerprint AND w.problem_id=pr.problem_id AND CASE WHEN pr.verification_plan ? 'lean' THEN lean_execution_current(v.id,pr.id) ELSE w.user_id<>pr.user_id AND w.model<>pr.model END AND w.status IN ('recorded','accepted') AND v.outcome IN ('pass','fail'))`;
