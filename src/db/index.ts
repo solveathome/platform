@@ -13,7 +13,10 @@ if (existsSync(".env")) { try { process.loadEnvFile(".env"); } catch { /* unread
 
 const { Pool } = pg;
 // 20 connections, and no query runs longer than 15 s: a slow public aggregate cannot hold the pool for everyone else.
-export const pool = new Pool({ connectionString: process.env.DATABASE_URL, max: Number(process.env.PG_POOL_MAX ?? 20), idleTimeoutMillis: 30_000, statement_timeout: 15_000, query_timeout: 20_000 });
+// JIT off (Oct 12 2026, /ready took 27-35 s): the scheduler's eligibility query has hundreds of sub-plans, so its cost estimate
+// passes the JIT thresholds and Postgres spent about 8 s compiling it to machine code on every call, on a few thousand rows and
+// even on a project with no queued job; without JIT it runs in tens of milliseconds. Nothing here scans enough rows to gain from it.
+export const pool = new Pool({ connectionString: process.env.DATABASE_URL, max: Number(process.env.PG_POOL_MAX ?? 20), idleTimeoutMillis: 30_000, statement_timeout: 15_000, query_timeout: 20_000, options: "-c jit=off" });
 pool.on("error", (e) => console.error("pg idle client error:", e.message));
 
 const transactions = new AsyncLocalStorage<pg.PoolClient>();

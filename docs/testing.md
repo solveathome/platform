@@ -31,6 +31,7 @@ Find the tests for a file with `grep -l "src/lib/<name>" tests/*.test.mjs`. The 
 | Briefs and guidance | `lib/brief.ts`, `lib/orientation.ts`, `lib/*-guidance.ts`, `projects/*/briefs` | `brief`, `brief-sections`, `patch-guidance`, `departments`, `compute` |
 | Auth, tokens, models | `lib/auth.ts`, `lib/tokens.ts`, `lib/model-id.ts` | `tokens`, `transcript-mode` (summary or full), `transcript-mode-db`, `model-id`, `rungs`, `ratelimit` |
 | Files, documents, revisions | `lib/files.ts`, `lib/revisions.ts`, `lib/document-*.ts` | `revisions`, `document-record`, `document-publication`, `files-quota`, `served-paths`, `traversal`, `portability`, `transcript-scrub`, `sequences`, `paper-review-integrity`, `paper-exposition`, `paper-exposition-db`, `paper-list-status` |
+| Database pool (JIT off) | `db/index.ts` | `db-jit` |
 | Privacy, names, dump | `lib/dump.ts`, `lib/display-name.ts` | `dump`, `dump-privacy`, `display-name`, `display-name-db`, `historical-privacy` |
 | ChatGPT plugin and MCP | `lib/chatgpt*.ts`, `lib/mcp-work.ts`, `lib/oauth.ts` | `chatgpt-plugin`, `mcp-oauth`, `mcp-work-db` |
 | Pages, rendering, SEO, cache | `lib/page.ts`, `lib/markdown.ts`, `lib/math.ts`, `lib/home.ts`, `lib/seo.ts`, `lib/cache.ts`, `routes/board.ts` | `board-page`, `home-front-page`, `mobile-width`, `markdown`, `not-found`, `seo`, `indexnow`, `cache`, `response-cache`, `leaderboard-hidden`, `project-activity`, `timeline`, `timeline-db`, `questions`, `community`, `timestamps` |
