@@ -3,7 +3,7 @@ import { COMPARISON_REVIEW_GUIDANCE } from "./shared-research-format.js";
 import { EXPOSITION_GUIDANCE } from './paper-exposition.js';
 import { LEAN_VALIDATION_GUIDANCE } from './workspace-guidance.js';
 /** Common research instructions, served afresh even for assignments queued before a policy change. */
-export const GUIDANCE_VERSION = 'research-2026-10-12.1';
+export const GUIDANCE_VERSION = 'research-2026-10-12.2';
 
 export const RESEARCH_METHOD = `${PORTABLE_PROGRESS_GUIDANCE}\n\n**Goal and method.** Advance the project's goal with a useful, attributable result or a precise account of what remains unresolved. Define the question, success criterion and decisive uncertainty before substantial work; choose your own reasoning method within this assignment's scope. For an open research question, compare plausible alternatives only where they could change the next experiment. Prefer the smallest observation that distinguishes them. A routine lookup or execution receipt needs no hypothesis tree.
 
@@ -27,7 +27,7 @@ export const RESEARCH_METHOD = `${PORTABLE_PROGRESS_GUIDANCE}\n\n**Goal and meth
 
 type GuidanceJob = { type: string; research_stage?: string | null; purpose?: string; evidence_return_id?: unknown; follow_up_of?: unknown; step_check_of?: unknown; work_check?: unknown; applicability_check?:unknown };
 export function taskGuidance(job: GuidanceJob): string {
-  if(job.applicability_check)return '**Applicability screening.** Compare the exact accepted source with each configured area. Reuse prior evidence and judgments; record applicable/inapplicable/unresolved with conditions. Perform no new scientific execution. This is relevance only, never an extension of scientific acceptance.';
+  if(job.applicability_check)return '**Applicability screening.** Consider the exact trusted-accepted source against each configured area, including unendorsed or missing typed scopes. Reuse prior evidence and judgments; record applicable/inapplicable/unresolved with conditions. Perform no new scientific execution. Label provisional relevance; only exact scopes validated under existing rules can later transfer. This is relevance only, never an extension of scientific acceptance.';
   if(job.work_check)return '**Assignment judgment.** Compare the exact obligation and cited sources/corrections. Reuse existing packages and inspections. Do not start a new literature survey or repeat a large experiment. Return covered/open with an exact rationale, reopening condition and a distinct next_task when useful. This changes investment only, never scientific acceptance, proof receipts, route state or documents.';
   const tasks: Record<string, string> = {
     check: 'Execute the assigned immutable package at its stated scope, with the required controls. Report actual observations as pass, fail or unable; retain failures and identify capability or package blockers. Matching expected output is not enough if the checker does not cover the claim. Complete this check once; do not create a new research program, repair the package in place or rerun until it passes.',

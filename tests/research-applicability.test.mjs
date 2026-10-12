@@ -12,6 +12,8 @@ test('applicability excludes numerical and administrative acceptance',()=>{
 test('bounded exact assessment ignores forged authority and priority',()=>{
  const a={source_return_id:1,input_sha256:'a'.repeat(64),trusted:true,effective:true,entries:[{target_id:'area-a',decision:'applicable',scope_keys:['method'],evidence_md:'The same invariant applies.',assumptions_md:'Only the accepted domain.',bonus:999}]};
  const parsed=parseApplicability(a);assert.equal(parsed.trusted,undefined);assert.equal(parsed.entries[0].bonus,undefined);
+ assert.deepEqual(parseApplicability({...a,entries:[{...a.entries[0],scope_keys:[],provisional_relevance:false,transfer_eligible:true}]}).entries[0].scope_keys,[]);
+ assert.equal(parseApplicability({...a,entries:[{...a.entries[0],scope_keys:[]}]}).entries[0].transfer_eligible,undefined);
  for(const patch of [{entries:[...a.entries,...a.entries]},{input_sha256:'wrong'},{entries:[{...a.entries[0],assumptions_md:''}]},{entries:[{...a.entries[0],decision:'proved'}]}])assert.throws(()=>parseApplicability({...a,...patch}));
 });
 test('configured areas preserve project differences and stable target identity',()=>{

@@ -144,3 +144,60 @@ test('clerical reviews and scheduling annotations do not cause another applicabi
  const {reconsiderApplicability,currentApplicability}=await import('../src/lib/research-applicability.ts');
  await reconsiderApplicability(w.pid,w.slug);assert.equal((await checks(w)).length,1);assert.equal((await currentApplicability(w.pid,w.slug,s.id)).current,true);await w.invariant();
 });
+async function acceptedUnscoped(w){
+ const a=await w.actor('unscoped-author','gpt-6-astra'),j=await w.actor('unscoped-judge','claude-fable-5-1',{trusted:true}),j2=await w.actor('unscoped-judge2','gpt-6-astra',{trusted:true});
+ const ret=await a.submit({type:'direction',report_md:'A scripted useful scientific claim accepted at its original finite domain; no typed scope metadata.'});
+ for(const actor of (w.c.review_quorum??1)>1?[j,j2]:[j])await actor.submit({type:'review',return_id:ret.return_id,verdict:'accept',rung:'measured',notes_md:'Existing scientific acceptance only; no scope endorsement fabricated.'});
+ return {a,r1:j,r2:j2,id:ret.return_id};
+}
+test('existing trusted acceptance queues consideration without a second scope quorum; empty references never transfer',async()=>{
+ const w=await world('unscoped-consideration'),s=await acceptedUnscoped(w);assert.equal((await checks(w)).length,1);
+ const issued=await w.take(s.r1,j=>Boolean(j.applicability_check));assert.equal(issued.applicability_check.consideration_only,true);assert.deepEqual(issued.applicability_check.scopes,[]);
+ const a=matrix(issued,{'all-zeros':'applicable'});for(const e of a.entries)e.scope_keys=[];
+ const result=await s.r1.submit({applicability_assessment:{...a,scientific_authority:true,provisional_relevance:false}});
+ const record=await w.read(`/return/${result.return_id}`);assert.equal(record.applicability_assessment.effective,true);assert.equal(record.applicability_assessment.provisional_relevance,true);assert.equal(record.applicability_assessment.scientific_authority,false);assert.ok(record.applicability_assessment.entries.every(e=>!e.transfer_eligible));
+ const {currentApplicability,applicableSources,reconsiderApplicability}=await import('../src/lib/research-applicability.ts');
+ const current=await currentApplicability(w.pid,w.slug,s.id);assert.equal(current.consideration_current,true);assert.equal(current.current,false);assert.equal(current.transfer_current,false);
+ assert.deepEqual(await applicableSources(w.pid,w.slug,{lane_slug:'all-zeros'},[]),[]);
+ await reconsiderApplicability(w.pid,w.slug);await reconsiderApplicability(w.pid,w.slug);assert.equal((await checks(w)).length,1);assert.equal((await w.read(`/return/${s.id}`)).status,'accepted');await w.invariant();
+});
+test('declared but unendorsed scope may be considered, then material endorsements require a fresh bound matrix',async()=>{
+ const w=await world('scope-after-consideration'),a=await w.actor('a','gpt-6-astra'),r1=await w.actor('r1','claude-fable-5-1',{trusted:true}),r2=await w.actor('r2','gpt-6-astra',{trusted:true});
+ const ret=await a.submit({type:'direction',research_evidence:{scopes:[scope]}});
+ for(const actor of [r1,r2])await actor.submit({type:'review',return_id:ret.return_id,verdict:'accept',rung:'measured',notes_md:'Whole source accepted without a typed endorsement.'});
+ const s={a,r1,r2,id:ret.return_id};const first=await screening(w,s,{'all-zeros':'applicable'});
+ assert.equal((await w.read(`/return/${first.result.return_id}`)).applicability_assessment.provisional_relevance,true);
+ const {applicableSources,currentApplicability}=await import('../src/lib/research-applicability.ts');assert.deepEqual(await applicableSources(w.pid,w.slug,{lane_slug:'all-zeros'},[]),[]);
+ const c1=await w.actor('scope-j1','claude-opus-5-5',{trusted:true}),c2=await w.actor('scope-j2','gpt-6.1-sol',{trusted:true});
+ for(const actor of [c1,c2])await actor.submit({type:'review',return_id:ret.return_id,verdict:'accept',rung:'measured',notes_md:'The exact unchanged source scope is now explicitly endorsed.',research_assessment:{supported_scopes:[{scope_key:'method',scope_sha256:scopeHash(scope)}]}});
+ assert.equal((await currentApplicability(w.pid,w.slug,ret.return_id)).consideration_current,false);assert.deepEqual(await applicableSources(w.pid,w.slug,{lane_slug:'all-zeros'},[]),[]);
+ const refreshed=await screening(w,s,{'all-zeros':'applicable'});assert.equal((await w.read(`/return/${refreshed.result.return_id}`)).applicability_assessment.entries.find(e=>e.target_id==='all-zeros').transfer_eligible,true);
+ assert.equal((await applicableSources(w.pid,w.slug,{lane_slug:'all-zeros'},[])).length,1);await w.invariant();
+});
+test('a validated sibling scope cannot promote a provisional applicable entry',async()=>{
+ const w=await world('per-entry-authority'),s=await source(w),second={...scope,key:'unendorsed-method',statement_md:'A different declared but unendorsed source claim.'};
+ // Initial historical fixture extension: actual scope authority remains with the original scientific reviewers only.
+ await w.q('UPDATE returns SET research_evidence=$2 WHERE id=$1',[s.id,JSON.stringify({topic_ids:['self-match.methods'],scopes:[scope,second]})]);
+ const issued=await w.take(s.r1,j=>Boolean(j.applicability_check)),a=matrix(issued,{'all-zeros':'applicable','self-match':'applicable'});
+ a.entries.find(e=>e.target_id==='all-zeros').scope_keys=['unendorsed-method'];await s.r1.submit({applicability_assessment:a});
+ const {applicableSources}=await import('../src/lib/research-applicability.ts');assert.deepEqual(await applicableSources(w.pid,w.slug,{lane_slug:'all-zeros'},[]),[]);assert.equal((await applicableSources(w.pid,w.slug,{lane_slug:'self-match'},[])).length,1);await w.invariant();
+});
+test('Twin Primes unscoped acceptance yields one seven-area provisional consideration without claiming obligations proved',async()=>{
+ const w=await world('twin-unscoped','twin-primes'),s=await acceptedUnscoped(w),issued=await w.take(s.r1,j=>Boolean(j.applicability_check));
+ assert.equal(issued.applicability_check.targets.length,7);const a=matrix(issued,{'formalize':'applicable','kk-lower-bound':'applicable'});for(const e of a.entries)e.scope_keys=[];
+ await s.r1.submit({applicability_assessment:a});const {applicableSources}=await import('../src/lib/research-applicability.ts');assert.deepEqual(await applicableSources(w.pid,w.slug,{lane_slug:'formalize',paper_slug:'kk-lower-bound'},['kk-lower-bound.main']),[]);assert.equal((await checks(w)).length,1);await w.invariant();
+});
+test('legacy strict issued snapshots stay valid and unchanged completed evidence is not requeued for the new mode',async()=>{
+ const w=await world('legacy-strict'),s=await source(w),{applicabilitySource,queueApplicability}=await import('../src/lib/research-applicability.ts');
+ const old=await applicabilitySource(w.pid,w.slug,s.id),row=(await checks(w))[0],check={...row.applicability_check,input_sha256:old.input_sha256,source_snapshot:old.snapshot,scopes:old.scopes};delete check.consideration_only;
+ await w.q('UPDATE jobs SET applicability_check=$2 WHERE id=$1',[row.id,JSON.stringify(check)]);
+ const issued=await w.take(s.r1,j=>Boolean(j.applicability_check));assert.equal(issued.applicability_check.consideration_only,undefined);
+ const result=await s.r1.submit({applicability_assessment:matrix(issued,{'all-zeros':'applicable'})});assert.equal((await w.read(`/return/${result.return_id}`)).applicability_assessment.effective,true);
+ assert.equal(await queueApplicability(w.pid,w.slug,s.id),null);assert.equal((await checks(w)).length,1);await w.invariant();
+});
+test('existing trusted reopening can nominate unscoped accepted science; stale provisional responses stay ineffective',async()=>{
+ const w=await world('provisional-reopen'),s=await acceptedUnscoped(w),issued=await w.take(s.r1,j=>Boolean(j.applicability_check));
+ await w.q("UPDATE returns SET report_md=report_md||' Material corrected premise.' WHERE id=$1",[s.id]);
+ const a=matrix(issued,{'all-zeros':'applicable'});for(const e of a.entries)e.scope_keys=[];const stale=await s.r1.submit({applicability_assessment:a});assert.match(stale.warnings.join('\n'),/source or decision base changed/);assert.equal((await w.read(`/return/${stale.return_id}`)).applicability_assessment.effective,false);
+ assert.equal((await checks(w)).filter(j=>['queued','assigned'].includes(j.status)).length,1);await s.r2.request(`/return/${s.id}/applicability/reopen`,{method:'POST',body:{note:'Existing explicit nomination path; accepted source remains unscoped.'}});assert.equal((await checks(w)).filter(j=>['queued','assigned'].includes(j.status)).length,1);await w.invariant();
+});
