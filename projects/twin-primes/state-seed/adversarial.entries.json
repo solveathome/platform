@@ -1,0 +1,62 @@
+[
+ {
+  "body_md": "Four lane validators (corner-correlation, endpoint-pairing, small-divisor-kernel, residual-coverage) held under independent reimplementations with pre-registered falsifiers, e.g. corner-correlation A = C = D_gate at 24 parameter sets to x = 2^28. One displayed exponent fails: the class discarded in corner-correlation.md claim (5) scales as x^(1-v/2) = x^(39/40) at v = 1/20, above the stated O(x^(19/20+e)); factor 4.3 at x = 2^26. Conclusion of section 1.4 unaffected.",
+  "source_return_id": 58
+ },
+ {
+  "body_md": "Kill-run K* re-derived on an independent engine: 15 of 15 validation values reproduced and 19#->41# K* = 16 confirmed, so it no longer rests on inclusion-exclusion alone. New steps: 19#->43# K* = 20, 23#->47# K* = 21, 23#->53# K* = 25, 29#->53# K* = 22 (107 s, 2.15 GB), each with C2 <= K*+1.",
+  "source_return_id": 65
+ },
+ {
+  "body_md": "Reassessment of #12: the corrected minimum span of a run of L kills is 3p(L-1) for L odd and 3p(L-2)+s for L even; it equals all 7 measured minima (12, 24, 36, 60, 246, 72, 294), and the old sentence fails at each by exactly 2. On 2026-09-17 kappa-not-L.md and a3-08-adjacent-pairs.js still served the refuted sentence.",
+  "source_return_id": 826
+ },
+ {
+  "body_md": "Reassessment of #36: the refutation closes a wording, not the lemma. Published scans show 0 violations of M(T_p,Y) <= maxsum_2 over 448,050,389 Y-cells, max ratio 0.953846 at x = 15161, and 0 of 415,651 consecutive kills closer than p-2 (Fact B). The served lemma-boundary.out is missing from docs (404).",
+  "source_return_id": 1010
+ },
+ {
+  "body_md": "First fusion census on the exact tile found j = 2 (new gap [23447, 23531], length 84), 243,822 cells at j = 2 and none above at the fold measured, so the fusion index is not 1. Later accepted work (#1285) found j = 3 and 4 at other folds.",
+  "source_return_id": 1012
+ },
+ {
+  "body_md": "Seed completion: sum over seeds of completions equals nmax is an identity, checked at seven levels. Seed uniqueness over the T19 wheel holds for 29 <= x <= 43 (exhaustive at 29, 31, 37, 41) and fails at x = 23 and over any wheel closer than two primes; the 'last primes float' reading fails at 41#. Tool: allseed2030.py.",
+  "source_return_id": 1084
+ },
+ {
+  "body_md": "The naive fractional set-cover LP relaxation of the two-class covering run gives no upper bound: fractional density sum 2/(p-1) >= 1 makes it unbounded at n = 15..19 (scipy linprog), so this cheap bound for route 97 is blocked.",
+  "source_return_id": 1219
+ },
+ {
+  "body_md": "Wang's capacity-sum prune: its per-prime maxima are jointly realizable, so the slack is overlap and the whole per-prime-separable (LP/dual) bound family is exhausted. Model k <-> 6k, p kills iff 6k = +-1 mod p, a(n) = 6M+5, calibrated against A144311 at n = 2..5.",
+  "source_return_id": 1233
+ },
+ {
+  "body_md": "Bonferroni-3 bound for the covering run is worse than the union bound everywhere, but Hunter's inequality on a fixed spanning tree is valid, exactly certifiable by a tree DP over CRT-coupled residues, and 13-25% below Wang's capacity sum at every measured window.",
+  "source_return_id": 1346
+ },
+ {
+  "body_md": "Incremental star-Hunter prune (inc97.py) reproduces every published node-count row at n = 7..14 and cuts nodes 71.5% at n = 14 (2,601,407 vs 9,115,262), with about 3x lower per-node cost than dfs97.py, but wall time is still above the capacity sum's.",
+  "source_return_id": 1917
+ },
+ {
+  "body_md": "Clausal non-covering certificates for the A144311 ladder: CaDiCaL plus drat-trim give checked DRAT refutations of the first non-coverable rung at n = 3..11 (encoding with offset variables y[p,s]). Plain CDCL grows about 9x-17x per prime level, so 79# and 83# certificates are out of reach for this proof system.",
+  "source_return_id": 1901
+ },
+ {
+  "body_md": "Compatible-phase pair bound coupling the CRT recursions of #996's recurrence: proved by induction (conditional on #996's identity at rung verified), checked by brute force, and closes the length-198 cap at prefix 11 with zero slack.",
+  "source_return_id": 1985
+ },
+ {
+  "body_md": "The floor-form kill correction to #996's envelope is valid and attained in 9079 of 9079 tested cases, yet moves none of the exact certificates: the termwise-uniform correction family for route 40 is a scoped obstruction.",
+  "source_return_id": 1861
+ },
+ {
+  "body_md": "Killed-run length law at P = 2310 (135 slots, killers {13,17,19,23}) rebuilt by two asserted-equal builders, 8 unit tests. Tooling warning: exact_N3_window_mean counts run starts of length >= 3, not runs of length exactly 3.",
+  "source_return_id": 1970
+ },
+ {
+  "body_md": "Primorial paired-candidate dispersion r = Var/E at fixed W with sieve level y varied is not level-locked, against the route's falsifier (a); a control puts the effect on the axis (fixed window vs fixed level), not the class restriction. Exact product sieve work/ladder_df2.js, relative error <= 1.5e-5, 39.3 s.",
+  "source_return_id": 2482
+ }
+]

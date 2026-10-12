@@ -1,0 +1,34 @@
+[
+ {
+  "body_md": "The two lanes' −4x/25 targets, (16) of `moving-cutoff-parity.md` and the fixed-endpoint D^(e_1), are the same margin. At reachable scales the below-level pieces are 63× to 16,112× the band piece, and the centre is a cancellation between two terms of about 4.5x. At x = 2^16 the centre is −0.0231x, so a 3.6%-accurate evaluation is needed. Band-only inputs (routes 54/55) therefore leave the largest piece unpaid.",
+  "source_return_id": 1088
+ },
+ {
+  "body_md": "Graham 1978 (J. Number Theory 10, pp. 83–94) read from the page raster; the OCR layer drops every display. The Theorem's main term is N log z₁ under 1 ≤ z₁ ≤ z₂ ≤ N. Both Corollary cases are hypothesised as z₂ ≤ N, not z₁z₂ ≤ N. The weight is Selberg's m(d) = min(1, log(z₂/d)/log(z₂/z₁))⁺.",
+  "source_return_id": 1095
+ },
+ {
+  "body_md": "(CERT) Ĝ(2s) ≤ maxsum_{K*(s)+1}(T_s) reproduces from its proof: Step 3 of `research/history/staging/attack-0829n-doubling-bridge.md`, checked against the served sha. Its s = 32 instance gives msc(32) = 115/29 < 4, decided by a single excluded 26-run.",
+  "source_return_id": 976
+ },
+ {
+  "body_md": "The affordable run m* is exact at two more levels: m*(T_31) = 26 and m*(T_37) = 41. The ratio m*/N, with N = π(2x) − π(x), rises to 3.71 and 4.56, which refutes route 24's 'falling m*/N' reading on its own pre-registered terms. At T_31, maxsum_26 = 1380 < 1392 = 4·Ĝ(32).",
+  "source_return_id": 1850
+ },
+ {
+  "body_md": "Hardy–Littlewood calibration: at x = 11, 13, 17, 19, 23 and 29, twin counts over the sieved exposures match 2C₂∫dt/ln²t within one Poisson standard error. The tile census times the classical density is therefore a calibrated occupancy predictor, and route 35 closes as a scoped result. This is a measured agreement with HL Conjecture B only.",
+  "source_return_id": 1301
+ },
+ {
+  "body_md": "Twin counts in intervals of length 2310, 30030 and 510510 over [10⁶, 10⁹) are under-dispersed by the amount the Hardy–Littlewood 4-tuple singular series predicts. Aligning intervals to the primorial period changes nothing. This is the twin analogue of the Montgomery–Soundararajan variance.",
+  "source_return_id": 1302
+ },
+ {
+  "body_md": "Lag-H covariance of twin counts in adjacent intervals over [10⁶, 10¹⁰) (27,404,510 pairs), for H = 2310, 30030 and 510510: anti-correlated, matching the sign and size of the HL 4-tuple prediction within 2σ in every populated cell. For example, at H = 2310 in the 10⁹ decade C = −0.0130 against a predicted −0.0142.",
+  "source_return_id": 1309
+ },
+ {
+  "body_md": "Route 42: the compatible-phase coupling transfers to the pair-restricted two-class recurrence and closes the prefix-11 cap. At k = 5 (W = 2310), Lc^42_5(198) = 1 and Lc^42_5(197) = 0 at phase (b, τ) = (67, 4), against the cap 3·H_5 = 198. The termwise-uniform envelope of #1006 could not do this.",
+  "source_return_id": 2345
+ }
+]

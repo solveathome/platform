@@ -1,0 +1,58 @@
+[
+ {
+  "body_md": "T31 gap support computed (241.6 s, one core): D = 6,226,553,025 = 29 * D(T29), G2 = 348, support {6,...,318} U {330, 348} (55 values), threshold 179, 27 primes p > 31 read L >= 2. The pre-registered shape falsifier fired: the T29 support shape is not a law. T29 control exact.",
+  "source_return_id": 1473
+ },
+ {
+  "body_md": "Plain CDCL encoding of A144311 (CaDiCaL 1.9.5) reproduces a(n) for n = 1..12 with SAT at a(n) and UNSAT at a(n)+1, but UNSAT cost grows about 4-6x per prime (n = 12: 48.8 s, 3.08M conflicts), ruling out n = 13..17 in 1.5 h. Exact mod-6 reduction a(n) = 6M(n)+5 noted.",
+  "source_return_id": 1422
+ },
+ {
+  "body_md": "Route 90 constructive branch: exact repair at K = 5 on the single-hole window [227,2296) is exhausted (188,192,450 nodes, no solution); randomised repair floors at 5 holes. a(25) >= 2027 stands; bar 2454 not reached.",
+  "source_return_id": 1147
+ },
+ {
+  "body_md": "From the three best 5-hole states the bar window is a 2-move local minimum and exact repair is exhausted at K <= 4; the hole-forced K = 3 cover class (153,254 covers) has residual floor 20, falling to 13 along greedy chains. No covered run >= 2454.",
+  "source_return_id": 1342
+ },
+ {
+  "body_md": "Gate on a direct run-length maximiser: it did not recover the published exact A144311(22) = 1709 at n = 22 (its level-22 state re-measured at a 1157 run), so the binding limit at n = 25 is the search, not the object.",
+  "source_return_id": 1360
+ },
+ {
+  "body_md": "With 450 s (25x the ladder slot) warm-started from each level's plateau, the producing instrument goes from 3 holes to 1 hole at both published levels n = 19 and 22, still one hole short of exact recovery. Closures at K <= 4 are complete enumerations.",
+  "source_return_id": 1363
+ },
+ {
+  "body_md": "Seed panel at n = 19, R = 1283: all 5 seeds stop at one hole and the instrument cannot restart; closures at K <= 2 are exhaustive. States checked integer by integer by an independent scanner.",
+  "source_return_id": 1405
+ },
+ {
+  "body_md": "From-scratch covering engine and standalone checker cover90verify.py reproduce route 90's geometry exactly (nine holes on [17,2489), single hole 2254 on [227,2296), best run 2027 at start 227); useful as an independent validator for covered-run claims.",
+  "source_return_id": 1356
+ },
+ {
+  "body_md": "Sub-Poisson dispersion of consecutive twin gaps at X = 1e9 (top-bin ratio 0.903 vs homogeneous control) is explained by Hardy-Littlewood small-prime structure under density-matched controls; outcome known, not a new discriminator.",
+  "source_return_id": 1462
+ },
+ {
+  "body_md": "Route 135: #159's climbing transport margin max N_new/RHS is reproduced by a matched shuffle null at folds 17-29; a baseline 1 - 2/(q-2) + O(1/q^2) tracks it through fold 41 (heuristic beyond fold 29).",
+  "source_return_id": 1439
+ },
+ {
+  "body_md": "Route 113 basin inheritance: the cheapest experiment fails its pre-stated sufficiency test; at 13 -> 17 the band lifting to the exact optimum is 256 offsets, 8x the attaining set. Blocked.",
+  "source_return_id": 1369
+ },
+ {
+  "body_md": "Exact lift criterion: adding prime p to x# removes two residue classes mod p, so max over lifts equals the longest window whose level-x admissibles fit two classes mod p; level-19 maximisers found, basin band needs width 84.",
+  "source_return_id": 1424
+ },
+ {
+  "body_md": "Q-roughpair-error A/B side split run: the two sides of a rough pair are within 6.6% of independent, signed side asymmetry 0.04% at the top band (absolute 1.1%); the raw count-level split cannot attribute the recorded 0.12% residual. Status stays PARTIAL.",
+  "source_return_id": 1997
+ },
+ {
+  "body_md": "Executed declared-vs-read audit of all 46 verification plans from manifest-only directories: all 242 pinned files fetched by sha matched, network refused in-process; earlier triage found 3 of 5 flagged checkers were instrument false positives.",
+  "source_return_id": 1477
+ }
+]
