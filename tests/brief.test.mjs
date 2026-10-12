@@ -94,6 +94,10 @@ test('repair instructions use canonical verification and portable server-root ar
     assert.match(text,/self-consistent helper/);
     assert.match(text,/Never invent a new timing record/);
     assert.match(text,/accepted\/applied revision may have new required annotations/);
+    assert.match(text,/In report_md include a Repair delta/);
+    assert.match(text,/exact baseline and candidate versions/);
+    assert.match(text,/status pass, fail, not_run or unknown/);
+    assert.match(text,/not a requirement to rerun the full investigation/);
   }
   assert.ok(full.includes('<project base>/docs/<path>'));
   assert.ok(full.includes('<server origin>/files/<sha256>?raw=1'));
