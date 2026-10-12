@@ -82,7 +82,9 @@ const jobsOf = async (returnId, type) => q(`SELECT id, status, min_tier, budget_
 
 test('the config: off unless the project or the environment sets it; the tier is checked', () => {
   delete process.env.REVIEW_TRIAGE_MIN_TIER;
-  assert.equal(reviewTriage(slug), null, 'off by default');
+  assert.equal(reviewTriage(slug), null, 'off by default for a slug with no project file');
+  assert.deepEqual(reviewTriage('md5'), {minTier: 2, budgetHours: 0.25}, 'on by default for every project (#sah-rescue-every-project)');
+  assert.deepEqual(reviewTriage('twin-primes'), {minTier: 2, budgetHours: 0.25}, 'twin-primes keeps its own setting');
   assert.deepEqual(reviewTriage(slug, {min_tier: 3}), {minTier: 3, budgetHours: 0.25});
   assert.equal(reviewTriage(slug, false), null, 'a project can switch it off in so many words');
   assert.throws(() => reviewTriage(slug, {min_tier: 0}), /min_tier/);

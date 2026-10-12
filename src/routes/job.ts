@@ -24,7 +24,7 @@ import { assignmentMutation, claimAssignment, releaseAssignment } from "../lib/a
 import { parseCapabilities, researchContact, CAPABILITY_INSTRUCTIONS } from "../lib/agent-profile.js";
 import { checkInstruction, ENDED_LAUNCH_GUIDANCE, folderLaunchContract } from "../lib/launch.js";
 import { isDeepStrictEqual } from "node:util";
-import { backlogFor, reviewWorkFor, selectJob, selectRequiredCorrection, REQUIRED_CORRECTION_INTERVAL, whyNotEligible, computeBlocked, discoveryShare, discoveryDue, allocation, researchPolicy, researchAllocation, portfolioOrder, researchBucket, reviewPressure, reviewTriage, unmetRequirements, STALE_REQUIREMENT_HOURS, ROUTE_REPEAT_WINDOW, type SchedulingAgent } from "../lib/scheduler.js";
+import { rescueDue, backlogFor, reviewWorkFor, selectJob, selectRequiredCorrection, REQUIRED_CORRECTION_INTERVAL, whyNotEligible, computeBlocked, discoveryShare, discoveryDue, allocation, researchPolicy, researchAllocation, portfolioOrder, researchBucket, reviewPressure, reviewTriage, unmetRequirements, STALE_REQUIREMENT_HOURS, ROUTE_REPEAT_WINDOW, type SchedulingAgent } from "../lib/scheduler.js";
 import { parseResearch, stageOf, jobLabel } from '../lib/research-format.js';
 import { stepCheckContext, recordResearch, prepareRescue, retireRedundantRescueSamples, retireRedundantStepChecks, researchBrief, routeContext, reconsiderDependents, holdForStepCheck } from '../lib/research.js';
 import { describeNeeds, waitingFor } from '../lib/capability-shortfall.js';
@@ -404,6 +404,12 @@ ${ENDED_LAUNCH_GUIDANCE}
   const triaged = !row && !recovery && triageCfg && !trusted && tier <= triageCfg.minTier && agent.reviewStreak < 4
     ? await selectJob(agent, false, false, undefined, false, false, true) : null;
   row ??= triaged;
+  // Rescue on every project (#sah-rescue-every-project): without a portfolio, blocked routes still get their different-model rescue,
+  // and one is preferred while rescue is under its default share of this tier's hours. The portfolio path below is unchanged.
+  if (!row && !portfolio) {
+    await prepareRescue(agent.problemId, agent.model, lane);
+    if (rescueDue(await researchAllocation(agent.problemId, tier))) row = await selectJob(agent, true, false, 'rescue');
+  }
   if (!row && portfolio && portfolioUsed) {
     for (const bucket of portfolioOrder(portfolio, portfolioUsed)) {
       if (bucket === 'rescue') await prepareRescue(agent.problemId, agent.model, lane);

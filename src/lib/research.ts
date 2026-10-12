@@ -359,14 +359,16 @@ export async function retireRedundantRescueSamples(problemId: number): Promise<v
         AND coalesce((SELECT max(a.started_at) FROM assignment_attempts a WHERE a.job_id=prior.id),prior.assigned_at,prior.created_at)>now()-interval '30 days')))`, [problemId]);
 }
 
-/** Materialize one eligible rescue when its allocation needs it. No repeated rechecks of the same obstacle. */
+/** Materialize one eligible rescue when its allocation needs it. No repeated rechecks of the same obstacle. A route whose obstacle is
+ *  a limit of the machine that ran it is a capability wait, not a block (#sah-capability-wait-not-block): it gets no rescue. */
 export async function prepareRescue(problemId: number, model: string | null, lane: string | null): Promise<void> {
-  const candidate = await one(`SELECT rr.*,r.model AS source_model FROM research_routes rr JOIN returns r ON r.id=rr.last_return_id LEFT JOIN lanes l ON l.id=rr.lane_id
+  const candidates = await q(`SELECT rr.*,r.model AS source_model FROM research_routes rr JOIN returns r ON r.id=rr.last_return_id LEFT JOIN lanes l ON l.id=rr.lane_id
     WHERE rr.problem_id=$1 AND rr.state IN ('blocked','paused') AND rr.obstacle IS NOT NULL AND r.model IS DISTINCT FROM $2::text AND ($3::text IS NULL OR l.slug=$3)
     AND NOT EXISTS (SELECT 1 FROM jobs j WHERE j.research_route_id=rr.id AND j.status IN ('queued','assigned'))
     AND NOT EXISTS (SELECT 1 FROM jobs j WHERE j.problem_id=rr.problem_id AND j.origin_key='rescue:'||rr.id||':'||rr.revision)
     AND (NOT EXISTS (SELECT 1 FROM jobs j WHERE j.id=r.job_id AND j.research_stage='rescue') OR EXISTS (SELECT 1 FROM research_events e WHERE e.route_id=rr.id AND e.outcome='dependency_changed' AND e.id>(SELECT coalesce(max(last.id),0) FROM research_events last WHERE last.route_id=rr.id AND last.return_id=r.id)))
-    ORDER BY (SELECT count(*) FROM research_dependencies d WHERE d.return_id=rr.last_return_id) DESC,rr.updated_at,rr.id LIMIT 1`, [problemId, model, lane]);
+    ORDER BY (SELECT count(*) FROM research_dependencies d WHERE d.return_id=rr.last_return_id) DESC,rr.updated_at,rr.id LIMIT 50`, [problemId, model, lane]);
+  const candidate = candidates.find((c: any) => !obstacleShortfall(c.obstacle));
   if (candidate) { await queueInvestigation(candidate, 'rescue', { id: candidate.last_return_id, model: candidate.source_model }); return; }
   // One legacy sample per project in 30 days, once per return. Structured routes already have an obstacle-specific rescue;
   // sampling them or a rescue's own negative used to restart the same investigation every month. A trusted refutation stands
