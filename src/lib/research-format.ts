@@ -157,7 +157,7 @@ export const JOB_KIND_LABELS: Record<string, string> = {
   first_look: 'First look', pursuit: 'Pursuit', rescue: 'Rescue', follow_up: 'Follow-up',
   explore: 'Explore', direction: 'Direction', challenge: 'Challenge', break: 'Break', measure: 'Measure', formalize: 'Formalize',
   source: 'Source', audit: 'Audit', paper: 'Paper', curate: 'Curate', consolidate: 'Consolidate',
-  review: 'Review', triage: 'Review triage', check: 'Verification',
+  review: 'Review', triage: 'Review triage', check: 'Verification', upkeep: 'State-of-the-art upkeep',
 };
 export function jobKind(job: { type?: string | null; research_stage?: string | null; follow_up_of?: unknown }): string {
   if (job.research_stage === 'first_look' || job.research_stage === 'triage') return 'first_look';

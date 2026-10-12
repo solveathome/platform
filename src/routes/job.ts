@@ -66,7 +66,7 @@ import { unservedNote } from "../lib/served-paths.js";
 import { parseTranscript } from "../lib/tokens.js";
 import { needsSourceReview, SOURCE_REVIEW_MESSAGE, sourceReviewHit, readPublication } from "../lib/document-publication.js";
 import { randomBytes } from "node:crypto";
-import { isTrusted, isGrantedTrusted, TRUSTED_MODEL_FAMILIES, ownerHandles } from "../lib/roles.js";
+import { isTrusted, isGrantedTrusted, ownerHandles } from "../lib/roles.js";
 import { ANNOUNCE_MD_MAX, ANNOUNCE_TYPES, candidateKind } from "../lib/announce.js";
 import { tierForEffort, MODEL_IDENTITY_GUIDANCE, isHarnessModel, TOP_EFFORTS } from "../lib/model-id.js";
 import { parseRung, RUNG_ERROR, LADDER } from "../lib/rungs.js";
@@ -106,6 +106,7 @@ import { ABANDON_AFTER_MIN } from "../lib/liveness.js";
 import { plainDescription, notFoundPage, abs } from "../lib/seo.js";
 import { noticeChannel } from "../lib/lane-channel.js";
 import { challengeConfig, challengeJob, challengeTaskBrief, challengeTrackOfJob, challengeSlugs } from "../lib/challenges.js";
+import { addEntry, applyStateUpdate, laneBySlug, lanesNeedingUpkeep, parseStateUpdate, queueStateUpkeep, stateBrief, StateError, upkeepBrief } from "../lib/lane-state.js";
 async function sweepExpired(problemId: number): Promise<void> {
   if (await one(`SELECT 1 FROM problems WHERE id = $1 AND slug = ANY($2::text[])`, [problemId, challengeSlugs()])) await settlePendingChallengeRuns(problemId);
   await expireUntrustedLeanChecks(problemId);
@@ -364,6 +365,14 @@ ${ENDED_LAUNCH_GUIDANCE}
     await queueWorkNextTasks(agent.problemId,req.project.slug);
     if(await workComparisonDue(agent))row=await selectJob({...agent,workCheckOnly:true},true);
   }
+  // State-of-the-art upkeep first (Chris, Oct 12 2026, #sah-sota-trusted-upkeep: "a routine job that sits along with review and
+  // verification", which a trusted reviewer's agent checks for "before running normal jobs"): a lane's Verified summary is written only by
+  // a reviewer trusted by grant, so such a session takes a due upkeep before reviews or research, reviews-only sessions included.
+  let upkept = false;
+  if (!row && agent.granted && !recovery && !directed && !session.direction_id && !tangentFirst && !chat) {
+    await queueStateUpkeep(agent.problemId, req.project.slug);
+    row = await selectJob({ ...agent, upkeepOnly: true }, false); upkept = !!row;
+  }
   if (reviewsOnly && !row) {
     row = await selectJob(agent, false, false, undefined, false, true);
     for (let tries = 0; !row && reviewTriage(req.project.slug) && tries < 5; tries++) {
@@ -423,7 +432,7 @@ ${ENDED_LAUNCH_GUIDANCE}
     }
   }
   row ??= await selectJob(agent, preferResearch);
-  const reserveDiscovery = !directed && !recovery && !requiredCorrection && !session.direction_id && !portfolio && !tangentFirst && tier === 1 && discoveryDue(share, used, Math.min(agent.maxHours, Number(row?.budget_hours ?? agent.maxHours)));
+  const reserveDiscovery = !directed && !recovery && !requiredCorrection && !upkept && !session.direction_id && !portfolio && !tangentFirst && tier === 1 && discoveryDue(share, used, Math.min(agent.maxHours, Number(row?.budget_hours ?? agent.maxHours)));
   if (reserveDiscovery) row = await selectJob(agent, preferResearch, true)
     ?? await synthesizeExplore(req, session, lane, maxHours, null, true);
   if (!row) row = await synthesizeExplore(req, session, lane, maxHours, await computeBlocked(agent));
@@ -432,7 +441,7 @@ ${ENDED_LAUNCH_GUIDANCE}
   const stepCheck = !recovery && !directed && !session.direction_id && !tangentFirst && !chat ? await holdForStepCheck(row) : null;
   if (stepCheck) row = stepCheck;
   const unmet = row.type === 'check' ? { tools: [], sources: [] } : unmetRequirements(row, agent.capabilities);
-  const reason = { policy: row.applicability_check ? "trusted applicability screening" : row.work_check ? "trusted assignment comparison" : directed ? "requested job" : session.direction_id ? "agent direction" : tangentFirst ? "person's tangent" : triageSkipped ? "management: triage skipped, trusted reviewer" : manage ? "management" : requiredCorrection ? "required correction" : trustedJudgment ? "trusted judgment" : pressed ? "review pressure" : triaged ? "review triage" : portfolio ? "research portfolio" : reserveDiscovery ? "reserved tier-1 discovery" : "eligible work by need and capability",
+  const reason = { policy: row.applicability_check ? "trusted applicability screening" : row.work_check ? "trusted assignment comparison" : directed ? "requested job" : upkept ? "state-of-the-art upkeep" : session.direction_id ? "agent direction" : tangentFirst ? "person's tangent" : triageSkipped ? "management: triage skipped, trusted reviewer" : manage ? "management" : requiredCorrection ? "required correction" : trustedJudgment ? "trusted judgment" : pressed ? "review pressure" : triaged ? "review triage" : portfolio ? "research portfolio" : reserveDiscovery ? "reserved tier-1 discovery" : "eligible work by need and capability",
     ...(row.required_correction ? { required_correction: true, correction_interval: REQUIRED_CORRECTION_INTERVAL } : {}),
     ...(agent.hoursLeft !== null && agent.hoursLeft !== undefined ? { session_fit: `about ${Math.round(agent.hoursLeft * 60)} minutes left in this session: jobs estimated longer are passed over for one that fits. The estimate chooses the job; it is no limit on it.` } : {}),
     tier, guidance_version: GUIDANCE_VERSION, discovery_share: share, discovery_allocation: used, eligible_backlog: { reviews: need.reviews, research: need.research }, prefer_research: preferResearch,
@@ -453,9 +462,12 @@ ${ENDED_LAUNCH_GUIDANCE}
   }
   row.repo_url = req.project.repo_url;
   // Match exact configured study text before the adapter expands it into a dynamic brief.
-  if (collaborationEnabled(req.project.slug)) row.research_task = await taskForJob(Number(req.project.id),req.project.slug,row);
+  if (collaborationEnabled(req.project.slug) && row.type !== 'upkeep') row.research_task = await taskForJob(Number(req.project.id),req.project.slug,row);
   // A record challenge's track assignment says where the record stands now, not when the job was made (src/lib/challenges.ts).
   if (challengeTrackOfJob(req.project.slug, row)) row.brief_md = await challengeTaskBrief(row, req.project, BASE());
+  // Every brief carries its lane's state of the art, both sections; an upkeep's brief is that document and what arrived since.
+  if (row.type === "upkeep") row.brief_md = await upkeepBrief(row, req.project, `${BASE()}/projects/${req.project.slug}`);
+  else row.brief_md += await stateBrief(Number(req.project.id), req.project.slug, row.lane_id ? Number(row.lane_id) : null, `${BASE()}/projects/${req.project.slug}`);
   const sess = { id: String(session.id), jobs: Number(session.jobs), max: session.max_jobs === null ? null : Number(session.max_jobs), length: lengthWords(session), disk, abandonAfterMin: ABANDON_AFTER_MIN, maxHours: agent.maxHours, compute: describeOffer(offer), transcriptPreapproved: settings.ai?.transcript_preapproved === true, transcriptMode: sessionTranscriptMode(settings.ai), subagents: settings.ai?.subagents?.allowed === false ? "not allowed" : settings.ai?.subagents?.max_parallel ? `allowed, up to ${settings.ai.subagents.max_parallel} at a time` : "allowed", files: await files.quota(uid).then((f) => ({ left: f.files_left, bytes_left: f.bytes_left, per_day: f.files_per_day })) };
   row.operational_deferrals = await deferralHistory(Number(row.id),session.id);
   row.handoffs = await handoffHistory(Number(row.id));
@@ -472,7 +484,7 @@ ${ENDED_LAUNCH_GUIDANCE}
   if (row.type === 'triage' && row.parent_return_id && triageCfg) { row.brief_md = await composeTriageBrief(Number(row.parent_return_id), triageCfg, { uid, model: req.model ?? null }); await q(`UPDATE jobs SET brief_md = $2 WHERE id = $1`, [row.id, row.brief_md]); }
   if (row.evidence_return_id || row.parent_return_id) row.brief_md += await verificationBrief(Number(row.evidence_return_id ?? row.parent_return_id), row.parent_return_id && row.type === 'review' ? 'review' : 'record');
   let sharedContext: any = null;
-  if (collaborationEnabled(req.project.slug)) {
+  if (collaborationEnabled(req.project.slug) && row.type !== 'upkeep') {
     row.research_task = await taskForJob(Number(req.project.id),req.project.slug,row);
     await q(`UPDATE jobs SET research_task=$2,work_scope_sha256=$3 WHERE id=$1`,[row.id,JSON.stringify(row.research_task),row.work_check?.scope_sha256 ?? workScopeHash(row.research_task)]);
     sharedContext = await researchContext(Number(req.project.id),req.project.slug,row,row.research_task);
@@ -815,6 +827,8 @@ job.get("/ready", bearer, project, async (req: any, res) => {
   const capped = await handleCapRefusal(Number(req.project.id), uid);
   if (capped) { res.json({ ready: 0, urgency: "normal", reviews: 0, trusted, tier, capped: true, facts: capped }); return; }
   const workChecks=(await workComparisonDue(agent)) ? (await backlogFor({...agent,workCheckOnly:true})).research : 0;
+  // Upkeeps a session of this caller would be handed first: the queued ones it may take, and the lanes /start would queue one for.
+  const upkeep = granted ? (await reviewWorkFor(agent, false)).upkeep + (await lanesNeedingUpkeep(Number(req.project.id), req.project.slug)).length : 0;
   if (work !== "all") {
     // Management mode, for any model: what /start would hand out (reviews and the triages a trusted session reviews directly, or
     // triage for others; package checks; queued rescues and the rescues /start makes for blocked routes; required corrections).
@@ -822,16 +836,16 @@ job.get("/ready", bearer, project, async (req: any, res) => {
     const u = await upkeepFor(agent);
     const rescuable = await rescueCandidates(agent.problemId, agent.model, agent.lane);
     const other = Math.max(0, u.total - u.reviews);   // reviews (and the triages a trusted session reviews directly) are counted by reviewWorkFor
-    const ready = w.reviews + w.triage + other + rescuable + workChecks;
-    res.json({ ready, ...(workChecks ? {work_comparisons:workChecks} : {}), urgency: "normal", reviews: w.reviews, triage: trusted ? w.triage : u.triage, checks: u.checks, rescues: u.rescues + rescuable, trusted, tier,
-      facts: `management work this agent may take: ${w.reviews} review${w.reviews === 1 ? "" : "s"}, ${trusted ? w.triage : u.triage} triage, ${u.checks} package check${u.checks === 1 ? "" : "s"}, ${u.rescues + rescuable} rescue${u.rescues + rescuable === 1 ? "" : "s"}${u.corrections ? `, ${u.corrections} required correction${u.corrections === 1 ? "" : "s"}` : ""}${workChecks ? `, ${workChecks} assignment comparisons` : ""} (never its own model's returns or blocks${granted ? "" : ", nor its handle's"})` });
+    const ready = w.reviews + w.triage + other + rescuable + upkeep + workChecks;
+    res.json({ ready, ...(workChecks ? {work_comparisons:workChecks} : {}), urgency: "normal", reviews: w.reviews, triage: trusted ? w.triage : u.triage, checks: u.checks, rescues: u.rescues + rescuable, ...(upkeep ? { upkeep } : {}), trusted, tier,
+      facts: `management work this agent may take: ${upkeep ? `${upkeep} state-of-the-art upkeep${upkeep === 1 ? "" : "s"} (taken first), ` : ""}${w.reviews} review${w.reviews === 1 ? "" : "s"}, ${trusted ? w.triage : u.triage} triage, ${u.checks} package check${u.checks === 1 ? "" : "s"}, ${u.rescues + rescuable} rescue${u.rescues + rescuable === 1 ? "" : "s"}${u.corrections ? `, ${u.corrections} required correction${u.corrections === 1 ? "" : "s"}` : ""}${workChecks ? `, ${workChecks} assignment comparisons` : ""} (never its own model's returns or blocks${granted ? "" : ", nor its handle's"})` });
     return;
   }
   const b = await backlogFor(agent);
   // With nothing queued that fits, /start still hands out one assignment it makes on the spot (a question to explore, or a record
   // challenge's run): counted here, so a scheduler that starts agents on ready > 0 is not told 0 while /start would assign.
-  const queued = b.reviews + b.research + workChecks, made = queued === 0 ? 1 : 0;
-  res.json({ ready: queued + made, ...(workChecks ? {work_comparisons:workChecks} : {}), urgency: "normal", reviews: b.reviews, research: b.research, ...(made ? { made_on_request: made } : {}), trusted, tier,
+  const queued = b.reviews + b.research + workChecks + (granted ? (await lanesNeedingUpkeep(Number(req.project.id), req.project.slug)).length : 0), made = queued === 0 ? 1 : 0;
+  res.json({ ready: queued + made, ...(workChecks ? {work_comparisons:workChecks} : {}), urgency: "normal", reviews: b.reviews, research: b.research, ...(upkeep ? { upkeep } : {}), ...(made ? { made_on_request: made } : {}), trusted, tier,
     facts: `${b.reviews} reviews and ${b.research} other assignments this agent may take${made ? "; none queued fits, so /start makes one (a question to explore or a challenge run)" : ""}` });
 });
 
@@ -1128,7 +1142,7 @@ job.get("/job/:id", optionalAuth, project, async (req: any, res) => {
  * job_id may be omitted for a self-assigned Direction (type must then be "direction" and problem given).
  */
 /** The scrub gates every stored prose field passes (secrets, home paths, harness identifiers): one message, or null when clean. */
-function scrubError(field: string, text: string): { error: string; field: string } | null {
+export function scrubError(field: string, text: string): { error: string; field: string } | null {
   const leak = files.findSecret(text); if (leak) return { error: `"${field}" looks like it contains a secret (${leak}). Scrub it and retry; nothing was stored.`, field };
   const harness = files.findHarnessId(text); if (harness) return { error: `"${field}" still carries a private execution identifier: ${harness}. Redact account, installation, session and attempt bindings, including historical identifiers inside decoded tool output; preserve research evidence, public IDs and observed usage. Nothing was stored.`, field };
   return null;
@@ -1240,7 +1254,7 @@ job.post("/result", bearer, project, assignmentMutation(async (req: any, res) =>
     if (typeof b[field] === "string" && needsSourceReview(b[field])) { res.status(400).json({ error: `${SOURCE_REVIEW_MESSAGE} The check tripped in "${field}" on this line: "${sourceReviewHit(b[field]) ?? "?"}". Paraphrase with a locator (page, theorem number) instead of transcribing.`, field, at: sourceReviewHit(b[field]) }); return; }
   }
   // Structured public text has the same publication and secret rules as ordinary reports.
-  for (const field of ['research', 'verification_plan', 'check_receipt', 'lean_statement_review', 'lean_execution_review', 'paper_exposition_review', 'research_evidence', 'research_assessment', 'research_links', 'known_work', 'work_disposition', 'work_check', 'applicability_assessment']) if (b[field] !== undefined) {
+  for (const field of ['research', 'verification_plan', 'check_receipt', 'lean_statement_review', 'lean_execution_review', 'paper_exposition_review', 'research_evidence', 'research_assessment', 'research_links', 'known_work', 'work_disposition', 'work_check', 'applicability_assessment', 'state_update', 'state_entry']) if (b[field] !== undefined) {
     const value = JSON.stringify(b[field]);
     const bad = scrubError(field, value); if (bad) { res.status(400).json(bad); return; }
     if (needsSourceReview(value)) { res.status(400).json({ error: SOURCE_REVIEW_MESSAGE, field }); return; }
@@ -1355,7 +1369,7 @@ job.post("/result", bearer, project, assignmentMutation(async (req: any, res) =>
     if (!jobRow) {
       const target = await one<{ id: number; user_id: number; status: string; problem_id: number; lane_id: number | null }>(`SELECT id, user_id, status, problem_id, lane_id FROM returns WHERE id = $1 AND problem_id = $2`, [reviewOf || 0, req.project.id]);
       if (!target) { res.status(400).json({ error: "a self-assigned review needs return_id: the return you reviewed, in this project" }); return; }
-      if (Number(target.user_id) === uid && !reviewerGranted) { res.status(403).json({ error: "you do not review your own return (a reviewer trusted by grant on the trust page may; a session trusted by its model may not)" }); return; }
+      if (Number(target.user_id) === uid && !reviewerGranted) { res.status(403).json({ error: "you do not review your own return (a reviewer trusted by grant on the trust page may)" }); return; }
       if (!["pending", "accepted", "rejected", "contested", "recorded"].includes(target.status)) { res.status(409).json({ error: `return #${target.id} is ${target.status}` }); return; }
       // On a project with a review quorum one approved person may review with a second model family (consensus.ts); elsewhere one review per person.
       const prior = await one<{ id: number; scored_at: string | null }>(`SELECT id, scored_at FROM reviews WHERE return_id = $1 AND user_id = $2 AND ($3::int = 1 OR lean_model_family(model) IS NOT DISTINCT FROM lean_model_family($4))`, [target.id, uid, reviewQuorum(req.project.slug), req.model ?? null]);
@@ -1408,7 +1422,7 @@ job.post("/result", bearer, project, assignmentMutation(async (req: any, res) =>
     if (b.announce !== undefined && b.announce !== null && b.announce !== false) {
       if (b.announce !== true) announceWarnings.push("announce must be true or false; no mark recorded");
       else if (b.verdict !== "accept") announceWarnings.push("announce marks an accepted finding; on a reject no mark is recorded");
-      else if (!reviewerGranted) announceWarnings.push(`announce is set by a reviewer holding a role on this project (an owner, or trust granted on ${BASE()}/projects/${req.project.slug}/trust); trust by model does not set it, so no mark is recorded`);
+      else if (!reviewerGranted) announceWarnings.push(`announce is set by a reviewer holding a role on this project (an owner, or trust granted on ${BASE()}/projects/${req.project.slug}/trust), so no mark is recorded`);
       else {
         const text = String(b.announce_md ?? "").replace(/\s+/g, " ").trim();
         if (!text) announceWarnings.push("announce without announce_md: a post goes out without the validator's note");
@@ -1501,7 +1515,7 @@ job.post("/result", bearer, project, assignmentMutation(async (req: any, res) =>
     await registerEntries(uid, "review", Number(myReview?.id ?? 0), entryKeys);
     const reviewReport = tokens.log === "unknown" && transcriptMode !== "summary" ? await reportHarness(String(b.transcript), { reviewId: Number(myReview?.id ?? 0) || undefined, uid, model: req.model ?? null }) : null;
     const reviewLogWarn = transcriptWarning(transcriptMode, sessionMode, tokens, String(b.transcript), `POST ${BASE()}/projects/${req.project.slug}/review/${Number(myReview?.id ?? 0)}/transcript (same headers)`, reviewReport);
-    res.json({ ok: true, review_of: reviewOf, review_id: Number(myReview?.id ?? 0) || null, work_check_job_id:reviewWorkCheckId, outcome, ...(Object.keys(seriesDecided).length ? { series: seriesDecided } : {}), advisory: !reviewerTrusted, ...(effortNote ? { effort_note: effortNote } : {}), warnings: [...(effortNote ? [effortNote] : []), ...alsoFixCut(b.also_fix), ...(reviewLogWarn ? [reviewLogWarn] : []), ...seriesWarnings, ...announceWarnings, ...onceWarning(tokens), ...scrubWarnings, ...sharedWarnings, ...subagentWarning(String(b.transcript ?? ""), `${BASE()}/projects/${req.project.slug}/review/${Number(myReview?.id ?? 0)}/transcript`)], trusted_by: reviewerGranted ? "grant" : reviewerTrusted ? "model" : null, return_status: after?.status ?? null, final_rung: after?.final_rung ?? null, provisional: after?.provisional ?? null, effects_applied_at: after?.effects_applied_at ?? null, integration: after?.integration ?? null, tokens });
+    res.json({ ok: true, review_of: reviewOf, review_id: Number(myReview?.id ?? 0) || null, work_check_job_id:reviewWorkCheckId, outcome, ...(Object.keys(seriesDecided).length ? { series: seriesDecided } : {}), advisory: !reviewerTrusted, ...(effortNote ? { effort_note: effortNote } : {}), warnings: [...(effortNote ? [effortNote] : []), ...alsoFixCut(b.also_fix), ...(reviewLogWarn ? [reviewLogWarn] : []), ...seriesWarnings, ...announceWarnings, ...onceWarning(tokens), ...scrubWarnings, ...sharedWarnings, ...subagentWarning(String(b.transcript ?? ""), `${BASE()}/projects/${req.project.slug}/review/${Number(myReview?.id ?? 0)}/transcript`)], trusted_by: reviewerTrusted ? "grant" : null, return_status: after?.status ?? null, final_rung: after?.final_rung ?? null, provisional: after?.provisional ?? null, effects_applied_at: after?.effects_applied_at ?? null, integration: after?.integration ?? null, tokens });
     return;
   }
 
@@ -1708,6 +1722,23 @@ job.post("/result", bearer, project, assignmentMutation(async (req: any, res) =>
     if (!b.decision || typeof b.decision !== "object") { res.status(400).json({ error: "curate returns need a decision object" }); return; }
     await q(`UPDATE returns SET decision = $2 WHERE id = $1`, [ret!.id, JSON.stringify(b.decision)]);
   }
+  // A state-of-the-art upkeep (src/lib/lane-state.ts) writes its lane's Verified section on receipt: a reviewer trusted by grant wrote it,
+  // so it is the trusted check and waits for no review. Anyone's return may add an unverified entry (state_entry); a defect there is a
+  // warning, never a refused return.
+  let stateUpdate: any = null;
+  if (rtype === "upkeep") {
+    if (!await isGrantedTrusted(Number(problem.id), uid, req.user!.handle)) { res.status(403).json({ error: "only a reviewer trusted by grant writes a lane's verified state of the art" }); return; }
+    const upkeepLane = await one(`SELECT id, slug, title, problem_id FROM lanes WHERE id = $1`, [jobRow?.lane_id ?? 0]);
+    if (!upkeepLane) { res.status(409).json({ error: "this upkeep job has no lane" }); return; }
+    try { stateUpdate = { lane: upkeepLane.slug, ...await applyStateUpdate(Number(problem.id), upkeepLane, { id: uid, model: req.model ?? null }, parseStateUpdate(b.state_update), Number(ret!.id)) }; }
+    catch (e) { if (e instanceof StateError) { res.status(e.status).json({ error: `state_update: ${e.message}` }); return; } throw e; }
+  } else if (b.state_entry !== undefined) {
+    try {
+      const entryLane = b.state_entry?.lane ? await laneBySlug(Number(problem.id), String(b.state_entry.lane)) : laneId ? await one(`SELECT id, slug, title, problem_id FROM lanes WHERE id = $1`, [laneId]) : null;
+      if (!entryLane) throw new StateError(400, "name the lane (state_entry.lane): this return has none");
+      sharedWarnings.push(`state_entry: added as unverified entry ${await addEntry(Number(problem.id), problem.slug, entryLane, req.user!, req.model ?? null, { ...b.state_entry, source_return_id: Number(ret!.id) })} on lane ${entryLane.slug}; a trusted upkeep promotes or rejects it`);
+    } catch (e) { if (e instanceof StateError) sharedWarnings.push(`state_entry not recorded: ${e.message}`); else throw e; }
+  }
   // Freeze the default target while this assignment still owns the job. Later findings and reassignments cannot change the review.
   if (!Array.isArray(b.resolves) && (rtype === 'audit' || paperPlan)) {
     const repair = await one(`SELECT * FROM returns WHERE id=$1`, [ret!.id]);
@@ -1787,7 +1818,7 @@ job.post("/result", bearer, project, assignmentMutation(async (req: any, res) =>
     if(!operationalApplicability)sharedWarnings.push('applicability_assessment: use the issued administrative screening without new scientific claims or review requests; no relevance authority recorded');
     else sharedWarnings.push(...await saveApplicability(Number(ret!.id),Number(problem.id),problem.slug,jobRow,applicabilityInput.value,{user_id:uid,handle:req.user!.handle,model:req.model,effort:effortEff}));
   }
-  const recordedExploration = Boolean(operationalApplicability || knownWork || operationalComparison) || rtype === 'check' || ((rtype === 'explore' || (rtype === 'direction' && researchReport?.proposal)) && b.request_review !== true && researchReport?.outcome !== 'result');
+  const recordedExploration = Boolean(operationalApplicability || knownWork || operationalComparison) || rtype === 'check' || rtype === 'upkeep' || ((rtype === 'explore' || (rtype === 'direction' && researchReport?.proposal)) && b.request_review !== true && researchReport?.outcome !== 'result');
   if (recordedExploration) await q(`UPDATE returns SET status = 'recorded', final_rung = 'recorded' WHERE id = $1`, [ret!.id]);
   const canonicalClaim = !recordedExploration && verificationPlan ? await foldExactClaim(Number(ret!.id)) : null;
   if (canonicalClaim?.status === 'rejected' && researchProgress) {
@@ -1858,6 +1889,7 @@ job.post("/result", bearer, project, assignmentMutation(async (req: any, res) =>
   }
   await queueWorkReconsiderations(Number(problem.id),problem.slug);
   if (recordedExploration) {
+    if (stateUpdate) { res.json({ ok: true, return_id: Number(ret!.id), status: "recorded", state_update: stateUpdate, reviews_requested: 0, files: attached, tokens, warnings, note: `The verified state of the art of lane ${stateUpdate.lane} is now version ${stateUpdate.version}: ${BASE()}/projects/${problem.slug}/state/${stateUpdate.lane}` }); return; }
     res.json({ ok: true, return_id: Number(ret!.id), status: "recorded", work_check_job_id:workCheckJobId, research: researchProgress, reviews_requested: 0, files: attached, tokens, warnings,
       note: `Exploration is recorded without review. Elevate a claim when it deserves verification: POST ${BASE()}/projects/${problem.slug}/return/${ret!.id}/request-review { "note": "<what deserves verification>" }.` });
     return;
@@ -2067,15 +2099,14 @@ export async function skipTriage(triageJob: any, why: string): Promise<boolean> 
   return true;
 }
 /** The triages already waiting on trusted tier-1 work go to review (#sah-tier1-skip-triage): the ones queued before the rule, and
- *  any whose author was granted trust since. Held triages finish as they are. Candidates are narrowed in SQL to authors a model
- *  family or a role could make trusted; skipsTriage decides. Caller holds the project transaction. */
+ *  any whose author was granted trust since. Held triages finish as they are. Candidates are narrowed in SQL to authors a role
+ *  makes trusted (a model no longer does, Oct 12 2026); skipsTriage decides. Caller holds the project transaction. */
 export async function releaseTrustedTriage(problemId: number): Promise<number> {
   const waiting = await q(`SELECT j.* FROM jobs j JOIN returns r ON r.id = j.parent_return_id JOIN users u ON u.id = r.user_id
       WHERE j.problem_id = $1 AND j.type = 'triage' AND j.status = 'queued' AND r.status = 'pending'
-        AND ((r.effort = ANY($2::text[]) AND ('-' || replace(lower(r.model), '.', '-') || '-') LIKE ANY($3::text[]))
-          OR EXISTS (SELECT 1 FROM project_roles pr WHERE pr.problem_id = $1 AND pr.user_id = r.user_id AND pr.revoked_at IS NULL)
-          OR r.user_id = (SELECT researcher_user_id FROM problems WHERE id = $1) OR lower(u.handle) = ANY($4::text[]))
-      ORDER BY j.id`, [problemId, [...TOP_EFFORTS], TRUSTED_MODEL_FAMILIES.map((f) => `%-${f}-%`), ownerHandles()]);
+        AND (EXISTS (SELECT 1 FROM project_roles pr WHERE pr.problem_id = $1 AND pr.user_id = r.user_id AND pr.revoked_at IS NULL)
+          OR r.user_id = (SELECT researcher_user_id FROM problems WHERE id = $1) OR lower(u.handle) = ANY($2::text[]))
+      ORDER BY j.id`, [problemId, ownerHandles()]);
   let moved = 0;
   for (const j of waiting) {
     const ret = await one(`SELECT * FROM returns WHERE id = $1`, [j.parent_return_id]);

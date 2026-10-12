@@ -4,24 +4,13 @@
  * and revokes trust, always with a public note, and decides applications. Roles are per project.
  */
 import { q, one } from "../db/index.js";
-import { TOP_EFFORTS, type Effort } from "./model-id.js";
+import { type Effort } from "./model-id.js";
 
-/** Model-trusted reviewers (Chris, Sep 11 2026, "for now, it is too expensive for me to do on my own"): a session running a model from one
- *  of these families at a top thinking level reviews as trusted, because the granted group is one person and reviews wait. Its verdicts
- *  decide like a grant's, except on its own handle's returns. Off with TRUSTED_MODEL_FAMILIES= (empty) in the environment.
- *  Opus 5.5 joined Astra (Chris, Sep 22 2026, "as long as it runs in high+"): the entry is the version, so claude-opus-5 and 4.x stay out.
- *  GPT-6.1 Sol joined them (Chris, Oct 1 2026, "in line with astra and claude 5.5"): gpt-6.1-sol only, so gpt-6-sol and gpt-5.6-sol stay out.
- *  An entry matches whole id segments ("astra" in gpt-6-astra-pro, claude-opus-5-5 in claude-opus-5-5-high, never claude-opus-5-50). */
-export const TRUSTED_MODEL_FAMILIES: string[] = (process.env.TRUSTED_MODEL_FAMILIES === undefined ? "astra,claude-opus-5-5,gpt-6-1-sol" : process.env.TRUSTED_MODEL_FAMILIES).split(",").map((s) => s.trim().toLowerCase().replace(/\./g, "-")).filter(Boolean);
-const FAMILY_LABELS: Record<string, string> = { astra: "Astra (gpt-6-astra)", "claude-opus-5-5": "Opus 5.5 (claude-opus-5-5)", "gpt-6-1-sol": "GPT-6.1 Sol (gpt-6.1-sol)" };
-/** The trusted families as the trust page and orientation name them: "Astra (gpt-6-astra), Opus 5.5 (claude-opus-5-5) or GPT-6.1 Sol (gpt-6.1-sol)". */
-export const trustedModelsLabel = (): string => { const l = TRUSTED_MODEL_FAMILIES.map((f) => FAMILY_LABELS[f] ?? f); return l.length > 1 ? `${l.slice(0, -1).join(", ")} or ${l.at(-1)}` : l.join(""); };
+/** Trust comes from a grant only (Chris, Oct 12 2026, #sah-sota-trusted-upkeep: "I believe we have a special rule to make astra always
+ *  trusted, let's kill that, only I and Nate are trusted"). From Sep 11 a session on a trusted model family at a top thinking level
+ *  (TRUSTED_MODEL_FAMILIES, last astra, claude-opus-5-5 and gpt-6-1-sol) reviewed as trusted whatever its handle; that rule is gone and
+ *  the variable is no longer read. A model and thinking level still decide a session's tier, never its trust. */
 export type Agent = { model?: string | null; effort?: Effort | string | null };
-export function trustedByModel(model: string | null | undefined, effort: string | null | undefined): boolean {
-  const m = String(model ?? "").toLowerCase().replace(/\./g, "-");   // "claude-opus-5.5" is claude-opus-5-5, "gpt-6.1-sol" is gpt-6-1-sol
-  if (!m || !TRUSTED_MODEL_FAMILIES.some((f) => (`-${m}-`).includes(`-${f}-`))) return false;
-  return !!effort && TOP_EFFORTS.has(effort as Effort);
-}
 
 export type Role = "owner" | "trusted";
 export type Member = { user_id: number; handle: string; display_name: string | null; role: Role; granted_at: string; note: string; granted_by: string | null; reviews: number; agreed: number; last_review: string | null; dormant: boolean };
@@ -37,9 +26,9 @@ export async function roleOf(problemId: number, userId: number, handle?: string)
   return r?.role ?? null;
 }
 export async function isOwner(problemId: number, userId: number, handle?: string): Promise<boolean> { return (await roleOf(problemId, userId, handle)) === "owner"; }
-/** Owners are trusted too; so is a session on a trusted model family at a top thinking level (see TRUSTED_MODEL_FAMILIES). */
-export async function isTrusted(problemId: number, userId: number, handle?: string, agent?: Agent): Promise<boolean> { return (await roleOf(problemId, userId, handle)) !== null || trustedByModel(agent?.model, agent?.effort); }
-/** Trust by grant only: the power to decide one's own handle's returns (Chris) never comes from the model. */
+/** Owners and reviewers trusted by grant. The agent's model is accepted for the callers' sake and grants nothing (Oct 12 2026). */
+export async function isTrusted(problemId: number, userId: number, handle?: string, _agent?: Agent): Promise<boolean> { return (await roleOf(problemId, userId, handle)) !== null; }
+/** Trust by grant: since Oct 12 2026 the same as isTrusted; kept as the name the own-handle rules read by. */
 export async function isGrantedTrusted(problemId: number, userId: number, handle?: string): Promise<boolean> { return (await roleOf(problemId, userId, handle)) !== null; }
 
 export async function roster(problemId: number): Promise<Member[]> {

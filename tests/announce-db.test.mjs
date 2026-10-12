@@ -101,12 +101,15 @@ test('a role-holder marks an accepted proof; the mark is on the review and the r
   assert.deepEqual([rv.announce, rv.announce_md], [true, 'Lemma 3 holds for all $x \\ge 2$ at Proven.']);
 });
 
-test('trust by model marks nothing, and an acceptance without a role-holder\'s mark is never announced', async () => {
+test('a model at max marks nothing and decides nothing, and an acceptance without a role-holder\'s mark is never announced (trust by grant only since Oct 12 2026)', async () => {
   const id = await mkReturn('formalize');
   const r = await okJson(await call('stranger', 'POST', '/result', {model: 'claude-opus-5-5', body: review(id, 'proven', {announce: true, announce_md: 'x'})}));
-  assert.equal(r.return_status, 'accepted', 'a model-trusted session decides');
-  assert.ok(r.warnings.some(w => /trust by model does not set it/.test(w)), r.warnings.join(' | '));
+  assert.deepEqual([r.return_status, r.advisory, r.trusted_by], ['pending', true, null], 'a model alone is advisory: it does not decide');
+  assert.ok(r.warnings.some(w => /no mark is recorded/.test(w)), r.warnings.join(' | '));
   assert.equal((await one(`SELECT announce FROM reviews WHERE return_id = $1`, [id])).announce, false);
+  // A role-holder accepts it without a mark: accepted, and still never announced.
+  const g = await okJson(await call('granted', 'POST', '/result', {model: 'gpt-6-astra', body: review(id, 'proven')}));
+  assert.deepEqual([g.return_status, g.trusted_by], ['accepted', 'grant']);
   const rej = await mkReturn('formalize');
   const rr = await okJson(await call('granted', 'POST', '/result', {model: 'gpt-6-astra', body: {...review(rej, null, {announce: true}), verdict: 'reject', reject_reason: 'refuted'}}));
   assert.ok(rr.warnings.some(w => /on a reject no mark/.test(w)));

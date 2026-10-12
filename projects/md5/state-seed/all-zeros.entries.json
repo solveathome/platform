@@ -1,0 +1,122 @@
+[
+ {
+  "body_md": "Fastest reported single GPU: the v14 CUDA Q9-tunnel kernel. It runs 4 candidates per thread, folds K+m, and gates with one compare (Q61 == -IV0 when 8 zeros are needed). It reaches 73.9 G candidates/s, 1.14× over v7, at 0.288 G candidates per J and 260 W, with hit lists identical to v7.",
+  "source_return_id": 3042,
+  "hardware": "NVIDIA RTX 2080 Ti (Turing, sm_75), CUDA 12.9, WSL2",
+  "throughput": "73.9 G candidates/s"
+ },
+ {
+  "body_md": "Four interleaved candidates per thread at full occupancy is the optimum for v14. With 5, 6 or 8 per thread, or larger register budgets, it is 2–7% slower (8 per thread: 68.7 G/s).",
+  "source_return_id": 3055,
+  "hardware": "NVIDIA RTX 2080 Ti (sm_75), CUDA 12.9, WSL2",
+  "throughput": "73.79 G/s (N=4) vs 68.71 G/s (N=8)"
+ },
+ {
+  "body_md": "The CUDA Q9-tunnel kernel is bound by the integer pipe. Pre-adding K+m and moving the adds to the FMA pipe (mad.lo) makes it 1.26× faster and cuts energy per candidate by 26%, with 0 mismatches.",
+  "source_return_id": 2997,
+  "hardware": "NVIDIA RTX 2080 Ti (sm_75), CUDA 12.9, WSL2",
+  "throughput": "55.4 G candidates/s"
+ },
+ {
+  "body_md": "Two interleaved candidates per thread on top of the K+m fold (v4) give 1.38× the unchanged kernel, at 0.243 G candidates per J.",
+  "source_return_id": 2999,
+  "hardware": "NVIDIA RTX 2080 Ti (sm_75), CUDA 12.9, WSL2",
+  "throughput": "62.4 G candidates/s"
+ },
+ {
+  "body_md": "First CUDA port of the Q9 tunnel (q9_52, steps 24..60, 23 registers, no spills). It passes 0 mismatches on 12,288 rows against a host MD5 and hashlib, and runs 1.33× over the 48-byte original kernel.",
+  "source_return_id": 2887,
+  "hardware": "NVIDIA RTX 2080 Ti (sm_75), CUDA 12.9, WSL2",
+  "throughput": "about 46.3 G candidates/s kernel-only"
+ },
+ {
+  "body_md": "End to end over 45 min, q9_52 ran 42.0 G/s against 32.8 G/s for original48 (1.28×). At 1.1e14 candidates the counts at k = 8..12 match 16^-k; best 11 (submission #165).",
+  "source_return_id": 2906,
+  "hardware": "NVIDIA RTX 2080 Ti (sm_75) + Ryzen 9 3900X host, WSL2",
+  "throughput": "42.0 G candidates/s end to end"
+ },
+ {
+  "body_md": "The platform record of 13 (submission #180) came from a 1.75 h segment of the v7 kernel (4 per thread): 4.17e14 candidates, with counts matching 16^-k through k = 12.",
+  "source_return_id": 3027,
+  "hardware": "NVIDIA RTX 2080 Ti (sm_75), CUDA 12.9, WSL2",
+  "throughput": "66.2 G candidates/s; score 13 in 6301 s"
+ },
+ {
+  "body_md": "An AVX2 CPU port of the Q9 tunnel with 3 vector chains per iteration (NV=3) is best; NV=4 runs out of ymm registers. SMT adds 40%. Running it beside the v14 GPU kernel adds 4.4% (76.9 G/s combined) and costs the GPU 0.5%.",
+  "source_return_id": 3050,
+  "hardware": "AMD Ryzen 9 3900X (12C/24T, AVX2), WSL2",
+  "throughput": "3.74 G/s on 24 threads; 0.272 G/s on 1 thread"
+ },
+ {
+  "body_md": "An independent AVX-512 Q9 tunnel (zeroq9) runs 1.300× over cached-m12 (step model 1.324). Its odds stay generic over 3.3e12 candidates; best 10 (submission #155).",
+  "source_return_id": 2883,
+  "hardware": "AMD Ryzen 9 9950X3D (16C/32T, AVX-512), 24 threads, Windows 11, MSVC 19.44",
+  "throughput": "7.85 G candidates/s"
+ },
+ {
+  "body_md": "Generic AVX-512 search, 16 lanes, varying the full 32-bit M12 innermost so steps 0..11 are cached: 1.133× over varying M7 and 1.30× over no cache.",
+  "source_return_id": 2881,
+  "hardware": "AMD Ryzen 9 9950X3D (16C/32T, AVX-512), 24 threads, Windows 11, MSVC 19.44",
+  "throughput": "5.67 G/s (w12); 5.06 (w7); 4.40 (full)"
+ },
+ {
+  "body_md": "A Metal Q9-tunnel kernel runs 1.378× the 48-byte kernel, validated on 16,384 candidates. A 90-min run covered 8.05e13 candidates and found four 11s.",
+  "source_return_id": 2658,
+  "hardware": "Apple M1 Max, 32-core GPU, Metal",
+  "throughput": "15.22 G/s kernel; 14.91 G/s end to end"
+ },
+ {
+  "body_md": "Metal kernel tun52 (52-byte Q9 tunnel) runs 1.40× over orig48 (2.68 G/s), close to the 53/37 step model. At this rate a 12 is projected at about 20.8 h. Files: md5q9gpu.m, reproduce_q9.py.",
+  "source_return_id": 2689,
+  "hardware": "Apple M1, 8-core GPU, Metal 3",
+  "throughput": "3.76 G candidates/s"
+ },
+ {
+  "body_md": "A plain Metal search with steps 0–7 precomputed and an early exit after step 60 ran about 500× the plain C baseline (16.5 MH/s) on the same machine; best 11 (submission #6).",
+  "source_return_id": 2617,
+  "hardware": "Apple M1 Max, 32-core GPU, Metal (background load)",
+  "throughput": "8.24 GH/s average over 3000 s; 10.7 GH/s short run"
+ },
+ {
+  "body_md": "Scalar Q9 tunnel (md5tun.c): steps 24..60 per candidate, 1.42–1.59× over the best cached-prefix generic kernel and about 1.95× over plain MD5. Clang vectorized the tunnel loop to 103–109 M/s. The odds measured generic up to k = 8.",
+  "source_return_id": 2622,
+  "hardware": "Apple M1 Max, 1 thread, clang -O3",
+  "throughput": "1.42–1.59× single-thread; 84.7 M/s on 4 threads"
+ },
+ {
+  "body_md": "Lazy message materialization in a 4-lane T8 (Q9) kernel: 1.285× over the equal-width generic M12 kernel and 1.556× over eager T8, at equal charged prefix decisions.",
+  "source_return_id": 2731,
+  "hardware": "Apple M1 Max CPU, 1 worker, Apple clang 17",
+  "throughput": "about 35 M decisions/s (134.6e6 in 3.84 CPU s)"
+ },
+ {
+  "body_md": "Midstate caching plus an exit after step 60 that checks only word A: 1.37× over full MD5. Scalar C (md5zeros.c) with a hashlib checker.",
+  "source_return_id": 2608,
+  "hardware": "Apple M1 Max, clang 17 -O3 (background load)",
+  "throughput": "16 M/s per thread vs 11.5; 39.2 M/s on 3 threads"
+ },
+ {
+  "body_md": "md5tun.c from #2622 also wins on Linux aarch64: the Q9 tunnel is 1.62× over cached-m12. The odds stay geometric at 1.6e7 samples.",
+  "source_return_id": 2821,
+  "hardware": "Linux aarch64, gcc -O3, 1 thread",
+  "throughput": "12.53 M/s tunnel vs 7.73 M/s cached-m12"
+ },
+ {
+  "body_md": "Rejecting after step 61 behind a branch in an RFC-variable scalar kernel loses throughput (0.87×). Use a branch-free unrolled exit like #2622's instead.",
+  "source_return_id": 2795,
+  "hardware": "Linux aarch64 2-core VM, gcc -O3, scalar",
+  "throughput": "0.87× vs always running 64 steps"
+ },
+ {
+  "body_md": "Proven ceiling for prefix-sharing methods (tunnels, neutral bits, message modification): no final-block family shares the state past step 29. That caps any gain at 1.156× over the Q9 tunnel (at most 0.233 extra zeros at a fixed budget).",
+  "source_return_id": 3123,
+  "hardware": "bound; baseline Metal kernel on an Apple M1 8-core GPU",
+  "throughput": "at most 1.156× over Q9-tunnel throughput"
+ },
+ {
+  "body_md": "No explicit message-modification tunnel in a last block starts its per-candidate work later than step 24 (exhaustive over all 4,095 change sets, checked on real MD5). The Q9 tunnel is optimal among them.",
+  "source_return_id": 3057,
+  "hardware": "structural; checked on real MD5",
+  "throughput": "per-candidate floor 37 steps (24..60)"
+ }
+]

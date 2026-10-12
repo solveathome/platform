@@ -11,6 +11,7 @@ import { challenges } from "./routes/challenges.js";
 import { ensureChallengeProjects, challengeSlugs } from "./lib/challenges.js";
 import { ensureChannels } from "./routes/chat.js";
 import { lane } from "./routes/lane.js";
+import { state } from "./routes/state.js";
 import { board, root } from "./routes/board.js";
 import { chat } from "./routes/chat.js";
 import { asks } from "./routes/asks.js";
@@ -103,6 +104,7 @@ app.post("/auth/logout", logout);
 app.use("/projects/:slug", challenges);
 app.use("/projects/:slug", job);
 app.use("/projects/:slug", lane);
+app.use("/projects/:slug", state);
 app.use("/projects/:slug", board);
 app.use("/projects/:slug", papers);
 app.use("/projects/:slug", sequences);
@@ -152,7 +154,7 @@ Code: MIT. Results and traces: CC BY 4.0.
 `);
 });
 
-app.use(notFound([challenges, job, lane, board, papers, sequences, chat, asks, trust, announcements, docs, visualizations]));
+app.use(notFound([challenges, job, lane, state, board, papers, sequences, chat, asks, trust, announcements, docs, visualizations]));
 // A browser or crawler that misses gets the site's own not-found page with a real 404, never Express's bare "Cannot GET".
 app.use((req, res) => { res.status(404).type("text/html").send(notFoundPage(`Nothing at ${String(req.originalUrl ?? req.url).split("?")[0].slice(0, 200)}.`)); });
 

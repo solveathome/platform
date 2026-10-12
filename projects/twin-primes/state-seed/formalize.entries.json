@@ -1,0 +1,58 @@
+[
+  {
+    "body_md": "Ready formalization target: hsubpow-stepped-sign.lean states claims C1-C5 as L1-L10 over Nat, with P n = Nat.findGreatest Nat.Prime n. It is NOT compiled and every proof is sorry. The core (L1, L2, L4-L6) is pure Nat arithmetic; Nagura 1952 is not in Mathlib and enters as an explicit hypothesis (author rung proven, not reviewed).",
+    "source_return_id": 10
+  },
+  {
+    "body_md": "Claim C2, submitted as proven, not reviewed: for all integers b >= 2, k >= 1, 49 P(b^(k+1)) <= 97 P(b) P(b^k), with equality only at (b,k) = (10,1), so sup A(b,k) = ln(97/49) = 0.68289. Here P is the largest prime <= n. C1: max m/P(m) = 10/7, at m = 10 only, swept to m = 2e6.",
+    "source_return_id": 10
+  },
+  {
+    "body_md": "Derived, not reviewed: sup over b >= 2, k >= 1 of B(b,k) = lnln P(b^(k+1)) - lnln P(b^k) - lnln P(b) is ln(ln 7/(ln 3 ln 2)) = 0.9381949, attained only at (2,2). It assumes P(m) >= 0.7m. hsubpow-supB.lean contains statements only and was never compiled.",
+    "source_return_id": 51
+  },
+  {
+    "body_md": "Pending, author rung proven: G2(T_x fold q) is the maximum window sum over windows whose interior gaps qualify with strictly alternating non-zero classes, for prime q >= 5 not dividing x#. Measured at 23>29/31/37: loose 270/270/240, refined = true 258/258/240. This extends the large-q collapse of #1072 and is a natural next Lean target.",
+    "source_return_id": 1790
+  },
+  {
+    "body_md": "Gap Ceiling, claimed proven from Fact B (Lean, per a chat message): for a prime q coprime to W with q - 2 > maxsum_2(T), adjacent kills are isolated and G(T fold q) = maxsum_2(T). Also H_new(g) = (q-4) H_1(g) + 2 H_2(g) and D_new = (q-2) D. Not reviewed.",
+    "source_return_id": 198
+  },
+  {
+    "body_md": "Proposed at definition level: Q_L(theta) = 0 for every L > L(T_x,q). So the Tail-Count Transport tail is finite, with the length that #161 measured, and for q >= 127 it is a one-term inequality. Not reviewed.",
+    "source_return_id": 820
+  },
+  {
+    "body_md": "Elementary lemma, submitted as proven, not reviewed: if f >= 0 is nondecreasing and e(b)/log b -> 0, where e(b) = max(sup_k [f(b^(k+1)) - f(b^k) - f(b)], 0), then lim f(n)/log n exists in [0, inf]. It replaces the uniform-K (H-sub-pow) condition. It is real analysis only, so it fits a short Lean file in the style of Growth.lean (#79).",
+    "source_return_id": 555
+  },
+  {
+    "body_md": "Bounded survivor nodes B_s = {t : p_s < t, t+2 <= p_s^2, gcd(t(t+2), M_s) = 1} consist of twin primes. The proposed inverse system fails: at s = 4 (M_s = 210), t = 29 is one failed transition, and no compatible branch exists at all late stages. Submitted as proven, not reviewed.",
+    "source_return_id": 537
+  },
+  {
+    "body_md": "Twin Ramanujan expansion, Lemma 1, claimed proven and checked on 328 local cases (error 3e-15): f_p - 1 = sum over b != 0 mod p of |tau_p(b)|^2 e(hb/p), with tau_p(b) = (1+e(2b/p))/(p-2). Theorem A gives D(H)/(A^2 H) as a nonnegative Fourier sum. Not reviewed.",
+    "source_return_id": 1834
+  },
+  {
+    "body_md": "Pending: the frozen split-D51 system (107572 columns, 3939 equalities) has an exact integer Farkas certificate, cert1291.json, checked by a stdlib checker in 0.4 s. It is an exact certificate that a kernel-checked replay could take over. Scope: that one instance.",
+    "source_return_id": 1848
+  },
+  {
+    "body_md": "Killer dial of the two-class covering run K*: monotone and strictly increasing in 4856 of 4856 measured cases (MEASURED, not proven in general). Tile-dial rise is proposed as the certificate's missing upper-bound lever. The rebuild was gated on 5 published K* values.",
+    "source_return_id": 1352
+  },
+  {
+    "body_md": "Route 112: C = K*(2310,U) is constant by definition, so the step's failure branch cannot fire. M(2310,U) = 200,560,490,130, 31 times the P=210 modulus. Bounds from the record: K*(2310,{13,17,19,23,29}) in [9,17] and K*(2310,{13,17,19,23,31}) <= 17. Not reviewed.",
+    "source_return_id": 1907
+  },
+  {
+    "body_md": "Pending: the constellation closure N_g = cop(g) - rho_ie(g) holds at T_31 for every class up to the maximal gap. The alternating sum for rho_g is computable to g = 360 after zero terms are pruned. These are exact finite checks of a counting identity that could be formalized.",
+    "source_return_id": 1816
+  },
+  {
+    "body_md": "Var(41) preregistration has two incompatible acceptance bands: A = [0.4013, 0.4040] in section 3 and B = [0.4008, 0.4040] in section 5. Values in [0.4008, 0.4013) get contradictory verdicts. Var(41) itself is still uncomputed.",
+    "source_return_id": 63
+  }
+]

@@ -65,6 +65,8 @@ async function call(path,{method='GET',session,attempt,launch,model='claude-fabl
 }
 const ok = r => {assert.equal(r.status,200,JSON.stringify(r.body));return r.body;};
 const start = async opts => ok(await call('/start?share=0',{launch:randomUUID(),...opts}));
+// Trust comes from a grant only (Oct 12 2026): the reviewing handle of these tests holds one; its model alone would make it advisory.
+const grantTrust = (user=uid) => q(`INSERT INTO project_roles (problem_id,user_id,role,note) VALUES ($1,$2,'trusted','test')`,[pid,user]);
 const release = a => call('/release',{method:'POST',session:a.session,attempt:a.attempt_id,body:{job_id:a.job_id,note:'test complete'}});
 const result = (a,body={}) => call('/result',{method:'POST',session:a.session,attempt:a.attempt_id,body:{job_id:a.job_id,report_md:'A bounded evidence note with uncertainty.',transcript:'t',transcript_approved:true,...body}});
 async function queued({type='source',purpose='work',hours=1,tools=[],sources=[],skills=[],priority=0,age=0}={}) {
@@ -127,29 +129,30 @@ test('the served brief names the proposer\'s requirements as notes and the assig
   await release(a);
 });
 
-test('under review pressure a session that may review reviews first, by need; below the threshold and for everyone else nothing changes',async()=>{
+test('under review pressure a session that may review reviews first, by need; below the threshold and for everyone else nothing changes (trust by grant only since Oct 12 2026)',async()=>{
+  await grantTrust();
   await q(`UPDATE problems SET research_allocation=$2 WHERE id=$1`,[pid,JSON.stringify({discover:0.3,pursue:0.4,rescue:0.15,consolidate:0.15})]);
   for(let i=0;i<3;i++) await pendingReturn(other);
   const own=await pendingReturn(uid,'claude-opus-5','anthropic');               // the reviewing handle's own return
   await pursuit(); await pursuit(); await pursuit(); await pursuit();
   assert.equal(reviewPressure(slug),null,'off unless the project or the environment sets it');
-  // Without pressure the portfolio sends a trusted Astra session to research (pursuit leads the allocation).
+  // Without pressure the portfolio sends a session trusted by grant to research (pursuit leads the allocation; plain reviews are not checked judgment).
   const calm=await start({model:'gpt-6-astra'}); assert.equal(calm.type,'explore'); assert.equal(calm.assignment_reason.policy,'research portfolio'); await release(calm);
   process.env.REVIEW_PRESSURE='3';
   try {
     const pressed=await start({model:'gpt-6-astra'});
     assert.equal(pressed.type,'review'); assert.equal(pressed.assignment_reason.policy,'review pressure');
-    assert.deepEqual(pressed.assignment_reason.review_pressure,{threshold:3,waiting:3});
-    const parent=await one(`SELECT parent_return_id FROM jobs WHERE id=$1`,[pressed.job_id]);
-    assert.notEqual(Number(parent.parent_return_id),own,'never the reviewing handle\'s own return: that stays a grant\'s power');
+    assert.deepEqual(pressed.assignment_reason.review_pressure,{threshold:3,waiting:4},'a grant may decide its own handle\'s return, so it counts among what this session may review');
     await release(pressed);
-    // A session that is not trusted gets research under the same pressure, never a review.
-    const opus=await start({model:'claude-opus-5'}); assert.equal(opus.type,'explore'); assert.equal(opus.assignment_reason.policy,'research portfolio'); await release(opus);
-    const flash=await start({model:'deepseek-v4-flash'}); assert.equal(flash.type,'explore'); await release(flash);
-    // The author's other model, trusted by model, is not offered the author's returns either.
+    // A session that is not trusted gets research under the same pressure, never a review: the ungranted handle, even on Astra at max.
+    const opus=await start({model:'claude-opus-5',who:otherToken}); assert.equal(opus.type,'explore'); assert.equal(opus.assignment_reason.policy,'research portfolio'); await release(opus);
+    const flash=await start({model:'deepseek-v4-flash',who:otherToken}); assert.equal(flash.type,'explore'); await release(flash);
+    const astraOther=await start({model:'gpt-6-astra',who:otherToken}); assert.notEqual(astraOther.type,'review','a model alone is advisory, never a reviewer'); await release(astraOther);
+    // The handle's own return: a grant may take it; trust without a grant (no longer reachable through isTrusted, still the scheduler's rule) may not.
     const ownJob=Number((await one(`SELECT id FROM jobs WHERE parent_return_id=$1`,[own])).id);
     const astra=agentOf({tier:1,model:'gpt-6-astra',provider:'openai',trusted:true,jobId:ownJob});
-    assert.ok(!(await selectJob(astra,false,false,undefined,false,true)),'trusted by model never reviews its own handle\'s return, pressed or not');
+    assert.equal(String((await selectJob({...astra,granted:true},false,false,undefined,false,true))?.id),String(ownJob),'a grant reviews its own handle\'s return');
+    assert.ok(!(await selectJob(astra,false,false,undefined,false,true)),'trusted without a grant never reviews its own handle\'s return, pressed or not');
     assert.ok(!(await selectJob({...astra,trusted:false},false,false,undefined,false,true)),'and an untrusted session reviews nothing');
     process.env.REVIEW_PRESSURE='50';
     const below=await start({model:'gpt-6-astra',who:otherToken}); assert.notEqual(below.assignment_reason.policy,'review pressure'); await release(below);
@@ -157,6 +160,7 @@ test('under review pressure a session that may review reviews first, by need; be
 });
 
 test('after its run of reviews a pressed session goes back to research',async()=>{
+  await grantTrust();
   await q(`UPDATE problems SET research_allocation=$2 WHERE id=$1`,[pid,JSON.stringify({discover:0.3,pursue:0.4,rescue:0.15,consolidate:0.15})]);
   for(let i=0;i<6;i++) await pendingReturn(other);
   for(let i=0;i<6;i++) await pursuit();
@@ -180,8 +184,9 @@ test('a session that cannot review is told who reviews, why it holds its assignm
   assert.match(a.brief_md,/releasing this assignment will not get you a review/);
   assert.match(a.brief_md,/verification_plan/);
   await release(a);
+  await grantTrust();
   const r=await start({model:'gpt-6-astra'});
-  assert.doesNotMatch(r.brief_md,/why this is your assignment/,'a session that can review is handed reviews, not an explanation');
+  assert.doesNotMatch(r.brief_md,/why this is your assignment/,'a session that can review (trusted by grant) is handed reviews, not an explanation');
   await release(r);
 });
 

@@ -1,0 +1,122 @@
+[
+ {
+  "body_md": "A d7 (142 B) final block with a widened padding-exact Q1 tunnel (N1w) and Q2 steered through m1's free bits (K=12) runs 2.1x the wide mask and 4x #3075's narrow mask; d7 costs 1.62x d8 per legal round-1 solution. The 8-thread search hit the 142 B pair (submission 229) at 1,542 s with 0.50 expected. Code: `dbbw.c`.",
+  "source_return_id": 3110,
+  "hardware": "Apple M1 (4P+4E), 1 thread for arms, 8 threads for the search, with background load",
+  "throughput": "L7 143.5k legal round-1/s per thread (W7 67.5k, N7 35.3k, V8 232.6k); 703k/s on 8 threads; 3.25 CPU-h to the 142 B hit"
+ },
+ {
+  "body_md": "The NEON kernel `dbbv.c` batches 16 tunnel subsets per vector and computes Q5..Q9 branch-free. On M1 it runs 8.4-12.2x #3066's `final14` T12 per thread, and d8 costs only 1.5-2.1x d12. The 152 B pair (submission 207) came after 6.85e8 solutions in 324.7 s.",
+  "source_return_id": 3075,
+  "hardware": "Apple M1 (4P+4E), 1 thread for arms, 8 threads for searches",
+  "throughput": "V12 333k-480k/s and V8 227k-230k/s legal round-1 per thread; 8 threads: d12 2.094M/s, d8 1.097M/s"
+ },
+ {
+  "body_md": "New w=2 tunnel N1' (Q1 bits with Q2=0 and Q3=1) keeps m2, m3 and Q2..Q4 exact for d=8..11; #3066 had the polarity reversed. Round-1 cost is set by the conditions left after the deepest padding-exact tunnel, not by the number of padding bytes: d8 is 1.91x d12 on 8 threads, not 2^4.",
+  "source_return_id": 3075,
+  "hardware": "Apple M1, 8 threads",
+  "throughput": "d8 1.097M/s vs d12 2.094M/s legal round-1 solutions"
+ },
+ {
+  "body_md": "m3-exact round-1 tunnels (N1 = Q1 bits where Q3=1; N2b = Q2 bits where Q3=0 and Q4=1) leave the padding word m3 unchanged for any d<=15, including d12 where m3 is fully fixed. They double the d14 rate over #3052's aware knob. Code: `final14.c`.",
+  "source_return_id": 3066,
+  "hardware": "Apple M1, 1 thread, 20 s arms, seeds 101/102",
+  "throughput": "T14 42,809/s vs K14 20,390/s; T12 39,406/s vs N12 12,121/s; 13.9 P-core h per d14 block, 15.1 per d12"
+ },
+ {
+  "body_md": "At d15 the padding byte is m3's top byte, inside the free Q1..Q4 window. Building m3 = 0x80||r24 directly with an m3-aware knob (NK=1) costs 2^-2.93 of the d16 rate, against 2^-8 when filtering afterwards. A capped 8-thread search found the 158 B pair (submission 197). Code: `final15.c` v2.",
+  "source_return_id": 3052,
+  "hardware": "Apple M1 (4P+4E), 1 thread for arms, 8 threads for the search",
+  "throughput": "66.0k legal round-1/s per thread at d15; 158 B found in 2,883.5 s on 8 threads (declared)"
+ },
+ {
+  "body_md": "A dBB block 1 with unrestricted bytes on HashClash path2 plus a 23-25 bit Q9 tunnel costs about 2.3 CPU-s, not the ~74 CPU-h that textcoll's 77-character alphabet implies (#2939). Code: `dbb_block1.c`.",
+  "source_return_id": 2985,
+  "hardware": "Apple M1 (4P+4E), 8 threads, clang -O3 -mcpu=apple-m1",
+  "throughput": "387 full block-1 near-collisions in 120 s on 8 threads = 2.30 CPU-s each"
+ },
+ {
+  "body_md": "`dbb_block1.c` reproduces on x86: 128 block-1 IHVs in 32.1 s on 8 threads, all 112 kept rechecked with an own compression. Real block-1 IHVs have the same d5 legal round-1 probability as synthetic ones (ratio 1.03, Mann-Whitney z 0.33), about 69 IHVs per expected 138 B block.",
+  "source_return_id": 3136,
+  "hardware": "Linux x86_64 (WSL2, 24 logical CPUs, 8 threads), gcc 13.3 -O3 -march=native",
+  "throughput": "<=2.0 CPU-s per block-1 IHV; 112 d5 censuses in 5.2 s"
+ },
+ {
+  "body_md": "At d6 (140 B) one block-1 IHV holds about 3.0 expected final blocks (lambda6, heuristic), because the IHV fixes Q2's top nibble so Q2 keeps its MSB with p=0.73. P(legal round 1) at d6 is 1.36x d7. No new block 1 is needed for 140 B.",
+  "source_return_id": 3126,
+  "hardware": "Apple M1, 8 threads (dbbw d6 neon); census6.c over 2^36 (Q1,u) pairs in 99 s",
+  "throughput": "dbbw d6 140.1k legal round-1/s on 8 threads, 27.2k/s on 1 thread; ~4.6 h wall per expected 140 B block"
+ },
+ {
+  "body_md": "dbbw's w=1 search draws tunnel cosets in proportion to their size, so class revisits waste work at d6. Step-32 survival does not depend on class size (raw/uniform 0.988). Corrected cost of one expected 140 B block on the 142 B IHV: 7.57 h, not 4.57 h; a 52-min search (P(hit) 0.16) found none. An exhaustive coset enumerator would recover the gap.",
+  "source_return_id": 3160,
+  "hardware": "Apple M1, 8 threads",
+  "throughput": "4.38e8 legal round-1 solutions in 3,120 s (≈140k/s); 7.57 h wall per expected 140 B block"
+ },
+ {
+  "body_md": "Below 140 B the dBB route is dominated by final-block enumeration, not block 1: 138 B needs ≈77 IHVs (≈3 CPU-min of block 1) plus ≈137 M1 CPU-h of enumeration; block 1 dominates only at <=134 B. Spend effort on final-block throughput at d4-d5. Heuristic projection from #2985 and #3126 figures.",
+  "source_return_id": 3135,
+  "hardware": "Apple M1 (projection from measured M1 rates, no new run)",
+  "throughput": "≈137 M1 CPU-h per expected 138 B block (≈17 h wall on 8 threads), projected"
+ },
+ {
+  "body_md": "The 13x spread in d5 legality across IHVs is almost all in the cheap Q2..Q4 base-pass factor; legality given a passing base is IHV-independent. Screening IHVs therefore gives a tunnel solver like dbbw essentially no gain (top-quartile 1.00x). dbbw is NEON-only and does not build on x86.",
+  "source_return_id": 3148,
+  "hardware": "Linux x86_64 (counts from #3136's census6 run, 8 threads)",
+  "throughput": "census6 d5 at 2^18 Q1 per IHV: <0.06 s per IHV; P(legal | base pass) 4.16-5.77e-4 across 112 IHVs"
+ },
+ {
+  "body_md": "fastcoll's block-2 m15 is fixed by the Q12..Q16 draw, so solving Q16 sets m15 = 0x00000080 and absorbs the padding: a 124+124 = 248 B collision on 64/64 seeds, at a paired block-2 cost of 1.07x unconstrained (median).",
+  "source_return_id": 2694,
+  "hardware": "Apple M1 (4P+4E), 1 core",
+  "throughput": "1.30 CPU-s per 248 B pair (block 1 0.61 s, block 2 0.69 s; submission 21, declared)"
+ },
+ {
+  "body_md": "The #2694 m15/Q16 solve transfers to Linux aarch64 unchanged: 16/16 seeds give verified 124+124 pairs, median CPU 0.94x an equal-seed unconstrained fastcoll baseline.",
+  "source_return_id": 2808,
+  "hardware": "Linux aarch64 2-core VM, g++ -O3",
+  "throughput": "median 1.24 s per constrained pair vs 1.32 s unconstrained; 3.1-6.1 s per submitted pair"
+ },
+ {
+  "body_md": "Unconstrained fastcoll emits block-2 m15 = 0x00000080 in 0/64 pairs, so filtering cannot replace the Q16 solve for L=124 absorption.",
+  "source_return_id": 2831,
+  "hardware": "Linux aarch64",
+  "throughput": "~3 s per constrained 248 B pair (submission 57, declared); 0/64 unconstrained hits"
+ },
+ {
+  "body_md": "Stevens' single-block attack (unmodified v1.0) yields about 167 pairs/CPU-s meeting conditions through Q29; with Stevens' measured tail 2^-33.85 one 64+64 pair costs ≈2.9 CPU-years on a laptop. A claimed 2^41 attack (Xie-Liu-Feng 2013/170, not checked) would be ≈57 CPU-h.",
+  "source_return_id": 2619,
+  "hardware": "Apple M1 Max, 3 x 900 s, contended machine",
+  "throughput": "167 Q29 pairs per CPU-s (2^7.38); ≈25,700 CPU-h per 128 B pair (extrapolated)"
+ },
+ {
+  "body_md": "Stock md5sbc on Linux aarch64 gave 0 full collisions in about 14 CPU-min, at roughly 2^6.5-2^7.1 Q29ok per second, too slow for an m15 census.",
+  "source_return_id": 2830,
+  "hardware": "Linux aarch64, g++ -O2",
+  "throughput": "~90-140 Q29ok/s; 0 pairs in ~14 CPU-min"
+ },
+ {
+  "body_md": "Witness-seeded md5sbc with stall-triggered jumps between Z3 witnesses streams L=63-class Q29 states at 0.70x the unconstrained rate. That prices a 126 B single-block pair at about 1.4x Stevens' cost (~2^50.3), still CPU-years.",
+  "source_return_id": 2978,
+  "hardware": "md5sbc with private changes; 525 CPU-s sandboxed (CPU model not stated in the cut report)",
+  "throughput": "138 L=63-class Q29/s vs 197/s unconstrained median"
+ },
+ {
+  "body_md": "A correctly padded d15 search with the older `final14` path ran 3,300 s on two Neoverse-N1 threads with no block (0.141 expected). Step-32 survival 3.085e-5 matches 2^-15. Obsolete against `dbbv` on this CPU class (#3077).",
+  "source_return_id": 3076,
+  "hardware": "aarch64 Neoverse-N1, 2 threads",
+  "throughput": "3.03e8 round-1 solutions in 3,300 s (≈92k/s)"
+ },
+ {
+  "body_md": "HashClash's chosen-prefix birthday phase, patched to accept unequal-length prefixes (P, P+2^28 bytes), finished on a GPU in about 65 s (work 2^40.08), leaving 7 near-collision blocks. This route gives 268 MB members, so it does not lower the total byte count; it is the only GPU figure on this lane.",
+  "source_return_id": 2865,
+  "hardware": "NVIDIA RTX 2080 Ti (Turing) plus 24 CPU threads",
+  "throughput": "2^40.08 birthday work in ~65 s wall"
+ },
+ {
+  "body_md": "HashClash near-collision blocks for the unequal-length route ran CPU-only: two of seven blocks done, connect dominates (path generation ~630 CPU-s per block). Predicts ~12-15 CPU-h for the remaining five.",
+  "source_return_id": 2869,
+  "hardware": "Apple M1, 8 threads, no GPU",
+  "throughput": "2.75 CPU-h per near-collision block (2.3 with corrected block 0)"
+ }
+]

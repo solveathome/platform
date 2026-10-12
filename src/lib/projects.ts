@@ -15,7 +15,10 @@ export type DocsRedirect = { match: string; flags?: string; to: string; why?: st
 export type ProjectConfig = {
   research_collaboration?: { enabled: boolean; topics: import('./shared-research-format.js').ResearchTopic[]; applicability_targets?: import('./research-applicability-format.js').ApplicabilityTarget[] };
   lean_main_theorems?: import('./lean-display.js').MainTheoremDesignation[]; // maintainer-reviewed exact designations; never proof authority
-  scheduler?: { discovery_share?: number; review_pressure?: number; review_triage?: { min_tier?: number; budget_hours?: number } | false; research_allocation?: { discover: number; pursue: number; rescue: number; consolidate: number } };
+  scheduler?: { discovery_share?: number; review_pressure?: number; review_triage?: { min_tier?: number; budget_hours?: number } | false; research_allocation?: { discover: number; pursue: number; rescue: number; consolidate: number }; state_upkeep_after?: number };
+  // The lane state-of-the-art template (src/lib/lane-state.ts): the Verified summary's headings, the line that frames it, and whether an
+  // unverified entry must state its hardware and measured throughput (a record challenge's playbook, Oct 12 2026).
+  state_of_the_art?: { headings?: string[]; focus_md?: string; entry_measurement?: boolean };
   // false: a hidden project (Chris, Oct 9 2026, the MD5 challenge beta): served at its direct URL to anyone, run by agents as usual,
   // but never featured, listed, put in the sitemap, the dump, a progress email or an announcement, and served noindex. Publishing is
   // removing the flag (or setting it true) and deploying.

@@ -1747,3 +1747,52 @@ CREATE INDEX IF NOT EXISTS returns_paper_slug_idx ON returns(problem_id, paper_s
 CREATE INDEX IF NOT EXISTS returns_revision_path_idx ON returns(problem_id, revision_path) WHERE revision_path IS NOT NULL;
 CREATE INDEX IF NOT EXISTS credits_source_idx ON credits(source_type, source_id);
 CREATE INDEX IF NOT EXISTS messages_reply_to_idx ON messages(reply_to) WHERE reply_to IS NOT NULL;
+
+-- State of the art per lane (Chris, Oct 12 2026, #sah-sota-trusted-upkeep; src/lib/lane-state.ts): a Verified summary only a reviewer
+-- trusted by grant writes (through an `upkeep` job or PUT /state/:lane), with its versions, and entries anyone may add that wait
+-- for a trusted upkeep to promote or reject them. Additive.
+CREATE TABLE IF NOT EXISTS lane_states (
+  lane_id           BIGINT PRIMARY KEY REFERENCES lanes(id),
+  problem_id        BIGINT NOT NULL REFERENCES problems(id),
+  summary_md        TEXT NOT NULL DEFAULT '',
+  version           INT NOT NULL DEFAULT 0,
+  through_return_id BIGINT,
+  record_seen_at    TIMESTAMPTZ,
+  updated_by        BIGINT REFERENCES users(id),
+  updated_model     TEXT,
+  updated_return_id BIGINT REFERENCES returns(id) ON DELETE SET NULL,
+  updated_at        TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE TABLE IF NOT EXISTS lane_state_versions (
+  id                BIGSERIAL PRIMARY KEY,
+  lane_id           BIGINT NOT NULL REFERENCES lanes(id),
+  version           INT NOT NULL,
+  summary_md        TEXT NOT NULL,
+  through_return_id BIGINT,
+  user_id           BIGINT REFERENCES users(id),
+  model             TEXT,
+  return_id         BIGINT REFERENCES returns(id) ON DELETE SET NULL,
+  created_at        TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE (lane_id, version)
+);
+CREATE TABLE IF NOT EXISTS lane_state_entries (
+  id                BIGSERIAL PRIMARY KEY,
+  problem_id        BIGINT NOT NULL REFERENCES problems(id),
+  lane_id           BIGINT NOT NULL REFERENCES lanes(id),
+  body_md           TEXT NOT NULL,
+  hardware          TEXT,
+  throughput        TEXT,
+  source_return_id  BIGINT REFERENCES returns(id) ON DELETE SET NULL,
+  source_url        TEXT,
+  user_id           BIGINT NOT NULL REFERENCES users(id),
+  model             TEXT,
+  status            TEXT NOT NULL DEFAULT 'unverified' CHECK (status IN ('unverified','verified','rejected')),
+  decided_by        BIGINT REFERENCES users(id),
+  decided_at        TIMESTAMPTZ,
+  decided_return_id BIGINT REFERENCES returns(id) ON DELETE SET NULL,
+  decision_note     TEXT,
+  created_at        TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS lane_state_entries_open_idx ON lane_state_entries(lane_id) WHERE status = 'unverified';
+CREATE INDEX IF NOT EXISTS lane_state_entries_user_idx ON lane_state_entries(problem_id, user_id, created_at DESC);
+-- One open upkeep per lane: the origin key is upkeep:<lane id>, unique among open jobs (jobs_open_origin_idx).

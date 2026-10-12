@@ -16,7 +16,6 @@ const {trust} = await import('../src/routes/trust.ts');
 const roles = await import('../src/lib/roles.ts');
 const {decide} = await import('../src/lib/consensus.ts');
 const reputation = await import('../src/lib/reputation.ts');
-const {trustedByModel} = await import('../src/lib/roles.ts');
 const {patchHash} = await import('../src/lib/duplicates.ts');
 
 const tag = `trust-test-${Date.now().toString(36)}`;
@@ -156,40 +155,20 @@ test('a rejection carries its reason class on the record, and costs a tenth of r
   assert.ok(Math.abs(await reputation.score(people.adv3.id) - before * 0.9) < 1e-9, 'a rejection multiplies reputation by 0.9');
 });
 
-test('trust by model (Chris, Sep 11): an Astra session at a top thinking level reviews as trusted, gets review jobs, decides outright, but never its own return', async () => {
-  assert.deepEqual([trustedByModel('gpt-6-astra', 'max'), trustedByModel('gpt-6-astra-pro', 'high'), trustedByModel('gpt-6-astra', 'low'), trustedByModel('gpt-6-astra', null), trustedByModel('claude-fable-5-1', 'max'), trustedByModel('gpt-6', 'max')], [true, true, false, false, false, false]);
-  // Handed a review job like a granted reviewer; handed back so the shared fixture's jobs stay queued for the later tests.
-  const s = await okJson(await call('adv3', 'POST', '/start', {model: 'gpt-6-astra', effort: 'max', body: {agreed: true, ai: {max_assignments: 1}, transcript_preapproved: true}}));
-  assert.equal(s.type, 'review', 'an Astra session at max was not handed a review job');
-  await okJson(await call('adv3', 'POST', '/release', {model: 'gpt-6-astra', effort: 'max', session: s.session, body: {job_id: s.job_id, note: 'test'}}));
-  // Opus 5.5 joined Astra (Chris, Sep 22 2026, "as long as it runs in high+"): by version, so Opus 5 and 4.x stay advisory.
-  assert.deepEqual([trustedByModel('claude-opus-5-5', 'high'), trustedByModel('claude-opus-5-5', 'xhigh'), trustedByModel('claude-opus-5-5', 'max'), trustedByModel('claude-opus-5.5', 'high'), trustedByModel('claude-opus-5-5', 'medium'), trustedByModel('claude-opus-5-5', null), trustedByModel('claude-opus-5', 'max'), trustedByModel('claude-opus-4-5', 'max'), trustedByModel('claude-opus-5-50', 'max')], [true, true, true, true, false, false, false, false, false]);
-  const o = await okJson(await call('adv3', 'POST', '/start', {model: 'claude-opus-5-5', effort: 'high', body: {agreed: true, ai: {max_assignments: 1}, transcript_preapproved: true}}));
-  assert.equal(o.type, 'review', 'an Opus 5.5 session at high was not handed a review job');
-  await okJson(await call('adv3', 'POST', '/release', {model: 'claude-opus-5-5', effort: 'high', session: o.session, body: {job_id: o.job_id, note: 'test'}}));
-  // GPT-6.1 Sol joined them (Chris, Oct 1 2026, "in line with astra and claude 5.5"): by version, so gpt-6-sol and gpt-5.6-sol stay advisory; Astra and Opus 5.5 unchanged.
-  assert.deepEqual([trustedByModel('gpt-6.1-sol', 'high'), trustedByModel('gpt-6.1-sol', 'xhigh'), trustedByModel('gpt-6.1-sol', 'max'), trustedByModel('gpt-6.1-sol', 'medium'), trustedByModel('gpt-6.1-sol', null), trustedByModel('gpt-6-sol', 'max'), trustedByModel('gpt-5.6-sol', 'max'), trustedByModel('gpt-6.10-sol', 'max'), trustedByModel('gpt-6-astra', 'high'), trustedByModel('claude-opus-5-5', 'high')], [true, true, true, false, false, false, false, false, true, true]);
-  const g = await okJson(await call('adv3', 'POST', '/start', {model: 'gpt-6.1-sol', effort: 'high', body: {agreed: true, ai: {max_assignments: 1}, transcript_preapproved: true}}));
-  assert.equal(g.type, 'review', 'a GPT-6.1 Sol session at high was not handed a review job');
-  await okJson(await call('adv3', 'POST', '/release', {model: 'gpt-6.1-sol', effort: 'high', session: g.session, body: {job_id: g.job_id, note: 'test'}}));
-  const gm = await okJson(await call('adv3', 'POST', '/start', {model: 'gpt-6.1-sol', effort: 'medium', body: {agreed: true, ai: {max_assignments: 1}, transcript_preapproved: true}}));
-  assert.notEqual(gm.type, 'review', 'a GPT-6.1 Sol session at medium was handed a trusted review job');
-  if (gm.job_id) await okJson(await call('adv3', 'POST', '/release', {model: 'gpt-6.1-sol', effort: 'medium', session: gm.session, body: {job_id: gm.job_id, note: 'test'}}));
+test('trust by grant only (Chris, Oct 12 2026): Astra, Opus 5.5 and GPT-6.1 Sol at a top thinking level review advisorily and get no review job', async () => {
+  // From Sep 11 to Oct 12 these sessions reviewed as trusted by their model; that rule is gone, whatever TRUSTED_MODEL_FAMILIES says.
+  for (const [model, effort] of [['gpt-6-astra', 'max'], ['claude-opus-5-5', 'high'], ['gpt-6.1-sol', 'high']]) {
+    assert.equal(await roles.isTrusted(pid, people.adv3.id, people.adv3.handle, {model, effort}), false, `${model} at ${effort} is not trusted`);
+    const s = await okJson(await call('adv3', 'POST', '/start', {model, effort, body: {agreed: true, ai: {max_assignments: 1}, transcript_preapproved: true}}));
+    assert.notEqual(s.type, 'review', `a ${model} session at ${effort} was handed a trusted review job`);
+    if (s.job_id) await okJson(await call('adv3', 'POST', '/release', {model, effort, session: s.session, body: {job_id: s.job_id, note: 'test'}}));
+  }
   const r = await one(`INSERT INTO returns (problem_id, type, user_id, model, provider, report_md, transcript, status) VALUES ($1,'source',$2,'claude-opus-5','anthropic','page 4 says so','t','pending') RETURNING id`, [pid, people.author.id]);
-  const id = Number(r.id);
-  const v = await okJson(await call('adv3', 'POST', '/result', {model: 'gpt-6-astra', effort: 'max', body: {type: 'review', return_id: id, verdict: 'accept', rung: 'measured', notes_md: 'checked page 4', transcript: 't', transcript_approved: true}}));
-  assert.deepEqual([v.advisory, v.trusted_by, v.outcome], [false, 'model', 'accepted']);
-  const row = await one(`SELECT status, provisional FROM returns WHERE id = $1`, [id]);
-  assert.deepEqual([row.status, row.provisional], ['accepted', false]);
-  // Its own handle's return: no.
-  const own = await one(`INSERT INTO returns (problem_id, type, user_id, model, provider, report_md, transcript, status) VALUES ($1,'source',$2,'claude-opus-5','anthropic','own','t','pending') RETURNING id`, [pid, people.adv3.id]);
-  const refused = await call('adv3', 'POST', '/result', {model: 'gpt-6-astra', effort: 'max', body: {type: 'review', return_id: Number(own.id), verdict: 'accept', rung: 'measured', notes_md: 'x', transcript: 't', transcript_approved: true}});
-  assert.equal(refused.status, 403);
-  // At a low thinking level the same model is advisory again.
-  const r2 = await one(`INSERT INTO returns (problem_id, type, user_id, model, provider, report_md, transcript, status) VALUES ($1,'source',$2,'claude-opus-5','anthropic','page 5 says so','t','pending') RETURNING id`, [pid, people.author.id]);
-  const low = await okJson(await call('adv3', 'POST', '/result', {model: 'gpt-6-astra', effort: 'low', body: {type: 'review', return_id: Number(r2.id), verdict: 'accept', rung: 'measured', notes_md: 'x', transcript: 't', transcript_approved: true}}));
-  assert.deepEqual([low.advisory, low.trusted_by], [true, null]);
-  assert.equal((await one(`SELECT status FROM returns WHERE id = $1`, [r2.id])).status, 'pending');
+  const v = await okJson(await call('adv3', 'POST', '/result', {model: 'gpt-6-astra', effort: 'max', body: {type: 'review', return_id: Number(r.id), verdict: 'accept', rung: 'measured', notes_md: 'checked page 4', transcript: 't', transcript_approved: true}}));
+  assert.deepEqual([v.advisory, v.trusted_by], [true, null]);
+  assert.equal((await one(`SELECT provisional FROM returns WHERE id = $1`, [r.id])).provisional !== false || (await one(`SELECT status FROM returns WHERE id = $1`, [r.id])).status === 'pending', true, 'an advisory review never decides a return outright');
+  // A grant reviews as trusted whatever its model.
+  assert.equal(await roles.isTrusted(pid, people.trusted.id, people.trusted.handle, {model: 'claude-fable-5-1', effort: 'low'}), true);
 });
 
 test('a self-assigned review is not capped by the handle\'s pending self-assigned returns (Astra report, Sep 11)', async () => {
