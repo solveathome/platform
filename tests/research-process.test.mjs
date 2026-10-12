@@ -1051,6 +1051,11 @@ test('without a research allocation a blocked route still gets its different-mod
   const waits=(await proposed()).research.route_id;
   await q(`UPDATE jobs SET status='expired' WHERE research_route_id=$1 AND status='queued'`,[waits]);
   await q(`UPDATE research_routes SET state='blocked',obstacle=$2 WHERE id=$1`,[waits,JSON.stringify({...obstacle,kind:'scoped_obstruction',statement:'This host lacks an RTX 2080 Ti for the benchmark.'})]);
+  // A request answered before the rescue path (here a job asked for by id) still makes the rescue (#sah-md5-rescue-jobs-check: on md5
+  // a record-challenge run and state-of-the-art upkeeps answered every start, and routes 257, 258 and 260 got none).
+  const asked=(await one(`INSERT INTO jobs (problem_id,type,title,brief_md,budget_hours,min_tier) VALUES ($1,'source','Asked for','Find the evidence.',1,99) RETURNING id`,[pid])).id;
+  assert.equal(Number(ok(await call(`/start?share=25&job=${asked}`,{who:'astra',launch:randomUUID()})).job_id),Number(asked));
+  assert.equal((await one(`SELECT count(*)::int AS n FROM jobs WHERE research_route_id=$1 AND research_stage='rescue' AND status='queued'`,[route])).n,1,'made while another job was handed out');
   const rescue=await start('astra');
   assert.equal(rescue.research_stage,'rescue');assert.equal(Number((await one(`SELECT research_route_id FROM jobs WHERE id=$1`,[rescue.job_id])).research_route_id),route);
   assert.equal((await one(`SELECT avoid_model FROM jobs WHERE id=$1`,[rescue.job_id])).avoid_model,models.author,'the rescue goes to another model');

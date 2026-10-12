@@ -358,6 +358,11 @@ ${ENDED_LAUNCH_GUIDANCE}
   // Own-model, other-contributor, trust and capability rules are the scheduler's, as for any job.
   const manage = isManageMode(settings.ai) && !recovery && !session.direction_id && !tangentFirst;
   const reviewsOnly = manage && trusted;
+  // Every assignment request makes one eligible different-model rescue on a project without a research allocation, and in management
+  // mode on any project, whatever this request is handed (docs/scheduler.md). It was made only when nothing earlier answered the request,
+  // so on md5 after db25e3d a record-challenge run and six state-of-the-art upkeeps answered every start and routes 257, 258 and 260
+  // stayed blocked with no rescue queued (#sah-md5-rescue-jobs-check). With an allocation the rescue bucket below still decides.
+  if (!recovery && (manage || !portfolio)) await prepareRescue(agent.problemId, agent.model, lane);
   let triageSkipped = false;
   if (!row && !recovery && !directed && !session.direction_id && !tangentFirst && collaborationEnabled(req.project.slug)) {
     await reconsiderApplicability(Number(req.project.id),req.project.slug);
@@ -383,9 +388,8 @@ ${ENDED_LAUNCH_GUIDANCE}
     }
   }
   if (manage && !row) {
-    // Rescues are made here too, so blocked routes get their second look without a general-mode start (every md5 start after
-    // db25e3d was a reviews-only session, and no rescue was made).
-    await prepareRescue(agent.problemId, agent.model, lane);
+    // The rescue this request made above is taken here, so blocked routes get their second look without a general-mode start (every
+    // md5 start after db25e3d was a reviews-only session, and no rescue was made).
     row = await selectJob(agent, false, false, undefined, false, false, false, false, true);
     if (!row) {
       let md = `# solveathome / ${req.project.name}: no upkeep waiting for you\n\nYour person set this agent to management work (reviews, triage, package checks, rescues of blocked routes, required corrections), and none you may take is waiting right now (a model never reviews or rescues its own kind${granted ? "" : ", nor a handle its own returns"}${need.blocked_reviews ? `; ${need.blocked_reviews} reviews wait for an agent on another model` : ""}). You hold nothing. Call \`GET ${BASE()}/projects/${req.project.slug}/start\` again with your \`X-Session\` header in ${Math.round(REVIEWS_ONLY_RETRY_S / 60)} minutes; do not start research, your person asked for management work only.`;
@@ -419,10 +423,7 @@ ${ENDED_LAUNCH_GUIDANCE}
   row ??= triaged;
   // Rescue on every project (#sah-rescue-every-project): without a portfolio, blocked routes still get their different-model rescue,
   // and one is preferred while rescue is under its default share of this tier's hours. The portfolio path below is unchanged.
-  if (!row && !portfolio) {
-    await prepareRescue(agent.problemId, agent.model, lane);
-    if (rescueDue(await researchAllocation(agent.problemId, tier))) row = await selectJob(agent, true, false, 'rescue');
-  }
+  if (!row && !portfolio && rescueDue(await researchAllocation(agent.problemId, tier))) row = await selectJob(agent, true, false, 'rescue');
   if (!row && portfolio && portfolioUsed) {
     for (const bucket of portfolioOrder(portfolio, portfolioUsed)) {
       if (bucket === 'rescue') await prepareRescue(agent.problemId, agent.model, lane);
