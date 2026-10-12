@@ -1022,3 +1022,19 @@ test('routes closed on a machine limit before capability waits reopen with their
   assert.ok((await one(`SELECT 1 FROM research_events WHERE route_id=$1 AND outcome='needs_capability' AND detail->'obstacle' IS NOT NULL`,[route])),'the obstacle stays in the history');
   assert.deepEqual(await projectTransaction(pid,()=>reopenOperationalBlocks(pid,true)),[],'only once');
 });
+
+// Rescue on every project (Chris, Oct 12 2026, #sah-rescue-every-project): this fixture project sets no research allocation, as md5.
+test('without a research allocation a blocked route still gets its different-model rescue through /start; a capability wait gets none',async()=>{
+  assert.equal((await one(`SELECT research_allocation FROM problems WHERE id=$1`,[pid])).research_allocation,null);
+  const {r}=await activeRoute(),route=r.research.route_id,p=await start('author');
+  ok(await submit('author',{research:{route_id:route,outcome:'blocked',evidence_md:'Only the uniform version failed.',obstacle}},p));
+  // A route left blocked with a machine limit as its obstacle (as before capability waits) is not rescued.
+  const waits=(await proposed()).research.route_id;
+  await q(`UPDATE jobs SET status='expired' WHERE research_route_id=$1 AND status='queued'`,[waits]);
+  await q(`UPDATE research_routes SET state='blocked',obstacle=$2 WHERE id=$1`,[waits,JSON.stringify({...obstacle,kind:'scoped_obstruction',statement:'This host lacks an RTX 2080 Ti for the benchmark.'})]);
+  const rescue=await start('astra');
+  assert.equal(rescue.research_stage,'rescue');assert.equal(Number((await one(`SELECT research_route_id FROM jobs WHERE id=$1`,[rescue.job_id])).research_route_id),route);
+  assert.equal((await one(`SELECT avoid_model FROM jobs WHERE id=$1`,[rescue.job_id])).avoid_model,models.author,'the rescue goes to another model');
+  await start('runner');
+  assert.equal((await one(`SELECT count(*)::int AS n FROM jobs WHERE research_route_id=$1 AND research_stage='rescue'`,[waits])).n,0,'a capability wait is not a block');
+});

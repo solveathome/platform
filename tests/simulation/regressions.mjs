@@ -76,7 +76,8 @@ export async function waitingCheck(w) {
   assert.equal(checks.filter(j=>j.check_wait_expired_at).length,1);
   assert.equal((await w.read(`/return/${claim.return_id}`)).verification_state.execution,'unable');
   await judge.submit({verdict:'reject',reject_reason:'unverifiable',notes_md:'Capacity unavailable; claim remains unsupported.'});
-  assert.equal((await w.q("SELECT id FROM jobs WHERE problem_id=$1 AND type='check' AND status='queued'",[w.pid])).length,0);
+  // The retry narrowed to the missing runtime stays queued for a machine that has it (#sah-capability-wait-not-block).
+  assert.equal((await w.q("SELECT id FROM jobs WHERE problem_id=$1 AND type='check' AND status='queued' AND compute_hint->>'capability_wait'='true'",[w.pid])).length,1);
   w.record('expectations',{long_url_assignment_supported:true,waiting_check_escalated:true,no_invented_execution:true});
 }
 

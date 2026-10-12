@@ -35,6 +35,14 @@ export async function selectRequiredCorrection(a: SchedulingAgent): Promise<any 
 export function portfolioOrder(policy: ResearchAllocation, used: Record<string, number>): ResearchBucket[] {
   return RESEARCH_BUCKETS.filter(k => policy[k] > 0).sort((a, b) => (policy[b] * (used.total + 1) - (used[b] ?? 0)) - (policy[a] * (used.total + 1) - (used[a] ?? 0)));
 }
+/** Rescue on every project (Chris, Oct 12 2026, #sah-rescue-every-project). Rescue jobs were made only inside the research portfolio,
+ *  which runs only where `research_allocation` is set: md5 had none, so a single unreviewed first look that blocked a route was
+ *  final there, while rescue unblocked 41 of 71 blocked twin-primes routes. A project without a portfolio now materialises rescues
+ *  as well, and prefers one while rescue holds less than this share of its tier's research hours (twin-primes' own share). */
+export const DEFAULT_RESCUE_SHARE = INITIAL_RESEARCH_ALLOCATION.rescue;
+export function rescueDue(used: Record<string, number>): boolean {
+  return !(Number(used.total) > 0) || Number(used.rescue ?? 0) / Number(used.total) < DEFAULT_RESCUE_SHARE;
+}
 // Each tier has its own research budget: plentiful models must not consume another
 // tier's discovery reserve, nor need that tier online to advance their own routes.
 export async function researchAllocation(problemId: number, tier = 1): Promise<Record<string, number>> {
@@ -305,14 +313,17 @@ export function reviewPressure(slug: string, override?: unknown): number | null 
  * Nothing reaches a trusted reviewer by itself (Chris, Sep 19 2026: "This is not about falling back to trusted reviewers, that system
  * is wrong"): a return waits in triage until a tier-2 session has read it. One triage may cover a series of returns of the same
  * lane or route, and one trusted review then decides them all.
- * Project `scheduler.review_triage` {min_tier, budget_hours} -> environment REVIEW_TRIAGE_MIN_TIER -> off. */
+ * Project `scheduler.review_triage` {min_tier, budget_hours} -> environment REVIEW_TRIAGE_MIN_TIER -> on at tier 2 for every
+ * project with a project.json (Chris, Oct 12 2026, #sah-rescue-every-project: the mechanisms run on every project, not only where
+ * they are configured; md5 had none). `review_triage: false` switches it off in so many words. A slug with no project file (a
+ * fixture) keeps the old default, off. */
 export type ReviewTriage = { minTier: number; budgetHours: number };
 export function reviewTriage(slug: string, override?: unknown): ReviewTriage | null {
   const cfg = override !== undefined ? override : readProjectConfig(slug)?.scheduler?.review_triage;
   if (cfg === false) return null;
   const raw = cfg && typeof cfg === 'object' ? cfg as any : null;
   const envTier = process.env.REVIEW_TRIAGE_MIN_TIER;
-  if (!raw && (envTier === undefined || envTier === '')) return null;
+  if (!raw && (envTier === undefined || envTier === '') && (override !== undefined || !readProjectConfig(slug))) return null;
   const minTier = Number(raw?.min_tier ?? envTier ?? 2), budgetHours = Number(raw?.budget_hours ?? 0.25);
   if (!Number.isInteger(minTier) || minTier < 1 || minTier > 99) throw new Error('review_triage.min_tier must be a tier (1 to 99)');
   return { minTier, budgetHours: Number.isFinite(budgetHours) && budgetHours > 0 ? Math.min(4, budgetHours) : 0.25 };

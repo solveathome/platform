@@ -136,15 +136,18 @@ async function verification(w) {
   const reused=await publish({...plan,cost:{...plan.cost,minutes:180,judgment_minutes:60}},'A distinct interpretation of the same finite evidence, requiring separate judgment.');
   assert.equal(reused.check_requested,false);
   const review=await w.one(`SELECT compute_hint,budget_hours FROM jobs WHERE parent_return_id=$1 AND type='review'`,[reused.return_id]);assert.deepEqual(review.compute_hint,{});assert.equal(Number(review.budget_hours),1);
-  // A distinct package still unable after the targeted retry must stop consuming execution slots.
+  // A capability gap narrows the retry to machines that have what was missing (#sah-capability-wait-not-block): the second gap names
+  // sage, so a third check waits for a machine that declares it, while judgment proceeds with the missing execution visible.
   const changed={...plan,scope:'The same finite list under a separately stated scope.'};
   const blocked=await publish(changed);
   await w.take(limited,a=>a.type==='check');await limited.submit(await w.unable(limited));
   await w.take(capable,a=>a.type==='check');await capable.submit(await w.unable(capable,'capability',['node','sage']));
-  assert.equal((await w.one(`SELECT count(*)::int AS n FROM jobs WHERE evidence_return_id=$1 AND type='check'`,[blocked.return_id])).n,2);
-  assert.equal((await w.one(`SELECT count(*)::int AS n FROM jobs WHERE evidence_return_id=$1 AND type='check' AND status='queued'`,[blocked.return_id])).n,0);
-  const pending=await w.one(`SELECT compute_hint FROM jobs WHERE parent_return_id=$1 AND type='review'`,[blocked.return_id]);assert.equal(pending.compute_hint.cpu_hours,.01);
-  await w.invariant();w.record('expectations',{shared_packages:2,targeted_retry_limit:1,replayed_receipts:3,judgment_budget_independent:true});
+  assert.equal((await w.one(`SELECT count(*)::int AS n FROM jobs WHERE evidence_return_id=$1 AND type='check'`,[blocked.return_id])).n,3);
+  const narrowed=await w.one(`SELECT required_tools,compute_hint FROM jobs WHERE evidence_return_id=$1 AND type='check' AND status='queued'`,[blocked.return_id]);
+  assert.ok(narrowed.required_tools.includes('sage'));assert.equal(narrowed.compute_hint.capability_wait,true);
+  // Judgment waits on the narrowed check until the 24-hour fallback (waitingCheck covers that path), not on a count of inabilities.
+  assert.equal((await w.one(`SELECT count(*)::int AS n FROM jobs WHERE parent_return_id=$1 AND type='review'`,[blocked.return_id])).n,0);
+  await w.invariant();w.record('expectations',{shared_packages:2,retry_narrowed_per_new_capability:true,replayed_receipts:3,judgment_budget_independent:true});
 }
 
 async function interruptions(w) {

@@ -8,7 +8,7 @@ import {scopeHash} from '../../src/lib/shared-research-format.ts';
 export async function sharedCollaboration(w) {
  const {PROJECTS_DIR}=await import('../../src/lib/projects.ts');
  const root=PROJECTS_DIR,slug=w.base.split('/').at(-1);
- const cfg=JSON.parse(readFileSync(new URL('../../projects/md5/project.json',import.meta.url)));delete cfg.challenge;cfg.slug=slug;
+ const cfg=JSON.parse(readFileSync(new URL('../../projects/md5/project.json',import.meta.url)));delete cfg.challenge;cfg.slug=slug;cfg.scheduler={...cfg.scheduler,review_triage:false};   // triage runs on every project now; this scenario is about shared research
  mkdirSync(join(root,slug));writeFileSync(join(root,slug,'project.json'),JSON.stringify(cfg));
  try {
   const a=await w.actor('author','gpt-6-astra'),b=await w.actor('other','claude-opus-5-5'),judge=await w.actor('judge','claude-fable-5-1',{trusted:true});
