@@ -1399,12 +1399,26 @@ CREATE OR REPLACE FUNCTION lean_independent(p_problem bigint, p_actor bigint, p_
 $$;
 -- V2 intake normalizes inventories and integer bounds. Compact canonical JSON matches its key-sorted digest
 -- without an extension: sha256(bytea) is built in. Strings retain their JSON escaping and arrays their normalized order.
-CREATE OR REPLACE FUNCTION lean_identity_canonical(value jsonb) RETURNS text LANGUAGE sql IMMUTABLE STRICT AS $$
-  SELECT CASE jsonb_typeof(value)
-    WHEN 'object' THEN '{'||coalesce((SELECT string_agg(to_json(key)::text||':'||lean_identity_canonical(val),',' ORDER BY key COLLATE "C") FROM jsonb_each(value) AS item(key,val)),'')||'}'
-    WHEN 'array' THEN '['||coalesce((SELECT string_agg(lean_identity_canonical(val),',' ORDER BY ordinal) FROM jsonb_array_elements(value) WITH ORDINALITY AS item(val,ordinal)),'')||']'
-    ELSE value::text END;
-$$;
+-- PL/pgSQL, same output byte for byte (Oct 12 2026, #sah-perf-sweep): as a recursive SQL function every JSON node paid a full
+-- SQL-function call, so one binding of a large Lean identity took 100-150 ms and a paper page that rechecks three Lean receipts took 1.5 s.
+-- tests/lean-canonical-db.test.mjs compares it with the SQL definition it replaces on nested, escaped and empty documents.
+CREATE OR REPLACE FUNCTION lean_identity_canonical(value jsonb) RETURNS text LANGUAGE plpgsql IMMUTABLE STRICT AS $$
+DECLARE parts text[] := '{}'; k text; v jsonb;
+BEGIN
+  CASE jsonb_typeof(value)
+  WHEN 'object' THEN
+    FOR k, v IN SELECT key, val FROM jsonb_each(value) AS item(key,val) ORDER BY key COLLATE "C" LOOP
+      parts := parts || (to_json(k)::text||':'||lean_identity_canonical(v));
+    END LOOP;
+    RETURN '{'||array_to_string(parts, ',')||'}';
+  WHEN 'array' THEN
+    FOR v IN SELECT val FROM jsonb_array_elements(value) WITH ORDINALITY AS item(val,ordinal) ORDER BY ordinal LOOP
+      parts := parts || lean_identity_canonical(v);
+    END LOOP;
+    RETURN '['||array_to_string(parts, ',')||']';
+  ELSE RETURN value::text;
+  END CASE;
+END $$;
 CREATE OR REPLACE FUNCTION lean_identity_binding(domain text, value jsonb) RETURNS text LANGUAGE sql IMMUTABLE STRICT AS $$
   SELECT encode(sha256(convert_to(domain||E'\n'||lean_identity_canonical(value),'UTF8')),'hex');
 $$;
@@ -1722,3 +1736,14 @@ ALTER TABLE jobs ADD COLUMN IF NOT EXISTS applicability_check jsonb;
 ALTER TABLE returns ADD COLUMN IF NOT EXISTS applicability_assessment jsonb;
 CREATE INDEX IF NOT EXISTS jobs_applicability_source_idx ON jobs(problem_id, (applicability_check->>'source_return_id')) WHERE applicability_check IS NOT NULL;
 CREATE INDEX IF NOT EXISTS returns_applicability_source_idx ON returns(problem_id, (applicability_assessment->>'source_return_id')) WHERE applicability_assessment IS NOT NULL;
+
+-- Lookups that scanned whole tables (Oct 12 2026, #sah-perf-sweep: production's table statistics showed file_refs read 8.1 billion
+-- rows in 620k sequential scans, returns 2M scans, assignment_attempts 578k). Each index serves a lookup made on every return page,
+-- paper list, Lean recheck or /start; without them the cost grows with every return, file and attempt. Additive and small.
+CREATE INDEX IF NOT EXISTS file_refs_ref_idx ON file_refs(ref_type, ref_id);
+CREATE INDEX IF NOT EXISTS attempts_job_idx ON assignment_attempts(job_id);
+CREATE INDEX IF NOT EXISTS attempts_user_recent_idx ON assignment_attempts(problem_id, user_id, started_at DESC);
+CREATE INDEX IF NOT EXISTS returns_paper_slug_idx ON returns(problem_id, paper_slug) WHERE paper_slug IS NOT NULL;
+CREATE INDEX IF NOT EXISTS returns_revision_path_idx ON returns(problem_id, revision_path) WHERE revision_path IS NOT NULL;
+CREATE INDEX IF NOT EXISTS credits_source_idx ON credits(source_type, source_id);
+CREATE INDEX IF NOT EXISTS messages_reply_to_idx ON messages(reply_to) WHERE reply_to IS NOT NULL;

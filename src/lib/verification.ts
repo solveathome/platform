@@ -116,16 +116,19 @@ export async function verificationRuns(returnId: number): Promise<any[]> {
   return q(`SELECT v.id,v.subject_return_id,v.result_return_id,v.fingerprint,v.outcome,v.observed,v.elapsed_seconds,v.details,v.created_at,
     u.handle,r.model,r.provider,r.effort,r.status AS receipt_status,
     v.execution_attestation->>'version' AS execution_policy, v.execution_attestation->>'recorded_at' AS execution_attested_at,
-    lean_execution_current(v.id,subject.id) AS trusted_execution,
-    (CASE WHEN subject.verification_plan ? 'lean' THEN lean_execution_current(v.id,subject.id) ELSE r.user_id<>subject.user_id AND r.model<>subject.model END) AS execution_eligible,
+    le.current AS trusted_execution,
+    (CASE WHEN subject.verification_plan ? 'lean' THEN le.current ELSE r.user_id<>subject.user_id AND r.model<>subject.model END) AS execution_eligible,
     (CASE WHEN subject.verification_plan ? 'lean' THEN lean_tier1(subject.model,subject.effort) AND lean_independent(subject.problem_id,r.user_id,r.model,r.effort,subject.user_id,subject.model) ELSE r.user_id<>subject.user_id AND r.model<>subject.model END) AS independent,
     (v.subject_return_id<>subject.id) AS reused
     FROM returns subject JOIN verification_runs v ON v.fingerprint=subject.verification_fingerprint
     JOIN returns r ON r.id=v.result_return_id AND r.problem_id=subject.problem_id JOIN users u ON u.id=r.user_id
+    -- Evaluated once per receipt, not once per column (OFFSET 0 keeps the planner from copying it back): it recomputes the receipt's Lean bindings (#sah-perf-sweep, Oct 12 2026).
+    CROSS JOIN LATERAL (SELECT lean_execution_current(v.id,subject.id) AS current OFFSET 0) le
     WHERE subject.id=$1 ORDER BY v.id DESC`, [returnId]);
 }
-export async function verificationState(returnId: number): Promise<any> {
-  const runs = await verificationRuns(returnId);
+/** `runs` is verificationRuns(returnId) when the caller already has it: each receipt's Lean recheck is the costly part. */
+export async function verificationState(returnId: number, runs?: any[]): Promise<any> {
+  runs ??= await verificationRuns(returnId);
   const valid = runs.filter(r => r.execution_eligible === true && ['recorded', 'accepted'].includes(r.receipt_status));
   const latest = valid.reduce((latest, r) => Math.max(latest, Number(r.id)), 0);
   const conflict = valid.some(r => r.outcome === 'pass') && valid.some(r => r.outcome === 'fail');
@@ -320,7 +323,7 @@ export async function verificationSummary(returnId: number): Promise<Verificatio
   const decision = await one(`SELECT status,provisional,by,final_rung FROM return_decisions WHERE return_id=$1 ORDER BY id DESC LIMIT 1`, [returnId]);
   const plan: VerificationPlan = ret.verification_plan;
   const runs = await verificationRuns(returnId);
-  const state = await verificationState(returnId);
+  const state = await verificationState(returnId, runs);
   const valid = runs.filter(r => r.execution_eligible === true && ['recorded', 'accepted'].includes(r.receipt_status));
   const completed = valid.filter(r => ['pass', 'fail'].includes(r.outcome));
   const latest = completed[0] ?? valid[0] ?? null;   // runs are newest first
@@ -431,7 +434,7 @@ export async function verificationBrief(returnId: number, audience: 'review' | '
   const ret = await one(`SELECT verification_plan,verification_fingerprint FROM returns WHERE id=$1`, [returnId]);
   if (!ret?.verification_plan) return '';
   const runs = await verificationRuns(returnId);
-  const state = await verificationState(returnId);
+  const state = await verificationState(returnId, runs);
   const summary = await verificationSummary(returnId);
   if (audience === 'review' && summary) {
     const receipts = runs.slice(0, 10).map(r => `- Receipt #${r.id} (return #${r.result_return_id}): ${r.outcome}, @${r.handle} (${r.model}), ${r.details?.method ?? 'method not recorded'}, ${Math.round(Number(r.elapsed_seconds))} s${r.reused ? ', reused from an identical package' : ''}${r.trusted_execution ? ', authenticated trusted contributor attestation' : !r.execution_eligible ? ', not eligible as trusted execution' : ''}${!['recorded', 'accepted'].includes(r.receipt_status) ? `, receipt ${r.receipt_status}` : ''}`).join('\n');

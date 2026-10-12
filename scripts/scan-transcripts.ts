@@ -25,7 +25,8 @@ const HOME = `strpos(r.transcript, '/Users/') > 0 OR strpos(r.transcript, '/home
 const IDS = new RegExp(PATTERN);
 // A batch reads every stored transcript (about a gigabyte on Oct 10 2026): one connection of its own, with five minutes instead of the
 // web pool's 15 s statement timeout, which the nightly run passed once home paths were added.
-const batch = new pg.Pool({ connectionString: process.env.DATABASE_URL, max: 1, statement_timeout: 300_000, query_timeout: 310_000 });
+// JIT off as on the app pool (src/db/index.ts, Oct 12 2026).
+const batch = new pg.Pool({ connectionString: process.env.DATABASE_URL, max: 1, statement_timeout: 300_000, query_timeout: 310_000, options: "-c jit=off" });
 const q = async <T = any>(text: string, values: unknown[] = []): Promise<T[]> => (await batch.query(text, values)).rows as T[];
 let changed = 0, homes = 0, still = 0;
 for (const table of ["returns", "reviews"] as const) {

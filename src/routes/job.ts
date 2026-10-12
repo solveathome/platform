@@ -2582,7 +2582,7 @@ job.get("/return/:id", optionalAuth, project, async (req: any, res) => {
   r.lean_scientific_identity = r.verification_plan?.lean ? leanScientificBinding(r.verification_plan.lean) : null;
   r.lean_execution_identity = r.lean_execution_binding;
   r.verification_runs = await verificationRuns(Number(r.id));
-  r.verification_state = r.verification_plan ? await verificationState(Number(r.id)) : null;
+  r.verification_state = r.verification_plan ? await verificationState(Number(r.id), r.verification_runs) : null;
   r.verification_summary = r.verification_plan ? await verificationSummary(Number(r.id)) : null;   // generated from the record; see summaryMarkdown for the page
   if (r.paper_exposition) r.paper_exposition_evidence = await expositionEvidence(r.paper_exposition,Number(r.problem_id));
   r.canonical_return = r.verification_plan && r.duplicate_of ? await one(`SELECT id,status,final_rung,provisional FROM returns WHERE id=$1`, [r.duplicate_of]) : null;

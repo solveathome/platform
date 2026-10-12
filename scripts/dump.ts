@@ -14,7 +14,8 @@ const dumpDir = process.env.DUMP_DIR ?? join(ROOT, "data", "dumps");
 await migrate();
 
 // A client of its own: the pool's 15 s statement timeout is for public requests, and a cursor needs one connection for the whole run.
-const client = new pg.Client({ connectionString: process.env.DATABASE_URL });
+// JIT off as on the app pool (src/db/index.ts, Oct 12 2026): the server default compiles large plans for seconds each.
+const client = new pg.Client({ connectionString: process.env.DATABASE_URL, options: "-c jit=off" });
 await client.connect();
 try {
   await client.query("BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY");
