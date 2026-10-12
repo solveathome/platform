@@ -483,15 +483,20 @@ test('a capability gap gets one targeted reassignment and a completed receipt re
   assert.equal(subject.verification_state.execution,'pass');assert.equal(subject.verification_runs.length,2);
 });
 
-test('a second capability failure stops reassignment and preserves missing execution for judgment',async()=>{
+test('each capability gap narrows the check to machines that have it; an inability with nothing new goes to judgment',async()=>{
   const plan=await packageFor(),r=await computation(plan),a=await start('runner');
   const unable={stdout_sha256:undefined,exit_code:null,observed:'Required capability is unavailable.',coverage_md:'Nothing ran.',controls_md:'Not run.',blocker:{kind:'capability',required_tools:['python3']}};
   ok(await submit('runner',await receipt(a,r.return_id,'unable',unable),a));
   const ready=ok(await call('/start?share=25',{who:'astra',launch:randomUUID(),capabilities:{tools:['python3']}}));
   assert.equal(ready.type,'check');
-  ok(await submit('astra',await receipt(ready,r.return_id,'unable',{...unable,blocker:{kind:'capability',required_tools:['python3','sage']}}),ready));
-  assert.equal((await one(`SELECT count(*)::int AS n FROM jobs WHERE evidence_return_id=$1 AND type='check'`,[r.return_id])).n,2);
-  assert.equal((await one(`SELECT count(*)::int AS n FROM jobs WHERE evidence_return_id=$1 AND type='check' AND status='queued'`,[r.return_id])).n,0);
+  ok(await submit('astra',await receipt(ready,r.return_id,'unable',{...unable,blocker:{kind:'capability',required_tools:['python3','sage'],compute:{gpu_name:'rtx 2080 ti'}}}),ready));
+  assert.equal((await one(`SELECT count(*)::int AS n FROM jobs WHERE evidence_return_id=$1 AND type='check'`,[r.return_id])).n,3);
+  const narrowed=await one(`SELECT * FROM jobs WHERE evidence_return_id=$1 AND type='check' AND status='queued'`,[r.return_id]);
+  assert.deepEqual(narrowed.required_tools.sort(),['python3','sage']);assert.equal(narrowed.compute_hint.gpu_name,'rtx 2080 ti');assert.equal(narrowed.compute_hint.capability_wait,true);
+  assert.notEqual(Number((await call('/start?share=50',{who:'judge',launch:randomUUID(),capabilities:{tools:['python3','sage']}})).body.job_id),Number(narrowed.id),'no GPU, no check');
+  const gpu=ok(await call('/start?share=50',{who:'judge',launch:randomUUID(),capabilities:{tools:['python3','sage'],gpu:{name:'NVIDIA GeForce RTX 2080 Ti',vram_gb:11}}}));assert.equal(Number(gpu.job_id),Number(narrowed.id));
+  ok(await submit('judge',await receipt(gpu,r.return_id,'unable',{...unable,blocker:{kind:'capability',required_tools:['sage']}}),gpu));
+  assert.equal((await one(`SELECT count(*)::int AS n FROM jobs WHERE evidence_return_id=$1 AND type='check' AND status='queued'`,[r.return_id])).n,0,'a machine that had everything named could not run it: judgment');
   const review=await one(`SELECT compute_hint FROM jobs WHERE parent_return_id=$1 AND type='review' AND status='queued'`,[r.return_id]);
   assert.equal(review.compute_hint.cpu_hours,plan.cost.cpu_hours);
 });
@@ -601,7 +606,7 @@ test('the summary says when nothing ran and names the capability a retry needs',
   ok(await submit('runner',base,a));
   const s=ok(await call(`/return/${r.return_id}`)).verification_summary;
   assert.equal(s.execution,'unable');assert.equal(s.pending_check,'queued');assert.equal(s.method,'rerun');
-  assert.match(s.headline,/^Execution has not happened: @research-runner-[a-f0-9]+ \(claude-sonnet-5\) lacked sage\. A targeted retry is queued\.$/);
+  assert.match(s.headline,/^Execution has not happened: @research-runner-[a-f0-9]+ \(claude-sonnet-5\) lacked sage\. A retry waits for a machine that has it\.$/);
   assert.equal(s.controls.itemised,false);assert.equal(s.controls.reported,false,'controls are counted on completed checks only');assert.equal(s.receipts.unable,1);
   assert.ok(!s.lines.some(l=>l.startsWith('Negative controls')),'nothing ran, so no control line');
   const board=ok(await call('/board')).research.checks;assert.equal(board.first_attempts,1);assert.equal(board.first_attempt_completed,0);assert.equal(board.awaiting_execution,1);assert.equal(board.awaiting_judgment,0);
@@ -961,4 +966,50 @@ test('formalize assignment and direct return require effective Tier 1 high-or-ab
   }
   assert.equal((await submit('author',{type:'formalize',recipe_md:'Read the exact statement and proof step by step.'})).status,400,'unassigned formalize submissions already refused');
   assert.equal((await submit('astra',{recipe_md:'Read the exact statement and proof step by step.'},held)).status,200);
+});
+
+// Capability waits (Chris, Oct 12 2026, card 1387, #sah-capability-wait-not-block): a limit of the machine never blocks a route; the
+// step waits for, and only goes to, a session whose offer and declarations meet it.
+const waitingJob=async route=>one(`SELECT * FROM jobs WHERE research_route_id=$1 AND status='queued' AND research_stage='pursue'`,[route]);
+const startWith=(who,share,capabilities)=>call(`/start?share=${share}`,{who,launch:randomUUID(),...(capabilities?{capabilities}:{})});
+test('a machine limit filed as an obstacle keeps the route active and waits for a machine with that GPU',async()=>{
+  const {r}=await activeRoute(),route=r.research.route_id,p=await start('author');assert.equal(p.research_stage,'pursue');
+  const filed=ok(await submit('author',{research:{route_id:route,outcome:'blocked',evidence_md:'The replication needs the original GPU.',obstacle:{kind:'scoped_obstruction',statement:'This host lacks an RTX 2080 Ti (sm_75) and CUDA 12.9 required for exact replication.',assumptions:'Exact replication on the original stack.',evidence:'nvidia-smi absent.',revisit_when:'A machine with an RTX 2080 Ti.'}}},p));
+  assert.equal(filed.research.state,'active');assert.equal(filed.research.waiting_for,'GPU RTX 2080 Ti');
+  assert.ok(filed.warnings.some(w=>/recorded as needs_capability/.test(w)),'the author is told how it was recorded');
+  const stored=await one(`SELECT state,obstacle,next_step FROM research_routes WHERE id=$1`,[route]);
+  assert.equal(stored.state,'active');assert.equal(stored.obstacle,null);assert.equal(stored.next_step.compute.gpu_name,'rtx 2080 ti');assert.equal(stored.next_step.question,step().question,'the experiment is unchanged');
+  const job=await waitingJob(route);assert.equal(job.compute_hint.gpu_name,'rtx 2080 ti');assert.equal(job.compute_hint.capability_wait,true);
+  // Never offered to a machine without it, offered to the first that has it.
+  for (const [who,caps] of [['runner',undefined],['judge',{gpu:{name:'NVIDIA GeForce RTX 4090',vram_gb:24}}]]) { const other=await startWith(who,50,caps);assert.notEqual(Number(other.body.job_id),Number(job.id),`${who} has no RTX 2080 Ti`); }
+  assert.notEqual(Number((await startWith('astra',0,{gpu:{name:'NVIDIA GeForce RTX 2080 Ti',vram_gb:11}})).body.job_id),Number(job.id),'a share of 0 offers no GPU');
+  const capable=ok(await startWith('astra',50,{gpu:{name:'NVIDIA GeForce RTX 2080 Ti',vram_gb:11}}));assert.equal(Number(capable.job_id),Number(job.id));
+  const page=await call(`/research-routes/${route}`,{accept:'text/markdown'});assert.match(page.body,/waiting for a machine with GPU RTX 2080 Ti/);
+  const board=ok(await call('/board'));assert.equal(board.research.routes.find(x=>Number(x.id)===route).waiting_for,'GPU RTX 2080 Ti');
+});
+test('needs_capability states its own requirement; the same requirement again pauses on a failed attempt',async()=>{
+  const {r}=await activeRoute(),route=r.research.route_id,p=await start('author');
+  const need={...step(),budget_hours:2,compute:{cpu_hours:2,ram_gb:2,disk_gb:1},shortfall:'The precompute needs about 2 CPU hours; this session offers 0.5.'};
+  const waits=ok(await submit('author',{research:{route_id:route,outcome:'needs_capability',evidence_md:'The table precompute did not finish.',next_step:need}},p));
+  assert.equal(waits.research.state,'active');assert.equal(waits.research.waiting_for,'2 CPU h per assignment');assert.ok(!waits.warnings.some(w=>/recorded as needs_capability/.test(w)));
+  const job=await waitingJob(route);assert.equal(Number(job.compute_hint.cpu_hours),2);
+  assert.notEqual(Number((await startWith('runner',25)).body.job_id),Number(job.id),'0.5 CPU h is not enough');
+  const taken=ok(await startWith('astra',50));assert.equal(Number(taken.job_id),Number(job.id));
+  const again=ok(await submit('astra',{research:{route_id:route,outcome:'needs_capability',evidence_md:'Still did not finish.',next_step:need}},taken));
+  assert.equal(again.research.state,'paused');
+  const stored=await one(`SELECT obstacle FROM research_routes WHERE id=$1`,[route]);assert.equal(stored.obstacle.kind,'attempt_failed');assert.match(stored.obstacle.statement,/still could not run it/);
+});
+test('routes closed on a machine limit before capability waits reopen with their experiment and requirement',async()=>{
+  const {r}=await activeRoute(),route=r.research.route_id,p=await start('author');
+  ok(await submit('author',{research:{route_id:route,outcome:'blocked',evidence_md:'Not finished.',obstacle:{...obstacle,kind:'scoped_obstruction',statement:'The bound fails at k=9 for every tested modulus.'}}},p));
+  // The legacy shape: the obstacle a machine limit used to leave, and no step on the route.
+  await q(`UPDATE research_routes SET obstacle=$2 WHERE id=$1`,[route,JSON.stringify({...obstacle,kind:'scoped_obstruction',statement:'Independent arms require a completed lookup table; table precompute did not finish in this sprint.'})]);
+  const {reopenOperationalBlocks}=await import('../src/lib/research.ts');
+  const dry=await projectTransaction(pid,()=>reopenOperationalBlocks(pid,false));assert.equal(dry.length,1);assert.equal((await one(`SELECT state FROM research_routes WHERE id=$1`,[route])).state,'blocked','a dry run writes nothing');
+  const [done]=await projectTransaction(pid,()=>reopenOperationalBlocks(pid,true));
+  assert.equal(done.route_id,route);assert.ok(done.job_id);
+  const stored=await one(`SELECT state,obstacle,next_step FROM research_routes WHERE id=$1`,[route]);
+  assert.equal(stored.state,'active');assert.equal(stored.next_step.question,step().question);assert.equal(Number(stored.next_step.compute.cpu_hours),2,'twice the 0.5 CPU h the session offered, at least two');
+  assert.ok((await one(`SELECT 1 FROM research_events WHERE route_id=$1 AND outcome='needs_capability' AND detail->'obstacle' IS NOT NULL`,[route])),'the obstacle stays in the history');
+  assert.deepEqual(await projectTransaction(pid,()=>reopenOperationalBlocks(pid,true)),[],'only once');
 });

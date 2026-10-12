@@ -3,8 +3,9 @@ import {validateKernelReceiptIdentity, type KernelEvidence} from './lean-kernel.
 import { parseLeanProfile, parseLeanEvidence, leanEvidenceFiles, leanStatementBinding, leanExecutionBinding, validateLeanV2Artifacts, validateLeanProofFiles, LEAN_POLICY_V2, LEAN_KERNEL_POLICY, summarizeLean, leanGuidance, type LeanProfile, type LeanSummary } from './lean-verification.js';
 import { createHash } from 'node:crypto';
 import { one, q } from '../db/index.js';
-import { amount, bad, object, prose, tags } from './research-format.js';
+import { amount, bad, computeNeeds, object, prose, tags, type ComputeNeeds } from './research-format.js';
 import { distinctLeanFamilies } from './model-id.js';
+import { describeNeeds } from './capability-shortfall.js';
 import { paperSource } from './paper-state.js';
 import { read as readArtifact } from './files.js';
 import { identityObject } from './lean-identity-v2.js';
@@ -54,14 +55,22 @@ export function parseVerificationPlan(raw: unknown): VerificationPlan | null {
     expected: p.expected, supports: prose(p.supports, 'verification_plan.supports'), coverage: p.coverage,
     cost: { minutes: amount(c.minutes, 'cost.minutes', 0.01, 240), judgment_minutes: amount(c.judgment_minutes ?? 15, 'cost.judgment_minutes', 6, 240), cpu_hours: amount(c.cpu_hours, 'cost.cpu_hours', 0, 32), ram_gb: amount(c.ram_gb, 'cost.ram_gb', 0, 32), disk_gb: amount(c.disk_gb ?? 1, 'cost.disk_gb', 0, 10) } };
 }
-type CheckBlocker = { kind: 'capability' | 'package'; required_tools: string[]; required_sources: string[] };
+/** `compute` names hardware the package needs that this worker lacked (a GPU, its model or VRAM, more CPU hours or memory): only the
+ *  keys given count, and the retry is offered only to a session whose offer has them (#sah-capability-wait-not-block). */
+type CheckBlocker = { kind: 'capability' | 'package'; required_tools: string[]; required_sources: string[]; compute?: Partial<ComputeNeeds> };
 export function parseCheckBlocker(raw: unknown): CheckBlocker | null {
   if (raw === undefined) return null; // Older unable receipts remain honest unknowns, not executions.
   const b = object(raw, 'check_receipt.blocker');
   if (!['capability', 'package'].includes(b.kind)) bad('check_receipt.blocker.kind must be capability|package');
   const required_tools = tags(b.required_tools ?? [], 'blocker.required_tools'), required_sources = tags(b.required_sources ?? [], 'blocker.required_sources');
-  if (b.kind === 'capability' && !required_tools.length && !required_sources.length) bad('a capability blocker must name the missing tools or sources needed by another worker');
-  return { kind: b.kind, required_tools, required_sources };
+  let compute: Partial<ComputeNeeds> | undefined;
+  if (b.compute !== undefined) {
+    const raw = object(b.compute, 'blocker.compute'), parsed: any = computeNeeds(raw, 'blocker.compute');
+    compute = Object.fromEntries(Object.entries(parsed).filter(([key]) => raw[key] !== undefined || (key === 'gpu' && (raw.gpu_name || raw.vram_gb)))) as Partial<ComputeNeeds>;
+    if (b.kind !== 'capability') bad('blocker.compute belongs on a capability blocker');
+  }
+  if (b.kind === 'capability' && !required_tools.length && !required_sources.length && !(compute && Object.keys(compute).length)) bad('a capability blocker must name the missing tools, sources or compute (gpu, gpu_name, vram_gb, cpu_hours, ram_gb, disk_gb) needed by another worker');
+  return { kind: b.kind, required_tools, required_sources, ...(compute && Object.keys(compute).length ? { compute } : {}) };
 }
 /** Itemised negative controls. Optional beside `controls_md`; when present, each control names its corruption and says whether the checker caught it. */
 export function parseCheckControls(raw: unknown): CheckControl[] | null {
@@ -148,18 +157,32 @@ export async function queueCheck(ret: any): Promise<boolean> {
     return true;
   }
   const unable = runs.filter(r => r.execution_eligible === true && r.outcome === 'unable');
-  // One targeted reassignment for a declared worker capability gap. Package defects,
-  // unknown causes or two unable observations go to judgment with the missing execution visible.
-  if (unable.length && (unable.length >= 2 || unable.some(r => r.details?.blocker?.kind !== 'capability'))) return false;
   const plan: VerificationPlan = ret.verification_plan;
-  // The package's declared runtimes route the first attempt; an unable worker's named gap narrows the retry.
-  const requiredTools = [...new Set([...(plan.tools ?? []), ...(plan.lean ? plan.lean.policy===LEAN_KERNEL_POLICY ? ['lean'] : ['lean','lean-comparator-linux'] : []), ...unable.flatMap(r => r.details.blocker.required_tools)])];
-  const requiredSources = [...new Set([...plan.availability.required_sources, ...unable.flatMap(r => r.details.blocker.required_sources)])];
+  // A worker that lacked a capability is a machine that could not run the package, not a finding about it (Chris, Oct 12 2026, card
+  // 1387: "we just don't want to assign such jobs to a maschine that can't run it"). Each capability gap narrows the retry to sessions
+  // that declare what was missing, for as long as each one names something the retry did not already require. Package defects, unknown
+  // causes and an inability on a machine that had everything named go to judgment with the missing execution visible. The 24-hour
+  // judgment fallback (expireWaitingChecks) is unchanged; a narrowed retry stays queued beside it for a machine that has the capability.
+  let requiredTools = [...new Set([...(plan.tools ?? []), ...(plan.lean ? plan.lean.policy===LEAN_KERNEL_POLICY ? ['lean'] : ['lean','lean-comparator-linux'] : [])])];
+  let requiredSources = [...new Set(plan.availability.required_sources)];
+  const hint: Record<string, any> = { ...plan.cost };
+  for (const r of [...unable].sort((x, y) => Number(x.id) - Number(y.id))) {   // oldest first: each gap is judged against what came before it
+    const b = r.details?.blocker;
+    if (b?.kind !== 'capability') return false;
+    const before = JSON.stringify([requiredTools, requiredSources, hint]);
+    requiredTools = [...new Set([...requiredTools, ...(b.required_tools ?? [])])];
+    requiredSources = [...new Set([...requiredSources, ...(b.required_sources ?? [])])];
+    for (const [key, value] of Object.entries(b.compute ?? {})) {
+      if (typeof value === 'number') hint[key] = Math.max(Number(hint[key] ?? 0), value); else if (value) hint[key] = value;
+    }
+    if (JSON.stringify([requiredTools, requiredSources, hint]) === before) return false;
+  }
+  if (unable.length) hint.capability_wait = true;
   await q(`INSERT INTO jobs (problem_id,lane_id,type,title,brief_md,budget_hours,min_tier,compute_hint,evidence_return_id,research_stage,origin_key)
     VALUES ($1,$2,'check',$3,$4,$5,99,$6,$7,'consolidate',$8)`,
     [ret.problem_id, ret.lane_id, `Check evidence for return #${ret.id}`,
       `${plan.lean ? leanGuidance(plan.lean) + "\n\n" : ""}Reconstruct the immutable package from GET <project base>/return/${ret.id} in a clean directory using ONLY its manifest and declared runtime/source requirements. Fetch each file by SHA from /files/<sha> to its relative manifest path. Inspect the checker before executing it within your person's limits. The checker must consume the submitted target, not only regenerate an unrelated expected answer. Check actual coverage and the comparison rule. Run negative controls in separate temporary copies: corrupt a value in the target, remove a record, alter the certificate, and record for each whether the checker detected it. A control the checker misses is a finding, not a failure of yours. Preserve the original files and results. Do not redo discovery. Return report_md, transcript, and check_receipt: {fingerprint: "${ret.verification_fingerprint}", outcome: "pass|fail|unable", observed: "actual output and differences", elapsed_seconds: <actual time>, stdout_sha256: "<uploaded actual output>", exit_code: <integer or null if unable>, environment: "observed versions", coverage_md: "exactly what ran, exclusions and seeds", execution_policy: "authenticated-contributor-v1", attestation_md: "for Lean: personally observed execution, actual artifacts, negative controls and limitations; unable attests only the blocker", method: "rerun|independent_implementation", shared_components_md: "shared algorithm, code, parser or library", controls_md: "negative controls and their observed outcomes", controls: [{name: "what you corrupted", detected: true|false, note: "exit code and message"}], limits_md: "what this execution does not establish (an unpinned producer, an unread input, a scope the checker skips)"}. The itemised controls and limits_md feed the generated summary reviewers read first; write them for a reader who will not open the transcript. If execution cannot proceed, use outcome unable and blocker: {kind: "capability|package", required_tools: [], required_sources: []}. Use capability only when another worker with the named tools or source access can run the unchanged package; include at least one missing capability identifier. Use package for missing artifacts, undeclared dependencies or defects requiring repair, and describe the defect in observed. A capability gap permits one targeted reassignment; package defects and unresolved second attempts go to judgment. A repair requires a new package. Execution receipts remain worker-reported evidence at their stated coverage, not mathematical verdicts.`,
-      Math.min(4, Math.max(0.1, plan.cost.minutes / 60 + 0.1)), JSON.stringify(plan.cost), ret.id, `check:${ret.id}:${ret.verification_fingerprint}:${unable.length + 1}`]);
+      Math.min(4, Math.max(0.1, plan.cost.minutes / 60 + 0.1)), JSON.stringify(hint), ret.id, `check:${ret.id}:${ret.verification_fingerprint}:${unable.length + 1}`]);
   await q(`UPDATE jobs SET required_tools=$2,required_sources=$3 WHERE evidence_return_id=$1 AND type='check' AND status='queued'`, [ret.id, requiredTools, requiredSources]);
   await q(`UPDATE returns SET review_admitted_at=coalesce(review_admitted_at,now()) WHERE id=$1`, [ret.id]);
   return true;
@@ -171,8 +194,10 @@ export async function checkWaitExpired(returnId: number): Promise<boolean> {
 }
 /** Scheduling only: an unclaimed check eventually needs an agent to assess the missing capacity. */
 export async function expireWaitingChecks(problemId: number): Promise<any[]> {
-  const expired = await q(`UPDATE jobs SET status='expired',check_wait_expired_at=now()
-    WHERE problem_id=$1 AND type='check' AND status='queued' AND created_at < now()-interval '24 hours'
+  // Judgment proceeds after a day either way. A retry narrowed to a capability another worker lacked stays queued for a machine that
+  // has it (#sah-capability-wait-not-block): a receipt after judgment is recorded as such (judged_before_execution).
+  const expired = await q(`UPDATE jobs SET status=CASE WHEN coalesce(compute_hint->>'capability_wait','false') IN ('true','1') THEN 'queued' ELSE 'expired' END,check_wait_expired_at=now()
+    WHERE problem_id=$1 AND type='check' AND status='queued' AND check_wait_expired_at IS NULL AND created_at < now()-interval '24 hours'
     RETURNING evidence_return_id`, [problemId]);
   if (!expired.length) return [];
   return q(`SELECT DISTINCT r.* FROM returns r JOIN returns source ON source.id=ANY($1::bigint[])
@@ -350,7 +375,7 @@ export async function verificationSummary(returnId: number): Promise<Verificatio
     headline = `${methodWord(latest)} by ${who(latest)} did not match the expected result (exit ${latest.details?.exit_code ?? '?'}). Observed: ${clip(latest.observed, 200)}`;
   } else if (state.execution === 'unable') {
     const b = latest?.details?.blocker;
-    headline = b?.kind === 'capability' ? `Execution has not happened: ${who(latest)} lacked ${[...(b.required_tools ?? []), ...(b.required_sources ?? [])].join(', ') || 'a declared requirement'}.${pending_check === 'queued' ? ' A targeted retry is queued.' : ''}`
+    headline = b?.kind === 'capability' ? `Execution has not happened: ${who(latest)} lacked ${describeNeeds({ compute: b.compute ?? {}, required_tools: b.required_tools, required_sources: b.required_sources }) || 'a declared requirement'}.${pending_check === 'queued' ? ' A retry waits for a machine that has it.' : ''}`
       : b?.kind === 'package' ? `Execution has not happened: ${who(latest)} reports a package defect. ${clip(latest.observed, 200)}`
       : `Execution has not happened: ${who(latest)} could not run the package. ${clip(latest?.observed, 200)}`;
     if (unables.length > 1) lines.push(`${unables.length} workers were unable to run it.`);

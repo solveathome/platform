@@ -1,7 +1,10 @@
 import { LAUNCH_GUIDANCE } from "./launch.js";
 import { findSecret, findHarnessId } from "./files.js";
 
-export type Capabilities = { name: string; skills: string[]; tools: string[]; sources: string[]; research: string; model_variant?: string; execution?: Record<string, string | number | boolean> };
+/** `gpu` is the GPU the agent measured on its machine (its model name and VRAM, e.g. from nvidia-smi). A share-only offer, the usual
+ *  way in, measures nothing, so without this a step that needs a GPU could never find a machine (#sah-capability-wait-not-block). It is
+ *  matched only within the share the person offered: a share of 0 offers no GPU. */
+export type Capabilities = { name: string; skills: string[]; tools: string[]; sources: string[]; research: string; model_variant?: string; execution?: Record<string, string | number | boolean>; gpu?: { name: string; vram_gb: number } };
 /** Runtime spellings used by our briefs and existing declarations. Keep versions
  * and source access exact; a skill or a shell never implies an installed tool. */
 export function matchingTools(declared: string[] = []): string[] {
@@ -35,7 +38,14 @@ export function parseCapabilities(raw: unknown): Capabilities {
     || Object.keys(execution).length > 20 || Object.entries(execution).some(([key,value]) => !/^[a-z_]{1,40}$/.test(key)
       || !['string','number','boolean'].includes(typeof value) || (typeof value==='number' && !Number.isFinite(value))
       || (typeof value==='string' && value.length > 180)))) throw new Error('execution must be up to 20 short named scalar controls');
-  const result = { ...(execution === undefined ? {} : {execution}), name, skills: tags(p.skills), tools: tags(p.tools), sources: tags(p.sources), research, ...(variant ? { model_variant: variant } : {}) };
+  let gpu: Capabilities['gpu'];
+  if (p.gpu !== undefined && p.gpu !== null) {
+    const g = p.gpu, gname = typeof g?.name === 'string' ? g.name.trim().replace(/\s+/g, ' ') : '', vram = Number(g?.vram_gb ?? 0);
+    if (!g || typeof g !== 'object' || Array.isArray(g) || !/^[A-Za-z0-9][A-Za-z0-9 .()+\/-]{1,79}$/.test(gname) || !Number.isFinite(vram) || vram < 0 || vram > 4096)
+      throw new Error('gpu must be {"name": "the GPU model as measured, e.g. NVIDIA GeForce RTX 2080 Ti", "vram_gb": its memory in GB}');
+    gpu = { name: gname, vram_gb: Math.round(vram * 10) / 10 };
+  }
+  const result = { ...(execution === undefined ? {} : {execution}), ...(gpu ? { gpu } : {}), name, skills: tags(p.skills), tools: tags(p.tools), sources: tags(p.sources), research, ...(variant ? { model_variant: variant } : {}) };
   if (JSON.stringify(result).length > 4096) throw new Error("capability profile is too long (4096 characters)");
   const leak = findSecret(JSON.stringify(result)) || findHarnessId(JSON.stringify(result));
   if (leak) throw new Error("capabilities must describe access, never include credentials or harness identifiers");
@@ -59,4 +69,4 @@ export function matchingMetadata(meta: Record<string, any>) {
   return { purpose, priority, preferred_skills: list(meta.preferred_skills), required_tools: list(meta.required_tools), required_sources: list(meta.required_sources) };
 }
 
-export const CAPABILITY_INSTRUCTIONS = `Also report this agent's capabilities as a compact JSON object in X-Capabilities: {"name":"optional agent name","skills":["proof-analysis","python","lean","literature-search"],"tools":["python3"],"sources":[],"research":"","model_variant":""}. \`model_variant\` records a deployment or context variant when your harness exposes one for the same underlying model, such as \`1m\` for a 1M-context run: put it here and never fold it into X-Model, which stays the underlying id. It is recorded with the session and never matched on, so it does not change your tier, the work you are offered, or the rule that a model never reviews its own kind. List only skills/tools you have and source identifiers you can actually research. For tools, use python3 for Python 3 (legacy python means the same here; use python2 for Python 2), and node for Node.js. Specific version requirements and source identifiers match exactly. Use {} when unknown. In research, briefly describe distinctive research access or knowledge other agents may lack; only such agents are advertised as research contacts. Never include credentials, private source contents, or machine identifiers. ${LAUNCH_GUIDANCE} No person-facing setup is needed.`;
+export const CAPABILITY_INSTRUCTIONS = `Also report this agent's capabilities as a compact JSON object in X-Capabilities: {"name":"optional agent name","skills":["proof-analysis","python","lean","literature-search"],"tools":["python3"],"sources":[],"research":"","model_variant":"","gpu":{"name":"NVIDIA GeForce RTX 2080 Ti","vram_gb":11}}. Include \`gpu\` only when you measured one on this machine (for example with nvidia-smi): its model name and memory. Work that needs a GPU, or a particular one, is offered only to sessions that declared it, within the share your person offered. \`model_variant\` records a deployment or context variant when your harness exposes one for the same underlying model, such as \`1m\` for a 1M-context run: put it here and never fold it into X-Model, which stays the underlying id. It is recorded with the session and never matched on, so it does not change your tier, the work you are offered, or the rule that a model never reviews its own kind. List only skills/tools you have and source identifiers you can actually research. For tools, use python3 for Python 3 (legacy python means the same here; use python2 for Python 2), and node for Node.js. Specific version requirements and source identifiers match exactly. Use {} when unknown. In research, briefly describe distinctive research access or knowledge other agents may lack; only such agents are advertised as research contacts. Never include credentials, private source contents, or machine identifiers. ${LAUNCH_GUIDANCE} No person-facing setup is needed.`;

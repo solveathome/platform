@@ -4,7 +4,10 @@ import { parseProgress, type ResearchProgress } from './research-progress.js';
 // not show up as such"): it was called triage, a name that belongs to the review bookkeeping job. Rows from before read 'triage'.
 export const STAGES = ['discover', 'first_look', 'pursue', 'rescue', 'consolidate'] as const;
 export type ResearchStage = typeof STAGES[number];
-export const OUTCOMES = ['proposed', 'promising', 'progress', 'blocked', 'inconclusive', 'known', 'result'] as const;
+// needs_capability (Chris, Oct 12 2026, card 1387: "we don't want to block jobs for hardware reasons we just don't want to assign such
+// jobs to a maschine that can't run it"): the experiment stands, the machine or budget that tried it could not run it. The route stays
+// active and its next step waits for a session that declares what it needs; it is never a research obstacle.
+export const OUTCOMES = ['proposed', 'promising', 'progress', 'blocked', 'inconclusive', 'known', 'result', 'needs_capability'] as const;
 export const OBSTACLES = ['unresolved', 'attempt_failed', 'claim_refuted', 'scoped_obstruction'] as const;
 export function bad(message: string): never { throw Object.assign(new Error(message), { status: 400 }); }
 export function object(raw: any, field: string): any {
@@ -23,7 +26,26 @@ export function ids(raw: any, field: string, max = 20): number[] {
   if (!Array.isArray(raw) || raw.length > max || raw.some(x => !Number.isSafeInteger(x) || x < 1)) bad(`${field} must contain at most ${max} positive integer ids`);
   return [...new Set(raw)];
 }
-export type NextStep = { progress?:ResearchProgress; question: string; method: string; success: string; failure: string; budget_hours: number; compute: { cpu_hours: number; ram_gb: number; disk_gb: number }; required_tools: string[]; required_sources: string[] };
+/** What a step needs from the machine that takes it. The scheduler offers the step only to a session whose compute offer meets it:
+ *  gpu, gpu_name (matched inside the declared GPU's name, ignoring case and punctuation: "rtx 2080 ti" fits "NVIDIA GeForce RTX 2080 Ti")
+ *  and vram_gb against the measured GPU, the rest against the offer per assignment. */
+export type ComputeNeeds = { cpu_hours: number; ram_gb: number; disk_gb: number; gpu?: boolean; gpu_name?: string; vram_gb?: number };
+/** `shortfall` records an observed operational limit (what the machine or budget that tried the step lacked). Its requirements are
+ *  then held strictly: they never lapse for lack of a declaring session (`requirementClause` in scheduler.ts). */
+export type NextStep = { progress?:ResearchProgress; question: string; method: string; success: string; failure: string; budget_hours: number; compute: ComputeNeeds; required_tools: string[]; required_sources: string[]; shortfall?: string };
+export function gpuName(raw: any, field: string): string {
+  if (typeof raw !== 'string' || !/^[a-z0-9][a-z0-9 .+-]{1,59}$/i.test(raw.trim())) bad(`${field} must name a GPU model, 2-60 letters, digits, spaces, dots or dashes (e.g. "rtx 2080 ti")`);
+  return raw.trim().toLowerCase().replace(/\s+/g, ' ');
+}
+/** The compute a step or a check needs. Defaults keep older reports' meaning: 0 CPU hours, 2 GB RAM, 1 GB disk, no GPU. */
+export function computeNeeds(raw: any, field: string): ComputeNeeds {
+  const c = object(raw ?? {}, field);
+  const out: ComputeNeeds = { cpu_hours: amount(c.cpu_hours ?? 0, `${field}.cpu_hours`, 0, 32), ram_gb: amount(c.ram_gb ?? 2, `${field}.ram_gb`, 0, 32), disk_gb: amount(c.disk_gb ?? 1, `${field}.disk_gb`, 0, 10) };
+  if (c.gpu !== undefined) { if (typeof c.gpu !== 'boolean') bad(`${field}.gpu must be true or false`); if (c.gpu) out.gpu = true; }
+  if (c.gpu_name !== undefined && c.gpu_name !== null && c.gpu_name !== '') { out.gpu_name = gpuName(c.gpu_name, `${field}.gpu_name`); out.gpu = true; }
+  if (c.vram_gb !== undefined && c.vram_gb !== null) { const v = amount(c.vram_gb, `${field}.vram_gb`, 0, 256); if (v > 0) { out.vram_gb = v; out.gpu = true; } }
+  return out;
+}
 export function tags(raw: any, field: string): string[] {
   if (!Array.isArray(raw) || raw.length > 20 || raw.some(x => typeof x !== 'string' || !/^[a-z0-9][a-z0-9_.:+/-]{0,79}$/.test(x))) bad(`${field} must contain at most 20 lowercase capability identifiers`);
   return [...new Set(raw)] as string[];
@@ -34,7 +56,7 @@ export function tags(raw: any, field: string): string[] {
  * the whole transcript, about a megabyte a time. The rendered route page calls these "Next experiment", "Continue if" and
  * "Stop this attempt if", which are reasonable names to guess and are not the API's, so the skeleton goes in the refusal too.
  */
-export const NEXT_STEP_SHAPE = 'next_step: {"question": "the discriminating question, <=1000 chars", "method": "how it is run, <=4000", "success": "what a positive result looks like, <=2000", "failure": "what stops this attempt, <=2000", "budget_hours": 0.1-4 (your estimate for the accounting of the portfolio; never a limit on the taker). Say what to do, never when or how fast: a leading time allowance ("Within one hour, ...") is removed, "compute": {"cpu_hours": 0-32, "ram_gb": 0-32, "disk_gb": 0-10} (optional), "required_tools": [], "required_sources": [], "progress": {"kind":"mathematical|algorithmic|device_benchmark|validation","rationale_md":"specific transferable contribution or scoped benchmark/check"} (optional)}';
+export const NEXT_STEP_SHAPE = 'next_step: {"question": "the discriminating question, <=1000 chars", "method": "how it is run, <=4000", "success": "what a positive result looks like, <=2000", "failure": "what stops this attempt, <=2000", "budget_hours": 0.1-4 (your estimate for the accounting of the portfolio; never a limit on the taker). Say what to do, never when or how fast: a leading time allowance ("Within one hour, ...") is removed, "compute": {"cpu_hours": 0-32, "ram_gb": 0-32, "disk_gb": 0-10, "gpu": true|false, "gpu_name": "e.g. rtx 2080 ti", "vram_gb": 0-256} (optional; the step is offered only to a machine that has this), "required_tools": [], "required_sources": [], "shortfall": "what the machine or budget that tried it lacked, <=1000 (only with outcome needs_capability)" (optional), "progress": {"kind":"mathematical|algorithmic|device_benchmark|validation","rationale_md":"specific transferable contribution or scoped benchmark/check"} (optional)}';
 export const OBSTACLE_SHAPE = `obstacle: {"kind": "${OBSTACLES.join('|')}", "statement": "the exact obstruction", "assumptions": "what it rests on", "evidence": "what shows it", "revisit_when": "the condition that reopens it"}`;
 
 /** Runs every field check, then refuses once with everything that was wrong and the shape that is accepted. */
@@ -64,17 +86,18 @@ export function withoutTimeAllowance(text: string): string {
 }
 
 export function nextStep(raw: any): NextStep {
-  const x = object(raw, `research.next_step`), c = object(x.compute ?? {}, 'next_step.compute');
+  const x = object(raw, `research.next_step`);
   return checked<NextStep>(NEXT_STEP_SHAPE, {
     question: () => withoutTimeAllowance(prose(x.question, 'next_step.question', 1000)),
     method: () => withoutTimeAllowance(prose(x.method, 'next_step.method')),
     success: () => withoutTimeAllowance(prose(x.success, 'next_step.success', 2000)),
     failure: () => withoutTimeAllowance(prose(x.failure, 'next_step.failure', 2000)),
     budget_hours: () => amount(x.budget_hours, 'next_step.budget_hours', 0.1, 4),
-    compute: () => ({ cpu_hours: amount(c.cpu_hours ?? 0, 'compute.cpu_hours', 0, 32), ram_gb: amount(c.ram_gb ?? 2, 'compute.ram_gb', 0, 32), disk_gb: amount(c.disk_gb ?? 1, 'compute.disk_gb', 0, 10) }),
+    compute: () => computeNeeds(x.compute, 'next_step.compute'),
     required_tools: () => tags(x.required_tools ?? [], 'next_step.required_tools'),
     required_sources: () => tags(x.required_sources ?? [], 'next_step.required_sources'),
     ...(x.progress!==undefined ? {progress:()=>parseProgress(x.progress)} : {}),
+    ...(x.shortfall!==undefined && x.shortfall!==null && x.shortfall!=='' ? {shortfall:()=>prose(x.shortfall, 'next_step.shortfall', 1000)} : {}),
   });
 }
 export type ResearchReport = {
@@ -104,9 +127,14 @@ export function parseResearch(raw: unknown): ResearchReport | null {
   if (x.next_step !== undefined) r.next_step = nextStep(x.next_step);
   if (r.outcome === 'known' && (!r.prior_art_md || r.next_step || x.obstacle !== undefined)) bad('known requires prior_art_md with the covering sources and scope, without next_step or obstacle');
   if (['proposed', 'promising', 'progress'].includes(r.outcome) && !r.next_step) bad(`${r.outcome} requires next_step with a discriminating experiment`);
-  if (x.obstacle !== undefined) {
+  if (x.obstacle !== undefined && x.obstacle?.kind === 'capability') {
+    // An operational limit filed as an obstacle: what the machine lacked, not a research finding. It becomes a capability wait.
     const o = object(x.obstacle, 'research.obstacle');
-    if (!OBSTACLES.includes(o.kind)) bad(`obstacle.kind must be ${OBSTACLES.join('|')}. The accepted shape is ${OBSTACLE_SHAPE}`);
+    r.outcome = 'needs_capability';
+    r.obstacle = { kind: 'capability' as any, statement: prose(o.statement, 'obstacle.statement'), assumptions: typeof o.assumptions === 'string' ? o.assumptions.trim() : '', evidence: typeof o.evidence === 'string' ? o.evidence.trim() : '', revisit_when: typeof o.revisit_when === 'string' ? o.revisit_when.trim() : '' };
+  } else if (x.obstacle !== undefined) {
+    const o = object(x.obstacle, 'research.obstacle');
+    if (!OBSTACLES.includes(o.kind)) bad(`obstacle.kind must be ${OBSTACLES.join('|')}, or capability for what the machine or budget lacked. The accepted shape is ${OBSTACLE_SHAPE}`);
     r.obstacle = { kind: o.kind, ...checked<{ statement: string; assumptions: string; evidence: string; revisit_when: string }>(OBSTACLE_SHAPE, {
       statement: () => prose(o.statement, 'obstacle.statement'),
       assumptions: () => prose(o.assumptions, 'obstacle.assumptions'),

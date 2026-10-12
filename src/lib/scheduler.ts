@@ -76,6 +76,8 @@ export type SchedulingAgent = {
   problemId: number; slug: string; sessionId: string; uid: number; tier: number; model: string | null;
   provider: string | null; trusted: boolean; granted: boolean; lane: string | null;
   cpuHours: number; ramGb: number; hasGpu: boolean; disk: number; maxHours: number;
+  /** The measured GPU's name and the VRAM this session's share offers: a step that names a GPU model or VRAM goes only where they fit. */
+  gpuName?: string | null; vramGb?: number;
   /** Hours left in the session, when it has an end (the person's time= or the agent's X-Session-Ends): jobs are fitted to it (item 10). */
   hoursLeft?: number | null;
   jobId?: number; directionId?: string | null; directionRevision?: number; reviewStreak: number; capabilities: Partial<Capabilities>;
@@ -108,7 +110,9 @@ const TOOL_ALIASES = `CASE WHEN need.name IN ('python','python3') THEN ARRAY['py
  * archive). A name nobody running has declared stops holding a pursuit step after a day; it is then shown to the taker as the proposer's note (`unmetRequirements`). */
 function requirementClause(column: 'required_tools' | 'required_sources', key: 'tools' | 'sources', held: string, aliases: boolean): string {
   const names = aliases ? TOOL_ALIASES : `ARRAY[need.name]`;
+  // A capability wait (#sah-capability-wait-not-block, Oct 12 2026) names what a machine was seen to lack: it never lapses, it waits.
   return `(j.${column} <@ ${held}::text[] OR (j.research_stage='pursue' AND j.created_at < now()-interval '${STALE_REQUIREMENT_HOURS} hours'
+      AND coalesce(j.compute_hint->>'capability_wait','false') NOT IN ('true','1')
       AND NOT EXISTS (SELECT 1 FROM unnest(j.${column}) need(name) WHERE NOT (need.name = ANY(${held}::text[]))
         AND EXISTS (SELECT 1 FROM sessions known WHERE known.problem_id=j.problem_id AND known.last_seen > now()-interval '${DECLARED_CAPABILITY_HOURS} hours'
           AND coalesce(known.capabilities->'${key}','[]'::jsonb) ?| ${names}))))`;
@@ -175,10 +179,13 @@ function eligibility(a: SchedulingAgent, omitCompute = false, sameKindOnly = fal
     : ["it belongs to another agent's direction", `j.agent_direction_id IS NULL`]);
   const clauses = labeled.map(([, sql]) => sql);
   if(a.jobId && filterJob) clauses.push(`j.id=${p(a.jobId)}`);
-  if (!omitCompute) { const compute: [string, string] = ["it needs more compute than this session offers (cpu, ram, gpu or disk)", [
+  if (!omitCompute) { const compute: [string, string] = ["it needs more compute than this session offers (cpu, ram, gpu, its model or VRAM, or disk)", [
     `coalesce((j.compute_hint->>'cpu_hours')::numeric,0) <= ${p(a.cpuHours)}`,
     `coalesce((j.compute_hint->>'ram_gb')::numeric,0) <= ${p(a.ramGb > 0 ? a.ramGb : 8)}`,
     `(coalesce(j.compute_hint->>'gpu','false') IN ('false','0','') OR ${p(a.hasGpu)}::boolean)`,
+    // A named GPU model matches inside the measured GPU's name, letters and digits only: "rtx 2080 ti" fits "NVIDIA GeForce RTX 2080 Ti".
+    `(coalesce(j.compute_hint->>'gpu_name','') = '' OR strpos(regexp_replace(lower(coalesce(${p(a.gpuName ?? null)}::text,'')),'[^a-z0-9]','','g'), regexp_replace(lower(j.compute_hint->>'gpu_name'),'[^a-z0-9]','','g')) > 0)`,
+    `coalesce((j.compute_hint->>'vram_gb')::numeric,0) <= ${p(a.vramGb ?? 0)}`,
     `(coalesce(j.compute_hint->>'mathlib_cache','false') IN ('false','0','') OR ${p(a.disk)} >= 10)`,
     `coalesce((j.compute_hint->>'disk_gb')::numeric,0) <= ${p(a.disk)}`,
   ].join(" AND ")]; labeled.push(compute); clauses.push(compute[1]); }

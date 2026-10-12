@@ -49,7 +49,7 @@ test('unable receipts require targeted capabilities to retry and never count as 
   assert.equal(parseCheckBlocker(undefined),null);
   assert.deepEqual(parseCheckBlocker({kind:'capability',required_tools:['python3']}),{kind:'capability',required_tools:['python3'],required_sources:[]});
   assert.equal(parseCheckBlocker({kind:'package'}).kind,'package');
-  assert.throws(()=>parseCheckBlocker({kind:'capability'}),/missing tools or sources/);
+  assert.throws(()=>parseCheckBlocker({kind:'capability'}),/missing tools, sources or compute/);
   assert.throws(()=>parseCheckBlocker({kind:'capability',required_sources:['invalid source']}),/identifiers/);
   const run={independent:true,execution_eligible:true,receipt_status:'recorded',outcome:'unable'};
   assert.equal(isCompletedCheck(run),false);

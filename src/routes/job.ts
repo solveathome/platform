@@ -27,6 +27,7 @@ import { isDeepStrictEqual } from "node:util";
 import { backlogFor, reviewWorkFor, selectJob, selectRequiredCorrection, REQUIRED_CORRECTION_INTERVAL, whyNotEligible, computeBlocked, discoveryShare, discoveryDue, allocation, researchPolicy, researchAllocation, portfolioOrder, researchBucket, reviewPressure, reviewTriage, unmetRequirements, STALE_REQUIREMENT_HOURS, ROUTE_REPEAT_WINDOW, type SchedulingAgent } from "../lib/scheduler.js";
 import { parseResearch, stageOf, jobLabel } from '../lib/research-format.js';
 import { stepCheckContext, recordResearch, prepareRescue, retireRedundantRescueSamples, retireRedundantStepChecks, researchBrief, routeContext, reconsiderDependents, holdForStepCheck } from '../lib/research.js';
+import { describeNeeds, waitingFor } from '../lib/capability-shortfall.js';
 import { leanStatementBinding, leanExecutionBinding, leanScientificBinding } from '../lib/lean-verification.js';
 import { expireUntrustedLeanChecks, saveLeanStatementReview, saveLeanExecutionReview, parseLeanExecutionReview, validateLeanIdentityArtifacts, parseVerificationPlan, saveVerificationPlan, queueCheck, saveCheckReceipt, verificationRuns, verificationState, verificationBrief, judgmentBudget, validateReceiptUse, isCompletedCheck, expireWaitingChecks, checkWaitExpired, identicalClaim, verificationSummary, receiptId } from '../lib/verification.js';
 import { readFileSync } from 'node:fs';
@@ -262,7 +263,7 @@ ${ENDED_LAUNCH_GUIDANCE}
   session.direction_snapshot = savedDirection;
   const agent: SchedulingAgent = { problemId: Number(req.project.id), slug: req.project.slug, sessionId: session.id, uid,
     tier, model: req.model ?? null, provider: req.provider ?? null, trusted, granted, lane, cpuHours: maxHours,
-    ramGb: prefs.ramGb, hasGpu: prefs.hasGpu, disk, maxHours: resources.maxHours,
+    ramGb: prefs.ramGb, hasGpu: prefs.hasGpu, gpuName: resources.gpuName, vramGb: resources.vramGb, disk, maxHours: resources.maxHours,
     directionId: session.direction_id, directionRevision: savedDirection?.revision, reviewStreak: Number(session.review_streak ?? 0), capabilities: session.capabilities ?? {},
     chatOnly: session.registered_via === "mcp" };
   const chat = session.registered_via === "mcp";
@@ -758,7 +759,11 @@ export function sessionResources(session: any, member: any) {
   const settings = { ai: session?.ai ?? member?.ai ?? {}, compute: session?.compute ?? null, input: session?.input ?? null };
   const maxHours = Number(settings.ai?.max_hours_per_assignment ?? 2);
   const offer = settings.compute?.usable ? settings.compute : parseOffer(settings.compute, maxHours);
-  return { settings, offer, cpuHours: Number(offer?.usable?.cpu_hours ?? 0), ramGb: Number(offer?.usable?.ram_gb ?? 0), hasGpu: !!(offer?.usable?.vram_gb),
+  // A share-only offer measures nothing; a GPU the agent declared in its capabilities counts within the same share (#sah-capability-wait-not-block).
+  const declaredGpu = offer?.usable && !offer.machine?.gpu && session?.capabilities?.gpu?.name ? session.capabilities.gpu : null;
+  const vramGb = Number(offer?.usable?.vram_gb ?? 0) || (declaredGpu ? Math.round(Number(declaredGpu.vram_gb ?? 0) * Number(offer!.share ?? 0) * 10) / 10 : 0);
+  return { settings, offer, cpuHours: Number(offer?.usable?.cpu_hours ?? 0), ramGb: Number(offer?.usable?.ram_gb ?? 0), hasGpu: !!vramGb || !!declaredGpu,
+    gpuName: offer?.machine?.gpu?.name ?? declaredGpu?.name ?? null, vramGb,
     lane: settings.input?.lane ?? null, disk: diskFor(offer), maxHours };
 }
 
@@ -785,7 +790,7 @@ job.get("/ready", bearer, project, async (req: any, res) => {
   const member = await one(`SELECT * FROM pool WHERE problem_id=$1 AND user_id=$2`, [req.project.id, uid]);
   const r = sessionResources(latest, member);
   const agent: SchedulingAgent = { problemId: Number(req.project.id), slug: req.project.slug, sessionId: "", deferralSessionId: latest?.id, uid, tier, model: req.model ?? null,
-    provider: req.provider ?? null, trusted, granted, lane: r.lane, cpuHours: r.cpuHours, ramGb: r.ramGb, hasGpu: r.hasGpu, disk: r.disk, maxHours: r.maxHours,
+    provider: req.provider ?? null, trusted, granted, lane: r.lane, cpuHours: r.cpuHours, ramGb: r.ramGb, hasGpu: r.hasGpu, gpuName: r.gpuName, vramGb: r.vramGb, disk: r.disk, maxHours: r.maxHours,
     reviewStreak: 0, capabilities: latest?.capabilities ?? {} };
   // /start refuses a new session at the handle's caps before it looks at any work: so does /ready, with the same limits.
   const capped = await handleCapRefusal(Number(req.project.id), uid);
@@ -818,7 +823,7 @@ job.get('/research-routes', project, async (req: any, res) => {
   const total = Number((await one<{ n: string }>(`SELECT count(*) AS n FROM research_routes WHERE problem_id=$1`, [req.project.id]))?.n ?? 0);
   if ((req.header('accept') ?? '').includes('application/json')) { res.json({ routes: rows, total, limit, offset, ...(offset + rows.length < total ? { next: `/projects/${req.project.slug}/research-routes?limit=${limit}&offset=${offset + rows.length}` } : {}) }); return; }
   const P = `/projects/${req.project.slug}`;
-  const text = `# Research routes\n\nInvestment states describe what to investigate, not what has been proved.\n\n${rows.map(r => `- [${r.title}](${P}/research-routes/${r.id}): ${r.state}. ${r.uncertainty_md}`).join('\n') || 'No routes proposed yet.'}`;
+  const text = `# Research routes\n\nInvestment states describe what to investigate, not what has been proved.\n\n${rows.map(r => `- [${r.title}](${P}/research-routes/${r.id}): ${waitingFor(r) ? `waiting for a machine with ${waitingFor(r)}` : r.state}. ${r.uncertainty_md}`).join('\n') || 'No routes proposed yet.'}`;
   if (wantsHtml(req)) res.type('text/html').send(page({ title: `Research routes · ${req.project.name}`, heading: 'Research routes', path: `${P}/research-routes`, description: `The research routes proposed on ${req.project.name}, each with its investment state and what is still uncertain. A route's state says what to investigate, not what has been proved.`, crumbs: `<a href="${P}">${escHtml(req.project.name)}</a>`, body: (() => { const m = protectMath(text.replace(/</g, '&lt;').replace(/>/g, '&gt;')); return m.restore(marked.parse(m.text) as string); })() }));
   else res.type('text/markdown').send(text);
 });
@@ -829,8 +834,8 @@ job.get('/research-routes/:id', project, async (req: any, res) => {
   if (!route || Number(route.problem_id) !== Number(req.project.id)) { res.status(404).json({ error: 'no such research route in this project' }); return; }
   if ((req.header('accept') ?? '').includes('application/json')) { res.json(route); return; }
   const P = `/projects/${req.project.slug}`;
-  const step = route.next_step, obstacle = route.obstacle;
-  const text = `Investment state: **${route.state}**. This describes research progress; claims have separate evidence grades.
+  const step = route.next_step, obstacle = route.obstacle, waits = waitingFor(route);
+  const text = `Investment state: **${route.state}**${waits ? `, waiting for a machine with ${waits}. The next experiment is offered only to a machine that has it; this is not an obstacle` : ''}. This describes research progress; claims have separate evidence grades.
 
 ## Contribution to the goal
 
@@ -844,7 +849,7 @@ ${route.prior_art_md}
 
 ${route.uncertainty_md}
 
-${step ? `## Next experiment\n\n${step.question}\n\n${step.method}\n\n- Continue if: ${step.success}\n- Stop this attempt if: ${step.failure}` : ''}
+${step ? `## Next experiment\n\n${step.question}\n\n${step.method}\n\n- Continue if: ${step.success}\n- Stop this attempt if: ${step.failure}${describeNeeds(step) ? `\n- Needs: ${describeNeeds(step)}` : ''}${waits ? `\n- Waiting because: ${step.shortfall}` : ''}` : ''}
 
 ${obstacle ? `## Current obstacle\n\n**${String(obstacle.kind).replaceAll('_', ' ')}:** ${obstacle.statement}\n\nAssumptions: ${obstacle.assumptions}\n\nEvidence: ${obstacle.evidence}\n\nReconsider when: ${obstacle.revisit_when}` : ''}
 
@@ -1725,7 +1730,11 @@ job.post("/result", bearer, project, assignmentMutation(async (req: any, res) =>
   if (twin) await q(`UPDATE returns SET duplicate_of = $2 WHERE id = $1`, [ret!.id, twin.id]);
   if (cpuHours > 0) await reputation.addCpuHours(uid, cpuHours);
   // Exploration is recorded, not reviewed: it costs reviewer time only when something builds on it or the author asks for a rung.
-  const researchProgress = await recordResearch(await one(`SELECT * FROM returns WHERE id=$1`, [ret!.id]), jobRow, researchReport);
+  // A capability wait asks for more than the machine that tried offered: read that session's offer (#sah-capability-wait-not-block).
+  const storedReturn = await one(`SELECT * FROM returns WHERE id=$1`, [ret!.id]);
+  const submitter = researchReport && storedReturn?.session ? await one(`SELECT * FROM sessions WHERE id=$1`, [storedReturn.session]) : null;
+  const offered = submitter ? { cpu_hours: sessionResources(submitter, await one(`SELECT * FROM pool WHERE problem_id=$1 AND user_id=$2`, [problem.id, uid])).cpuHours } : {};
+  const researchProgress = await recordResearch(storedReturn, jobRow, researchReport, offered);
   if (exposition) {
     const refs = Array.isArray(cites.returns) ? cites.returns : [];
     cites.returns = [...new Set([...refs,exposition.source_return_id])];
@@ -1811,7 +1820,7 @@ job.post("/result", bearer, project, assignmentMutation(async (req: any, res) =>
   const twinWarn = twin ? [`this change is byte-identical to pending return #${twin.id}: the two are one change; when #${twin.id} is decided this return is folded into it (accepted: superseded; rejected: rejected with it; unpaid either way), and reviewers see both as one.`] : [];
   const returnReport = tokens.log === "unknown" && transcriptMode !== "summary" ? await reportHarness(String(b.transcript), { returnId: Number(ret!.id), uid, model: req.model ?? null }) : null;
   const returnLogWarn = transcriptWarning(transcriptMode, sessionMode, tokens, String(b.transcript), `POST ${BASE()}/projects/${req.project.slug}/return/${Number(ret!.id)}/transcript (same headers)`, returnReport);
-  const warnings = [...(effortNote ? [effortNote] : []), ...(returnLogWarn ? [returnLogWarn] : []), ...onceWarning(tokens), ...scrubWarnings, ...sharedWarnings, ...fileWarn, ...mathWarn, ...patchWarning, ...ledgerWarn, ...omissionWarn, ...subWarn, ...twinWarn, ...recipeGapWarnings(recipeGap, BASE()), ...inputGapWarnings(inputGap, BASE()), ...(rtype === "audit" ? alsoFixCut(b.also_fix) : []), ...(stray.length ? [`recipe_md names ${stray.length} sha256 value(s) that are neither in hashes, nor among your or cited files, nor a served document: ${stray.map((x: string) => x.slice(0, 12) + "…").join(", ")}. If one is an expected output hash, put it in hashes too; if it is a typo, a reviewer's rerun will not match.`] : [])];
+  const warnings = [...(researchProgress?.note ? [researchProgress.note] : []), ...(effortNote ? [effortNote] : []), ...(returnLogWarn ? [returnLogWarn] : []), ...onceWarning(tokens), ...scrubWarnings, ...sharedWarnings, ...fileWarn, ...mathWarn, ...patchWarning, ...ledgerWarn, ...omissionWarn, ...subWarn, ...twinWarn, ...recipeGapWarnings(recipeGap, BASE()), ...inputGapWarnings(inputGap, BASE()), ...(rtype === "audit" ? alsoFixCut(b.also_fix) : []), ...(stray.length ? [`recipe_md names ${stray.length} sha256 value(s) that are neither in hashes, nor among your or cited files, nor a served document: ${stray.map((x: string) => x.slice(0, 12) + "…").join(", ")}. If one is an expected output hash, put it in hashes too; if it is a typo, a reviewer's rerun will not match.`] : [])];
   if (jobRow?.ask_id) {
     const ask = await one(`SELECT a.id, a.message_id, m.channel_id FROM asks a JOIN messages m ON m.id = a.message_id WHERE a.id = $1 AND a.status IN ('open','researching')`, [jobRow.ask_id]);
     if (ask) {
@@ -1886,7 +1895,7 @@ export async function resumeDeferredReviews(problemId: number): Promise<number> 
 
 /** Create review jobs for a return. Reviews require tier 1 (scope Q7/Q13). */
 /** Bumped whenever the standard review guidance changes; a queued review from an earlier version is refreshed when served. */
-export const REVIEW_BRIEF_VERSION = 25; // 22: transferable progress and explicit bounded next-step classifications. // 21: trusted source-only legacy closure triage without a scientific verdict. // 20: explicit legacy nominations and report-bound comparison checks. // 19: a summary transcript is the author's person's choice, judged as such (Oct 10 2026).   // 18: exact scoped assessments and shared corrections (Oct 10 2026).   // 16: authenticated trusted execution separate from cross-family correctness review (Oct 8 2026); 15: distinct Lean model families, both Tier 1/high, bounded reconstruction (Oct 7 2026); 14: concrete Lean package artifacts and make-checkable continuation (Oct 6 2026); 13: pinned Lean statement review and trustworthy worker validation (Oct 6 2026); 12: a chat return's transcript is the server's record of its tool calls, model unmeasured (Oct 4 2026, #sah-mcp-real-work-build);   // 11: review targets match integration closure, including explicit empty lists (Oct 2 2026); 10: required document repairs go to Tier 1 trusted agents and reviews reuse established evidence (Oct 2 2026); 9: a series also gathers the same document's later fixes, chain links and no-op revisions (#mba-sah-held-feedback-items, item 15); 8: the return schema names verification_sufficiency_md on a packaged review and the also_fix note cap (#mba-sah-bot-feedback-fixes, fix 7); 7: a reviewer holding a role on the project may mark an accepted finding worth announcing (Chris, Sep 26 2026, #sah-discord-announcer); 6: the reviewer asks whether the return earns credit, a rung or a citation without the work (Chris, Sep 24 2026, #sah-gemma-mvp; the Gemma Challenge's agents caught a gameable gate themselves);5: a revision's review lists the findings it answers, and also_fix takes a scope (Sep 24 2026); 3: no time budget in the review brief (Chris, Sep 19 2026); 4: series verdicts are decisions with their usual effects, from a trusted reviewer only (Sep 23 2026)
+export const REVIEW_BRIEF_VERSION = 26; // 26: a check summary names a capability gap (tools, sources or compute) and says the retry waits for a machine with it. // 22: transferable progress and explicit bounded next-step classifications. // 21: trusted source-only legacy closure triage without a scientific verdict. // 20: explicit legacy nominations and report-bound comparison checks. // 19: a summary transcript is the author's person's choice, judged as such (Oct 10 2026).   // 18: exact scoped assessments and shared corrections (Oct 10 2026).   // 16: authenticated trusted execution separate from cross-family correctness review (Oct 8 2026); 15: distinct Lean model families, both Tier 1/high, bounded reconstruction (Oct 7 2026); 14: concrete Lean package artifacts and make-checkable continuation (Oct 6 2026); 13: pinned Lean statement review and trustworthy worker validation (Oct 6 2026); 12: a chat return's transcript is the server's record of its tool calls, model unmeasured (Oct 4 2026, #sah-mcp-real-work-build);   // 11: review targets match integration closure, including explicit empty lists (Oct 2 2026); 10: required document repairs go to Tier 1 trusted agents and reviews reuse established evidence (Oct 2 2026); 9: a series also gathers the same document's later fixes, chain links and no-op revisions (#mba-sah-held-feedback-items, item 15); 8: the return schema names verification_sufficiency_md on a packaged review and the also_fix note cap (#mba-sah-bot-feedback-fixes, fix 7); 7: a reviewer holding a role on the project may mark an accepted finding worth announcing (Chris, Sep 26 2026, #sah-discord-announcer); 6: the reviewer asks whether the return earns credit, a rung or a citation without the work (Chris, Sep 24 2026, #sah-gemma-mvp; the Gemma Challenge's agents caught a gameable gate themselves);5: a revision's review lists the findings it answers, and also_fix takes a scope (Sep 24 2026); 3: no time budget in the review brief (Chris, Sep 19 2026); 4: series verdicts are decisions with their usual effects, from a trusted reviewer only (Sep 23 2026)
 const REASSESSMENT_NOTE = '\n\nEvidence needs reassessment or execution could not find capacity within 24 hours. Assess the specific missing or changed evidence from the record; execution is not included. Preserve existing observations. Do not report that a check ran. If new execution is necessary, name the smallest check and missing capability in needs_md; a repaired package is a new return.';
 /** The standard review brief for a return as it stands now, with the tier, budget and compute hint that go with it. Job-specific text (the reassessment note) is the caller's. */
 export async function composeReviewBrief(returnId: number, problemId: number, options: { judgmentOnly?: boolean } = {}): Promise<{ brief: string; tier: number; budget: number; compute: any; judgmentOnly: boolean; packaged: boolean }> {

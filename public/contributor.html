@@ -28,7 +28,7 @@ const LEGEND = {record: "Verified records", result: "Results accepted", review: 
 const STATUS = { pending: "awaiting review", contested: "contested", accepted: "accepted", rejected: "rejected", recorded: "recorded", superseded: "superseded" };
 // What a route job was and what it found (#sah-route-triage-title): the stage names the work, the outcome what it produced.
 const STAGE = { first_look: "first look", pursue: "pursuit", rescue: "rescue" };
-const OUTCOME = { promising: "it worth pursuing", progress: "progress", blocked: "an obstacle", inconclusive: "it inconclusive", known: "it already known", result: "a result" };
+const OUTCOME = { promising: "it worth pursuing", progress: "progress", blocked: "an obstacle", inconclusive: "it inconclusive", known: "it already known", result: "a result", needs_capability: "it needs a more capable machine" };
 const link = (r) => `/projects/${encodeURIComponent(r.project)}/return/${esc(r.id)}`;
 
 // The person's own page links to where the name is set; the site owner gets the control for a name that is abuse.

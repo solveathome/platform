@@ -4,6 +4,7 @@ import { collaborationEnabled, activeLinkSQL, associatedReturns } from './shared
 import { createHash } from 'node:crypto';
 import { one, q } from '../db/index.js';
 import { bad, type NextStep, type ResearchReport, type ResearchStage } from './research-format.js';
+import { describeNeeds, obstacleShortfall, operationalShortfall, requirementKey, waitingFor, waitingStep } from './capability-shortfall.js';
 
 const experimentKey = (step: NextStep) => createHash('sha256').update(JSON.stringify([step.question.trim(), step.method.trim(), step.success.trim(), step.failure.trim()])).digest('hex');
 
@@ -75,7 +76,7 @@ export async function researchSummary(problemId: number): Promise<any> {
       coalesce(sum((SELECT count(*) FROM jsonb_array_elements(v.details->'controls'))) FILTER (WHERE jsonb_typeof(v.details->'controls')='array'),0)::int AS controls_total,
       (SELECT round((percentile_cont(0.5) WITHIN GROUP (ORDER BY x.elapsed_seconds::double precision))::numeric,1) FROM verification_runs x JOIN returns y ON y.id=x.result_return_id WHERE y.problem_id=$1 AND x.outcome IN ('pass','fail')) AS median_elapsed_seconds
     FROM verification_runs v JOIN returns r ON r.id=v.result_return_id WHERE r.problem_id=$1`, [problemId]);
-  return { routes, states, checks: { ...checks, ...reuse, ...packages, ...controls } };
+  return { routes: routes.map((r: any) => ({ ...r, waiting_for: waitingFor(r) })), states, checks: { ...checks, ...reuse, ...packages, ...controls } };
 }
 // The brief stays readable on a long route: the latest returns' files are listed, the rest are one request away in the route record.
 const BRIEF_FILE_RETURNS = 12;
@@ -89,11 +90,21 @@ export async function researchBrief(id: number): Promise<string> {
   const r = await routeContext(id); if (!r) return '';
   return `\n\n### Research route #${r.id}: ${r.title}\n\nInvestment state: ${r.state}; this is not a truth grade. Revision ${r.revision}.\n\nContribution: ${r.contribution_md}\n\nPrior art and exact difference: ${r.prior_art_md}\n\nCentral uncertainty: ${r.uncertainty_md}\n\nNext experiment: ${JSON.stringify(r.next_step)}\n\nObstacle: ${JSON.stringify(r.obstacle)}\n\nEvidence behind continued investment: ${JSON.stringify(r.basis)}.\n\nFiles served with this route's returns (GET <project base>/return/<id> lists and links them; a number in a file name is usually the job it was made under, not a return id):\n${routeFilesMd(r.files, r.id)}\n\nDeclared dependencies: ${JSON.stringify(r.dependencies)}. Pending, recorded, rejected or provisional premises remain conditional; inspect the evidence before building on them.\n\nRecent investigations:\n${r.events.slice(0, 5).map((e: any) => `- Return #${e.return_id ?? '—'} (${e.model ?? 'system'}): ${e.outcome}. ${e.evidence_md}`).join('\n')}\n\nFull route and event record: GET <project base>/research-routes/${r.id}.\n`;
 }
+/** A step's compute hint on its job. `capability_wait` marks requirements an attempt showed (the step's shortfall): the scheduler holds
+ *  those strictly, where a proposer's guessed tool names lapse after a day without a declaring session. */
+export function stepHint(step: NextStep | null | undefined): Record<string, unknown> {
+  return { ...(step?.compute ?? {}), ...(step?.shortfall ? { capability_wait: true } : {}) };
+}
 async function queueInvestigation(route: any, stage: ResearchStage, source: any): Promise<any> {
   if (await one(`SELECT 1 FROM jobs WHERE research_route_id=$1 AND research_stage IN ('first_look','pursue','rescue') AND status IN ('queued','assigned')`, [route.id])) return null;
   const step: NextStep | null = route.next_step;
   const origin = stage === 'pursue' && step ? `pursue:${route.id}:${experimentKey(step)}` : `${stage}:${route.id}:${route.revision}`;
-  if (await one(`SELECT 1 FROM jobs WHERE problem_id=$1 AND origin_key=$2`, [route.problem_id, origin])) return null;
+  // The same experiment is bought once. A capability wait is the exception: the step that a machine could not run goes out again,
+  // held to the stricter requirement the attempt showed, so the earlier job of that experiment no longer counts as the same work.
+  const hint = stage === 'pursue' ? stepHint(step) : {};
+  const prior = await q(`SELECT compute_hint,required_tools,required_sources FROM jobs WHERE problem_id=$1 AND origin_key=$2`, [route.problem_id, origin]);
+  const wanted = requirementKey(hint, stage === 'pursue' ? step?.required_tools : [], stage === 'pursue' ? step?.required_sources : []);
+  if (prior.length && !(stage === 'pursue' && step?.shortfall && prior.every((j: any) => requirementKey(j.compute_hint, j.required_tools, j.required_sources) !== wanted))) return null;
   const task = stage === 'first_look'
     ? 'Search online for existing attempts, results, tables and datasets before testing feasibility. Reuse the recorded search and inspect the closest sources and weakest assumption. Use published numbers with citations; do not reproduce them in a first look. Seek the smallest experiment on the uncovered step. Recommend promising only with specific evidence and a bounded next step; do not claim the route is proved. Map the assumptions of any borrowed method onto this problem.'
     : stage === 'rescue'
@@ -102,9 +113,9 @@ async function queueInvestigation(route: any, stage: ResearchStage, source: any)
   return one(`INSERT INTO jobs (problem_id,lane_id,type,title,brief_md,budget_hours,min_tier,compute_hint,purpose,research_stage,research_route_id,research_source_return_id,avoid_model,origin_key,required_tools,required_sources,priority,research_revision)
     VALUES ($1,$2,'explore',$3,$4,$5,$6,$7,'discovery',$8,$9,$10,$11,$12,$13,$14,$15,$16) RETURNING *`,
     [route.problem_id, route.lane_id, String(route.title).slice(0, 200),
-      `${task}\n\nRead GET <project base>/research-routes/${route.id} and return #${source.id}. Return the ordinary report and transcript plus research: {route_id: ${route.id}, outcome: "promising|progress|blocked|inconclusive|known|result", evidence_md: "what the evidence changes, <=4000 chars", prior_art_md: "updated online search record, sources and exact remaining gap, <=4000", next_step: {question, method, success, failure, budget_hours} <only for continued pursuit; what to do, never when or how fast; it must not ask for what a return on this route or a linked route already did, and the route returns it builds on go in depends_on or cites.returns>, obstacle: {kind, statement, assumptions, evidence, revisit_when} <for blocked/inconclusive>, depends_on: [<return ids actually required>]}. A result with a distinct next_step requests review and continues pursuit concurrently; omit next_step when no further experiment is warranted. Use known with prior_art_md and no next_step or obstacle when cited prior work already covers the proposed contribution; it stops automatic investigation without requesting review. The evidence grade is separate. Do not close a broad route because one proof attempt failed.`,
+      `${task}\n\nRead GET <project base>/research-routes/${route.id} and return #${source.id}. Return the ordinary report and transcript plus research: {route_id: ${route.id}, outcome: "promising|progress|blocked|inconclusive|known|result|needs_capability", evidence_md: "what the evidence changes, <=4000 chars", prior_art_md: "updated online search record, sources and exact remaining gap, <=4000", next_step: {question, method, success, failure, budget_hours} <only for continued pursuit; what to do, never when or how fast; it must not ask for what a return on this route or a linked route already did, and the route returns it builds on go in depends_on or cites.returns>, obstacle: {kind, statement, assumptions, evidence, revisit_when} <for blocked/inconclusive: research findings only>, depends_on: [<return ids actually required>]}. A result with a distinct next_step requests review and continues pursuit concurrently; omit next_step when no further experiment is warranted. Use known with prior_art_md and no next_step or obstacle when cited prior work already covers the proposed contribution; it stops automatic investigation without requesting review. The evidence grade is separate. Do not close a broad route because one proof attempt failed. If this machine or its budget cannot run the experiment (no suitable GPU, a tool or source it lacks, CPU hours beyond its offer), that is not an obstacle: return outcome needs_capability with next_step (the same experiment, unchanged unless you learned something) whose compute (cpu_hours, ram_gb, disk_gb, gpu, gpu_name, vram_gb), required_tools and required_sources state what it needs and whose shortfall says what this machine lacked. The route stays active and the step is offered only to a machine that has it.`,
       stage === 'pursue' ? step?.budget_hours ?? 1 : 0.5, 99,
-      JSON.stringify(stage === 'pursue' ? step?.compute ?? {} : {}), stage, route.id, source.id,
+      JSON.stringify(hint), stage, route.id, source.id,
       stage === 'rescue' ? source.model : null, origin,
       stage === 'pursue' ? step?.required_tools ?? [] : [], stage === 'pursue' ? step?.required_sources ?? [] : [], stage === 'pursue' ? 3 : 1, route.revision]);
 }
@@ -220,13 +231,42 @@ export async function holdForStepCheck(row: any): Promise<any | null> {
   return { ...check, lane_slug: row.lane_slug, skill_matches: row.skill_matches, route_repeat: row.route_repeat };
 }
 
-export async function recordResearch(ret: any, job: any, report: ResearchReport | null): Promise<any> {
+/** Merge two requirement sets: the stricter of each. */
+function strictest(a: NextStep['compute'] | undefined, b: NextStep['compute'] | undefined): NextStep['compute'] {
+  const x: any = a ?? {}, y: any = b ?? {};
+  const out: any = { cpu_hours: Math.max(Number(x.cpu_hours ?? 0), Number(y.cpu_hours ?? 0)), ram_gb: Math.max(Number(x.ram_gb ?? 0), Number(y.ram_gb ?? 0)), disk_gb: Math.max(Number(x.disk_gb ?? 0), Number(y.disk_gb ?? 0)) };
+  if (x.gpu || y.gpu) out.gpu = true;
+  if (x.gpu_name || y.gpu_name) out.gpu_name = y.gpu_name ?? x.gpu_name;
+  if (x.vram_gb || y.vram_gb) out.vram_gb = Math.max(Number(x.vram_gb ?? 0), Number(y.vram_gb ?? 0));
+  return out;
+}
+
+/**
+ * A capability wait (needs_capability, or a blocked/inconclusive report whose obstacle is an operational limit): the experiment stays
+ * the route's next step, with the requirement the attempt showed, and the route stays active. Null when the report is not one, or
+ * when there is no experiment to wait on (a route with no step keeps the report as filed).
+ */
+export function capabilityWait(report: ResearchReport, routeStep: NextStep | null | undefined, offered: { cpu_hours?: number | null } = {}): { report: ResearchReport; converted: boolean } | null {
+  const filed = report.outcome === 'needs_capability';
+  const fromObstacle = !filed && ['blocked', 'inconclusive'].includes(report.outcome) ? obstacleShortfall(report.obstacle) : null;
+  if (!filed && !fromObstacle) return null;
+  const base = report.next_step ?? routeStep;
+  if (!base) return null;
+  const statement = report.next_step?.shortfall ?? report.obstacle?.statement ?? report.evidence_md;
+  const found = fromObstacle ?? (report.obstacle ? obstacleShortfall(report.obstacle) : null) ?? operationalShortfall(statement);
+  // An agent that states the requirement itself is taken at its word; the shortfall text only adds what it left out.
+  const step = waitingStep(base, filed && report.next_step ? null : found, statement, offered);
+  const { obstacle: _dropped, ...rest } = report;
+  return { report: { ...rest, outcome: 'needs_capability', next_step: step }, converted: !filed };
+}
+
+export async function recordResearch(ret: any, job: any, report: ResearchReport | null, offered: { cpu_hours?: number | null } = {}): Promise<any> {
   if (job?.research_route_id && ['first_look', 'pursue', 'rescue'].includes(job.research_stage) && !report) bad('this route assignment requires research with outcome, evidence and its next step or obstacle');
   if (!report) return null;
   if (report.depends_on !== undefined) for (const id of report.depends_on)
     if (id === Number(ret.id) || !(await one(`SELECT 1 FROM returns WHERE id=$1 AND problem_id=$2`, [id, ret.problem_id]))) bad('research dependencies must name earlier returns in this project');
   if (job?.research_route_id && Number(job.research_route_id) !== report.route_id) bad('this assignment must report on its assigned route; propose independent alternatives in a separate linked return');
-  let route: any, held: any = null;
+  let route: any, held: any = null, waitNote: string | null = null;
   if (report.proposal) {
     if (!['explore', 'direction'].includes(ret.type)) bad('propose a route through an explore or direction return');
     if (report.parent_route_id && !(await one(`SELECT 1 FROM research_routes WHERE id=$1 AND problem_id=$2`, [report.parent_route_id, ret.problem_id]))) bad('parent route is not in this project');
@@ -249,13 +289,28 @@ export async function recordResearch(ret: any, job: any, report: ResearchReport 
       await q(`INSERT INTO research_events (route_id,return_id,outcome,evidence_md,detail) VALUES ($1,$2,'stale_progress',$3,$4)`, [route.id, ret.id, report.evidence_md, JSON.stringify(report)]);
       return { route_id: Number(route.id), state: route.state, next_job_id: null, stale: true, note: 'Route premises changed during this assignment. Findings are preserved for reassessment.' };
     }
-    let state = ({ promising: 'active', progress: 'active', blocked: 'blocked', inconclusive: 'paused', known: 'known', result: report.next_step ? 'active' : 'result' } as any)[report.outcome];
+    const wait = capabilityWait(report, route.next_step, offered);
+    if (report.outcome === 'needs_capability' && !wait) bad('needs_capability names the experiment that could not run: give next_step with its compute, required_tools and required_sources, and a shortfall saying what this machine lacked');
+    if (wait) { report = wait.report; waitNote = wait.converted ? `This report filed an operational limit as a research obstacle. It is recorded as needs_capability: route #${route.id} stays active, and its step waits for a machine with ${describeNeeds(report.next_step) || 'the stated requirement'}. Report what a machine or budget lacked as needs_capability; keep obstacles for research findings.` : null; }
+    // A later report that copies a waiting step without its requirements (a step check, a progress note) keeps them.
+    if (report.next_step && !report.next_step.shortfall && route.next_step?.shortfall && experimentKey(report.next_step) === experimentKey(route.next_step))
+      report = { ...report, next_step: { ...report.next_step, compute: strictest(route.next_step.compute, report.next_step.compute), required_tools: [...new Set([...(route.next_step.required_tools ?? []), ...report.next_step.required_tools])], required_sources: [...new Set([...(route.next_step.required_sources ?? []), ...report.next_step.required_sources])], shortfall: route.next_step.shortfall } };
+    let state = ({ promising: 'active', progress: 'active', blocked: 'blocked', inconclusive: 'paused', known: 'known', result: report.next_step ? 'active' : 'result', needs_capability: 'active' } as any)[report.outcome];
     if (!state) bad('this is an existing route; report progress or an obstacle');
     // A step check that finds the held step still open copies it unchanged: the held pursuit goes back out, it is not a repeat.
     held = job?.step_check_of ? await one(`SELECT * FROM jobs WHERE id=$1`, [job.step_check_of]) : null;
     if (held && !(report.next_step && held.origin_key === `pursue:${route.id}:${experimentKey(report.next_step)}`)) held = null;
     // An identical experiment is already on record. Cosmetic re-budgeting cannot buy the same work again.
-    if (!held && report.next_step && await one(`SELECT 1 FROM jobs WHERE problem_id=$1 AND origin_key=$2`, [ret.problem_id, `pursue:${route.id}:${experimentKey(report.next_step)}`])) state = 'paused';
+    if (!held && report.next_step) {
+      const earlier = await q(`SELECT compute_hint,required_tools,required_sources FROM jobs WHERE problem_id=$1 AND origin_key=$2`, [ret.problem_id, `pursue:${route.id}:${experimentKey(report.next_step)}`]);
+      const wanted = requirementKey(stepHint(report.next_step), report.next_step.required_tools, report.next_step.required_sources);
+      // A wait for a stricter machine is new work; the same requirement again means a machine that met it still could not run the
+      // step, which is about the step, not the machine: the route pauses on that, stated as a failed attempt.
+      if (earlier.length && (report.outcome !== 'needs_capability' || earlier.some((j: any) => requirementKey(j.compute_hint, j.required_tools, j.required_sources) === wanted))) {
+        state = 'paused';
+        if (report.outcome === 'needs_capability') report = { ...report, obstacle: { kind: 'attempt_failed', statement: `A machine meeting this step's recorded requirement (${describeNeeds(report.next_step) || 'as stated'}) still could not run it: ${report.next_step.shortfall ?? report.evidence_md}`.slice(0, 4000), assumptions: 'The requirement recorded on the step was met by the machine that tried it.', evidence: report.evidence_md, revisit_when: 'A changed method, or a stated further requirement the step did not name.' } };
+      }
+    }
     route = await one(`UPDATE research_routes SET state=$2,next_step=$3,obstacle=$4,revision=revision+1,last_return_id=$5,prior_art_md=coalesce($6,prior_art_md),updated_at=now() WHERE id=$1 RETURNING *`,
       [route.id, state, report.next_step ? JSON.stringify(report.next_step) : null, report.obstacle ? JSON.stringify(report.obstacle) : null, ret.id, report.prior_art_md ?? null]);
   }
@@ -275,7 +330,7 @@ export async function recordResearch(ret: any, job: any, report: ResearchReport 
         `\n\nStep check: return #${ret.id} compared this step with the returns on record and found it still open.\n\n${report.evidence_md}`])
     : route.state === 'active' ? await queueInvestigation(route, 'pursue', ret) : null;
   if (held && next) { const vector=await sharedStepVector(held); if (vector) await q(`UPDATE jobs SET step_checked_vector=$2 WHERE id=$1`,[held.id,JSON.stringify(vector)]); }
-  return { route_id: Number(route.id), state: route.state, next_job_id: next ? Number(next.id) : null };
+  return { route_id: Number(route.id), state: route.state, next_job_id: next ? Number(next.id) : null, ...(route.state === 'active' && route.next_step?.shortfall ? { waiting_for: describeNeeds(route.next_step) } : {}), ...(waitNote ? { note: waitNote } : {}) };
 }
 
 const LEGACY_NEGATIVE_SQL = `r.type IN ('explore','direction','break','measure','formalize','source','challenge')
@@ -352,4 +407,39 @@ export async function reconsiderDependents(returnId: number, status: string): Pr
     await q(`UPDATE jobs SET status='expired' WHERE research_route_id=$1 AND research_stage IN ('first_look','pursue','rescue') AND status='queued'`, [route.id]);
   }
   return ids;
+}
+
+/**
+ * Routes closed on an operational limit before capability waits existed (#sah-capability-wait-not-block, Oct 12 2026: md5 routes 261,
+ * 263, 265 and 268 were blocked or paused because the machine that ran the step had no RTX 2080 Ti, or the step did not finish within
+ * the 4 CPU hours its session offered). Each goes back to active with the experiment it was trying as its next step, held to the
+ * requirement its obstacle shows (twice the CPU hours that session offered, or the named GPU), and one pursuit is queued that only a
+ * machine meeting it is offered. The obstacle is kept in the route's history as a needs_capability event; nothing else changes.
+ * A blocked route stores no step, so the experiment is the next step of the return its last assignment answered.
+ */
+export async function reopenOperationalBlocks(problemId: number | null, apply: boolean): Promise<any[]> {
+  const rows = await q(`SELECT rr.*,r.session AS last_session,src.research->'next_step' AS tried_step,s.compute->'usable'->>'cpu_hours' AS offered_cpu_hours
+    FROM research_routes rr JOIN returns r ON r.id=rr.last_return_id LEFT JOIN jobs j ON j.id=r.job_id
+    LEFT JOIN returns src ON src.id=j.research_source_return_id LEFT JOIN sessions s ON s.id=r.session
+    WHERE rr.state IN ('blocked','paused') AND rr.obstacle IS NOT NULL AND ($1::bigint IS NULL OR rr.problem_id=$1) ORDER BY rr.id`, [problemId]);
+  const out: any[] = [];
+  for (const row of rows) {
+    const found = obstacleShortfall(row.obstacle);
+    if (!found) continue;
+    const tried = row.next_step ?? row.tried_step;
+    if (!tried?.question) { out.push({ route_id: Number(row.id), skipped: 'no recorded experiment to wait on' }); continue; }
+    const base: NextStep = { ...tried, compute: tried.compute ?? { cpu_hours: 0, ram_gb: 2, disk_gb: 1 }, required_tools: tried.required_tools ?? [], required_sources: tried.required_sources ?? [] };
+    const step = waitingStep(base, found, String(row.obstacle.statement), { cpu_hours: row.offered_cpu_hours == null ? null : Number(row.offered_cpu_hours) });
+    const item: any = { route_id: Number(row.id), from: row.state, waiting_for: describeNeeds(step), shortfall: step.shortfall };
+    out.push(item);
+    if (!apply) continue;
+    const route = await one(`UPDATE research_routes SET state='active',next_step=$3,obstacle=NULL,revision=revision+1,updated_at=now() WHERE id=$1 AND revision=$2 RETURNING *`, [row.id, row.revision, JSON.stringify(step)]);
+    if (!route) { item.skipped = 'the route changed meanwhile'; continue; }
+    await q(`INSERT INTO research_events (route_id,return_id,outcome,evidence_md,detail) VALUES ($1,NULL,'needs_capability',$2,$3)`, [route.id,
+      `Reopened: the obstacle that return #${row.last_return_id} recorded is a limit of the machine that ran the step, not a research finding. The step waits for a machine with ${item.waiting_for}.`,
+      JSON.stringify({ reopened_from: row.state, obstacle: row.obstacle, next_step: step })]);
+    const job = await queueInvestigation(route, 'pursue', { id: row.last_return_id, model: null });
+    item.job_id = job ? Number(job.id) : null;
+  }
+  return out;
 }

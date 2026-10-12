@@ -5,6 +5,7 @@ import { one, q } from '../db/index.js';
 import { assignmentMutation } from '../lib/assignments.js';
 import { publicId, directionFor, canClaimAsk, LIVE_RUN } from '../lib/departments.js';
 import { matchingMetadata } from '../lib/agent-profile.js';
+import { computeNeeds } from '../lib/research-format.js';
 export const departments = Router({mergeParams:true});
 departments.use((req,res,next) => /^\/(?:departments(?:\/|$)|run(?:\/|$)|department(?:\/|$)|asks\/[^/]+\/claim$)/.test(req.path) ? next() : next('router'));
 departments.use(bearer, async (req:any,res,next) => {
@@ -87,11 +88,12 @@ departments.post('/run/next-step',assignmentMutation(async(req,res) => {
   if(!['explore','source','break','measure','formalize','direction'].includes(type)) { res.status(400).json({error:'proposed steps must be research; link an existing review or verification job for those obligations'}); return; }
   const title=String(b.title ?? '').trim(),question=String(b.question ?? '').trim(),why=String(b.why ?? '').trim(),stop=String(b.stop_when ?? '').trim(),hours=Number(b.budget_hours);
   if(!title || title.length>200 || !question || question.length>6000 || !why || why.length>2000 || !stop || stop.length>2000 || !Number.isFinite(hours) || hours<.25 || hours>Number(s.ai.max_hours_per_assignment)) { res.status(400).json({error:'provide title, question, why this serves the direction, stop_when, and a budget_hours within your assignment cap'}); return; }
-  let match; try { match=matchingMetadata({...b,type}); } catch(e:any) { res.status(400).json({error:e.message}); return; }
+  // A step may say what machine it needs (#sah-capability-wait-not-block): it is then offered only to a session whose offer has it.
+  let match,compute={}; try { match=matchingMetadata({...b,type}); if(b.compute!==undefined) compute=computeNeeds(b.compute,'compute'); } catch(e:any) { res.status(400).json({error:e.message}); return; }
   const text=`${question}\n\nWhy this step: ${why}\n\nStop when: ${stop}`;
   // The declaration establishes relevance; the ordinary scheduler still checks capabilities and limits.
-  const j=await one(`INSERT INTO jobs(problem_id,type,title,brief_md,git_ref,budget_hours,min_tier,agent_direction_id,agent_direction_revision,required_tools,required_sources)
-    VALUES($1,$9,$2,$3,'main',$4,99,$5,$6,$7,$8) RETURNING id`,[req.project.id,title,text,hours,d.id,d.revision,match.required_tools,match.required_sources,type]);
+  const j=await one(`INSERT INTO jobs(problem_id,type,title,brief_md,git_ref,budget_hours,min_tier,agent_direction_id,agent_direction_revision,required_tools,required_sources,compute_hint)
+    VALUES($1,$9,$2,$3,'main',$4,99,$5,$6,$7,$8,$10) RETURNING id`,[req.project.id,title,text,hours,d.id,d.revision,match.required_tools,match.required_sources,type,JSON.stringify(compute)]);
   res.json({job_id:j!.id,direction_id:d.id,revision:d.revision});
 }));
 departments.post('/run/link-step',assignmentMutation(async(req,res) => {
