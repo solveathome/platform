@@ -90,10 +90,10 @@ export async function researchBrief(id: number): Promise<string> {
   const r = await routeContext(id); if (!r) return '';
   return `\n\n### Research route #${r.id}: ${r.title}\n\nInvestment state: ${r.state}; this is not a truth grade. Revision ${r.revision}.\n\nContribution: ${r.contribution_md}\n\nPrior art and exact difference: ${r.prior_art_md}\n\nCentral uncertainty: ${r.uncertainty_md}\n\nNext experiment: ${JSON.stringify(r.next_step)}\n\nObstacle: ${JSON.stringify(r.obstacle)}\n\nEvidence behind continued investment: ${JSON.stringify(r.basis)}.\n\nFiles served with this route's returns (GET <project base>/return/<id> lists and links them; a number in a file name is usually the job it was made under, not a return id):\n${routeFilesMd(r.files, r.id)}\n\nDeclared dependencies: ${JSON.stringify(r.dependencies)}. Pending, recorded, rejected or provisional premises remain conditional; inspect the evidence before building on them.\n\nRecent investigations:\n${r.events.slice(0, 5).map((e: any) => `- Return #${e.return_id ?? '—'} (${e.model ?? 'system'}): ${e.outcome}. ${e.evidence_md}`).join('\n')}\n\nFull route and event record: GET <project base>/research-routes/${r.id}.\n`;
 }
-/** A step's compute hint on its job. `capability_wait` marks requirements an attempt showed (the step's shortfall): the scheduler holds
- *  those strictly, where a proposer's guessed tool names lapse after a day without a declaring session. */
+/** A step's compute hint on its job. `capability_wait` marks a step an attempt could not run (the step's shortfall); `strict_tools` and
+ *  `strict_sources` are what that attempt reported missing, held strictly, where a proposer's guessed names lapse after a day. */
 export function stepHint(step: NextStep | null | undefined): Record<string, unknown> {
-  return { ...(step?.compute ?? {}), ...(step?.shortfall ? { capability_wait: true } : {}) };
+  return { ...(step?.compute ?? {}), ...(step?.shortfall ? { capability_wait: true } : {}), ...(step?.strict_tools?.length ? { strict_tools: step.strict_tools } : {}), ...(step?.strict_sources?.length ? { strict_sources: step.strict_sources } : {}) };
 }
 async function queueInvestigation(route: any, stage: ResearchStage, source: any): Promise<any> {
   if (await one(`SELECT 1 FROM jobs WHERE research_route_id=$1 AND research_stage IN ('first_look','pursue','rescue') AND status IN ('queued','assigned')`, [route.id])) return null;
@@ -256,6 +256,13 @@ export function capabilityWait(report: ResearchReport, routeStep: NextStep | nul
   const found = fromObstacle ?? (report.obstacle ? obstacleShortfall(report.obstacle) : null) ?? operationalShortfall(statement);
   // An agent that states the requirement itself is taken at its word; the shortfall text only adds what it left out.
   const step = waitingStep(base, filed && report.next_step ? null : found, statement, offered);
+  // What the agent itself named as missing is held strictly: the tools and sources its report adds to the step it was given.
+  if (filed && report.next_step) {
+    const strictTools = report.next_step.required_tools.filter(t => !(routeStep?.required_tools ?? []).includes(t));
+    const strictSources = report.next_step.required_sources.filter(x => !(routeStep?.required_sources ?? []).includes(x));
+    if (strictTools.length) step.strict_tools = strictTools;
+    if (strictSources.length) step.strict_sources = strictSources;
+  }
   const { obstacle: _dropped, ...rest } = report;
   return { report: { ...rest, outcome: 'needs_capability', next_step: step }, converted: !filed };
 }
@@ -294,7 +301,7 @@ export async function recordResearch(ret: any, job: any, report: ResearchReport 
     if (wait) { report = wait.report; waitNote = wait.converted ? `This report filed an operational limit as a research obstacle. It is recorded as needs_capability: route #${route.id} stays active, and its step waits for a machine with ${describeNeeds(report.next_step) || 'the stated requirement'}. Report what a machine or budget lacked as needs_capability; keep obstacles for research findings.` : null; }
     // A later report that copies a waiting step without its requirements (a step check, a progress note) keeps them.
     if (report.next_step && !report.next_step.shortfall && route.next_step?.shortfall && experimentKey(report.next_step) === experimentKey(route.next_step))
-      report = { ...report, next_step: { ...report.next_step, compute: strictest(route.next_step.compute, report.next_step.compute), required_tools: [...new Set([...(route.next_step.required_tools ?? []), ...report.next_step.required_tools])], required_sources: [...new Set([...(route.next_step.required_sources ?? []), ...report.next_step.required_sources])], shortfall: route.next_step.shortfall } };
+      report = { ...report, next_step: { ...report.next_step, compute: strictest(route.next_step.compute, report.next_step.compute), required_tools: [...new Set([...(route.next_step.required_tools ?? []), ...report.next_step.required_tools])], required_sources: [...new Set([...(route.next_step.required_sources ?? []), ...report.next_step.required_sources])], shortfall: route.next_step.shortfall, ...(route.next_step.strict_tools ? { strict_tools: route.next_step.strict_tools } : {}), ...(route.next_step.strict_sources ? { strict_sources: route.next_step.strict_sources } : {}) } };
     let state = ({ promising: 'active', progress: 'active', blocked: 'blocked', inconclusive: 'paused', known: 'known', result: report.next_step ? 'active' : 'result', needs_capability: 'active' } as any)[report.outcome];
     if (!state) bad('this is an existing route; report progress or an obstacle');
     // A step check that finds the held step still open copies it unchanged: the held pursuit goes back out, it is not a repeat.

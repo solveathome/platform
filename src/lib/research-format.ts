@@ -30,9 +30,11 @@ export function ids(raw: any, field: string, max = 20): number[] {
  *  gpu, gpu_name (matched inside the declared GPU's name, ignoring case and punctuation: "rtx 2080 ti" fits "NVIDIA GeForce RTX 2080 Ti")
  *  and vram_gb against the measured GPU, the rest against the offer per assignment. */
 export type ComputeNeeds = { cpu_hours: number; ram_gb: number; disk_gb: number; gpu?: boolean; gpu_name?: string; vram_gb?: number };
-/** `shortfall` records an observed operational limit (what the machine or budget that tried the step lacked). Its requirements are
- *  then held strictly: they never lapse for lack of a declaring session (`requirementClause` in scheduler.ts). */
-export type NextStep = { progress?:ResearchProgress; question: string; method: string; success: string; failure: string; budget_hours: number; compute: ComputeNeeds; required_tools: string[]; required_sources: string[]; shortfall?: string };
+/** `shortfall` records an observed operational limit (what the machine or budget that tried the step lacked). Compute is always
+ *  matched strictly. `strict_tools` and `strict_sources` are set by the server, never read from a report: the tools and sources an
+ *  agent reported as missing in a needs_capability report. Those never lapse for lack of a declaring session (`requirementClause` in
+ *  scheduler.ts); a proposer's other tool names keep their one-day lapse, since agents rarely declare tools. */
+export type NextStep = { progress?:ResearchProgress; question: string; method: string; success: string; failure: string; budget_hours: number; compute: ComputeNeeds; required_tools: string[]; required_sources: string[]; shortfall?: string; strict_tools?: string[]; strict_sources?: string[] };
 export function gpuName(raw: any, field: string): string {
   if (typeof raw !== 'string' || !/^[a-z0-9][a-z0-9 .+-]{1,59}$/i.test(raw.trim())) bad(`${field} must name a GPU model, 2-60 letters, digits, spaces, dots or dashes (e.g. "rtx 2080 ti")`);
   return raw.trim().toLowerCase().replace(/\s+/g, ' ');

@@ -999,6 +999,15 @@ test('needs_capability states its own requirement; the same requirement again pa
   assert.equal(again.research.state,'paused');
   const stored=await one(`SELECT obstacle FROM research_routes WHERE id=$1`,[route]);assert.equal(stored.obstacle.kind,'attempt_failed');assert.match(stored.obstacle.statement,/still could not run it/);
 });
+test('tools an agent reported missing never lapse; a proposer\'s guessed tool names still do',async()=>{
+  const {r}=await activeRoute(),route=r.research.route_id,p=await start('author');
+  ok(await submit('author',{research:{route_id:route,outcome:'needs_capability',evidence_md:'Sage is not installed here.',next_step:{...step(),required_tools:['sage'],shortfall:'This machine has no sage.'}}},p));
+  const job=await waitingJob(route);assert.deepEqual(job.compute_hint.strict_tools,['sage']);
+  await q(`UPDATE jobs SET created_at=now()-interval '2 days' WHERE id=$1`,[job.id]);
+  assert.notEqual(Number((await startWith('runner',50)).body.job_id),Number(job.id),'a reported missing tool holds the step');
+  await q(`UPDATE jobs SET compute_hint=compute_hint-'strict_tools' WHERE id=$1`,[job.id]);
+  assert.equal(Number((await startWith('judge',50)).body.job_id),Number(job.id),'the same name as a proposer guess lapses after a day');
+});
 test('routes closed on a machine limit before capability waits reopen with their experiment and requirement',async()=>{
   const {r}=await activeRoute(),route=r.research.route_id,p=await start('author');
   ok(await submit('author',{research:{route_id:route,outcome:'blocked',evidence_md:'Not finished.',obstacle:{...obstacle,kind:'scoped_obstruction',statement:'The bound fails at k=9 for every tested modulus.'}}},p));

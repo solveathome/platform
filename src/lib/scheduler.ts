@@ -110,9 +110,10 @@ const TOOL_ALIASES = `CASE WHEN need.name IN ('python','python3') THEN ARRAY['py
  * archive). A name nobody running has declared stops holding a pursuit step after a day; it is then shown to the taker as the proposer's note (`unmetRequirements`). */
 function requirementClause(column: 'required_tools' | 'required_sources', key: 'tools' | 'sources', held: string, aliases: boolean): string {
   const names = aliases ? TOOL_ALIASES : `ARRAY[need.name]`;
-  // A capability wait (#sah-capability-wait-not-block, Oct 12 2026) names what a machine was seen to lack: it never lapses, it waits.
+  // What an attempt reported a machine lacked (compute_hint.strict_tools / strict_sources, #sah-capability-wait-not-block, Oct 12 2026)
+  // never lapses: the step waits for a session that declares it.
   return `(j.${column} <@ ${held}::text[] OR (j.research_stage='pursue' AND j.created_at < now()-interval '${STALE_REQUIREMENT_HOURS} hours'
-      AND coalesce(j.compute_hint->>'capability_wait','false') NOT IN ('true','1')
+      AND NOT EXISTS (SELECT 1 FROM unnest(j.${column}) need(name) WHERE NOT (need.name = ANY(${held}::text[])) AND coalesce(j.compute_hint->'strict_${key}','[]'::jsonb) ? need.name)
       AND NOT EXISTS (SELECT 1 FROM unnest(j.${column}) need(name) WHERE NOT (need.name = ANY(${held}::text[]))
         AND EXISTS (SELECT 1 FROM sessions known WHERE known.problem_id=j.problem_id AND known.last_seen > now()-interval '${DECLARED_CAPABILITY_HOURS} hours'
           AND coalesce(known.capabilities->'${key}','[]'::jsonb) ?| ${names}))))`;
