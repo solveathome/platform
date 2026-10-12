@@ -185,6 +185,18 @@ test('an upkeep is queued when a lane has news, offered only to a grant, and tak
   assert.equal(doc.verified.version, 1); assert.equal(doc.verified.updated_by, people.owner.handle); assert.equal(doc.unverified.length, 0);
   assert.equal(doc.decided_entries[0].status, 'verified');
   assert.equal((await lanesNeedingUpkeep(pid, slug)).some(l => l.slug === S.lane), false, 'nothing new: no upkeep due');
+  // An upkeep may leave an entry open; that entry does not make the lane due again (#sah-manage-rescue-prod-check: on md5 every start of
+  // a granted session was a "no change" upkeep, so management sessions never reached reviews or rescues).
+  const laneId = (await one(`SELECT id FROM lanes WHERE problem_id = $1 AND slug = $2`, [pid, S.lane])).id;
+  await q(`INSERT INTO lane_state_entries (problem_id, lane_id, body_md, source_return_id, user_id) VALUES ($1,$2,'Test: an entry the next upkeep leaves open.',$3,$4)`, [pid, laneId, S.source, people.c.id]);
+  assert.ok((await lanesNeedingUpkeep(pid, slug)).some(l => l.slug === S.lane && /1 new unverified entry/.test(l.why)), 'a new entry makes the lane due');
+  const k = await (await call('owner', 'GET', '/start')).json(); assert.equal(k.type, 'upkeep', JSON.stringify(k).slice(0, 300));
+  const through = (await one(`SELECT through_return_id FROM lane_states WHERE lane_id = $1`, [laneId])).through_return_id;
+  const left = await call('owner', 'POST', '/result', {session: k.session, body: {job_id: k.job_id, attempt_id: k.attempt_id, transcript: transcriptOf('claude-opus-5-5'), transcript_approved: true,
+    report_md: 'Test: no change; the entry stays open for a later upkeep.', state_update: {through_return_id: Number(through ?? 0)}}});
+  assert.equal(left.status, 200, JSON.stringify(await left.json()).slice(0, 300));
+  assert.equal((await lanesNeedingUpkeep(pid, slug)).some(l => l.slug === S.lane), false, 'an entry left open does not make the lane due again');
+  assert.equal((await one(`SELECT count(*)::int AS n FROM lane_state_entries WHERE lane_id = $1 AND status = 'unverified'`, [laneId])).n, 1, 'and it stays open');
 });
 
 test('a return may carry an unverified entry; a bad one is a warning, never a refused return', async () => {

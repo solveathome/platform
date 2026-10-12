@@ -209,19 +209,24 @@ export async function applyStateUpdate(problemId: number, lane: LaneRef, by: { i
   return { version, promoted: update.promote ?? [], rejected: (update.reject ?? []).map((r) => r.id) };
 }
 
-/** Lanes that need a trusted upkeep now: enough accepted returns or any open entry since the last update, or a newer record. */
+/** Lanes that need a trusted upkeep now: enough accepted returns or a new open entry since the last update, or a newer record.
+ *  An entry counts once: an upkeep may leave it open for a later one, and it is due again only when something new arrives. "Any open
+ *  entry" made every md5 lane due again the moment its upkeep returned "no change", so from 14:03 on Oct 12 2026 every start of a granted
+ *  session on md5 and twin-primes was an upkeep, and management sessions never reached reviews or rescues (#sah-manage-rescue-prod-check). */
 export async function lanesNeedingUpkeep(problemId: number, projectSlug: string): Promise<Array<LaneRef & { why: string }>> {
   const after = upkeepAfter(projectSlug);
-  const rows = await q<LaneRef & { since: string; open: string; record_after: boolean }>(`SELECT l.id, l.slug, l.title, l.problem_id,
+  const rows = await q<LaneRef & { since: string; open: string; fresh: string; record_after: boolean }>(`SELECT l.id, l.slug, l.title, l.problem_id,
       (SELECT count(*) FROM returns r WHERE r.lane_id = l.id AND r.status = 'accepted' AND NOT r.provisional AND r.id > coalesce(s.through_return_id, 0)) AS since,
       (SELECT count(*) FROM lane_state_entries e WHERE e.lane_id = l.id AND e.status = 'unverified') AS open,
+      (SELECT count(*) FROM lane_state_entries e WHERE e.lane_id = l.id AND e.status = 'unverified' AND e.created_at > greatest(coalesce(s.updated_at, '-infinity'),
+        coalesce((SELECT max(j.created_at) FROM jobs j WHERE j.lane_id = l.id AND j.type = 'upkeep' AND j.status NOT IN ('queued','assigned','expired')), '-infinity'))) AS fresh,
       EXISTS (SELECT 1 FROM challenge_events ce WHERE ce.problem_id = l.problem_id AND ce.namespace = 'live' AND ce.kind = 'record' AND ce.challenge_id = l.variant AND ce.created_at > coalesce(s.record_seen_at, '-infinity')) AS record_after
     FROM lanes l LEFT JOIN lane_states s ON s.lane_id = l.id
     WHERE l.problem_id = $1 AND l.status = 'open'
       AND NOT EXISTS (SELECT 1 FROM jobs j WHERE j.lane_id = l.id AND j.type = 'upkeep' AND j.status IN ('queued','assigned'))
     ORDER BY l.id`, [problemId]);
   return rows.flatMap((r) => {
-    const why = [Number(r.since) >= after ? `${r.since} accepted returns since the last update` : "", Number(r.open) ? `${r.open} unverified entr${Number(r.open) === 1 ? "y" : "ies"}` : "", r.record_after ? "a new record" : ""].filter(Boolean);
+    const why = [Number(r.since) >= after ? `${r.since} accepted returns since the last update` : "", Number(r.fresh) ? `${r.fresh} new unverified entr${Number(r.fresh) === 1 ? "y" : "ies"} (${r.open} open)` : "", r.record_after ? "a new record" : ""].filter(Boolean);
     return why.length ? [{ id: Number(r.id), slug: r.slug, title: r.title, problem_id: Number(r.problem_id), why: why.join(", ") }] : [];
   });
 }
