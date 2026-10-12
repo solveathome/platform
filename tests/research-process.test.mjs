@@ -21,7 +21,7 @@ const {board}=await import('../src/routes/board.ts');
 const {filesRouter}=await import('../src/routes/files.ts');
 const files=await import('../src/lib/files.ts');
 const {prepareRescue,retireRedundantRescueSamples,reconsiderDependents}=await import('../src/lib/research.ts');
-const {researchAllocation}=await import('../src/lib/scheduler.ts');
+const {researchAllocation,allocation:discoveryAllocation,portfolioOrder}=await import('../src/lib/scheduler.ts');
 let server,pid,slug,base;
 const users={};
 const models={author:'claude-opus-5',astra:'gpt-6-astra',runner:'claude-sonnet-5',judge:'claude-fable-5-1'};
@@ -708,6 +708,25 @@ test('a review queued under the previous template is served with the current gui
   assert.match(review.brief_md,/Evidence needs reassessment or execution could not find capacity within 24 hours\./,'the job-specific note is preserved');
   const refreshed=await one(`SELECT brief_version,brief_md FROM jobs WHERE id=$1`,[job.id]);assert.equal(refreshed.brief_version,REVIEW_BRIEF_VERSION);assert.doesNotMatch(refreshed.brief_md,/Read the code and the recipe/);
   assert.equal((refreshed.brief_md.match(/Evidence needs reassessment/g)||[]).length,1,'the note is kept once');
+});
+
+// Management hours stay out of the research mix (#sah-portfolio-exclude-manage-hours): twin-primes tier 1 on Oct 12 2026 had 16.8 h of
+// portfolio research beside 66 h of management sessions, upkeep, screenings and requested jobs, and that total put pursue and discover
+// ahead of an untouched rescue bucket, so no general session reached rescue job 6784.
+test('management, upkeep and requested hours do not count toward the research portfolio or the discovery reserve',async()=>{
+  const policy={discover:.3,pursue:.4,rescue:.15,consolidate:.15};
+  const jid=Number((await one(`INSERT INTO jobs (problem_id,type,title,brief_md,budget_hours) VALUES ($1,'review','hours','x',1) RETURNING id`,[pid])).id);
+  const add=(hours,stage,policyName,purpose='work')=>q(`INSERT INTO assignment_attempts (id,job_id,problem_id,user_id,model,tier,purpose,scheduled,budget_hours,reason,research_stage,status)
+    VALUES ($1,$2,$3,$4,'claude-opus-5',1,$5,true,$6,$7,$8,'completed')`,[randomUUID(),jid,pid,users.author.id,purpose,hours,JSON.stringify({policy:policyName}),stage]);
+  await add(6,'discover','research portfolio','discovery');await add(8.8,'pursue','research portfolio','discovery');await add(2,'consolidate','research portfolio');
+  await add(8,'consolidate','required correction');
+  for(const [hours,name] of [[18,'reviews only: triage skipped, trusted reviewer'],[14,'state-of-the-art upkeep'],[6.7,'reviews only'],[5,'management'],[0.5,'management: triage skipped, trusted reviewer'],[0.6,'trusted applicability screening'],[0.6,'trusted assignment comparison'],[12.1,'requested job']])await add(hours,null,name);
+  const used=await researchAllocation(pid);
+  assert.equal(used.total,24.8);assert.equal(used.consolidate,10);assert.equal(used.rescue,0);assert.equal(Math.round(used.outside*10)/10,57.5);
+  assert.equal(portfolioOrder(policy,used)[0],'rescue',JSON.stringify(used));
+  // The same hours with the management counted in were the bug: rescue came third.
+  assert.notEqual(portfolioOrder(policy,{...used,total:used.total+used.outside,consolidate:used.consolidate+used.outside})[0],'rescue');
+  const legacy=await discoveryAllocation(pid);assert.equal(legacy.total,24.8);assert.equal(legacy.discovery,14.8);
 });
 
 // Sep 16 2026: the owner's Fable sessions were all sent to pursuit while 22 checked packages waited for the only handle that

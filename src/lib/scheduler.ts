@@ -43,14 +43,28 @@ export const DEFAULT_RESCUE_SHARE = INITIAL_RESEARCH_ALLOCATION.rescue;
 export function rescueDue(used: Record<string, number>): boolean {
   return !(Number(used.total) > 0) || Number(used.rescue ?? 0) / Number(used.total) < DEFAULT_RESCUE_SHARE;
 }
+/** Hours outside the research mix (Chris, Oct 12 2026, #sah-portfolio-exclude-manage-hours). The portfolio, the rescue share and the
+ *  discovery reserve rank research buckets by their share of a tier's seven-day hours, and those hours included every scheduled
+ *  attempt: on twin-primes tier 1, 66 of 82.8 hours were management sessions (work=manage and its alias work=reviews), state-of-the-art
+ *  upkeep, trusted screenings and assignment comparisons, and jobs a session asked for by id. They inflated the total, so pursue
+ *  (24.8 h short) and discover (18.8) always ranked ahead of rescue (12.4) and general sessions never reached rescue job 6784.
+ *  Attempts with these policies are counted apart (`outside`) and enter neither the total nor any bucket; a requested job is left
+ *  out for the reason directed hours are (`scheduled` is false for them): the scheduler did not choose it. Consolidation a general
+ *  session takes ahead of the portfolio (required corrections, trusted judgment, review pressure, triage) still counts. */
+export const OUTSIDE_RESEARCH_POLICIES = ['management', 'management: triage skipped, trusted reviewer', 'reviews only', 'reviews only: triage skipped, trusted reviewer',
+  'state-of-the-art upkeep', 'trusted applicability screening', 'trusted assignment comparison', 'requested job'] as const;
+const OUTSIDE_SQL = `coalesce(a.reason->>'policy','') IN (${OUTSIDE_RESEARCH_POLICIES.map(p => `'${p}'`).join(',')})`;
 // Each tier has its own research budget: plentiful models must not consume another
 // tier's discovery reserve, nor need that tier online to advance their own routes.
 export async function researchAllocation(problemId: number, tier = 1): Promise<Record<string, number>> {
-  const rows = await q(`SELECT coalesce(a.research_stage,CASE WHEN a.purpose='discovery' THEN 'discover' ELSE 'consolidate' END) AS stage,
+  const rows = await q(`SELECT coalesce(a.research_stage,CASE WHEN a.purpose='discovery' THEN 'discover' ELSE 'consolidate' END) AS stage,${OUTSIDE_SQL} AS outside,
     sum(a.budget_hours) AS hours,sum(a.budget_hours) FILTER (WHERE a.status IN ('released','cancelled')) AS abandoned
-    FROM assignment_attempts a WHERE a.problem_id=$1 AND a.tier=$2 AND a.scheduled AND (a.started_at>now()-interval '7 days' OR a.status='assigned') GROUP BY 1`, [problemId, tier]);
-  const used: Record<string, number> = { total: 0, abandoned: 0, discover: 0, pursue: 0, rescue: 0, consolidate: 0 };
-  for (const r of rows) { const key = r.stage === 'first_look' ? 'pursue' : r.stage; used[key] = (used[key] ?? 0) + Number(r.hours); used.total += Number(r.hours); used.abandoned += Number(r.abandoned ?? 0); }
+    FROM assignment_attempts a WHERE a.problem_id=$1 AND a.tier=$2 AND a.scheduled AND (a.started_at>now()-interval '7 days' OR a.status='assigned') GROUP BY 1,2`, [problemId, tier]);
+  const used: Record<string, number> = { total: 0, abandoned: 0, discover: 0, pursue: 0, rescue: 0, consolidate: 0, outside: 0 };
+  for (const r of rows) {
+    if (r.outside) { used.outside += Number(r.hours); continue; }
+    const key = r.stage === 'first_look' ? 'pursue' : r.stage; used[key] = (used[key] ?? 0) + Number(r.hours); used.total += Number(r.hours); used.abandoned += Number(r.abandoned ?? 0);
+  }
   return used;
 }
 
@@ -354,12 +368,13 @@ export function discoveryShare(slug: string, databaseShare?: number | string | n
   const n = Number(raw);
   return Number.isFinite(n) && n >= 0 && n <= 1 ? n : 0.2;
 }
+// The discovery reserve counts research hours only, as the portfolio does (OUTSIDE_RESEARCH_POLICIES).
 export async function allocation(problemId: number) {
   const r = await one(`SELECT coalesce(sum(budget_hours),0) AS total,
     coalesce(sum(budget_hours) FILTER (WHERE purpose = 'discovery'),0) AS discovery,
     coalesce(sum(budget_hours) FILTER (WHERE purpose = 'discovery' AND status = 'completed'),0) AS completed_discovery,
     coalesce(sum(budget_hours) FILTER (WHERE purpose = 'discovery' AND status IN ('released','cancelled')),0) AS abandoned_discovery
-    FROM assignment_attempts WHERE problem_id = $1 AND tier = 1 AND scheduled AND (started_at > now() - interval '7 days' OR status = 'assigned')`, [problemId]);
+    FROM assignment_attempts a WHERE problem_id = $1 AND tier = 1 AND scheduled AND (started_at > now() - interval '7 days' OR status = 'assigned') AND NOT ${OUTSIDE_SQL}`, [problemId]);
   return Object.fromEntries(Object.entries(r ?? {}).map(([k, v]) => [k, Number(v)]));
 }
 export function discoveryDue(share: number, used: { [key: string]: number }, nextHours: number): boolean {
