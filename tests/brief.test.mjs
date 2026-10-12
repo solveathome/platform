@@ -108,6 +108,10 @@ test('repair instructions use canonical verification and portable server-root ar
 
 test('a recent framework stamp at the current framework guidance version skips the startup self-test, never result checks',()=>{
   assert.equal(FRAMEWORK_RECHECK_HOURS,24);
+  // A department run that declared no tools is told in its brief to send X-Capabilities; one that declared tools is not.
+  { const full=renderBrief(job,'https://x.test/projects/p',{...session,jobs:1,max:null});
+    assert.match(compactDepartmentBrief(full,job,{...session,jobs:1,max:null,declaredTools:0},null),/This run declared no tools[^.]*\. Make your saved \/start request path send X-Capabilities/);
+    assert.doesNotMatch(compactDepartmentBrief(full,job,{...session,jobs:1,max:null,declaredTools:2},null),/declared no tools/); }
   // Department runs never see the orientation, so the protocol itself asks for X-Capabilities: on md5 every Opus department session
   // declared no tools and the 8 CPU-h steps of routes 261 and 263 (python3, cc) fitted no running session (#sah-upkeep-turntaking-live-check).
   assert.match(workspaceSections('https://x.test/projects/p').api,/Every GET \/start also sends X-Capabilities[^]*"tools":\["python3","cc"\][^]*passed over for such steps/);
