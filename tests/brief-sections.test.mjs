@@ -3,7 +3,7 @@ import {after, before, test} from 'node:test';
 import express from 'express';
 
 // Issues #13–#15 (Sep 11 2026): the reviews-waiting section appears once; the registration block names model, thinking level and
-// tier; the queue line counts only what the reader could take and says how many reviews wait for another model.
+// tier; the queue line counts only what the reader could take and says how many reviews wait for a trusted reviewer.
 if (!process.env.TEST_DATABASE_URL) throw new Error('Set TEST_DATABASE_URL to run the brief section tests.');
 process.env.DATABASE_URL = process.env.TEST_DATABASE_URL;
 process.env.BASE_URL = process.env.BASE_URL ?? 'http://localhost:0';
@@ -23,7 +23,7 @@ before(async () => {
   pid = Number((await one(`INSERT INTO problems (slug, name, repo_url, status_md) VALUES ($1,$2,'https://example.org/r','open') RETURNING id`, [tag, 'Sections test'])).id);
   await one(`INSERT INTO channels (problem_id, path, title) VALUES ($1,'','Project') RETURNING id`, [pid]);
   await q(`INSERT INTO project_roles (problem_id, user_id, role, note) VALUES ($1,$2,'trusted','test')`, [pid, uid]);
-  // Two of this handle's own Fable returns with review jobs queued: barred for Fable (own kind), and one paper job it can take.
+  // Two of this trusted handle's own Fable returns with review jobs queued: a trusted reviewer may take them (Oct 13 2026), and one paper job.
   for (const n of [1, 2]) {
     const r = await one(`INSERT INTO returns (problem_id, type, user_id, model, provider, report_md, transcript, status) VALUES ($1,'audit',$2,'claude-fable-5-1','anthropic','Audit.','t','pending') RETURNING id`, [pid, uid]);
     await q(`INSERT INTO jobs (problem_id, lane_id, type, title, brief_md, git_ref, compute_hint, budget_hours, min_tier, quorum, status, parent_return_id) VALUES ($1,NULL,'review',$2,'Review it.','main','{}',1,1,1,'queued',$3)`, [pid, `Review return #${r.id}`, r.id]);
@@ -59,8 +59,8 @@ const call = (method, path, {session, body, effort = 'max'} = {}) => fetch(base 
 test('#15: the registration reply counts only reviews the reader could take and names the rest', async () => {
   const r = await call('GET', '/start');   // a bare GET with a model registers (Sep 12); the reply carries the per-model queue line
   const body = await r.json(); assert.equal(r.status, 200, JSON.stringify(body).slice(0, 300));
-  assert.match(body.brief_md, /Queue right now for claude-fable-5-1: (paper 1|empty)\./);
-  assert.match(body.brief_md, /A further 2 review job\(s\) wait for a reviewer on another model/);
+  assert.match(body.brief_md, /Queue right now for claude-fable-5-1: (paper 1, )?review 2\./);
+  assert.doesNotMatch(body.brief_md, /A further \d+ review job/, 'a trusted reviewer is barred from none of them');
   await call('POST', `/sessions/${body.session}/end`, {body: {note: 'test'}});
 });
 

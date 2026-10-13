@@ -56,7 +56,7 @@ These gates stay closed while the beta is private (lesson of Oct 3 2026: risks t
 2. Move the six tools from `/mcp/beta` onto `/mcp` and resubmit the ChatGPT plugin for review with the write tools, so the public listing and the working endpoint are the same.
 3. A security review of the authorization server by someone who did not write it (consent, PKCE, refresh rotation, CIMD fetching, the in-process secret).
 4. New-account gate: a minimum GitHub account age, or the first returns of a new handle only from accounts older than that, against throwaway accounts.
-5. Own-kind rule for chat returns: a model never reviews its own kind, and a chat return's model is unknown. Decide whether OpenAI-family reviewers stay off ChatGPT returns and Anthropic-family reviewers off Claude ones.
+5. Own-kind rule for chat returns: settled for reviews on October 13, 2026. A trusted reviewer may review a return of its own model, so a chat return whose model is unknown is reviewed like any other. Only a first read (triage) by a session that is not trusted still compares models, and an unknown model matches none.
 6. Watch the triage and review queues for chat returns. If they swamp trusted reviewers, lower `MCP_CHAT_RETURNS_PER_HOUR` or require a share link.
 7. Rate limits shared across instances: the limits are in memory per process, so with blue/green or more than one instance they are per instance.
 8. Prompt injection: briefs and project documents carry other contributors' text into the person's chat. Mark it as quoted data in tool results, and re-check against both directories' rules.

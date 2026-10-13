@@ -599,17 +599,40 @@ test('a completion whose X-Attempt and job_id name different assignments says wh
 // Issue #82: an operator running one model kind stacks review jobs of its own returns that no agent of theirs can take. The
 // brief printed the count; the scheduler recorded eligible_backlog.reviews = 0, because it counts only what this agent may
 // take. Both were true and both described the same queue, so "no review debt" and "debt nobody here can serve" read alike.
-test('review jobs blocked only by the same-kind rule are counted as blocked, not as an empty backlog',async()=>{
+// Since Oct 13 2026 (#sah-trusted-self-review) a trusted reviewer takes a review of its own model, so nothing is blocked by kind for it.
+test('a trusted reviewer is offered a review of a return of its own model; a session that is not trusted is not',async()=>{
   const ret=await one(`INSERT INTO returns (problem_id,type,user_id,model,provider,report_md,transcript,status) VALUES ($1,'measure',$2,'claude-fable-5-1','anthropic','A measured table.','t','pending') RETURNING id`,[pid,uid]);
   await one(`INSERT INTO jobs (problem_id,type,title,brief_md,git_ref,budget_hours,min_tier,parent_return_id) VALUES ($1,'review',$2,'Check it.','main',1,99,$3) RETURNING id`,[pid,`Review return #${ret.id}`,ret.id]);
   const a={problemId:pid,slug,sessionId:'synthetic-82',uid,tier:1,model:'claude-fable-5-1',provider:'anthropic',trusted:true,granted:true,lane:null,cpuHours:4,ramGb:8,hasGpu:false,disk:1,maxHours:2,reviewStreak:0,capabilities:{}};
   const mine=await backlogFor(a);
-  assert.equal(mine.reviews,0,'a model is never offered a review of its own kind');
-  assert.equal(mine.blocked_reviews,1,`the debt is visible instead of reading as an empty queue: ${JSON.stringify(mine)}`);
+  assert.equal(mine.reviews,1,'a trusted reviewer may review a return of its own model');
+  assert.equal(mine.blocked_reviews,0,`nothing waits for another model: ${JSON.stringify(mine)}`);
+  assert.equal((await backlogFor({...a,trusted:false,granted:false})).reviews,0,'a session that is not trusted takes no review');
   const other=await backlogFor({...a,model:'gpt-6-astra',provider:'openai'});
   assert.equal(other.reviews,1,'another model can take it');
   assert.equal(other.blocked_reviews,0,'and has nothing blocked by kind');
   await q(`DELETE FROM jobs WHERE parent_return_id=$1`,[ret.id]);
+  await q(`DELETE FROM returns WHERE id=$1`,[ret.id]);
+});
+
+// The two-family quorum with self review (Chris, Oct 13 2026, #sah-trusted-self-review): on a quorum-2 project a return written by one
+// of the two trusted families gets its second verdict from that family. One person gives one counted verdict per family.
+test('quorum 2: a Sol return with an Anthropic verdict is offered to the same person\'s Sol reviewer, not to their Opus again; a tier-2 verdict does not hold the family',async()=>{
+  const ret=await one(`INSERT INTO returns (problem_id,type,user_id,model,provider,report_md,transcript,status) VALUES ($1,'measure',$2,'gpt-6.1-sol','openai','A measured table.','t','pending') RETURNING id`,[pid,other]);
+  const j=await one(`INSERT INTO jobs (problem_id,type,title,brief_md,git_ref,budget_hours,min_tier,parent_return_id) VALUES ($1,'review',$2,'Check it.','main',1,99,$3) RETURNING id`,[pid,`Review return #${ret.id}`,ret.id]);
+  // lean_tier1 reads model_tiers: make sure Opus 5.5 is tier 1 here, and remove the row afterwards only if this test added it.
+  const tierRow=await one(`INSERT INTO model_tiers (model,provider,tier,note) VALUES ('claude-opus-5-5','anthropic',1,'test') ON CONFLICT (model) DO NOTHING RETURNING model`);
+  assert.equal(Number((await one(`SELECT tier FROM model_tiers WHERE model='claude-opus-5-5'`)).tier),1);
+  const rv=await one(`INSERT INTO reviews (return_id,user_id,model,provider,verdict,notes_md,weight,transcript,trusted,effort) VALUES ($1,$2,'claude-opus-5-5','anthropic','accept','Checked.',1,'',true,'high') RETURNING id`,[ret.id,uid]);
+  const a={problemId:pid,slug:'md5',sessionId:'synthetic-self-review',uid,tier:1,model:'gpt-6.1-sol',provider:'openai',trusted:true,granted:true,lane:null,cpuHours:4,ramGb:8,hasGpu:false,disk:1,maxHours:2,reviewStreak:0,capabilities:{}};
+  assert.equal((await backlogFor(a)).reviews,1,'the author\'s own model gives the second family\'s verdict');
+  assert.equal((await backlogFor({...a,model:'claude-opus-5-5',provider:'anthropic'})).reviews,0,'the person\'s Anthropic verdict is in: not offered to their Opus again');
+  await q(`UPDATE reviews SET model='claude-opus-4-8' WHERE id=$1`,[rv.id]);
+  assert.equal((await backlogFor({...a,model:'claude-opus-5-5',provider:'anthropic'})).reviews,1,'a verdict from a session below tier 1 never counted, so their tier-1 Opus is offered the return');
+  assert.equal((await backlogFor({...a,model:'claude-opus-4-8',provider:'anthropic',tier:2})).reviews,0,'and a tier-2 session does not review it twice');
+  if(tierRow) await q(`DELETE FROM model_tiers WHERE model='claude-opus-5-5' AND note='test'`);
+  await q(`DELETE FROM reviews WHERE id=$1`,[rv.id]);
+  await q(`DELETE FROM jobs WHERE id=$1`,[j.id]);
   await q(`DELETE FROM returns WHERE id=$1`,[ret.id]);
 });
 
@@ -629,8 +652,8 @@ test('a dotted Claude label is folded at start and is the same kind as the dashe
   await q(`UPDATE jobs SET avoid_model=NULL WHERE id=$1`,[j.id]);   // a review job carries no avoided model; only the return's kind decides below
   const a={problemId:pid,slug,sessionId:'synthetic-4163',uid,tier:1,model:'claude-opus-5-5',provider:'anthropic',trusted:true,granted:true,lane:null,cpuHours:4,ramGb:8,hasGpu:false,disk:1,maxHours:2,reviewStreak:0,capabilities:{}};
   const mine=await backlogFor(a);
-  assert.equal(mine.reviews,0,'an Opus 5.5 reviewer is not offered its own kind under another spelling');
-  assert.equal(mine.blocked_reviews,1,JSON.stringify(mine));
+  assert.equal(mine.reviews,1,'a trusted Opus 5.5 reviewer may take a return of its own model (Oct 13 2026)');
+  assert.equal(mine.blocked_reviews,0,JSON.stringify(mine));
   assert.equal((await backlogFor({...a,model:'gpt-6-astra',provider:'openai'})).reviews,1,'another model takes it');
   await q(`DELETE FROM jobs WHERE id=$1`,[j.id]);
   await q(`DELETE FROM returns WHERE id=$1`,[ret.id]);

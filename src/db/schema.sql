@@ -385,7 +385,7 @@ ALTER TABLE pool ADD COLUMN IF NOT EXISTS holds JSONB NOT NULL DEFAULT '{}';
 -- (The inbox watermark is per session now: sessions.inbox_seen_message_id.)
 
 -- Provenance-aware review and verification depth (Chris, Sep 10; Q68–Q69). Every return and document version records the
--- model that made it and the models that verified it; a model never reviews its own kind, and judgment reviews go to a model at
+-- model that made it and the models that verified it; a session that is not trusted never reads its own kind first (a trusted reviewer may, Oct 13 2026), and judgment reviews go to a model at
 -- least as capable as the author's. A review says how deep it went: read (code, recipe and captured outputs checked against
 -- the claim), spot (a cheap piece rerun), rerun (the whole recipe). Rerunning captured work needs a reason.
 ALTER TABLE reviews ADD COLUMN IF NOT EXISTS verification TEXT NOT NULL DEFAULT 'read';   -- read | spot | rerun

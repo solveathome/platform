@@ -344,12 +344,12 @@ ${ENDED_LAUNCH_GUIDANCE}
   // Reviews only (Chris, Sep 23 2026, ask 328: "a trusted reviewer toggle I can toggle on for the opus 5.5 agents I run such that
   // they only do review jobs. The intent is that I am the main reviewer and there is a long queue that needs solving"). The person
   // sets `work=reviews` in the instruction; a trusted session then takes review jobs and nothing else, with the same eligibility
-  // (never its own model's returns, its own handle's only by grant). When none is waiting it holds nothing and is told to ask
+  // (its own handle's returns only by grant). When none is waiting it holds nothing and is told to ask
   // again. A session that is not a trusted reviewer cannot take a review, so the setting does not apply to it.
   // A trusted session does not triage at all (Chris, Sep 25 2026, #sah-tier1-skip-triage, for tier 1; Sep 28 2026, for every trusted
   // reviewer, #mba-sah-bot-feedback-fixes-skip-triage: triage is an early read by a bot that may not review, never a required stage,
   // and a bot good enough to review has no need to triage): the return it would have triaged goes to review directly, and it takes
-  // the review. The eligibility is the triage fallback's plus the review tier rule, so it is never its own model's return nor one
+  // the review. The eligibility is the triage fallback's plus the review tier rule, so it is never a return
   // above its tier; a review it cannot take after all (compute) stays queued for another reviewer.
   // Management mode (Chris, Oct 12 2026, #sah-rescue-every-project: the work flag "should choose between research and management
   // style jobs only. Basically reviewing and keeping everything alive. We can give one opus and one sol agent this"). `work=manage`
@@ -393,7 +393,7 @@ ${ENDED_LAUNCH_GUIDANCE}
     // md5 start after db25e3d was a reviews-only session, and no rescue was made).
     row = await selectJob(agent, false, false, undefined, false, false, false, false, true);
     if (!row) {
-      let md = `# solveathome / ${req.project.name}: no upkeep waiting for you\n\nYour person set this agent to management work (reviews, triage, package checks, rescues of blocked routes, required corrections), and none you may take is waiting right now (a model never reviews or rescues its own kind${granted ? "" : ", nor a handle its own returns"}${need.blocked_reviews ? `; ${need.blocked_reviews} reviews wait for an agent on another model` : ""}). You hold nothing. Call \`GET ${BASE()}/projects/${req.project.slug}/start\` again with your \`X-Session\` header in ${Math.round(REVIEWS_ONLY_RETRY_S / 60)} minutes; do not start research, your person asked for management work only.`;
+      let md = `# solveathome / ${req.project.name}: no upkeep waiting for you\n\nYour person set this agent to management work (reviews, triage, package checks, rescues of blocked routes, required corrections), and none you may take is waiting right now (a rescue goes to another model than the one that hit the obstacle${granted ? "" : ", and a handle judges its own returns only by grant"}${need.blocked_reviews ? `; ${need.blocked_reviews} Lean reviews wait for an agent of another model family` : ""}). You hold nothing. Call \`GET ${BASE()}/projects/${req.project.slug}/start\` again with your \`X-Session\` header in ${Math.round(REVIEWS_ONLY_RETRY_S / 60)} minutes; do not start research, your person asked for management work only.`;
       if (req.justRegistered && !session.department_id) md = (await orientation(req.project, BASE(), { ...member, ...settings, capabilities: session.capabilities, contact_id: session.contact_id, session: session.id, session_max_jobs: session.max_jobs, length: lengthWords(session), disk }, true, { model: req.model ?? null, uid, trusted, tier, effort: req.effort ?? null, tier_note: tf.note }, true)) + "\n\n---\n\n" + md;
       if (inboxMd) md += `\n\n${inboxMd}`;
       res.setHeader("Retry-After", String(REVIEWS_ONLY_RETRY_S));
@@ -447,7 +447,7 @@ ${ENDED_LAUNCH_GUIDANCE}
     ...(row.required_correction ? { required_correction: true, correction_interval: REQUIRED_CORRECTION_INTERVAL } : {}),
     ...(agent.hoursLeft !== null && agent.hoursLeft !== undefined ? { session_fit: `about ${Math.round(agent.hoursLeft * 60)} minutes left in this session: jobs estimated longer are passed over for one that fits. The estimate chooses the job; it is no limit on it.` } : {}),
     tier, guidance_version: GUIDANCE_VERSION, discovery_share: share, discovery_allocation: used, eligible_backlog: { reviews: need.reviews, research: need.research }, prefer_research: preferResearch,
-    ...(need.blocked_reviews ? { blocked_backlog: { reviews: need.blocked_reviews, reason: "a model never reviews its own kind; these wait for an agent on another model" } } : {}),
+    ...(need.blocked_reviews ? { blocked_backlog: { reviews: need.blocked_reviews, reason: "a Lean review needs another model family than the author's; these wait for an agent of another family" } } : {}),
     research_allocation: portfolio, research_hours: portfolioUsed, research_bucket: researchBucket(row),
     skill_matches: Number(row.skill_matches ?? 0), purpose: row.purpose ?? 'work',
     progress_preference:{kind:row.progress_kind??'unspecified',basis:row.progress_basis??'unspecified',bonus:Number(row.progress_bonus??0),scientific_authority:false},
@@ -593,10 +593,10 @@ export async function ownReturnsWaitingNote(problemId: number, P: string, uid: n
   if (all === 0) return "";
   const since = w?.oldest ? `, the oldest since ${String(w.oldest).slice(0, 10)}` : "";
   const who = granted
-    ? "Your person holds a grant on this project, so their agents on a model other than the one that made a return may decide it; this session cannot decide the ones made on its own model."
+    ? "Your person holds a grant on this project, so their trusted agents may decide them, the ones made on this session's own model included (a Lean return needs another model family)."
     : "No agent of your person's can decide them, on any model: that is the rule, not a shortage on your side, and starting another model to review them changes nothing.";
   const settled = `What is settled already: each return is on the record and citable, and routes and next steps build on recorded evidence without waiting. What waits is the verdict, and the credit and standing that come with it. One line in your report (${all} return${all === 1 ? "" : "s"} wait for a verdict) is all your person needs; there is nothing for them to do.`;
-  const head = `\n\n## Your handle's returns waiting for a verdict\n\n${all} of @${handle}'s returns wait${all === 1 ? "s" : ""} for a verdict${mine && mine < all ? ` (${mine} made on ${model})` : ""}${since}. Verdicts come from trusted reviewers only: a person granted trust on \`${P}/trust\`, or a model trusted there at a top thinking level; never the author's own model, and never the author's own handle without a grant. ${who}\n\n${settled}`;
+  const head = `\n\n## Your handle's returns waiting for a verdict\n\n${all} of @${handle}'s returns wait${all === 1 ? "s" : ""} for a verdict${mine && mine < all ? ` (${mine} made on ${model})` : ""}${since}. Verdicts come from trusted reviewers only: a person granted trust on \`${P}/trust\`; never the author's own handle without a grant. ${who}\n\n${settled}`;
   return all >= OWN_WAITING_NOTE_FROM ? `${head}\n\n${newGround(P)}` : head;
 }
 
@@ -1387,6 +1387,13 @@ job.post("/result", bearer, project, assignmentMutation(async (req: any, res) =>
     if (jobRow) {
       const prior = await one(`SELECT id,scored_at FROM reviews WHERE return_id=$1 AND user_id=$2 AND needs_reassessment`, [reviewOf,uid]);
       if (prior) { await archiveReview(Number(prior.id)); priorScoredAt = prior.scored_at; }
+      // On a quorum project a person gives one verdict per model family, and only a tier-1 one counts. An earlier verdict of theirs
+      // in this family from a session below tier 1 never counted; it is archived when their tier-1 session reviews the return, so
+      // the return is not left waiting for a family that already looked (Oct 13 2026, #sah-trusted-self-review).
+      if (reviewQuorum(req.project.slug) > 1) {
+        const uncounted = await one(`SELECT rv.id FROM reviews rv WHERE rv.return_id=$1 AND rv.user_id=$2 AND NOT rv.needs_reassessment AND NOT lean_tier1(rv.model, rv.effort) AND lean_tier1($3,$4) AND coalesce(lean_model_family(rv.model), rv.model) = coalesce(lean_model_family($3), $3)`, [reviewOf, uid, req.model ?? "unknown", effortEff]);
+        if (uncounted) await archiveReview(Number(uncounted.id));
+      }
     }
     const w = await reputation.score(uid);
     const reviewRung = parseRung(b.rung);
@@ -1464,7 +1471,6 @@ job.post("/result", bearer, project, assignmentMutation(async (req: any, res) =>
           continue;
         }
         if (Number(o.user_id) === uid && !reviewerGranted) { seriesWarnings.push(`return #${key} is your own handle's; it gets its own reviewer`); continue; }
-        if (String(o.model).toLowerCase() === String(req.model ?? "").toLowerCase()) { seriesWarnings.push(`return #${key} is on your own model; it gets its own reviewer`); continue; }
         if (await one(`SELECT 1 FROM reviews WHERE return_id = $1 AND user_id = $2`, [id, uid])) { seriesWarnings.push(`return #${key}: you already reviewed it`); continue; }
         const v = raw && typeof raw === "object" ? raw : { verdict: raw };
         if (!["accept", "reject"].includes(v.verdict)) { seriesWarnings.push(`return #${key}: verdict must be accept or reject; no verdict recorded`); continue; }
@@ -1778,9 +1784,7 @@ job.post("/result", bearer, project, assignmentMutation(async (req: any, res) =>
   // the spot, unpaid, linked both ways, no review slot; a duplicate of a pending one is labelled and folded when that one is accepted.
   const ph = patchHash(b.patch); const revSha = rtype === "audit" ? String(b.revision?.file ?? "").toLowerCase() || null : null; const revPath = rtype === "audit" ? revisions.safeRel(String(b.revision?.path ?? "")) : null;
   if (ph) await q(`UPDATE returns SET patch_hash = $2 WHERE id = $1`, [ret!.id, ph]);
-  const twin = !researchReport && !verificationPlan && (ph || revSha) ? await one<{ id: string; status: string }>(`SELECT id, status FROM returns WHERE problem_id = $1 AND id <> $2 AND status IN ('accepted','pending') AND NOT provisional
-      AND research_evidence IS NOT DISTINCT FROM (SELECT research_evidence FROM returns WHERE id=$2)
-      AND (($3::text IS NOT NULL AND patch_hash = $3) OR ($4::text IS NOT NULL AND revision_sha = $4 AND revision_path = $5)) ORDER BY (status = 'accepted') DESC, id LIMIT 1`, [problem.id, ret!.id, ph, revSha, revPath]) : null;
+  const twin = !researchReport && !verificationPlan ? await duplicateTwin(Number(problem.id), Number(ret!.id), ph, revSha, revPath) : null;
   if (twin && twin.status === "accepted") {
     await q(`UPDATE returns SET status = 'superseded', superseded_by = $2, final_rung = NULL WHERE id = $1`, [ret!.id, twin.id]);
     await q(`INSERT INTO return_decisions (return_id, status, final_rung, provisional, by, note) VALUES ($1,'superseded',NULL,false,'duplicate',$2)`, [ret!.id, `the same change as accepted return #${twin.id}: folded into it, one change, one payment, no review`]);
@@ -1958,7 +1962,7 @@ export async function resumeDeferredReviews(problemId: number): Promise<number> 
 
 /** Create review jobs for a return. Reviews require tier 1 (scope Q7/Q13). */
 /** Bumped whenever the standard review guidance changes; a queued review from an earlier version is refreshed when served. */
-export const REVIEW_BRIEF_VERSION = 26; // 26: a check summary names a capability gap (tools, sources or compute) and says the retry waits for a machine with it. // 22: transferable progress and explicit bounded next-step classifications. // 21: trusted source-only legacy closure triage without a scientific verdict. // 20: explicit legacy nominations and report-bound comparison checks. // 19: a summary transcript is the author's person's choice, judged as such (Oct 10 2026).   // 18: exact scoped assessments and shared corrections (Oct 10 2026).   // 16: authenticated trusted execution separate from cross-family correctness review (Oct 8 2026); 15: distinct Lean model families, both Tier 1/high, bounded reconstruction (Oct 7 2026); 14: concrete Lean package artifacts and make-checkable continuation (Oct 6 2026); 13: pinned Lean statement review and trustworthy worker validation (Oct 6 2026); 12: a chat return's transcript is the server's record of its tool calls, model unmeasured (Oct 4 2026, #sah-mcp-real-work-build);   // 11: review targets match integration closure, including explicit empty lists (Oct 2 2026); 10: required document repairs go to Tier 1 trusted agents and reviews reuse established evidence (Oct 2 2026); 9: a series also gathers the same document's later fixes, chain links and no-op revisions (#mba-sah-held-feedback-items, item 15); 8: the return schema names verification_sufficiency_md on a packaged review and the also_fix note cap (#mba-sah-bot-feedback-fixes, fix 7); 7: a reviewer holding a role on the project may mark an accepted finding worth announcing (Chris, Sep 26 2026, #sah-discord-announcer); 6: the reviewer asks whether the return earns credit, a rung or a citation without the work (Chris, Sep 24 2026, #sah-gemma-mvp; the Gemma Challenge's agents caught a gameable gate themselves);5: a revision's review lists the findings it answers, and also_fix takes a scope (Sep 24 2026); 3: no time budget in the review brief (Chris, Sep 19 2026); 4: series verdicts are decisions with their usual effects, from a trusted reviewer only (Sep 23 2026)
+export const REVIEW_BRIEF_VERSION = 27; // 27: a trusted reviewer may review a return of its own model or family (Chris, Oct 13 2026, #sah-trusted-self-review). // 26: a check summary names a capability gap (tools, sources or compute) and says the retry waits for a machine with it. // 22: transferable progress and explicit bounded next-step classifications. // 21: trusted source-only legacy closure triage without a scientific verdict. // 20: explicit legacy nominations and report-bound comparison checks. // 19: a summary transcript is the author's person's choice, judged as such (Oct 10 2026).   // 18: exact scoped assessments and shared corrections (Oct 10 2026).   // 16: authenticated trusted execution separate from cross-family correctness review (Oct 8 2026); 15: distinct Lean model families, both Tier 1/high, bounded reconstruction (Oct 7 2026); 14: concrete Lean package artifacts and make-checkable continuation (Oct 6 2026); 13: pinned Lean statement review and trustworthy worker validation (Oct 6 2026); 12: a chat return's transcript is the server's record of its tool calls, model unmeasured (Oct 4 2026, #sah-mcp-real-work-build);   // 11: review targets match integration closure, including explicit empty lists (Oct 2 2026); 10: required document repairs go to Tier 1 trusted agents and reviews reuse established evidence (Oct 2 2026); 9: a series also gathers the same document's later fixes, chain links and no-op revisions (#mba-sah-held-feedback-items, item 15); 8: the return schema names verification_sufficiency_md on a packaged review and the also_fix note cap (#mba-sah-bot-feedback-fixes, fix 7); 7: a reviewer holding a role on the project may mark an accepted finding worth announcing (Chris, Sep 26 2026, #sah-discord-announcer); 6: the reviewer asks whether the return earns credit, a rung or a citation without the work (Chris, Sep 24 2026, #sah-gemma-mvp; the Gemma Challenge's agents caught a gameable gate themselves);5: a revision's review lists the findings it answers, and also_fix takes a scope (Sep 24 2026); 3: no time budget in the review brief (Chris, Sep 19 2026); 4: series verdicts are decisions with their usual effects, from a trusted reviewer only (Sep 23 2026)
 const REASSESSMENT_NOTE = '\n\nEvidence needs reassessment or execution could not find capacity within 24 hours. Assess the specific missing or changed evidence from the record; execution is not included. Preserve existing observations. Do not report that a check ran. If new execution is necessary, name the smallest check and missing capability in needs_md; a repaired package is a new return.';
 /** The standard review brief for a return as it stands now, with the tier, budget and compute hint that go with it. Job-specific text (the reassessment note) is the caller's. */
 export async function composeReviewBrief(returnId: number, problemId: number, options: { judgmentOnly?: boolean } = {}): Promise<{ brief: string; tier: number; budget: number; compute: any; judgmentOnly: boolean; packaged: boolean }> {
@@ -1966,7 +1970,7 @@ export async function composeReviewBrief(returnId: number, problemId: number, op
     `SELECT r.paper_exposition,r.verification_plan,r.type, r.paper_slug, r.revision_path, r.recipe_md, r.target, j.budget_hours AS job_budget, j.compute_hint AS job_compute, r.model, u.handle, mt.tier AS author_tier, r.problem_id, left(r.transcript, 24) AS transcript_head, r.patch, r.revision_sha, r.transcript_omitted, r.duplicate_of, r.tokens AS author_tokens, r.transcript_mode, r.file_notes, (r.patch IS NOT NULL) AS has_patch
      FROM returns r LEFT JOIN jobs j ON j.id = r.job_id JOIN users u ON u.id = r.user_id LEFT JOIN model_tiers mt ON mt.model = r.model WHERE r.id = $1`, [returnId]);
   // Provenance (Q68): the reviewer sees who made this and with what, and who last verified the document it touches, and is told to be a different pair of eyes.
-  let provenance = parent ? `\n\nProvenance: authored by @${parent.handle} with ${parent.model}${parent.author_tier ? ` (tier ${parent.author_tier})` : ""}. If that is your own handle: a trusted reviewer may review their handle's return; the value is a second look by another model in a clean session, so declare it in the claim and the return and proceed, do not release. You are a different model, at least as capable for a judgment call; a model does not review its own kind because it shares its blind spots. Look for what that model would miss.` : "";
+  let provenance = parent ? `\n\nProvenance: authored by @${parent.handle} with ${parent.model}${parent.author_tier ? ` (tier ${parent.author_tier})` : ""}. If that is your own handle or your own model: a trusted reviewer may review it; the value is a second look in a clean session that did not write it, so declare it in the claim and the return and proceed, do not release. You are at least as capable for a judgment call. Look for what the author's model would miss; when it is your own model, that means your own habits too, so check the steps you would have taken on trust.` : "";
   if (parent?.revision_path) {
     const lastV = await one<{ version: number; author: string | null; author_model: string | null; verified_models: any[] }>(`SELECT v.version, u.handle AS author, v.author_model, v.verified_models FROM document_versions v LEFT JOIN users u ON u.id = v.author_user_id WHERE v.problem_id = $1 AND v.path = $2 ORDER BY v.version DESC LIMIT 1`, [parent.problem_id, parent.revision_path]);
     if (lastV) provenance += ` The document \`${parent.revision_path}\` is at version ${lastV.version}${lastV.author ? `, last revised by @${lastV.author}${lastV.author_model ? ` (${lastV.author_model})` : ""}` : " (as mirrored)"}${Array.isArray(lastV.verified_models) && lastV.verified_models.length ? `, verified by ${lastV.verified_models.map((v: any) => `${v.model ?? v.handle}${v.verification ? `/${v.verification}` : ""}`).join(", ")}` : ""}.`;
@@ -2261,6 +2265,21 @@ async function reassessAffected(returnId: number, note: string, includeSource = 
   const claims = await q(`SELECT * FROM returns WHERE id=ANY($1::bigint[]) AND (id<>$2 OR $3::boolean)
     AND status='accepted' AND NOT provisional AND duplicate_of IS NULL`, [ids,returnId,includeSource]);
   for (const claim of claims) await reopen(claim, null, `Evidence return #${returnId} changed: ${note}. Reassess its use; this is not an automatic refutation.`, 'evidence', { propagate: false, judgmentOnly: true });
+}
+
+/** The accepted or pending return that is the same change as this one (issue #51), or null. A return that answers required
+ * corrections is never a duplicate (Oct 13 2026, #sah-trusted-self-review): on Oct 13 one correction was handed out 113 times in seven
+ * hours, because each repair sent the served text unchanged (an earlier accepted revision already satisfied the finding), was
+ * folded into that old return without review, closed nothing, and the open finding queued the job again at the next request. Such a
+ * return goes to trusted review, where accepting an unchanged revision closes the findings it answers. */
+export async function duplicateTwin(problemId: number, returnId: number, ph: string | null, revSha: string | null, revPath: string | null): Promise<{ id: string; status: string } | null> {
+  if (!ph && !revSha) return null;
+  const answers = await one(`SELECT 1 FROM returns r WHERE r.id=$1 AND (jsonb_array_length(CASE WHEN jsonb_typeof(r.resolves)='array' THEN r.resolves ELSE '[]'::jsonb END) > 0
+      OR EXISTS (SELECT 1 FROM findings f WHERE f.job_id = r.job_id AND f.status = 'open'))`, [returnId]);
+  if (answers) return null;
+  return await one<{ id: string; status: string }>(`SELECT id, status FROM returns WHERE problem_id = $1 AND id <> $2 AND status IN ('accepted','pending') AND NOT provisional
+      AND research_evidence IS NOT DISTINCT FROM (SELECT research_evidence FROM returns WHERE id=$2)
+      AND (($3::text IS NOT NULL AND patch_hash = $3) OR ($4::text IS NOT NULL AND revision_sha = $4 AND revision_path = $5)) ORDER BY (status = 'accepted') DESC, id LIMIT 1`, [problemId, returnId, ph, revSha, revPath]) ?? null;
 }
 
 async function archiveReview(id: number): Promise<void> {
@@ -2779,7 +2798,7 @@ async function returnPage(req: any, res: any): Promise<void> {
   if (quorum > 1 && r.status === "pending") {
     const fam = await q<{ family: string | null; verdict: string }>(`SELECT DISTINCT lean_model_family(model) AS family, verdict FROM reviews WHERE return_id = $1 AND trusted AND lean_tier1(model, effort) AND NOT needs_reassessment`, [r.id]);
     const waiting = Number((await one<{ c: string }>(`SELECT count(*) AS c FROM jobs WHERE parent_return_id = $1 AND type = 'review' AND status IN ('queued','assigned')`, [r.id]))?.c ?? 0);
-    quorumLine = `<p class="muted">Waiting for review. On this project a finding is decided when ${quorum} trusted reviewers on tier-1 models of different families agree, and a model never reviews its own kind. ${fam.length ? `So far: ${fam.map((f) => `${escHtml(f.family ?? "?")} ${f.verdict === "accept" ? "accepts" : "rejects"}`).join(", ")}.` : "No qualifying verdict yet."}${waiting ? ` ${waiting} review assignment${waiting === 1 ? " is" : "s are"} open for eligible reviewers.` : ""}</p>`;
+    quorumLine = `<p class="muted">Waiting for review. On this project a finding is decided when ${quorum} trusted reviewers on tier-1 models of different families agree; the author's own family may be one of them. ${fam.length ? `So far: ${fam.map((f) => `${escHtml(f.family ?? "?")} ${f.verdict === "accept" ? "accepts" : "rejects"}`).join(", ")}.` : "No qualifying verdict yet."}${waiting ? ` ${waiting} review assignment${waiting === 1 ? " is" : "s are"} open for eligible reviewers.` : ""}</p>`;
   }
   const body = quorumLine + challenged + targetLine + human + dupList + researchRecord + (await md(r.report_md)) + (evidenceRecord ? await md(evidenceRecord) : "") + fixList + (r.patch ? `<h2>Patch</h2><pre><code>${escHtml(r.patch)}</code></pre>` : "") + dlist;
   const firstLine = String(r.report_md ?? "").split("\n").map((l: string) => l.replace(/^[#>*\s-]+/, "").trim()).find((l: string) => l.length > 20) ?? "";

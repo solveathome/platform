@@ -17,7 +17,7 @@ const {migrate, q, one, pool} = await import('../src/db/index.ts');
 const {TERMS_VERSION} = await import('../src/lib/terms.ts');
 const files = await import('../src/lib/files.ts');
 const {recordMirrorCut, restoreVersion, history, servedDrift} = await import('../src/lib/revisions.ts');
-const {resolveReturn, spawnFixJob, recoverCorrectionJobs, staleRevision, composeReviewBrief} = await import('../src/routes/job.ts');
+const {resolveReturn, spawnFixJob, recoverCorrectionJobs, staleRevision, composeReviewBrief, duplicateTwin} = await import('../src/routes/job.ts');
 const {selectJob, whyNotEligible} = await import('../src/lib/scheduler.ts');
 const findings = await import('../src/lib/findings.ts');
 const {paperReview} = await import('../src/lib/paper-state.ts');
@@ -372,6 +372,33 @@ test('unavailable old findings cannot starve a later served correction in bounde
   for (let i=0; i<3; i++) await recoverCorrectionJobs(pid, slug);
   assert.equal((await findings.findingsByIds([f]))[0].job_status, 'queued');
   assert.equal(Number((await one(`SELECT count(*) AS n FROM findings WHERE problem_id=$1 AND path LIKE 'research/unavailable-%' AND last_recovery_at IS NOT NULL`, [pid])).n), 100);
+});
+
+// Oct 13 2026: one correction was handed out 113 times in seven hours. Each repair sent the served text unchanged (an accepted
+// revision already satisfied the finding), was folded into that old return as the same change, closed nothing, and the open finding
+// queued the job again. A return that answers a required correction is never folded: it is reviewed, and accepting it closes the finding.
+test('a repair that sends the already accepted text is not folded as a duplicate: it is reviewed, closes its finding and queues no new job', async () => {
+  const path = 'research/answered-already.md'; mirror(path, '# Answered\n');
+  const first = await submit({path, text: '# Answered\n\nThe ledger says ANSWERED.\n'});
+  assert.equal(await decide(first), 'accepted');
+  const f = await findings.recordFinding({problemId: pid, path, note: 'The ledger must say ANSWERED.', contentSha: null, returnId: correction});
+  const jobId = await spawnFixJob(pid, null, slug, path, 'The ledger must say ANSWERED.', {findingId: f});
+  const sha = files.sha256(served(path));
+  const plain = await submit({path, text: served(path)});
+  assert.equal(Number((await duplicateTwin(pid, plain, null, sha, path))?.id), first, 'the same text with no correction behind it is still the same change');
+  await q(`DELETE FROM returns WHERE id=$1`, [plain]);
+  const repair = await submit({path, text: served(path), jobId, resolves: [f]});
+  await q(`UPDATE jobs SET status='returned' WHERE id=$1`, [jobId]);
+  assert.equal(await duplicateTwin(pid, repair, null, sha, path), null, 'a return that answers a correction is not a duplicate');
+  const unnamed = await submit({path, text: served(path), jobId, resolves: []});
+  assert.equal(await duplicateTwin(pid, unnamed, null, sha, path), null, 'nor is one on a job that still carries an open correction');
+  await q(`DELETE FROM returns WHERE id=$1`, [unnamed]);
+  await recoverCorrectionJobs(pid, slug);
+  assert.equal((await findings.findingsByIds([f]))[0].job_id, jobId, 'while the repair waits for its verdict no new job is queued');
+  assert.equal(await decide(repair), 'accepted');
+  assert.equal((await findings.findingsByIds([f]))[0].status, 'resolved', 'accepting the unchanged revision closes the finding');
+  await recoverCorrectionJobs(pid, slug);
+  assert.equal(Number((await one(`SELECT count(*) AS n FROM jobs WHERE problem_id=$1 AND title=$2 AND status IN ('queued','assigned')`, [pid, `Fix ${path}`])).n), 0, 'and the correction is not queued again');
 });
 
 test('a superseded return does not strand corrections on a returned job, while provisional review still counts as work', async () => {

@@ -28,6 +28,15 @@ test('quorum 2: two trusted tier-1 verdicts from different families must agree',
   assert.equal(decide([v('accept', null), v('accept', 'openai')], 2).status, 'pending', 'a model of unknown family does not count');
 });
 
+// Chris, Oct 13 2026 (#sah-trusted-self-review): the author's own family may be one of the two. The count never asks who wrote the return.
+test('quorum 2 with self review: the author\'s family and one other decide; two verdicts of one family never do', () => {
+  const solReturn = [v('accept', 'anthropic'), v('accept', 'openai')];   // a Sol return: an Opus verdict and a Sol verdict
+  assert.equal(decide(solReturn, 2).status, 'accepted');
+  assert.equal(decide([v('accept', 'openai'), v('accept', 'openai')], 2).status, 'pending', 'Sol twice (two people, or Sol and Astra) is one family');
+  assert.equal(decide([v('accept', 'anthropic'), v('accept', 'anthropic')], 2).status, 'pending', 'Opus and Fable are one family');
+  assert.equal(decide([v('reject', 'anthropic'), v('reject', 'openai')], 2).status, 'rejected');
+});
+
 test('the project settings: MD5 asks for 2, twin primes keeps 1', () => {
   assert.equal(reviewQuorum('md5'), 2);
   assert.equal(reviewQuorum('twin-primes'), 1);

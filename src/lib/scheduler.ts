@@ -187,12 +187,16 @@ function eligibility(a: SchedulingAgent, omitCompute = false, sameKindOnly = fal
     ["it is a review and this session is not a trusted reviewer", `(pr.id IS NULL OR j.type = 'triage' OR ${p(a.trusted)}::boolean)`],
     // Review triage (Sep 18 2026): a first read by a session that is not trusted, on another handle and model than the author's;
     // a trusted session reviews instead, and nobody triages one return twice. A reviews-only trusted session with no review
-    // waiting selects a triage under the review rules (never its own model's return, its own handle's only by grant) only to
+    // waiting selects a triage under the review rules (its own handle's return only by grant) only to
     // turn it into its review: a trusted session never triages (Sep 28 2026, #mba-sah-bot-feedback-fixes-skip-triage).
     ["it is a triage: a trusted session never triages, nobody triages a return twice, and a run of four first reads goes to research", `(j.type <> 'triage' OR ((${fallback}::boolean OR (NOT ${p(a.trusted)}::boolean AND ${p(a.reviewStreak < 4)}::boolean)) AND NOT EXISTS (SELECT 1 FROM triages t WHERE t.return_id = j.parent_return_id AND t.user_id = ${uid})))`],
-    ["you already reviewed this return" + (reviewQuorum(a.slug) > 1 ? " with this model family" : ""), `NOT EXISTS (SELECT 1 FROM reviews rv WHERE rv.return_id = j.parent_return_id AND rv.user_id = ${uid} AND NOT rv.needs_reassessment${reviewQuorum(a.slug) > 1 ? ` AND lean_model_family(rv.model) IS NOT DISTINCT FROM lean_model_family(${p(a.model)})` : ""})`],
+    ["you already reviewed this return" + (reviewQuorum(a.slug) > 1 ? " with this model family" : ""), `NOT EXISTS (SELECT 1 FROM reviews rv WHERE rv.return_id = j.parent_return_id AND rv.user_id = ${uid} AND NOT rv.needs_reassessment${reviewQuorum(a.slug) > 1 ? ` AND lean_model_family(rv.model) IS NOT DISTINCT FROM lean_model_family(${p(a.model)}) AND (lean_tier1(rv.model, rv.effort) OR ${tier} <> 1)` : ""})`],
     ["you already hold another job on this return", `NOT EXISTS (SELECT 1 FROM jobs j2 WHERE j2.parent_return_id = j.parent_return_id AND j2.id <> j.id AND j2.assigned_to = ${uid} AND j2.status = 'assigned')`],
-    [sameKindOnly ? "it is not a return of your model" : "it judges a return of your own model: a model never judges its own kind", sameKindOnly ? `(pr.id IS NOT NULL AND pr.model IS NOT DISTINCT FROM ${model}::text)` : `(pr.id IS NULL OR CASE WHEN pr.verification_plan ? 'lean' THEN coalesce(lean_model_family(pr.model) <> lean_model_family(${model}::text),false) AND lean_tier1(pr.model,pr.effort) AND ${tier}=1 ELSE pr.model IS DISTINCT FROM ${model}::text END)`],
+    // A trusted reviewer may review a return of its own model or family (Chris, Oct 13 2026, #sah-trusted-self-review: "trusted reviewers
+    // may self review ... trusted reviewers are TRUSTED"): with the two-family quorum and the old exclusion, a return written by one of
+    // the two trusted families could never get its second verdict. A first read by a session that is not trusted stays off its own
+    // model's returns, and Lean keeps its distinct-family rule (Oct 6 2026).
+    [sameKindOnly ? "it is not a return this session is kept off by its model" : "it is a first read of a return of your own model (only a trusted reviewer judges its own model's return), or a Lean review, which needs another model family", sameKindOnly ? `(pr.id IS NOT NULL AND pr.model IS NOT DISTINCT FROM ${model}::text AND (NOT ${p(a.trusted)}::boolean OR pr.verification_plan ? 'lean'))` : `(pr.id IS NULL OR CASE WHEN pr.verification_plan ? 'lean' THEN coalesce(lean_model_family(pr.model) <> lean_model_family(${model}::text),false) AND lean_tier1(pr.model,pr.effort) AND ${tier}=1 ELSE (pr.model IS DISTINCT FROM ${model}::text OR ${p(a.trusted)}::boolean) END)`],
     // A trusted session never triages (Chris, Sep 28 2026, #mba-sah-bot-feedback-fixes-skip-triage): a triage it falls back to becomes
     // its review, so it only falls back to a triage whose return it may review.
     ["the return's author model is above this session's tier", `(pr.id IS NULL OR (j.type = 'triage' AND NOT ${fallback}::boolean) OR (j.type <> 'triage' AND j.min_tier >= 99) OR ${tier} <= coalesce(amt.tier, 99))`],
@@ -238,7 +242,8 @@ export async function backlogFor(a: SchedulingAgent, withBlocked = true) {
   const e = eligibility(a);
   const row = await one(`SELECT count(*) FILTER (WHERE j.type IN ('review','audit','upkeep')) AS reviews,
     count(*) FILTER (WHERE j.type NOT IN ('review','audit','upkeep')) AS research ${e.joins} WHERE ${e.where}`, e.values);
-  // Reviews this agent cannot take *only* because a model never reviews its own kind (platform issue #82). Without it the
+  // Reviews this agent cannot take *only* because of its model (platform issue #82): since Oct 13 2026 that is a Lean review of its
+  // own family for a trusted session; a trusted reviewer takes every other review of its own model. Without it the
   // scheduler records eligible_backlog.reviews = 0 while the brief prints the count waiting, and the two describe one queue:
   // "no review debt" and "review debt nobody here can serve" are not the same fact, and only the second one grows.
   const k = eligibility(a, false, true);
