@@ -1364,8 +1364,11 @@ ALTER TABLE reviews ADD COLUMN IF NOT EXISTS lean_statement_review jsonb;
 ALTER TABLE reviews ADD COLUMN IF NOT EXISTS lean_execution_review jsonb;
 
 -- Preserve reported identities; aliases cannot manufacture independent Lean validators/reviewers.
+-- The calls below name public: reviews_return_user_family_idx evaluates lean_model_family, and autovacuum, restores and reindexes
+-- run index expressions with only pg_catalog on the search path. Unqualified, every automatic analyze of reviews failed from Oct 10 2026
+-- (its statistics stayed at Oct 9); qualified names keep the functions inlinable, which SET search_path would not (#sah-perf-sweep-route-retime).
 CREATE OR REPLACE FUNCTION lean_model_identity(model text) RETURNS text LANGUAGE sql IMMUTABLE AS $$
-  SELECT regexp_replace(regexp_replace(canon_model(model), '(-(none|minimal|low|medium|high|xhigh|max|maximum|extended|extra-high|extrahigh|x_high|ultra|deep|off))+$', ''), '([0-9])\.(?=[0-9])', '\1-', 'g');
+  SELECT regexp_replace(regexp_replace(public.canon_model(model), '(-(none|minimal|low|medium|high|xhigh|max|maximum|extended|extra-high|extrahigh|x_high|ultra|deep|off))+$', ''), '([0-9])\.(?=[0-9])', '\1-', 'g');
 $$;
 -- Lean independence (Chris, Oct 6 2026: "Different model I think we should keep but it can be same user for approved users and tier 1 models").
 -- Statement and mathematical correctness review require a distinct model family and Tier 1/high.
@@ -1381,15 +1384,15 @@ $$;
 -- Model versions and sibling models do not supply a second proof-review family.
 CREATE OR REPLACE FUNCTION lean_model_family(model text) RETURNS text LANGUAGE sql IMMUTABLE AS $$
   SELECT CASE
-    WHEN lean_model_identity(model) ~ '^(claude-(opus|sonnet|haiku|fable|mythos)(-|$)|(fable|mythos)(-|$))' THEN 'anthropic'
-    WHEN lean_model_identity(model) ~ '^(gpt-[0-9]|o[0-9](-|$)|astra(-|$))' THEN 'openai'
-    WHEN lean_model_identity(model) ~ '^(gemini|gemma|palm)(-|$)' THEN 'google'
-    WHEN lean_model_identity(model) ~ '^llama(-|$)' THEN 'meta'
-    WHEN lean_model_identity(model) ~ '^(mistral|mixtral|codestral|magistral)(-|$)' THEN 'mistral'
-    WHEN lean_model_identity(model) ~ '^deepseek(-|$)' THEN 'deepseek'
-    WHEN lean_model_identity(model) ~ '^(qwen|qwq)(-|$)' THEN 'alibaba'
-    WHEN lean_model_identity(model) ~ '^grok(-|$)' THEN 'xai'
-    WHEN lean_model_identity(model) ~ '^(kimi|moonshot)(-|$)' THEN 'moonshot'
+    WHEN public.lean_model_identity(model) ~ '^(claude-(opus|sonnet|haiku|fable|mythos)(-|$)|(fable|mythos)(-|$))' THEN 'anthropic'
+    WHEN public.lean_model_identity(model) ~ '^(gpt-[0-9]|o[0-9](-|$)|astra(-|$))' THEN 'openai'
+    WHEN public.lean_model_identity(model) ~ '^(gemini|gemma|palm)(-|$)' THEN 'google'
+    WHEN public.lean_model_identity(model) ~ '^llama(-|$)' THEN 'meta'
+    WHEN public.lean_model_identity(model) ~ '^(mistral|mixtral|codestral|magistral)(-|$)' THEN 'mistral'
+    WHEN public.lean_model_identity(model) ~ '^deepseek(-|$)' THEN 'deepseek'
+    WHEN public.lean_model_identity(model) ~ '^(qwen|qwq)(-|$)' THEN 'alibaba'
+    WHEN public.lean_model_identity(model) ~ '^grok(-|$)' THEN 'xai'
+    WHEN public.lean_model_identity(model) ~ '^(kimi|moonshot)(-|$)' THEN 'moonshot'
     ELSE NULL END;
 $$;
 CREATE OR REPLACE FUNCTION lean_independent(p_problem bigint, p_actor bigint, p_actor_model text, p_actor_effort text, p_author bigint, p_author_model text) RETURNS boolean LANGUAGE sql STABLE AS $$

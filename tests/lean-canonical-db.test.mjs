@@ -38,3 +38,14 @@ test('PL/pgSQL canonical JSON equals the SQL definition it replaced, and its bin
   }
   assert.equal((await c.query(`SELECT lean_identity_canonical(NULL) AS v`)).rows[0].v, null, 'still STRICT');
 });
+
+test('lean_model_family resolves with only pg_catalog on the search path, as autovacuum runs the reviews index', async () => {
+  // reviews_return_user_family_idx calls lean_model_family; unqualified inner calls made every automatic analyze of reviews fail
+  // from Oct 10 2026 (#sah-perf-sweep-route-retime). ANALYZE under an empty search path is what autovacuum and a restore do.
+  await c.query('BEGIN');
+  try {
+    await c.query(`SET LOCAL search_path TO ''`);
+    assert.equal((await c.query(`SELECT public.lean_model_family('Claude-Opus-5.5-high') AS f`)).rows[0].f, 'anthropic');
+    await c.query('ANALYZE public.reviews');
+  } finally { await c.query('ROLLBACK'); }
+});
