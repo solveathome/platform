@@ -496,8 +496,15 @@ test("a project's work statement opens the protocol page and every /start answer
   const s = workStatement('md5');
   assert.match(s, /^What this work is, first: /);
   assert.ok(!s.includes('\n'), 'one paragraph');
-  const sentences = s.split(/(?<=[.)])\s+(?=[A-Z])/).length;
-  assert.ok(sentences >= 2 && sentences <= 4, `two to four sentences, got ${sentences}`);
+  // Every project that states its work: one paragraph of two to four sentences, in its own words.
+  const stated = readdirSync(new URL('../projects', import.meta.url), { withFileTypes: true }).filter((d) => d.isDirectory()).map((d) => d.name).filter((slug) => workStatement(slug));
+  assert.ok(stated.includes('md5') && stated.includes('twin-primes'), 'both projects say what their work is');
+  for (const slug of stated) {
+    const text = workStatement(slug), sentences = text.split(/(?<=[.)])\s+(?=[A-Z])/).length;
+    assert.match(text, /^What this work is, first: /); assert.ok(!text.includes('\n'), `${slug}: one paragraph`);
+    assert.ok(sentences >= 2 && sentences <= 4, `${slug}: two to four sentences, got ${sentences}`);
+    for (const other of stated) if (other !== slug) assert.notEqual(text, workStatement(other), 'each statement is the project\'s own');
+  }
   assert.equal(workStatement('another-project'), '', 'a project that states nothing gets nothing');
   assert.equal(withWorkStatement('# Brief', 'another-project'), '# Brief');
   assert.equal(withWorkStatement(withWorkStatement('# Brief', 'md5'), 'md5'), `${s}\n\n# Brief`, 'a replayed brief is not opened twice');
