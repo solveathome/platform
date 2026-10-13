@@ -71,10 +71,46 @@ export async function flushFileEffects(existingClient?: pg.PoolClient): Promise<
   finally { if (!existingClient) client.release(); }
 }
 
+/** Lock-order fix for the boot schema (Oct 13 2026, #sah-boot-schema-deadlocks). schema.sql runs as one transaction at every start,
+ *  while the other blue/green slot serves. Sent as one query, it kept the AccessExclusiveLock of each table it altered until its end
+ *  and took the next one later: `users` early, then tokens, messages, problems or returns, which a live request already held
+ *  AccessShare on while it waited for users. Production logged 25 such deadlocks from Oct 5 to Oct 12, and the victim was sometimes the
+ *  live request. Now every existing table is locked first, in name order, in one LOCK statement given less time than
+ *  deadlock_timeout: a live request that queued behind it has not reached its own deadlock check when the attempt gives up, and once
+ *  the schema holds every lock it waits on nothing live, so no cycle can form. A busy attempt rolls back and retries; the file itself,
+ *  its single transaction and what it does at every start are unchanged. */
+const MIGRATE_RETRY_FOR_MS = 45_000;   // under the deploy's one-minute health wait: a boot that never gets its locks fails, and the live slot stays
 export async function migrate(): Promise<void> {
   const here = dirname(fileURLToPath(import.meta.url));
   const sql = readFileSync(join(here, "schema.sql"), "utf8");
-  await pool.query(sql);
+  const client = await pool.connect();
+  const started = Date.now();
+  try {
+    for (let attempt = 1; ; attempt++) {
+      let locking = false;
+      try {
+        await client.query("BEGIN");
+        await client.query(`SELECT pg_advisory_xact_lock(hashtextextended('solveathome-schema', 0))`);   // one migrator at a time (a boot and a cron)
+        const { rows: [t] } = await client.query(`SELECT string_agg(format('%I.%I', n.nspname, c.relname), ', ' ORDER BY c.relname) AS tables,
+          (SELECT setting::int FROM pg_settings WHERE name = 'deadlock_timeout') AS deadlock_ms
+          FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace WHERE n.nspname = current_schema() AND c.relkind IN ('r','p','v','m')`);
+        if (t.tables) {
+          locking = true;
+          await client.query(`SET LOCAL statement_timeout = ${Math.max(50, Math.min(500, Math.floor(Number(t.deadlock_ms) / 2)))}`);
+          await client.query(`LOCK TABLE ${t.tables} IN ACCESS EXCLUSIVE MODE`);
+          await client.query(`SET LOCAL statement_timeout TO DEFAULT`);
+          locking = false;
+        }
+        await client.query(sql);
+        await client.query("COMMIT");
+        return;
+      } catch (e: any) {
+        await client.query("ROLLBACK").catch(() => {});
+        if (!locking || !["57014", "40P01"].includes(e?.code) || Date.now() - started > MIGRATE_RETRY_FOR_MS) throw e;
+        await new Promise((r) => setTimeout(r, Math.min(2000, 100 * attempt) + Math.floor(Math.random() * 200)));
+      }
+    }
+  } finally { client.release(); }
 }
 
 export async function q<T = any>(text: string, params: unknown[] = []): Promise<T[]> {

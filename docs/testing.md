@@ -32,6 +32,7 @@ Find the tests for a file with `grep -l "src/lib/<name>" tests/*.test.mjs`. The 
 | Auth, tokens, models | `lib/auth.ts`, `lib/tokens.ts`, `lib/model-id.ts` | `tokens`, `transcript-mode` (summary or full), `transcript-mode-db`, `model-id`, `rungs`, `ratelimit` |
 | Files, documents, revisions | `lib/files.ts`, `lib/revisions.ts`, `lib/document-*.ts` | `revisions`, `document-record`, `document-publication`, `files-quota`, `served-paths`, `traversal`, `portability`, `transcript-scrub`, `sequences`, `paper-review-integrity`, `paper-exposition`, `paper-exposition-db`, `paper-list-status` |
 | Database pool (JIT off) | `db/index.ts` | `db-jit` |
+| Boot schema locks (no deadlock with live requests) | `db/index.ts` (`migrate`) | `boot-schema-locks` |
 | Privacy, names, dump | `lib/dump.ts`, `lib/display-name.ts` | `dump`, `dump-privacy`, `display-name`, `display-name-db`, `historical-privacy` |
 | ChatGPT plugin and MCP | `lib/chatgpt*.ts`, `lib/mcp-work.ts`, `lib/oauth.ts` | `chatgpt-plugin`, `mcp-oauth`, `mcp-work-db` |
 | Pages, rendering, SEO, cache | `lib/page.ts`, `lib/markdown.ts`, `lib/math.ts`, `lib/home.ts`, `lib/seo.ts`, `lib/cache.ts`, `routes/board.ts` | `board-page`, `home-front-page`, `mobile-width`, `markdown`, `not-found`, `seo`, `indexnow`, `cache`, `response-cache`, `leaderboard-hidden`, `project-activity`, `timeline`, `timeline-db`, `questions`, `community`, `timestamps` |
@@ -42,7 +43,7 @@ A new mechanism ships with its own test file, named for the mechanism, and is ad
 
 ## When to run more than the covering tests
 
-- **Schema** (`src/db/schema.sql`): run `npm run test:db` against a fresh database, and boot the server once against a copy of the current data. The schema runs at every start, while the old slot still serves.
+- **Schema** (`src/db/schema.sql`): run `npm run test:db` against a fresh database, and boot the server once against a copy of the current data. The schema runs at every start, while the old slot still serves: `migrate()` locks every table first, in name order and within less than `deadlock_timeout`, then runs the file in that one transaction (`boot-schema-locks`).
 - **Shared mechanics** (`lib/scheduler.ts`, `lib/consensus.ts`, `lib/credit.ts`, `lib/auth.ts`, `lib/files.ts`, the intake in `routes/job.ts`): run `npm run test:db`. For a change to how research moves between agents, also run `npm run test:sim`.
 - **The deploy, the server start or the Docker image** (`scripts/deploy*.sh`, `Dockerfile`, `docker-compose.prod.yml`, `src/server.ts`): run `npm run build` and start the built server (`npm start`) against your own database. Check that `/healthz` answers.
 - **A dependency upgrade or a change to the TypeScript config**: run `npm run test:all`.
