@@ -24,6 +24,7 @@ export type ProjectConfig = {
   // removing the flag (or setting it true) and deploying.
   listed?: boolean;
   review_quorum?: number;   // trusted tier-1 verdicts from different model families that must agree (src/lib/consensus.ts); default 1
+  negative_review_quorum?: number;   // below review_quorum: the families a declared and reviewer-confirmed negative result needs (src/lib/consensus.ts); absent: no such rule
   challenge?: import('./challenges.js').ChallengeConfig;   // a record challenge: submissions verified by the server, no review (src/lib/challenges.ts)
   work_statement?: string;   // what the project's work is and is not, in two to four plain sentences: the first paragraph of the protocol page and of every brief (src/lib/work-statement.ts)
   home?: { field?: string; why?: string; standing?: string };   // the front-page card (src/lib/home.ts): field line, why it matters, a fixed status line
@@ -70,6 +71,9 @@ export function unlistedSlugs(): string[] {
 export const isListed = (slug: string): boolean => !unlistedSlugs().includes(slug);
 /** The project's review quorum (project.json review_quorum): 1 unless it asks for more. */
 export const reviewQuorum = (slug: string): number => { const n = Number(readProjectConfig(slug)?.review_quorum ?? 1); return Number.isInteger(n) && n > 1 ? Math.min(n, 5) : 1; };
+/** The families a declared, reviewer-confirmed negative result needs (project.json negative_review_quorum), or null when the project
+ *  has no such rule: it only exists below a review quorum above 1, so a project at quorum 1 is never touched by it. */
+export const negativeQuorum = (slug: string): number | null => { const n = Number(readProjectConfig(slug)?.negative_review_quorum), quorum = reviewQuorum(slug); return Number.isInteger(n) && n >= 1 && n < quorum ? n : null; };
 export function forgetUnlisted(): void { unlistedCache.at = 0; }
 
 export type Featured = { slug: string; name: string; summary: string; tagline: string };

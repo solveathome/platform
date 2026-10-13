@@ -629,3 +629,24 @@ test('a triage is paid once per triager per return, whatever calls it again (the
   const rows = await q(`SELECT points, note FROM credits WHERE source_type='return' AND source_id=$1 AND user_id=$2`, [String(r.return_id), second]);
   assert.equal(rows.length, 1); assert.equal(Number(rows[0].points), 15); assert.match(rows[0].note, /recorded as it stands/);
 });
+
+// The negative-result rule is a project setting (Oct 13 2026, #sah-md5-review-rules-a-b). A project that does not set it, as twin
+// primes does not, is decided exactly as before: the label is not recorded, and one trusted verdict decides with or without it.
+test('a project without negative_review_quorum is untouched by a negative_result label on the return or the review', async () => {
+  delete process.env.REVIEW_TRIAGE_MIN_TIER;   // triage off: the return goes straight to its review jobs
+  await q(`INSERT INTO jobs (problem_id, lane_id, type, title, brief_md, git_ref, compute_hint, budget_hours, min_tier, quorum, status) VALUES ($1,NULL,'explore','Explore: a gap statistic','b','main','{}',1,3,1,'queued')`, [pid]);
+  const a = await start({who: tokens.author, model: 'deepseek-v4-flash', effort: 'max'});
+  assert.equal(a.type, 'explore');
+  const r = ok(await answer(a, {report_md: 'The fold was tried to 41# and shows nothing: no gain over the plain count.', request_review: true, negative_result: true}, tokens.author));
+  assert.ok(r.warnings.some(w => /negative_result: not recorded \(this project decides every return under one rule\)/.test(w)), JSON.stringify(r.warnings));
+  assert.equal(r.negative_result, undefined);
+  assert.equal((await one(`SELECT negative_result FROM returns WHERE id=$1`, [r.return_id])).negative_result, null);
+  const reviews = await jobsOf(r.return_id, 'review');
+  assert.ok(reviews.length > 0);
+  assert.doesNotMatch((await one(`SELECT brief_md FROM jobs WHERE id=$1`, [reviews[0].id])).brief_md, /negative result/);
+  const rv = ok(await call('/result', {method: 'POST', who: tokens.trusted, model: 'claude-opus-5', effort: 'high', body: {type: 'review', return_id: r.return_id, verdict: 'accept', rung: 'measured', notes_md: 'Sound for its scope.', negative_result: false, transcript: 't', transcript_approved: true}}));
+  assert.equal(rv.return_status, 'accepted', 'one trusted verdict decides, as before, whatever the review says about the class');
+  assert.ok(rv.warnings.some(w => /the author did not declare this return a negative result/.test(w)));
+  assert.equal((await one(`SELECT negative_result FROM reviews WHERE return_id=$1`, [r.return_id])).negative_result, null);
+  assert.doesNotMatch((await one(`SELECT note FROM return_decisions WHERE return_id=$1 ORDER BY id DESC LIMIT 1`, [r.return_id])).note, /negative/);
+});

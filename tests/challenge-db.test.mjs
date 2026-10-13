@@ -27,7 +27,7 @@ writeFileSync(join(projectsDir, slug, 'project.json'), JSON.stringify({...testCo
 const {migrate, q, one, pool} = await import('../src/db/index.ts');
 const {issueToken} = await import('../src/lib/auth.ts');
 const {TERMS_VERSION} = await import('../src/lib/terms.ts');
-const {job, settleChallengeRun, settlePendingChallengeRuns} = await import('../src/routes/job.ts');
+const {job, settleChallengeRun, settlePendingChallengeRuns, composeReviewBrief} = await import('../src/routes/job.ts');
 const {challenges} = await import('../src/routes/challenges.ts');
 const {projects} = await import('../src/routes/projects.ts');
 const {board} = await import('../src/routes/board.ts');
@@ -259,6 +259,77 @@ test('a finding needs two trusted tier-1 verdicts of different families that agr
   assert.match(page, /Waiting for review\. On this project a finding is decided when 2 trusted reviewers on tier-1 models of different families agree/, 'a pending finding says what it waits for');
   assert.match(page, /So far: (openai accepts, anthropic rejects|anthropic rejects, openai accepts)/);
   assert.equal(await paid(split.return_id), 0);
+});
+
+// The negative-result rule (Chris, Oct 13 2026, #sah-md5-review-rules-a-b): the author declares the class, the trusted reviewer confirms or
+// overrides it, and only a confirmed one closes on one verdict. A positive claim is never decided on one, whatever anybody labels it.
+test('a declared negative result closes on one confirming trusted tier-1 verdict; no confirmation, an override or a mislabel keep two families', async () => {
+  const returnOnce = async (extra, report = 'Test: the tunnel idea was tried on 2^20 inputs and gives no gain; nothing found.') => {
+    const started = await (await call('a', 'GET', '/start', {session: S.a})).json();
+    assert.match(started.brief_md, /## A negative result\n\nA negative result reports that an attempt established nothing new to build on.*"negative_result": true.*use `known_work`/s, 'the work brief says how to declare the class and what it means');
+    const held = await one(`SELECT id, attempt_id FROM jobs WHERE problem_id = $1 AND assigned_session = $2 AND status = 'assigned'`, [pid, S.a]);
+    const r = await call('a', 'POST', '/result', {session: S.a, body: {job_id: Number(held.id), attempt_id: held.attempt_id, transcript: transcriptOf('claude-opus-5-5'), transcript_approved: true,
+      report_md: report, recipe_md: 'Test: node search.mjs mirror 15 9 ran the tunnel variant against the plain search with the same seed; rerun to compare.', request_review: true, ...extra}});
+    const ret = await r.json(); assert.equal(r.status, 200, JSON.stringify(ret).slice(0, 300)); return ret;
+  };
+  const review = async (model, id, verdict, extra = {}) => {
+    const rv = await call('owner', 'POST', '/result', {model, body: {type: 'review', return_id: id, verdict, rung: 'measured', notes_md: `Test: ${verdict}.`, transcript: transcriptOf(model), transcript_approved: true, ...(verdict === 'reject' ? {reject_reason: 'refuted'} : {}), ...extra}});
+    const out = await rv.json(); assert.equal(rv.status, 200, JSON.stringify(out).slice(0, 300)); return out;
+  };
+  const paid = async (id) => Number((await one(`SELECT coalesce(sum(points),0)::float AS p FROM credits WHERE source_type = 'return' AND source_id = $1 AND kind = 'result'`, [String(id)])).p);
+  const open = async (id) => Number((await one(`SELECT count(*) AS c FROM jobs WHERE parent_return_id = $1 AND status IN ('queued','assigned')`, [id])).c);
+  const declared = async (id) => (await one(`SELECT negative_result FROM returns WHERE id = $1`, [id])).negative_result;
+
+  // 1. Declared and confirmed: one verdict decides, the open review jobs close, the points are paid.
+  const neg = await returnOnce({negative_result: true});
+  assert.equal(neg.status, 'pending'); assert.equal(neg.negative_result, true); assert.equal(await declared(neg.return_id), true);
+  const {brief} = await composeReviewBrief(neg.return_id, pid);
+  assert.match(brief, /^\*\*The author declares this return a negative result\.\*\*.*"negative_result": true.*"negative_result": false.*Leaving the field out counts as not confirmed/s, 'the reviewer is told first that the label is theirs to check');
+  const page = await (await call('a', 'GET', `/return/${neg.return_id}`, {accept: 'text/html'})).text();
+  assert.match(page, /decided when 2 trusted reviewers on tier-1 models of different families agree.*The author declared this a negative result: if the reviewer confirms that, one trusted tier-1 verdict decides it/s);
+  const one1 = await review('gpt-6-astra', neg.return_id, 'accept', {negative_result: true});
+  assert.equal(one1.return_status, 'accepted', 'a confirmed negative closes on one trusted tier-1 verdict');
+  assert.ok(await paid(neg.return_id) > 0, 'credit is paid as for any accepted return');
+  assert.equal(await open(neg.return_id), 0, 'nothing stays queued for a second verdict');
+  assert.match((await one(`SELECT note FROM return_decisions WHERE return_id = $1 ORDER BY id DESC LIMIT 1`, [neg.return_id])).note, /negative result, confirmed by the reviewer/);
+
+  // 2. A later trusted reviewer who says it is not a negative and rejects: the decision is recomputed at two families and reopens.
+  const later = await review('claude-fable-5-1', neg.return_id, 'reject', {negative_result: false});
+  assert.equal(later.return_status, 'pending', 'reclassified: one accept and one reject under the two-family rule');
+
+  // 3. Declared, but the reviewer does not state the class: not confirmed, two families as ever.
+  const silent = await returnOnce({negative_result: true});
+  const s1 = await review('gpt-6-astra', silent.return_id, 'accept');
+  assert.equal(s1.return_status, 'pending'); assert.ok(s1.warnings.some((w) => /negative_result: this return is declared a negative result and your review does not say/.test(w)));
+  assert.equal(await paid(silent.return_id), 0);
+  assert.equal((await review('claude-fable-5-1', silent.return_id, 'accept', {negative_result: true})).return_status, 'accepted', 'the second family decides it under the ordinary rule');
+
+  // 4. The mislabel: a positive claim sent as a negative. The reviewer overrides the label; one verdict decides nothing.
+  const mislabel = await returnOnce({negative_result: true}, 'Test: a new 2x speed-up of the tunnel search, labelled negative to get one review.');
+  const m1 = await review('gpt-6-astra', mislabel.return_id, 'accept', {negative_result: false});
+  assert.equal(m1.return_status, 'pending', 'an overridden label is the two-family rule'); assert.equal(await paid(mislabel.return_id), 0);
+  assert.ok(await open(mislabel.return_id) > 0, 'a second verdict is asked for');
+
+  // 5. A positive claim nobody declared negative: a reviewer cannot make it one.
+  const positive = await returnOnce({});
+  assert.equal(positive.negative_result, undefined); assert.equal(await declared(positive.return_id), null);
+  assert.doesNotMatch((await composeReviewBrief(positive.return_id, pid)).brief, /negative result\.\*\*/, 'an undeclared return\'s review brief does not ask for the class');
+  const p1 = await review('gpt-6-astra', positive.return_id, 'accept', {negative_result: true});
+  assert.equal(p1.return_status, 'pending', 'a positive claim still needs two families');
+  assert.ok(p1.warnings.some((w) => /the author did not declare this return a negative result/.test(w)));
+  assert.equal((await one(`SELECT negative_result FROM reviews WHERE return_id = $1`, [positive.return_id])).negative_result, null);
+  const page2 = await (await call('a', 'GET', `/return/${positive.return_id}`, {accept: 'text/html'})).text();
+  assert.match(page2, /decided when 2 trusted reviewers on tier-1 models of different families agree/); assert.doesNotMatch(page2, /declared this a negative result/);
+
+  // 6. The label is refused where the return is a positive claim by its form, or malformed: a run that submitted a candidate.
+  const bad = await returnOnce({negative_result: 'yes'});
+  assert.ok(bad.warnings.some((w) => /negative_result: not recorded \(it must be true or false\)/.test(w))); assert.equal(await declared(bad.return_id), null);
+  await (await call('a', 'GET', '/start', {session: S.a})).json();
+  const held = await one(`SELECT id, attempt_id FROM jobs WHERE problem_id = $1 AND assigned_session = $2 AND status = 'assigned'`, [pid, S.a]);
+  assert.equal((await submit('a', {challenge_id: ZERO, input_hex: '6b'.repeat(41)})).status, 201);
+  const ran = await (await call('a', 'POST', '/result', {session: S.a, body: {job_id: Number(held.id), attempt_id: held.attempt_id, transcript: transcriptOf('claude-opus-5-5'), transcript_approved: true, negative_result: true,
+    report_md: 'Test: a run with a candidate, labelled negative.', recipe_md: 'Test: node search.mjs zero 15 7 prints the input and its score; reproduce with the same seed.'}})).json();
+  assert.ok(ran.warnings.some((w) => /negative_result: not recorded \(this run submitted a candidate\)/.test(w)), JSON.stringify(ran.warnings)); assert.equal(await declared(ran.return_id), null);
 });
 
 test('a valid new result ranks at once: platform best, high scores and the page, with no review', async () => {

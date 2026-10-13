@@ -17,7 +17,7 @@ export const MAX_REVIEWS = Math.max(envInt("CONSENSUS_MAX_REVIEWS", 7), MIN_REVI
 export const ACCEPT_SHARE = 0.7;
 export const REJECT_SHARE = 0.3;
 
-export type ReviewVote = { verdict: "accept" | "reject"; weight: number; provider: string; rung?: string | null; trusted?: boolean; family?: string | null; tier1?: boolean };
+export type ReviewVote = { verdict: "accept" | "reject"; weight: number; provider: string; rung?: string | null; trusted?: boolean; family?: string | null; tier1?: boolean; negative_result?: boolean | null };
 export type Decision =
   | { status: "accepted" | "rejected"; share: number; rung: string | null; provisional: boolean; by: "trusted" | "advisory" }
   | { status: "contested"; share: number; rung: null; provisional: true; by: "advisory" }
@@ -28,10 +28,11 @@ export type Decision =
  * project: "we need two tier 1 models to agree from a trusted reviewer"), a decision needs that many trusted verdicts from tier-1
  * sessions of different model families on the same side, and more families on that side than on the other. One approved trusted person
  * may give two of them with two different families, as for Lean. Short of that the return waits for another trusted tier-1 family.
+ * `families` keeps that counting (tier-1 sessions, one verdict per family) at a quorum of 1: the negative-result rule below.
  */
-export function decide(votes: ReviewVote[], quorum = 1): Decision {
+export function decide(votes: ReviewVote[], quorum = 1, families = quorum > 1): Decision {
   const trusted = votes.filter((v) => v.trusted);
-  if (quorum > 1 && trusted.length) {
+  if ((quorum > 1 || families) && trusted.length) {
     const eligible = trusted.filter((v) => v.tier1 && v.family);
     const families = (verdict: string) => new Set(eligible.filter((v) => v.verdict === verdict).map((v) => v.family)).size;
     const acc = families("accept"), rej = families("reject");
@@ -57,6 +58,27 @@ export function decide(votes: ReviewVote[], quorum = 1): Decision {
   if (share <= REJECT_SHARE) return { status: "rejected", share, rung: null, provisional: true, by: "advisory" };
   if (votes.length < MAX_REVIEWS) return { status: "pending", share, needMore: true, reason: "no trusted review yet; advisory split, escalating" };
   return { status: "contested", share, rung: null, provisional: true, by: "advisory" };
+}
+
+/** The one definition of a negative result, served to authors and reviewers alike. */
+export const NEGATIVE_RESULT_MEANING = "A negative result reports that an attempt established nothing new to build on: the approach did not work, the search found nothing, the question stays open, or an idea is ruled out for the scope stated. It offers no collision, record, candidate, bound, proof, method, artefact or speed-up, and no measurement as evidence that something works.";
+
+/**
+ * The quorum one return is decided under (Chris, Oct 13 2026: "a negative result needs less verification than a positive"). A project
+ * with a review quorum above 1 may set negative_review_quorum below it (the MD5 project: 1). It applies to a return only when all of
+ * this holds: intake admitted the author's declaration that the return is a negative result; at least one trusted tier-1 verdict of a
+ * known family is on record; every such verdict says negative_result true; and no trusted review of any tier says false. The class is
+ * the author's claim and the reviewer's judgment, never read from the report by the server. Everything else fails closed to the
+ * project quorum: no declaration, a reviewer who does not state the class, one who overrides it, a later trusted review that
+ * disagrees with the class (the decision is then recomputed at the full quorum and reopens). The lower quorum keeps the family
+ * counting, so a tier-2 or unknown-family verdict never decides a negative either.
+ */
+export function quorumFor(o: { quorum: number; negativeQuorum: number | null; declaredNegative: boolean; votes: ReviewVote[] }): { quorum: number; families: boolean; negative: boolean } {
+  const full = { quorum: o.quorum, families: o.quorum > 1, negative: false };
+  if (o.quorum <= 1 || o.negativeQuorum === null || o.negativeQuorum >= o.quorum || !o.declaredNegative) return full;
+  const trusted = o.votes.filter((v) => v.trusted), counted = trusted.filter((v) => v.tier1 && v.family);
+  if (!counted.length || counted.some((v) => v.negative_result !== true) || trusted.some((v) => v.negative_result === false)) return full;
+  return { quorum: o.negativeQuorum, families: true, negative: true };
 }
 
 /** Lowest rung among accepting reviewers wins: "when unsure pick the lower rung". */

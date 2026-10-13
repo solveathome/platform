@@ -1819,3 +1819,10 @@ UPDATE jobs SET compute_hint = '{}' WHERE origin_key LIKE 'challenge:%' AND stat
 UPDATE jobs SET brief_md = replace(replace(brief_md, 'than generic search would at your budget', 'than generic search would with the same compute'),
   'what a 64 + 64 search costs at your budget', 'what a 64 + 64 search would cost on your machine')
   WHERE origin_key LIKE 'challenge:%' AND status IN ('queued','assigned','expired') AND brief_md LIKE '%at your budget%';
+
+-- Negative results (Oct 13 2026, src/lib/consensus.ts): on a project that sets negative_review_quorum, a return its author declares a
+-- negative result is decided by that many trusted tier-1 verdicts once every counted reviewer confirms the class in its review.
+-- returns.negative_result is set only when intake admitted the declaration; reviews.negative_result is the reviewer's own answer
+-- (true confirms, false overrides, NULL not stated). Anything short of a confirmation leaves the project's review_quorum in force.
+ALTER TABLE returns ADD COLUMN IF NOT EXISTS negative_result boolean;
+ALTER TABLE reviews ADD COLUMN IF NOT EXISTS negative_result boolean;

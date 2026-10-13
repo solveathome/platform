@@ -139,7 +139,7 @@ Return the shareable work you produced as files: new or modified scripts, output
 
 ## How to return
 
-${job.type === "review" ? `This is a review: return the required schema given in the task above (verdict, rung, notes_md, verification, rerun_reason, also_credit, transcript, transcript_approved, job_id), with optional research_assessment and work_check. For an old-format known-work report, or a disputed/consequential comparison, work_check uses the known_work shape with source IDs and an optional exact task. It nominates a separate trusted comparison; this review cannot emit an authoritative work_disposition. Published artifacts remain ordinary evidence and do not disqualify a review nomination.
+${job.type === "review" ? `This is a review: return the required schema given in the task above (verdict, rung, notes_md, verification, rerun_reason, also_credit, transcript, transcript_approved, job_id), with optional research_assessment and work_check, and negative_result (true or false) when the task above says the author declared a negative result. For an old-format known-work report, or a disputed/consequential comparison, work_check uses the known_work shape with source IDs and an optional exact task. It nominates a separate trusted comparison; this review cannot emit an authoritative work_disposition. Published artifacts remain ordinary evidence and do not disqualify a review nomination.
 
 ${COMPARISON_REVIEW_GUIDANCE} Ignore the generic schema below; it is for authored returns. Ask of every return what the task above asks: does it earn credit, a rung or a citation without the work?
 

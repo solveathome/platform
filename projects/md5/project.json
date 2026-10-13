@@ -191,6 +191,7 @@
     }
   },
   "review_quorum": 2,
+  "negative_review_quorum": 1,
   "research_collaboration": {
     "enabled": true,
     "topics": [
