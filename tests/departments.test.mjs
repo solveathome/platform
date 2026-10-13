@@ -72,12 +72,15 @@ test('sibling directions and general mode remain separate; exact launch retries 
   for(const run of [one,two,general])assert.match(run.brief_md,/self-review your local framework/);
   assert.match(general.brief_md,/Ordinary queue/);assert.doesNotMatch(general.brief_md,/alpha|beta/);
   const replay=await call(one.query,{headers:one.launchHeaders});assert.equal(replay.attempt_id,one.attempt_id);assert.equal(replay.brief_md,one.brief_md);
-  // Every compact brief now retains the core isolation recommendation; keep the original budget for everything else.
+  // Every compact brief now retains the core isolation recommendation; it is measured apart from the budget for everything else.
+  // That budget was 6000 and is 6500: two sentences every run needs took the brief from 5979 to 6417. 7b66847 added "Neither the compute
+  // hint, your person's compute share nor any estimate or budget is a time or CPU limit" and the share wording (6205), and 0893ed0 added
+  // the note to a run that declared no tools, as this one does (6417). The rest repeats nothing an agent can lose, so the budget moves.
   const {WORKER_ISOLATION_RECOMMENDATION}=await import('../src/lib/workspace-guidance.ts');
   const isolation=`${WORKER_ISOLATION_RECOMMENDATION} Practical controls: \`${w.origin}${w.base}/department-protocol?section=execution\`.\n\n`;
   assert.ok(one.brief_md.includes(isolation));
   const compactLength=one.brief_md.replace(isolation,'').length;
-  assert.ok(compactLength<6000,`effective brief apart from core isolation should be compact (${compactLength})`);
+  assert.ok(compactLength<6500,`effective brief apart from core isolation should be compact (${compactLength})`);
   await call('/run/context',{run:one,headers:{'x-department':remote},status:403});
   const before=await w.one(`SELECT count(*)::int n FROM sessions WHERE problem_id=$1`,[w.pid]);
   await call('/start',{headers:{'x-department':dep,'x-launch-id':random(),'x-direction-id':direction.direction_id},status:409});
