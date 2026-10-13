@@ -77,8 +77,9 @@ test('statement trust, receipt independence and check assignment follow the rule
   assert.equal(await leanStatementReviewed(own),true,'owner review on another tier-1 model is trusted');
   assert.equal((await one(`SELECT lean_statement_review_current($1) AS ok`,[own.id])).ok,true,'the SQL twin agrees');
   const same=await proofFor(await review(users.owner,AUTHOR,'high'));
-  assert.equal(await leanStatementReviewed(same),false,'same model is refused');
-  assert.equal((await one(`SELECT lean_statement_review_current($1) AS ok`,[same.id])).ok,false);
+  // Oct 13 2026 (#sah-trusted-self-review): a trusted (approved) reviewer may give the statement review on its own model and handle.
+  assert.equal(await leanStatementReviewed(same),true,'an approved reviewer on the author\'s own model is trusted');
+  assert.equal((await one(`SELECT lean_statement_review_current($1) AS ok`,[same.id])).ok,true);
   const small=await proofFor(await review(users.owner,SMALL,'high'));
   assert.equal(await leanStatementReviewed(small),false,'non-tier-1 same user is refused');
   const plainSource=await ret(users.plain,AUTHOR,{plan});
@@ -170,12 +171,19 @@ test('new authenticated execution allows approved author/same family; binds evid
   assert.equal((await leanVerificationSummary(proof.id,plan.lean.manuscript_sha256)).status,'awaiting_review','execution alone is not mathematical correctness review');
   const correctness=await one(`INSERT INTO reviews(return_id,user_id,model,provider,verdict,rung,notes_md,trusted,effort,verification_receipt_id,verification_sufficiency_md)
     VALUES($1,$2,$3,'fixture','accept','Measured','Synthetic review',true,'high',$4,$5) RETURNING id`,[proof.id,users.owner,AUTHOR,saved.id,'Synthetic independent correctness assessment: mapped identity follows from its hypothesis; proof reasoning, assumptions, artifacts, isolation, controls and limits assessed.']);
-  assert.equal((await leanVerificationSummary(proof.id,plan.lean.manuscript_sha256)).status,'awaiting_review','same-family semantic self-approval is ineligible');
+  assert.equal((await leanVerificationSummary(proof.id,plan.lean.manuscript_sha256)).status,'checked','an approved reviewer\'s correctness review on the author\'s own model counts (Oct 13 2026)');
   await q(`UPDATE reviews SET model=$2 WHERE id=$1`,[correctness.id,OTHER]);
-  assert.equal((await leanVerificationSummary(proof.id,plan.lean.manuscript_sha256)).status,'checked','one author execution plus same-human cross-family correctness review suffices');
+  assert.equal((await leanVerificationSummary(proof.id,plan.lean.manuscript_sha256)).status,'checked','and so does the same reviewer on another family');
   const summary=await verificationSummary(proof.id);
   assert.equal(summary.receipts.eligible,1);assert.equal(summary.receipts.trusted_execution,1);assert.equal(summary.receipts.independent,0);
-  assert.equal(await independent(users.owner,AUTHOR,'high',users.owner),false,'same-family correctness self-approval stays prohibited');
+  assert.equal(await independent(users.owner,AUTHOR,'high',users.owner),false,'the execution label stays truthful: the same model is not model-independent');
+  const reviewIndependent=async(actor,model,effort,author,authorModel=AUTHOR)=>(await one(`SELECT lean_review_independent($1,$2,$3,$4,$5,$6) AS ok`,[pid,actor,model,effort,author,authorModel])).ok;
+  assert.equal(await reviewIndependent(users.owner,AUTHOR,'high',users.owner),true,'an approved reviewer may review its own model and handle');
+  assert.equal(await reviewIndependent(users.trusted,'claude-fable-5-1','max',users.plain),true,'and a sibling model of another contributor\'s return');
+  assert.equal(await reviewIndependent(users.owner,AUTHOR,'medium',users.owner),false,'Tier 1 at high or above still holds');
+  assert.equal(await reviewIndependent(users.stranger,AUTHOR,'high',users.plain),false,'a reviewer who is not approved still needs another family');
+  assert.equal(await reviewIndependent(users.plain,OTHER,'high',users.plain),false,'and never reviews their own return');
+  assert.equal(await reviewIndependent(users.stranger,OTHER,'high',users.plain),true);
   const identical=await ret(users.owner,AUTHOR,{plan:proof.verification_plan});
   await q(`UPDATE returns SET verification_fingerprint=$2 WHERE id=$1`,[identical.id,proof.verification_fingerprint]);
   assert.equal((await current(identical)).trusted_execution,true,'same exact package reuses this one receipt');

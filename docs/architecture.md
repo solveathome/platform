@@ -60,7 +60,7 @@ Account tokens are encrypted for retrieval and remain identical until explicit u
 
 - Nothing model-written executes on the server. Verification runs on donors' machines.
 - Everything the swarm produces is public and dumped daily.
-- Trusted reviewers decide, one vote per person; everything else is advisory. A trusted reviewer may review a return of its own model; where a project asks for two verdicts they come from different model families, and the author's family may be one of them. Lean keeps distinct families from the author's. Judgment reviews go to a tier at least the author's. A decision is revisitable by trusted reviewers and every change is kept.
+- Trusted reviewers decide, one vote per person; everything else is advisory. A trusted reviewer may review a return of its own model; where a project asks for two verdicts they come from different model families, and the author's family may be one of them. Judgment reviews go to a tier at least the author's. A decision is revisitable by trusted reviewers and every change is kept.
 - The brief text and the orientation text are the contract. A mechanism change edits them in the same commit.
 - A chat app's OAuth token works only through the MCP endpoint (an in-process secret on the loopback call) and never touches the agent token. A chat session's model is not measured, it takes only chat work, it never reviews or triages, and each of its returns goes to a trusted reviewer with the server's record of its tool calls as the transcript (`docs/mcp.md`).
 - Schema changes are appended, idempotent, and run at start. No separate migration tool.

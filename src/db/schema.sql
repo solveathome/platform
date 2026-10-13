@@ -1371,7 +1371,7 @@ CREATE OR REPLACE FUNCTION lean_model_identity(model text) RETURNS text LANGUAGE
   SELECT regexp_replace(regexp_replace(public.canon_model(model), '(-(none|minimal|low|medium|high|xhigh|max|maximum|extended|extra-high|extrahigh|x_high|ultra|deep|off))+$', ''), '([0-9])\.(?=[0-9])', '\1-', 'g');
 $$;
 -- Lean independence (Chris, Oct 6 2026: "Different model I think we should keep but it can be same user for approved users and tier 1 models").
--- Statement and mathematical correctness review require a distinct model family and Tier 1/high.
+-- Statement and mathematical correctness review require Tier 1/high; a reviewer who is not an approved contributor also needs a distinct model family (Oct 13 2026).
 -- Its user differs or is approved on the project (owner or trusted by grant, or the researcher).
 -- The maintainer handles of OWNER_HANDLES are known to the scheduler's session check, not here. Non-Lean packages keep their rules.
 CREATE OR REPLACE FUNCTION lean_approved_member(p_problem bigint, p_user bigint) RETURNS boolean LANGUAGE sql STABLE AS $$
@@ -1399,6 +1399,16 @@ CREATE OR REPLACE FUNCTION lean_independent(p_problem bigint, p_actor bigint, p_
   SELECT coalesce(lean_model_family(p_actor_model)<>lean_model_family(p_author_model), false)
     AND lean_tier1(p_actor_model, p_actor_effort)
     AND (p_actor<>p_author OR lean_approved_member(p_problem, p_actor));
+$$;
+-- Who may give a Lean statement or correctness review (Oct 13 2026, #sah-trusted-self-review). lean_independent above keeps its meaning
+-- for execution receipts, where "independent" is a label of model independence and must stay truthful.
+CREATE OR REPLACE FUNCTION lean_review_independent(p_problem bigint, p_actor bigint, p_actor_model text, p_actor_effort text, p_author bigint, p_author_model text) RETURNS boolean LANGUAGE sql STABLE AS $$
+  -- A trusted (approved) contributor on Tier 1/high is independent whatever the author's model or family, their own return included
+  -- (Chris, Oct 13 2026: "trusted reviewers may self review ... trusted reviewers are TRUSTED"). Anyone else still needs another
+  -- person's return and another model family.
+  SELECT lean_tier1(p_actor_model, p_actor_effort)
+    AND (lean_approved_member(p_problem, p_actor)
+      OR (p_actor<>p_author AND coalesce(lean_model_family(p_actor_model)<>lean_model_family(p_author_model), false)));
 $$;
 -- V2 intake normalizes inventories and integer bounds. Compact canonical JSON matches its key-sorted digest
 -- without an extension: sha256(bytea) is built in. Strings retain their JSON escaping and arrays their normalized order.
@@ -1433,8 +1443,8 @@ CREATE OR REPLACE FUNCTION lean_statement_review_current(subject_id bigint) RETU
       JOIN returns source ON source.id=rv.return_id AND source.problem_id=proof.problem_id
     WHERE proof.id=subject_id AND lean_tier1(proof.model,proof.effort) AND lean_tier1(source.model,source.effort) AND rv.trusted AND rv.verdict='accept' AND NOT rv.needs_reassessment
       AND source.status='accepted' AND NOT source.provisional
-      AND lean_independent(proof.problem_id, rv.user_id, rv.model, rv.effort, proof.user_id, proof.model)
-      AND lean_independent(proof.problem_id, rv.user_id, rv.model, rv.effort, source.user_id, source.model)
+      AND lean_review_independent(proof.problem_id, rv.user_id, rv.model, rv.effort, proof.user_id, proof.model)
+      AND lean_review_independent(proof.problem_id, rv.user_id, rv.model, rv.effort, source.user_id, source.model)
       AND rv.lean_statement_review->>'binding_sha256' ~ '^[a-f0-9]{64}$'
       AND CASE WHEN proof.verification_plan->'lean'->>'policy' IN ('lean-comparator-v2','lean-kernel-v1') THEN
         source.verification_plan->'lean'->>'policy' IN ('lean-comparator-v2','lean-kernel-v1')
@@ -1461,8 +1471,8 @@ CREATE OR REPLACE FUNCTION lean_execution_review_current(subject_id bigint) RETU
       AND lean_tier1(proof.model,proof.effort) AND lean_tier1(source.model,source.effort)
       AND rv.trusted AND rv.verdict='accept' AND NOT rv.needs_reassessment
       AND source.status='accepted' AND NOT source.provisional
-      AND lean_independent(proof.problem_id,rv.user_id,rv.model,rv.effort,proof.user_id,proof.model)
-      AND lean_independent(proof.problem_id,rv.user_id,rv.model,rv.effort,source.user_id,source.model)
+      AND lean_review_independent(proof.problem_id,rv.user_id,rv.model,rv.effort,proof.user_id,proof.model)
+      AND lean_review_independent(proof.problem_id,rv.user_id,rv.model,rv.effort,source.user_id,source.model)
       AND rv.lean_execution_review->>'binding_sha256' ~ '^[a-f0-9]{64}$'
       AND length(trim(rv.lean_execution_review->>'correctness_md'))>=80
       AND jsonb_typeof(proof.verification_plan->'lean'->'execution_identity')='object'

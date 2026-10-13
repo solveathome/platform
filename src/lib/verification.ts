@@ -4,7 +4,6 @@ import { parseLeanProfile, parseLeanEvidence, leanEvidenceFiles, leanStatementBi
 import { createHash } from 'node:crypto';
 import { one, q } from '../db/index.js';
 import { amount, bad, computeNeeds, object, prose, tags, type ComputeNeeds } from './research-format.js';
-import { distinctLeanFamilies } from './model-id.js';
 import { describeNeeds } from './capability-shortfall.js';
 import { paperSource } from './paper-state.js';
 import { read as readArtifact } from './files.js';
@@ -500,12 +499,12 @@ export async function leanExecutionReviewed(ret: any): Promise<boolean> {
   if (!p.execution_review_id || !(await one('SELECT lean_tier1($1,$2) AS ok',[ret.model,ret.effort]))?.ok) return false;
   const review = await one(`SELECT rv.*,r.status AS source_status,r.provisional AS source_provisional,r.model AS source_model,
     lean_tier1(r.model,r.effort) AS source_tier1,r.verification_plan AS source_plan,
-    lean_independent(r.problem_id,rv.user_id,rv.model,rv.effort,$3,$4) AS independent_of_proof,
-    lean_independent(r.problem_id,rv.user_id,rv.model,rv.effort,r.user_id,r.model) AS independent_of_source
+    lean_review_independent(r.problem_id,rv.user_id,rv.model,rv.effort,$3,$4) AS independent_of_proof,
+    lean_review_independent(r.problem_id,rv.user_id,rv.model,rv.effort,r.user_id,r.model) AS independent_of_source
     FROM reviews rv JOIN returns r ON r.id=rv.return_id WHERE rv.id=$1 AND r.problem_id=$2`,[p.execution_review_id,ret.problem_id,ret.user_id,ret.model]);
   return !!review && review.source_tier1 === true && review.trusted && review.verdict==='accept' && !review.needs_reassessment && review.source_status==='accepted' && !review.source_provisional
-    && review.independent_of_proof===true && distinctLeanFamilies(review.model,ret.model)
-    && review.independent_of_source===true && distinctLeanFamilies(review.model,review.source_model)
+    && review.independent_of_proof===true
+    && review.independent_of_source===true
     && review.source_plan?.lean?.policy===LEAN_POLICY_V2 && leanExecutionBinding(review.source_plan.lean)===leanExecutionBinding(p)
     && review.lean_execution_review?.binding_sha256===leanExecutionBinding(p)
     && typeof review.lean_execution_review?.correctness_md==='string' && review.lean_execution_review.correctness_md.trim().length>=80;
@@ -513,13 +512,13 @@ export async function leanExecutionReviewed(ret: any): Promise<boolean> {
 export async function leanStatementReviewed(ret: any): Promise<boolean> {
   const p: LeanProfile | undefined = ret.verification_plan?.lean;
   if (!p?.statement_review_id || !(await one('SELECT lean_tier1($1,$2) AS ok',[ret.model,ret.effort]))?.ok) return false;
-  // Independence of both authors is lean_independent (schema.sql): distinct families and Tier 1/high; the same user only when approved (Chris, Oct 6 2026).
+  // Independence of both authors is lean_independent (schema.sql): Tier 1/high, and either an approved contributor (own family and own return included, Oct 13 2026) or another person on another family.
   const review = await one(`SELECT rv.*, r.status AS source_status,r.provisional AS source_provisional,r.user_id AS source_author,r.model AS source_model,lean_tier1(r.model,r.effort) AS source_tier1,r.verification_plan AS source_plan,
-      lean_independent(r.problem_id, rv.user_id, rv.model, rv.effort, $3, $4) AS independent_of_proof, lean_independent(r.problem_id, rv.user_id, rv.model, rv.effort, r.user_id, r.model) AS independent_of_source
+      lean_review_independent(r.problem_id, rv.user_id, rv.model, rv.effort, $3, $4) AS independent_of_proof, lean_review_independent(r.problem_id, rv.user_id, rv.model, rv.effort, r.user_id, r.model) AS independent_of_source
     FROM reviews rv JOIN returns r ON r.id=rv.return_id WHERE rv.id=$1 AND r.problem_id=$2`, [p.statement_review_id, ret.problem_id, ret.user_id, ret.model]);
   return !!review && review.source_tier1 === true && review.trusted && review.verdict === 'accept' && !review.needs_reassessment && review.source_status === 'accepted' && !review.source_provisional
-    && review.independent_of_proof === true && distinctLeanFamilies(review.model, ret.model)
-    && review.independent_of_source === true && distinctLeanFamilies(review.model, review.source_model)
+    && review.independent_of_proof === true
+    && review.independent_of_source === true
     && !!review.source_plan?.lean && (review.source_plan.lean.policy === p.policy || [LEAN_POLICY_V2,LEAN_KERNEL_POLICY].includes(p.policy) && [LEAN_POLICY_V2,LEAN_KERNEL_POLICY].includes(review.source_plan.lean.policy)) && leanStatementBinding(review.source_plan.lean) === leanStatementBinding(p)
     && review.lean_statement_review?.binding_sha256 === leanStatementBinding(p);
 }
@@ -527,7 +526,7 @@ export async function leanVerificationSummary(returnId: number, currentSha: stri
   const ret = await one(`SELECT * FROM returns WHERE id=$1`, [returnId]);
   const p: LeanProfile | undefined = ret?.verification_plan?.lean;
   if (!p) return undefined;
-  const reviews = ret.status === 'accepted' && !ret.provisional ? await q(`SELECT id,verification_receipt_id FROM reviews WHERE return_id=$1 AND trusted AND verdict='accept' AND NOT needs_reassessment AND lean_independent($4, user_id, model, effort, $2, $3) AND length(trim(verification_sufficiency_md))>=80`, [returnId, ret.user_id, ret.model, ret.problem_id]) : [];
+  const reviews = ret.status === 'accepted' && !ret.provisional ? await q(`SELECT id,verification_receipt_id FROM reviews WHERE return_id=$1 AND trusted AND verdict='accept' AND NOT needs_reassessment AND lean_review_independent($4, user_id, model, effort, $2, $3) AND length(trim(verification_sufficiency_md))>=80`, [returnId, ret.user_id, ret.model, ret.problem_id]) : [];
   const runs = await verificationRuns(returnId);
   const summary = summarizeLean(p, runs, reviews.map(r => Number(r.verification_receipt_id)), await leanStatementReviewed(ret) && await leanExecutionReviewed(ret), currentSha, { status: ret.status, provisional: ret.provisional, superseded_by: ret.superseded_by });
   const judged = runs.find(r => Number(r.id) === summary.judged_receipt_id);
