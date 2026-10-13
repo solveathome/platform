@@ -520,7 +520,7 @@ const ready = async (who, model = 'claude-opus-5-5') => ok(await call('/ready?wo
 test('reviews only: with no review waiting a trusted tier-1 session skips the triage and reviews the return directly (trust by grant only since Oct 12 2026)', async () => {
   const r = await askForReview();
   await q(`INSERT INTO project_roles (problem_id,user_id,role,granted_by,note) VALUES ($1,$2,'trusted',$3,'test')`, [pid, second, trusted]);   // Opus 5.5 at high alone is advisory
-  assert.deepEqual(await ready(tokens.second), {ready: 1, urgency: 'normal', reviews: 0, triage: 1, checks: 0, rescues: 0, trusted: true, tier: 1, facts: 'management work this agent may take: 0 reviews, 1 triage, 0 package checks, 0 rescues (never its own model\'s returns or blocks)'});
+  assert.deepEqual(await ready(tokens.second), {ready: 1, urgency: 'normal', reviews: 0, triage: 1, checks: 0, rescues: 0, trusted: true, tier: 1, facts: 'management work this agent may take: 0 reviews, 1 triage, 0 package checks, 0 rescues (a rescue or a check never of its own model\'s block)'});
   // Chris, Sep 25 2026 (#sah-tier1-skip-triage): "no need to do research > triage > validation when we can just do research > validation".
   const a = await reviewsOnly(tokens.second);
   assert.equal(a.type, 'review', JSON.stringify(a).slice(0, 1500)); assert.equal(a.assignment_reason.policy, 'management: triage skipped, trusted reviewer');
@@ -588,11 +588,17 @@ test('triages already waiting on trusted tier-1 work go to review at the next /s
   await release(held);
 });
 
-test('reviews only: never a triage of its own model; its own handle only by grant; nothing to take is still no_review_waiting and ready 0 (trust by grant only since Oct 12 2026)', async () => {
-  await askForReview(tokens.author, 'claude-opus-5-5');
+// Oct 13 2026 (#sah-trusted-self-review): a trusted reviewer takes a return of its own model; only its own handle still needs the grant.
+test('reviews only: a trusted session reviews a return of its own model; its own handle only by grant; without a grant nothing is its to take (trust by grant only since Oct 12 2026)', async () => {
+  const authored = await askForReview(tokens.author, 'claude-opus-5-5');
   await q(`INSERT INTO project_roles (problem_id,user_id,role,granted_by,note) VALUES ($1,$2,'trusted',$3,'test')`, [pid, second, trusted]);
   const own = await reviewsOnly(tokens.second);
-  assert.equal(own.state, 'no_review_waiting'); assert.equal(own.job_id, undefined);
+  assert.equal(own.type, 'review', 'the return is on its own model and it is trusted: it reviews it');
+  assert.equal(Number((await one(`SELECT parent_return_id FROM jobs WHERE id=$1`, [own.job_id])).parent_return_id), Number(authored.return_id));
+  await release(own);
+  await q(`UPDATE jobs SET status='expired' WHERE parent_return_id=$1 AND status IN ('queued','assigned')`, [authored.return_id]);
+  const none = await reviewsOnly(tokens.second);
+  assert.equal(none.state, 'no_review_waiting'); assert.equal(none.job_id, undefined);
   assert.equal((await ready(tokens.second)).ready, 0);
   // Without a grant a session is not trusted at all, whatever its model, so nothing of its own handle's is its to take either.
   await q(`DELETE FROM project_roles WHERE problem_id=$1 AND user_id=$2`, [pid, second]);
