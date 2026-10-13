@@ -24,7 +24,7 @@ import { assignmentMutation, claimAssignment, releaseAssignment } from "../lib/a
 import { parseCapabilities, researchContact, CAPABILITY_INSTRUCTIONS } from "../lib/agent-profile.js";
 import { checkInstruction, ENDED_LAUNCH_GUIDANCE, folderLaunchContract } from "../lib/launch.js";
 import { isDeepStrictEqual } from "node:util";
-import { rescueDue, upkeepFor, isManageMode, backlogFor, reviewWorkFor, selectJob, selectRequiredCorrection, REQUIRED_CORRECTION_INTERVAL, whyNotEligible, computeBlocked, discoveryShare, discoveryDue, allocation, researchPolicy, researchAllocation, portfolioOrder, researchBucket, reviewPressure, reviewTriage, unmetRequirements, STALE_REQUIREMENT_HOURS, ROUTE_REPEAT_WINDOW, type SchedulingAgent } from "../lib/scheduler.js";
+import { rescueDue, upkeepFor, isManageMode, backlogFor, reviewWorkFor, queuedUpkeepFor, selectJob, selectRequiredCorrection, REQUIRED_CORRECTION_INTERVAL, whyNotEligible, computeBlocked, discoveryShare, discoveryDue, allocation, researchPolicy, researchAllocation, portfolioOrder, researchBucket, reviewPressure, reviewTriage, unmetRequirements, STALE_REQUIREMENT_HOURS, ROUTE_REPEAT_WINDOW, type SchedulingAgent } from "../lib/scheduler.js";
 import { parseResearch, stageOf, jobLabel } from '../lib/research-format.js';
 import { stepCheckContext, recordResearch, prepareRescue, rescueCandidates, retireRedundantRescueSamples, retireRedundantStepChecks, researchBrief, routeContext, reconsiderDependents, holdForStepCheck } from '../lib/research.js';
 import { describeNeeds, waitingFor } from '../lib/capability-shortfall.js';
@@ -829,9 +829,9 @@ job.get("/ready", bearer, project, async (req: any, res) => {
   // /start refuses a new session at the handle's caps before it looks at any work: so does /ready, with the same limits.
   const capped = await handleCapRefusal(Number(req.project.id), uid);
   if (capped) { res.json({ ready: 0, urgency: "normal", reviews: 0, trusted, tier, capped: true, facts: capped }); return; }
-  const workChecks=(await workComparisonDue(agent)) ? (await backlogFor({...agent,workCheckOnly:true})).research : 0;
+  const workChecks=(await workComparisonDue(agent)) ? (await backlogFor({...agent,workCheckOnly:true}, false)).research : 0;
   // Upkeeps a session of this caller would be handed first: the queued ones it may take, and the lanes /start would queue one for.
-  const upkeep = granted ? (await reviewWorkFor(agent, false)).upkeep + (await lanesNeedingUpkeep(Number(req.project.id), req.project.slug)).length : 0;
+  const upkeep = granted ? (await queuedUpkeepFor(agent)) + (await lanesNeedingUpkeep(Number(req.project.id), req.project.slug)).length : 0;
   if (work !== "all") {
     // Management mode, for any model: what /start would hand out (reviews and the triages a trusted session reviews directly, or
     // triage for others; package checks; queued rescues and the rescues /start makes for blocked routes; required corrections).
@@ -844,7 +844,7 @@ job.get("/ready", bearer, project, async (req: any, res) => {
       facts: `management work this agent may take: ${upkeep ? `${upkeep} state-of-the-art upkeep${upkeep === 1 ? "" : "s"} (taken first), ` : ""}${w.reviews} review${w.reviews === 1 ? "" : "s"}, ${trusted ? w.triage : u.triage} triage, ${u.checks} package check${u.checks === 1 ? "" : "s"}, ${u.rescues + rescuable} rescue${u.rescues + rescuable === 1 ? "" : "s"}${u.corrections ? `, ${u.corrections} required correction${u.corrections === 1 ? "" : "s"}` : ""}${workChecks ? `, ${workChecks} assignment comparisons` : ""} (never its own model's returns or blocks${granted ? "" : ", nor its handle's"})` });
     return;
   }
-  const b = await backlogFor(agent);
+  const b = await backlogFor(agent, false);
   // With nothing queued that fits, /start still hands out one assignment it makes on the spot (a question to explore, or a record
   // challenge's run): counted here, so a scheduler that starts agents on ready > 0 is not told 0 while /start would assign.
   const queued = b.reviews + b.research + workChecks + (granted ? (await lanesNeedingUpkeep(Number(req.project.id), req.project.slug)).length : 0), made = queued === 0 ? 1 : 0;

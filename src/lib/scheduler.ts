@@ -231,7 +231,10 @@ export async function whyNotEligible(a: SchedulingAgent, jobId: number): Promise
   if (!row) return ["no such job in this project"];
   return e.labeled.map(([label], i) => row[`c${i}`] ? null : label.replace("${j.min_tier}", String(row.min_tier)).replace("${j.budget_hours}", String(Number(row.budget_hours)))).filter((x): x is string => !!x);
 }
-export async function backlogFor(a: SchedulingAgent) {
+// Each count names the job types it reports in its WHERE as well as its FILTER: Postgres checks that cheap test before the
+// eligibility sub-plans, which otherwise ran for every queued job of every type (Oct 13 2026, #sah-perf-sweep-route-retime: the
+// blocked-review count and reviewWorkFor were two thirds of /ready's 0.5-0.6 s). /ready never reports blocked reviews and skips that count.
+export async function backlogFor(a: SchedulingAgent, withBlocked = true) {
   const e = eligibility(a);
   const row = await one(`SELECT count(*) FILTER (WHERE j.type IN ('review','audit','upkeep')) AS reviews,
     count(*) FILTER (WHERE j.type NOT IN ('review','audit','upkeep')) AS research ${e.joins} WHERE ${e.where}`, e.values);
@@ -239,7 +242,7 @@ export async function backlogFor(a: SchedulingAgent) {
   // scheduler records eligible_backlog.reviews = 0 while the brief prints the count waiting, and the two describe one queue:
   // "no review debt" and "review debt nobody here can serve" are not the same fact, and only the second one grows.
   const k = eligibility(a, false, true);
-  const blocked = await one(`SELECT count(*) FILTER (WHERE j.type IN ('review','audit')) AS reviews ${k.joins} WHERE ${k.where}`, k.values);
+  const blocked = withBlocked ? await one(`SELECT count(*) AS reviews ${k.joins} WHERE ${k.where} AND j.type IN ('review','audit')`, k.values) : null;
   return { reviews: Number(row?.reviews ?? 0), research: Number(row?.research ?? 0), blocked_reviews: Number(blocked?.reviews ?? 0) };
 }
 
@@ -249,8 +252,14 @@ export async function backlogFor(a: SchedulingAgent) {
  * still counts one each. */
 export async function reviewWorkFor(a: SchedulingAgent, triage: boolean) {
   const e = eligibility({ ...a, triageFallback: triage });
-  const row = await one(`SELECT count(*) FILTER (WHERE j.type = 'review') AS reviews, count(*) FILTER (WHERE j.type = 'triage') AS triage, count(*) FILTER (WHERE j.type = 'upkeep') AS upkeep ${e.joins} WHERE ${e.where}`, e.values);
+  const row = await one(`SELECT count(*) FILTER (WHERE j.type = 'review') AS reviews, count(*) FILTER (WHERE j.type = 'triage') AS triage, count(*) FILTER (WHERE j.type = 'upkeep') AS upkeep ${e.joins} WHERE ${e.where} AND j.type IN ('review','triage','upkeep')`, e.values);
   return { reviews: Number(row?.reviews ?? 0), triage: triage ? Number(row?.triage ?? 0) : 0, upkeep: Number(row?.upkeep ?? 0) };
+}
+
+/** Queued state-of-the-art upkeeps this agent may take: what /ready adds for a granted caller, without counting reviews and triage. */
+export async function queuedUpkeepFor(a: SchedulingAgent): Promise<number> {
+  const e = eligibility(a);
+  return Number((await one(`SELECT count(*) AS n ${e.joins} WHERE ${e.where} AND j.type = 'upkeep'`, e.values))?.n ?? 0);
 }
 
 const DEFAULT_SKILLS = `CASE j.type WHEN 'upkeep' THEN ARRAY['verification','research'] WHEN 'formalize' THEN ARRAY['lean','formalize'] WHEN 'measure' THEN ARRAY['python','computation'] WHEN 'source' THEN ARRAY['literature-search'] WHEN 'break' THEN ARRAY['proof-analysis','counterexamples'] WHEN 'review' THEN ARRAY['verification','proof-analysis'] WHEN 'explore' THEN ARRAY['proof-analysis','research'] ELSE ARRAY[]::text[] END`;
