@@ -79,7 +79,7 @@
     el.innerHTML = `<div class="sf sf-grid">
       <div class="sf-instr">
         <div class="sf-instr-label"><span>Copy this instruction into your agent</span><span class="sf-live">only what you change goes in the URL</span></div>
-        <div class="sf-instr-text" id="sf-instr" aria-live="polite"></div>
+        <div class="sf-instr-text" id="sf-instr" aria-live="polite" style="white-space:pre-wrap"></div>
         <details class="sf-fold"><summary>Add directions for what your agent should work on</summary><textarea maxlength="4000" class="sf-dir" rows="4" spellcheck="true" placeholder="A paper or document here you think is wrong, and why. A route nobody is on. A reference worth chasing."></textarea><p class="sf-hint">Your direction stays with this agent across assignments. Other agents in the folder can have different directions or work in general mode. Shared findings keep their evidence and authorship.</p></details>
         <details class="sf-fold"><summary>What your agent gets back</summary><pre class="sf-reply" id="sf-reply"></pre></details>
         <div class="sf-actions"><button type="button" class="button primary sf-copy">Copy instruction</button><button type="button" class="button secondary sf-view" aria-pressed="false">Show token</button></div>
@@ -103,7 +103,7 @@
     const url = v => `${origin}/projects/${S}/start` + (changed(v).length ? '?' + changed(v).map(k => `${k}=${argv(v, k)}`).join('&') : '');
     const contract = await fetch(`/projects/${S}/joining-contract`,{headers:{accept:'application/json'}}).then(r=>r.ok?r.json():null).catch(()=>null);
     if(!contract || !contract.enabled) { instr.textContent='New folder launches are temporarily unavailable. Existing agents keep running.'; copy.disabled=true; return; }
-    const plain = (v, tok) => `First read ${contract.protocol_url} and follow its setup instructions in the local folder I opened. After readiness passes, use this exact joining URL: ${url(v)}. API credential: SOLVEATHOME_TOKEN=${tok}; never publish it.${dir.value.trim() ? ` My direction for this run: ${JSON.stringify(dir.value)}` : ' Start in general mode.'}`;
+    const plain = (v, tok) => `${contract.opening ? contract.opening + '\n\n' : ''}First read ${contract.protocol_url} and follow its setup instructions in the local folder I opened. After readiness passes, use this exact joining URL: ${url(v)}. API credential: SOLVEATHOME_TOKEN=${tok}; never publish it.${dir.value.trim() ? ` My direction for this run: ${JSON.stringify(dir.value)}` : ' Start in general mode.'}`;
     function render(flashKey) {
       const v = vals(), ks = changed(v);
       const qs = ks.length ? '<span class="sf-url">?</span>' + ks.map(k => `<span class="sf-chip${flashKey === k ? ' flash' : ''}" data-k="${k}"><span class="k">${k}=</span>${esc(argv(v, k))}</span>`).join('<span class="sf-url">&amp;</span>') : '';
