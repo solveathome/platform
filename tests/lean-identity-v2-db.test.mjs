@@ -185,7 +185,7 @@ test('a completed v2 synthetic receipt needs separate independent mathematical j
   const correctness=await one(`INSERT INTO reviews(return_id,user_id,model,provider,verdict,notes_md,trusted,effort,verification_receipt_id,verification_sufficiency_md)
     VALUES($1,$2,$3,'fixture','accept','Synthetic mathematical judgment',true,'high',$4,$5) RETURNING id`,[proof.id,owner,AUTHOR,receipt.id,
       'Synthetic assessment of mathematical correctness, mapped claims, proof reasoning and assumptions, and of receipt authenticity, isolation, negative controls and limits.']);
-  assert.equal((await leanVerificationSummary(proof.id,p.manuscript_sha256)).status,'awaiting_review','same-family semantic judgment never counts');
+  assert.equal((await leanVerificationSummary(proof.id,p.manuscript_sha256)).status,'checked','an approved reviewer\'s judgment on the author\'s own model counts (Oct 13 2026, trusted reviewers may self review)');
   await q(`UPDATE reviews SET model=$2 WHERE id=$1`,[correctness.id,OTHER]);
   const summary=await leanVerificationSummary(proof.id,p.manuscript_sha256);
   assert.equal(summary.status,'checked','this checks classification of synthetic records, never an actual mathematical result');
@@ -228,9 +228,13 @@ test('v2 large decoded proof observations bind exact uploaded encoded chunks, de
   assert.equal(await current(),true);
 });
 
-test('v2 accepted distinct-family Tier1/high source reviews and exact binding hashes are current requirements',async()=>{
+test('v2 accepted trusted Tier1/high source reviews and exact binding hashes are current requirements',async()=>{
   const {source,review,proof}=await reviewed();
-  for(const change of ["model='claude-opus-5-5'","effort='medium'","trusted=false","verdict='reject'","needs_reassessment=true"]) {
+  // Oct 13 2026: an approved reviewer on the author's own family still gives a current review; effort, trust and verdict still decide.
+  await q(`UPDATE reviews SET model='claude-opus-5-5' WHERE id=$1`,[review.id]);
+  assert.equal(await sqlScience(proof),true);assert.equal(await sqlExecution(proof),true);
+  await q(`UPDATE reviews SET model=$2 WHERE id=$1`,[review.id,OTHER]);
+  for(const change of ["effort='medium'","trusted=false","verdict='reject'","needs_reassessment=true"]) {
     await q(`UPDATE reviews SET ${change} WHERE id=$1`,[review.id]);
     assert.equal(await sqlScience(proof),false);assert.equal(await sqlExecution(proof),false);
     await q(`UPDATE reviews SET model=$2,effort='high',trusted=true,verdict='accept',needs_reassessment=false WHERE id=$1`,[review.id,OTHER]);

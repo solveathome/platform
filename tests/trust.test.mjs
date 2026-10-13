@@ -351,23 +351,23 @@ test('spawnReviews asks for n more and never passes the cap', async () => {
 });
 
 
-test('self-assigned Lean acceptance enforces distinct families and high effort for same and different contributors',async()=>{
+test('self-assigned Lean acceptance: a trusted reviewer may accept a return of its own family; high effort is still enforced',async()=>{
   const {leanFixture}=await import('./fixtures/lean.mjs');
   const {modelTier}=await import('../src/lib/auth.ts');
   for(const m of ['claude-opus-5-5','claude-fable-5-1','gpt-6.1-sol']) await modelTier(m);
-  for(const [who,model,effort,expected] of [['owner','claude-fable-5-1','high',403],['trusted','claude-fable-5-1','high',403],['trusted','gpt-6.1-sol','low',403],['trusted','gpt-6.1-sol','high',200],['owner','gpt-6.1-sol','high',200]]) {
+  for(const [who,model,effort,expected] of [['owner','claude-fable-5-1','high',200],['trusted','claude-fable-5-1','high',200],['trusted','claude-opus-5-5','high',200],['trusted','gpt-6.1-sol','low',403],['trusted','gpt-6.1-sol','high',200],['owner','gpt-6.1-sol','high',200]]) {
     const r=await one(`INSERT INTO returns(problem_id,type,user_id,model,provider,report_md,transcript,status,verification_plan,effort)
       VALUES($1,'formalize',$2,'claude-opus-5-5','anthropic','Statement proposal.','t','pending',$3,'high') RETURNING id`,[pid,people.owner.id,JSON.stringify(leanFixture().plan)]);
     const response=await call(who,'POST','/result',{model,effort,body:review('accept',{return_id:Number(r.id),verification_sufficiency_md:'Synthetic statement proposal only; no proof execution.'})});
     const body=await response.json();assert.equal(response.status,expected,JSON.stringify(body));
     if(expected===403) {
-      assert.match(body.error,/distinct model family/);
+      assert.match(body.error,/Tier 1\/high or above/);
       assert.equal((await one('SELECT count(*) AS n FROM reviews WHERE return_id=$1',[r.id])).n,'0');
     }
   }
 });
 
-test('Lean series verdicts recheck each child family and author effort and leave ineligible children pending', async()=>{
+test('Lean series verdicts recheck each child\'s author effort and leave ineligible children pending; the child\'s family no longer matters to a trusted reviewer', async()=>{
   const {leanFixture}=await import('./fixtures/lean.mjs');
   const {modelTier}=await import('../src/lib/auth.ts');
   for(const model of ['claude-opus-5-5','claude-fable-5-1','claude-opus-5-5-high','gpt-6.1-sol']) await modelTier(model);
@@ -376,7 +376,7 @@ test('Lean series verdicts recheck each child family and author effort and leave
   const job=await one(`INSERT INTO jobs(problem_id,type,title,brief_md,parent_return_id,status,assigned_to,assigned_at)
     VALUES($1,'review','Review synthetic series','Synthetic fixture',$2,'assigned',$3,now()) RETURNING id`,[pid,lead.id,people.trusted.id]);
   const children=[];
-  for(const [model,effort,eligible] of [['claude-fable-5-1','high',false],['claude-opus-5-5-high','high',false],['gpt-6.1-sol','low',false],['gpt-6.1-sol','high',true]]) {
+  for(const [model,effort,eligible] of [['claude-fable-5-1','high',true],['claude-opus-5-5-high','high',true],['gpt-6.1-sol','low',false],['gpt-6.1-sol','high',true]]) {
     const child=await one(`INSERT INTO returns(problem_id,type,user_id,model,provider,report_md,transcript,status,verification_plan,effort,triage_lead)
       VALUES($1,'formalize',$2,$3,'test','Synthetic statement proposal; no proof execution.','t','pending',$4,$5,$6) RETURNING id`,[pid,people.author.id,model,JSON.stringify(leanFixture().plan),effort,lead.id]);
     children.push({...child,eligible});
