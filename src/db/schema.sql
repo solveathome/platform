@@ -1766,6 +1766,9 @@ CREATE TABLE IF NOT EXISTS lane_states (
   updated_return_id BIGINT REFERENCES returns(id) ON DELETE SET NULL,
   updated_at        TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+-- Rejected returns reach the summary too (Oct 13 2026, #sah-brief-state-frontload-gaps): the decision time of the last rejected return an
+-- upkeep was handed. NULL means none was read yet, so the first upkeeps after this take the earlier rejections, oldest first.
+ALTER TABLE lane_states ADD COLUMN IF NOT EXISTS rejected_through TIMESTAMPTZ;
 CREATE TABLE IF NOT EXISTS lane_state_versions (
   id                BIGSERIAL PRIMARY KEY,
   lane_id           BIGINT NOT NULL REFERENCES lanes(id),

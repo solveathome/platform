@@ -31,7 +31,7 @@ const {ensureChallengeProjects} = await import('../src/lib/challenges.ts');
 const {ensureChannels} = await import('../src/routes/chat.ts');
 const {listProjectConfigs} = await import('../src/lib/projects.ts');
 const {isTrusted, isGrantedTrusted} = await import('../src/lib/roles.ts');
-const {lanesNeedingUpkeep, queueStateUpkeep, insertStateSection, stateBrief} = await import('../src/lib/lane-state.ts');
+const {lanesNeedingUpkeep, queueStateUpkeep, insertStateSection, stateBrief, stateDoc, upkeepBrief, applyStateUpdate, parseStateUpdate, SUMMARY_MAX} = await import('../src/lib/lane-state.ts');
 const {renderBrief, renderChatBrief} = await import('../src/lib/brief.ts');
 const {compactDepartmentBrief} = await import('../src/lib/department-protocol.ts');
 
@@ -236,4 +236,65 @@ test('every kind of brief carries the state of the art inline under its title: r
   assertStateOnTop(insertStateSection(renderChatBrief(row, base, {id: 's', host: 'chatgpt', handle: 'x'}), section), 'chat');
   const full = insertStateSection(renderBrief(row, base, {id: 's', jobs: 0, max: null, maxHours: 1, compute: 'test', transcriptPreapproved: true}), section);
   assertStateOnTop(compactDepartmentBrief(full, row, {length: 'one task', jobs: 0, max: null, compute: 'test', disk: 5, subagents: 'allowed'}, null), 'department compact');
+});
+
+test('a brief front-loads what the summary does not hold yet: a summary past 6,000 characters whole, the accepted returns since by id and link, twenty open entries, and the rejected returns until an upkeep has read them', async () => {
+  // Chris, Oct 13 2026 (#sah-brief-state-frontload-gaps): "We want to ensure all learnings we have are front loaded". On the live site every
+  // summary sat at the 6,000 cap, the returns not folded in were a count, entries past the newest 8 were a link, and a rejected return
+  // reached neither a brief nor an upkeep.
+  const lane = await one(`SELECT id, slug, title, problem_id FROM lanes WHERE problem_id = $1 AND slug = $2`, [pid, S.lane]);
+  const ref = {id: Number(lane.id), slug: lane.slug, title: lane.title, problem_id: pid}, P = `${base}/projects/${slug}`;
+  const ret = async (status, report) => Number((await one(`INSERT INTO returns (problem_id, lane_id, type, user_id, model, provider, report_md, transcript, status, final_rung) VALUES ($1,$2,'explore',$3,'claude-fable-5-1','anthropic',$4,'Test',$5,'MEASURED') RETURNING id`, [pid, lane.id, people.c.id, report, status])).id);
+  // 1. The cap: 11,000 characters are kept and served whole; one past the cap is refused with the cap named.
+  assert.equal(SUMMARY_MAX, 12000);
+  const long = `#### Start here: the fastest known way, by machine\n\n${'Test: a learning that must stay. '.repeat(330)}\n\n#### Dead ends (slow or refuted)\n\nTest: the last line of a long summary.`;
+  assert.ok(long.length > 10000 && long.length <= SUMMARY_MAX, String(long.length));
+  const through = Number((await one(`SELECT coalesce(max(id), 0) AS m FROM returns WHERE lane_id = $1 AND status = 'accepted' AND NOT provisional`, [lane.id])).m);
+  await applyStateUpdate(pid, ref, {id: people.owner.id, model: 'claude-opus-5-5'}, parseStateUpdate({summary_md: long, through_return_id: through}), null);
+  assert.throws(() => parseStateUpdate({summary_md: 'x'.repeat(SUMMARY_MAX + 1)}), /at most 12000 characters/);
+  let brief = await stateBrief(pid, slug, ref.id, P);
+  assert.ok(brief.includes('Test: the last line of a long summary.') && !brief.includes('(continued at'), 'a summary past 6,000 characters is in the brief whole');
+  assert.doesNotMatch(brief, /not in the summary yet/, 'nothing unfolded: no list');
+  // 2. Accepted returns since: each by id and link, under the stamp and above the summary.
+  const accepted = [await ret('accepted', 'Test: the first result the summary lacks.'), await ret('accepted', 'Test: the second.'), await ret('accepted', 'Test: the third.')];
+  // 4. A rejected return, with the trusted review's reason.
+  const failed = await ret('rejected', 'Test: an approach that was refuted on review.');
+  const rj = Number((await one(`INSERT INTO jobs (problem_id, lane_id, type, title, brief_md, min_tier, budget_hours, compute_hint, parent_return_id, status) VALUES ($1,$2,'review','Test: review of a refuted return','Test',99,1,'{}',$3,'done') RETURNING id`, [pid, lane.id, failed])).id);
+  await q(`INSERT INTO reviews (return_id, review_job_id, user_id, model, provider, verdict, notes_md, trusted, reject_reason) VALUES ($1,$2,$3,'claude-opus-5-5','anthropic','reject','Test: the bound fails at n = 3.',true,'refuted')`, [failed, rj, people.owner.id]);
+  await q(`INSERT INTO return_decisions (return_id, status, by) VALUES ($1,'rejected','trusted')`, [failed]);
+  // 3. Entries: twelve more than the one or two already open, all inline (the old cut was 8).
+  for (let i = 0; i < 12; i++) await q(`INSERT INTO lane_state_entries (problem_id, lane_id, body_md, hardware, throughput, source_return_id, user_id) VALUES ($1,$2,$3,'Test: M1','1e8/s',$4,$5)`, [pid, lane.id, `Test: open entry number ${i} for the larger inline allowance.`, S.source, people.c.id]);
+  brief = await stateBrief(pid, slug, ref.id, P);
+  const stamp = brief.indexOf('3 accepted return(s) since are not folded in yet'), body = brief.indexOf('Test: a learning that must stay.');
+  assert.ok(stamp > 0 && body > stamp, brief.slice(0, 900));
+  for (const id of accepted) { const at = brief.indexOf(`- #${id} (explore, @${people.c.handle}`); assert.ok(at > stamp && at < body && brief.slice(at, at + 400).includes(`${P}/return/${id}`), `accepted return #${id} is listed with its link under the stamp`); }
+  const rejectedAt = brief.indexOf(`- #${failed} (explore, @${people.c.handle}, claude-fable-5-1; rejected as refuted), ${P}/return/${failed}: Test: an approach that was refuted on review.`);
+  assert.ok(rejectedAt > brief.indexOf('Rejected, not in the summary yet (not results') && rejectedAt < body, 'the rejected return is listed as a lead on what failed, with the reason and its link');
+  const open = Number((await one(`SELECT count(*)::int AS n FROM lane_state_entries WHERE lane_id = $1 AND status = 'unverified'`, [lane.id])).n);
+  assert.ok(open > 8 && open <= 20, String(open));
+  assert.equal((brief.match(/^- Entry \d+/gm) ?? []).length, open, 'every open entry is inline');
+  assert.doesNotMatch(brief, /older entries at/);
+  // The upkeep is handed the rejected return, and told what to do with it.
+  const up = await upkeepBrief({lane_id: lane.id, brief_md: 'Due: test.', assigned_at: null}, {id: pid, slug}, P);
+  assert.match(up, /^A routine trusted task, like a review:/, 'the upkeep brief still opens by saying what the work is');
+  assert.match(up, /Dead ends come from rejected returns too/);
+  assert.ok(up.includes(`### Rejected returns no upkeep has read (1)`) && up.includes(`- #${failed} (explore, @${people.c.handle}, claude-fable-5-1; rejected as refuted), ${P}/return/${failed}`), up.slice(-900));
+  // Rejections decided since the last update count toward the upkeep with the accepted ones (5 by default): 3 + 1 are not enough, a second rejection is.
+  await q(`DELETE FROM jobs WHERE lane_id = $1 AND type = 'upkeep' AND status IN ('queued','assigned')`, [lane.id]);
+  await q(`UPDATE lane_states SET updated_at = now() - interval '1 minute' WHERE lane_id = $1`, [lane.id]);
+  await q(`UPDATE lane_state_entries SET created_at = now() - interval '1 hour' WHERE lane_id = $1 AND status = 'unverified'`, [lane.id]);
+  assert.equal((await lanesNeedingUpkeep(pid, slug)).some(l => l.slug === S.lane && /returns since/.test(l.why)), false, '3 accepted and 1 rejected: not due on returns yet');
+  const failed2 = await ret('rejected', 'Test: a second approach that failed.');
+  await q(`INSERT INTO return_decisions (return_id, status, by) VALUES ($1,'rejected','trusted')`, [failed2]);
+  assert.ok((await lanesNeedingUpkeep(pid, slug)).some(l => l.slug === S.lane && /3 accepted and 2 rejected returns since the last update/.test(l.why)), JSON.stringify(await lanesNeedingUpkeep(pid, slug)));
+  // An upkeep's return has read them: they leave the brief and the next upkeep, and no longer make the lane due. A direct write moves nothing.
+  await applyStateUpdate(pid, ref, {id: people.owner.id, model: 'claude-opus-5-5'}, parseStateUpdate({through_return_id: accepted[2]}), null);
+  assert.equal((await stateDoc(pid, slug, ref)).rejected.length, 2, 'a direct PUT read no list of rejected returns');
+  const upkeepReturn = Number((await one(`INSERT INTO returns (problem_id, lane_id, type, user_id, model, provider, report_md, transcript, status) VALUES ($1,$2,'upkeep',$3,'claude-opus-5-5','anthropic','Test: an upkeep that read the rejected returns.','Test','recorded') RETURNING id`, [pid, lane.id, people.owner.id])).id);
+  await applyStateUpdate(pid, ref, {id: people.owner.id, model: 'claude-opus-5-5'}, parseStateUpdate({through_return_id: accepted[2]}), upkeepReturn);
+  const doc = await stateDoc(pid, slug, ref);
+  assert.equal(doc.rejected.length, 0); assert.equal(doc.unfolded.length, 0);
+  assert.doesNotMatch(await stateBrief(pid, slug, ref.id, P), /not in the summary yet/);
+  assert.match(await upkeepBrief({lane_id: lane.id, brief_md: 'Due: test.', assigned_at: null}, {id: pid, slug}, P), /### Rejected returns no upkeep has read \(0\)\n\nNone\./);
+  assert.equal((await lanesNeedingUpkeep(pid, slug)).some(l => l.slug === S.lane && /returns since/.test(l.why)), false);
 });

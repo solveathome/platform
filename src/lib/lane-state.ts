@@ -12,16 +12,27 @@
  * The document is served in every assignment brief of its lane (job.ts, /start) and at /projects/<slug>/state.
  * An upkeep job is queued for a lane when it has gathered UPKEEP_AFTER accepted returns or any unverified entry since its last
  * update, or a new record; trusted sessions take it before anything else (job.ts, /start), the reviews-only ones included.
+ *
+ * Front-loading (Chris, Oct 13 2026, #sah-brief-state-frontload-gaps: "We want to ensure all learnings we have are front loaded to make
+ * sure research moves forward at best speed"). Four gaps a read of the live briefs found, closed here:
+ * - every lane's summary sat at its 6,000-character cap, so each new learning pushed an old one out: the cap is 12,000;
+ * - accepted returns not folded in yet were a count: they are listed under the version stamp, each with its id and link;
+ * - open entries past the newest 8 were a link (17 were open on one md5 track): a brief carries the newest 20;
+ * - a rejected return reached nobody: the ones no upkeep has read are listed in the brief as leads on what failed, and an upkeep is
+ *   handed them with the trusted review's reason, so a dead end reaches the Verified summary.
  */
 import { q, one } from "../db/index.js";
 import { readProjectConfig } from "./projects.js";
 import { challengeConfig, currentTarget, fmtValue, trackByLane, trackView } from "./challenges.js";
 
-export const SUMMARY_MAX = 6000;
+export const SUMMARY_MAX = 12000;
 export const ENTRY_MAX = 1200;
 /** Inline allowance in a brief: the whole verified summary (it is capped at SUMMARY_MAX when written) and the newest unverified entries;
  * the rest is one GET away. */
-const BRIEF_SUMMARY_MAX = SUMMARY_MAX, BRIEF_ENTRIES = 8, LANELESS_ENTRIES = 3;
+const BRIEF_SUMMARY_MAX = SUMMARY_MAX, BRIEF_ENTRIES = 20, LANELESS_ENTRIES = 3;
+/** Returns not folded into the summary yet that a brief lists by line (the newest; the rest is a count and the link), and that one
+ * upkeep is handed (the oldest first, so a backlog drains in order). */
+const BRIEF_UNFOLDED = 12, UPKEEP_RETURNS = 40;
 /** Open entries one handle may add per project per day: enough for a finding per return, short of flooding the reviewers. */
 export const ENTRIES_PER_DAY = 20;
 
@@ -46,8 +57,11 @@ export function upkeepAfter(slug: string): number {
 
 export type LaneRef = { id: number; slug: string; title: string; problem_id: number };
 export type Entry = { id: number; body_md: string; hardware: string | null; throughput: string | null; source_return_id: number | null; source_url: string | null; handle: string; model: string | null; created_at: string; status: string; decision_note: string | null };
+/** A return the Verified summary does not cover yet: accepted since `through_return_id`, or rejected and read by no upkeep. */
+export type Unfolded = { id: number; type: string; handle: string; model: string | null; final_rung: string | null; head: string; reasons: string | null };
 export type StateDoc = {
   lane: { slug: string; title: string }; records: string[];
+  unfolded: Unfolded[]; rejected: Unfolded[]; rejected_since: number;
   verified: { summary_md: string; version: number; through_return_id: number | null; updated_by: string | null; updated_model: string | null; updated_return_id: number | null; updated_at: string | null };
   unverified: Entry[]; accepted_since: number; open_upkeep_job: number | null;
 };
@@ -70,18 +84,49 @@ export async function laneRecords(problemId: number, projectSlug: string, lane: 
   return [`Accepted returns on this lane: ${Number(r?.n ?? 0)}${r?.last ? `, newest #${r.last}` : ""}.`];
 }
 
+/** The first line of a report, as a brief quotes it beside the return's link. */
+const HEAD_SQL = `left(regexp_replace(r.report_md, '\\s+', ' ', 'g'), 220)`;
+/** A rejected return's last trusted decision: the moment an upkeep's reading of rejections is counted from. */
+const REJECTED_AT = `(SELECT max(d.decided_at) FROM return_decisions d WHERE d.return_id = r.id AND NOT d.provisional AND d.status = 'rejected')`;
+/** Rejected returns of a lane ($1) decided after $2 (null: from the start) and up to $3 (null: now). A duplicate folded into another
+ * return is that return's story, not a second dead end. */
+const REJECTED_WHERE = `r.lane_id = $1 AND r.status = 'rejected' AND NOT r.provisional AND r.duplicate_of IS NULL AND r.superseded_by IS NULL
+  AND ${REJECTED_AT} > coalesce($2::timestamptz, '-infinity') AND ${REJECTED_AT} <= coalesce($3::timestamptz, 'infinity')`;
+/** The rejected returns no upkeep has read yet (lane_states.rejected_through), each with the trusted reviews' reason. A rejection is not
+ * a result: what it carries is why an approach or a claim failed, which is what the next agent would otherwise retry. */
+async function rejectedUnread(laneId: number, after: string | Date | null, upTo: string | Date | null, order: "ASC" | "DESC", limit: number): Promise<Array<Unfolded & { decided_at: string }>> {
+  return q<Unfolded & { decided_at: string }>(`SELECT r.id, r.type, u.handle, r.model, r.final_rung, ${HEAD_SQL} AS head, ${REJECTED_AT} AS decided_at,
+      (SELECT string_agg(DISTINCT rv.reject_reason, ', ') FROM reviews rv WHERE rv.return_id = r.id AND rv.trusted AND rv.verdict = 'reject' AND rv.reject_reason IS NOT NULL) AS reasons
+    FROM returns r JOIN users u ON u.id = r.user_id WHERE ${REJECTED_WHERE} ORDER BY ${REJECTED_AT} ${order}, r.id ${order} LIMIT ${limit}`, [laneId, after, upTo]);
+}
+
 export async function stateDoc(problemId: number, projectSlug: string, lane: LaneRef): Promise<StateDoc> {
   const s = await one(`SELECT s.*, u.handle AS updated_handle FROM lane_states s LEFT JOIN users u ON u.id = s.updated_by WHERE s.lane_id = $1`, [lane.id]);
   const entries = await q<Entry>(`SELECT e.id, e.body_md, e.hardware, e.throughput, e.source_return_id, e.source_url, u.handle, e.model, e.created_at, e.status, e.decision_note
     FROM lane_state_entries e JOIN users u ON u.id = e.user_id WHERE e.lane_id = $1 AND e.status = 'unverified' ORDER BY e.id DESC`, [lane.id]);
   const since = await one<{ n: string }>(`SELECT count(*) AS n FROM returns WHERE lane_id = $1 AND status = 'accepted' AND NOT provisional AND id > $2`, [lane.id, s?.through_return_id ?? 0]);
   const job = await one<{ id: string }>(`SELECT id FROM jobs WHERE lane_id = $1 AND type = 'upkeep' AND status IN ('queued','assigned') ORDER BY id LIMIT 1`, [lane.id]);
+  const unfolded = Number(since?.n ?? 0) ? await q<Unfolded>(`SELECT r.id, r.type, u.handle, r.model, r.final_rung, ${HEAD_SQL} AS head, NULL AS reasons
+    FROM returns r JOIN users u ON u.id = r.user_id WHERE r.lane_id = $1 AND r.status = 'accepted' AND NOT r.provisional AND r.id > $2 ORDER BY r.id DESC LIMIT ${BRIEF_UNFOLDED}`, [lane.id, s?.through_return_id ?? 0]) : [];
+  const rejected = await rejectedUnread(lane.id, s?.rejected_through ?? null, null, "DESC", BRIEF_UNFOLDED);
+  const rejectedN = rejected.length < BRIEF_UNFOLDED ? rejected.length : Number((await one<{ n: string }>(`SELECT count(*) AS n FROM returns r WHERE ${REJECTED_WHERE}`, [lane.id, s?.rejected_through ?? null, null]))?.n ?? 0);
+  const num = (r: Unfolded) => ({ ...r, id: Number(r.id) });
   return {
     lane: { slug: lane.slug, title: lane.title }, records: await laneRecords(problemId, projectSlug, lane),
+    unfolded: unfolded.map(num), rejected: rejected.map(num), rejected_since: rejectedN,
     verified: { summary_md: s?.summary_md ?? "", version: Number(s?.version ?? 0), through_return_id: s?.through_return_id ? Number(s.through_return_id) : null, updated_by: s?.updated_handle ?? null, updated_model: s?.updated_model ?? null, updated_return_id: s?.updated_return_id ? Number(s.updated_return_id) : null, updated_at: s?.updated_at ? new Date(s.updated_at).toISOString() : null },
     unverified: entries.map((e) => ({ ...e, id: Number(e.id), source_return_id: e.source_return_id === null ? null : Number(e.source_return_id) })),
     accepted_since: Number(since?.n ?? 0), open_upkeep_job: job ? Number(job.id) : null,
   };
+}
+
+const unfoldedLine = (r: Unfolded, base: string) => `- #${r.id} (${r.type}, @${r.handle}${r.model ? `, ${r.model}` : ""}${r.reasons ? `; rejected as ${r.reasons}` : r.final_rung ? `, ${r.final_rung}` : ""}), ${base}/return/${r.id}: ${r.head}`;
+/** What the summary does not cover yet, by line: the accepted returns since it was written, and the rejected returns no upkeep has read. */
+function unfoldedMarkdown(doc: StateDoc, base: string, url: string): string {
+  const more = (shown: number, total: number) => total > shown ? `\n- ${total - shown} older ones at ${url}` : "";
+  const accepted = doc.unfolded.length ? `\n\nAccepted since, not in the summary yet (results; read one before you repeat its work):\n\n${doc.unfolded.map((r) => unfoldedLine(r, base)).join("\n")}${more(doc.unfolded.length, doc.accepted_since)}` : "";
+  const rejected = doc.rejected.length ? `\n\nRejected, not in the summary yet (not results: each is an approach or a claim that did not hold up, with the trusted review's reason; read its reviews before you try the same thing):\n\n${doc.rejected.map((r) => unfoldedLine(r, base)).join("\n")}${more(doc.rejected.length, doc.rejected_since)}` : "";
+  return accepted + rejected;
 }
 
 const entryLine = (e: Entry, base: string) => `- Entry ${e.id}${e.source_return_id ? ` (return #${e.source_return_id}, ${base}/return/${e.source_return_id})` : e.source_url ? ` (${e.source_url})` : ""}, by @${e.handle}${e.model ? ` (${e.model})` : ""}, ${new Date(e.created_at).toISOString().slice(0, 10)}: ${e.body_md.replace(/\s*\n\s*/g, " ")}${e.hardware || e.throughput ? ` [hardware: ${e.hardware ?? "not stated"}; measured: ${e.throughput ?? "not stated"}]` : ""}`;
@@ -102,7 +147,7 @@ ${heading}# Verified (written by trusted reviewers only)
 
 ${doc.records.map((r) => `- ${r}`).join("\n")}
 
-${stamp}
+${stamp}${unfoldedMarkdown(doc, base, url)}
 
 ${summary || "(empty)"}
 
@@ -188,6 +233,15 @@ export function parseStateUpdate(raw: any): StateUpdate {
 /** A trusted reviewer's update of the Verified section. The caller checks the grant. Each change of the summary is a new version. */
 export async function applyStateUpdate(problemId: number, lane: LaneRef, by: { id: number; model: string | null }, update: StateUpdate, returnId: number | null): Promise<{ version: number; promoted: number[]; rejected: number[] }> {
   const cur = await one(`SELECT * FROM lane_states WHERE lane_id = $1 FOR UPDATE`, [lane.id]);
+  // An upkeep's return has read the rejected returns its brief listed (upkeepBrief): the oldest UPKEEP_RETURNS decided before the job was
+  // taken. The mark moves past exactly those, so a rejection decided while the upkeep ran, or beyond the list, is handed to the next one.
+  // A direct PUT read no list and moves nothing.
+  let rejectedThrough: string | Date | null = cur?.rejected_through ?? null;
+  if (returnId !== null) {
+    const taken = (await one<{ at: Date | null }>(`SELECT coalesce(j.assigned_at, r.created_at) AS at FROM returns r LEFT JOIN jobs j ON j.id = r.job_id WHERE r.id = $1`, [returnId]))?.at ?? new Date();
+    const read = await rejectedUnread(lane.id, rejectedThrough, taken, "ASC", UPKEEP_RETURNS);
+    rejectedThrough = read.length === UPKEEP_RETURNS ? read[read.length - 1].decided_at : taken;
+  }
   const open = new Set((await q<{ id: string }>(`SELECT id FROM lane_state_entries WHERE lane_id = $1 AND status = 'unverified'`, [lane.id])).map((r) => Number(r.id)));
   const unknown = [...update.promote ?? [], ...(update.reject ?? []).map((r) => r.id)].filter((id) => !open.has(id));
   if (unknown.length) throw new StateError(400, `not open entries of lane ${lane.slug}: ${unknown.join(", ")}`);
@@ -197,11 +251,11 @@ export async function applyStateUpdate(problemId: number, lane: LaneRef, by: { i
   const through = update.through_return_id ?? (cur?.through_return_id ?? null);
   const summary = update.summary_md ?? cur?.summary_md ?? "";
   const version = Number(cur?.version ?? 0) + (update.summary_md !== undefined && update.summary_md !== cur?.summary_md ? 1 : 0);
-  await q(`INSERT INTO lane_states (lane_id, problem_id, summary_md, version, through_return_id, updated_by, updated_model, updated_return_id, updated_at, record_seen_at)
-    VALUES ($1,$2,$3,$4,$5,$6,$7,$8,now(),now())
+  await q(`INSERT INTO lane_states (lane_id, problem_id, summary_md, version, through_return_id, updated_by, updated_model, updated_return_id, updated_at, record_seen_at, rejected_through)
+    VALUES ($1,$2,$3,$4,$5,$6,$7,$8,now(),now(),$9)
     ON CONFLICT (lane_id) DO UPDATE SET summary_md = EXCLUDED.summary_md, version = EXCLUDED.version, through_return_id = EXCLUDED.through_return_id,
-      updated_by = EXCLUDED.updated_by, updated_model = EXCLUDED.updated_model, updated_return_id = EXCLUDED.updated_return_id, updated_at = now(), record_seen_at = now()`,
-    [lane.id, problemId, summary, version, through, by.id, by.model, returnId]);
+      updated_by = EXCLUDED.updated_by, updated_model = EXCLUDED.updated_model, updated_return_id = EXCLUDED.updated_return_id, updated_at = now(), record_seen_at = now(), rejected_through = EXCLUDED.rejected_through`,
+    [lane.id, problemId, summary, version, through, by.id, by.model, returnId, rejectedThrough]);
   if (version !== Number(cur?.version ?? 0)) await q(`INSERT INTO lane_state_versions (lane_id, version, summary_md, through_return_id, user_id, model, return_id) VALUES ($1,$2,$3,$4,$5,$6,$7)`, [lane.id, version, summary, through, by.id, by.model, returnId]);
   for (const id of update.promote ?? []) await q(`UPDATE lane_state_entries SET status = 'verified', decided_by = $2, decided_at = now(), decided_return_id = $3, decision_note = $4 WHERE id = $1`, [id, by.id, returnId, `folded into version ${version}`]);
   for (const r of update.reject ?? []) await q(`UPDATE lane_state_entries SET status = 'rejected', decided_by = $2, decided_at = now(), decided_return_id = $3, decision_note = $4 WHERE id = $1`, [r.id, by.id, returnId, r.note]);
@@ -209,14 +263,19 @@ export async function applyStateUpdate(problemId: number, lane: LaneRef, by: { i
   return { version, promoted: update.promote ?? [], rejected: (update.reject ?? []).map((r) => r.id) };
 }
 
-/** Lanes that need a trusted upkeep now: enough accepted returns or a new open entry since the last update, or a newer record.
+/** Lanes that need a trusted upkeep now: enough accepted or rejected returns or a new open entry since the last update, or a newer record.
+ *  A rejection counts from the last update, never from the start: the rejections decided before this was built are read by the upkeeps
+ *  a lane has anyway, UPKEEP_RETURNS at a time, and never queue one by themselves (a backlog that made every lane due at once is what
+ *  kept management sessions from reviews on Oct 12 2026).
  *  An entry counts once: an upkeep may leave it open for a later one, and it is due again only when something new arrives. "Any open
  *  entry" made every md5 lane due again the moment its upkeep returned "no change", so from 14:03 on Oct 12 2026 every start of a granted
  *  session on md5 and twin-primes was an upkeep, and management sessions never reached reviews or rescues (#sah-manage-rescue-prod-check). */
 export async function lanesNeedingUpkeep(problemId: number, projectSlug: string): Promise<Array<LaneRef & { why: string }>> {
   const after = upkeepAfter(projectSlug);
-  const rows = await q<LaneRef & { since: string; open: string; fresh: string; record_after: boolean }>(`SELECT l.id, l.slug, l.title, l.problem_id,
+  const rows = await q<LaneRef & { since: string; rejected: string; open: string; fresh: string; record_after: boolean }>(`SELECT l.id, l.slug, l.title, l.problem_id,
       (SELECT count(*) FROM returns r WHERE r.lane_id = l.id AND r.status = 'accepted' AND NOT r.provisional AND r.id > coalesce(s.through_return_id, 0)) AS since,
+      (SELECT count(*) FROM returns r WHERE r.lane_id = l.id AND r.status = 'rejected' AND NOT r.provisional AND r.duplicate_of IS NULL AND r.superseded_by IS NULL
+        AND ${REJECTED_AT} > greatest(coalesce(s.rejected_through, '-infinity'), coalesce(s.updated_at, now()))) AS rejected,
       (SELECT count(*) FROM lane_state_entries e WHERE e.lane_id = l.id AND e.status = 'unverified') AS open,
       (SELECT count(*) FROM lane_state_entries e WHERE e.lane_id = l.id AND e.status = 'unverified' AND e.created_at > greatest(coalesce(s.updated_at, '-infinity'),
         coalesce((SELECT max(j.created_at) FROM jobs j WHERE j.lane_id = l.id AND j.type = 'upkeep' AND j.status NOT IN ('queued','assigned','expired')), '-infinity'))) AS fresh,
@@ -226,7 +285,8 @@ export async function lanesNeedingUpkeep(problemId: number, projectSlug: string)
       AND NOT EXISTS (SELECT 1 FROM jobs j WHERE j.lane_id = l.id AND j.type = 'upkeep' AND j.status IN ('queued','assigned'))
     ORDER BY l.id`, [problemId]);
   return rows.flatMap((r) => {
-    const why = [Number(r.since) >= after ? `${r.since} accepted returns since the last update` : "", Number(r.fresh) ? `${r.fresh} new unverified entr${Number(r.fresh) === 1 ? "y" : "ies"} (${r.open} open)` : "", r.record_after ? "a new record" : ""].filter(Boolean);
+    const both = Number(r.since) + Number(r.rejected);
+    const why = [both >= after ? `${[Number(r.since) ? `${r.since} accepted` : "", Number(r.rejected) ? `${r.rejected} rejected` : ""].filter(Boolean).join(" and ")} returns since the last update` : "", Number(r.fresh) ? `${r.fresh} new unverified entr${Number(r.fresh) === 1 ? "y" : "ies"} (${r.open} open)` : "", r.record_after ? "a new record" : ""].filter(Boolean);
     return why.length ? [{ id: Number(r.id), slug: r.slug, title: r.title, problem_id: Number(r.problem_id), why: why.join(", ") }] : [];
   });
 }
@@ -250,16 +310,18 @@ export async function upkeepBrief(job: any, project: { id: number; slug: string 
   const doc = await stateDoc(Number(project.id), project.slug, lane);
   const since = await q<{ id: string; type: string; handle: string; model: string | null; final_rung: string | null; head: string; decided_by: string | null }>(`SELECT r.id, r.type, u.handle, r.model, r.final_rung, left(regexp_replace(r.report_md, '\\s+', ' ', 'g'), 220) AS head,
       (SELECT d.by FROM return_decisions d WHERE d.return_id = r.id AND NOT d.provisional ORDER BY d.id DESC LIMIT 1) AS decided_by
-    FROM returns r JOIN users u ON u.id = r.user_id WHERE r.lane_id = $1 AND r.status = 'accepted' AND NOT r.provisional AND r.id > $2 ORDER BY r.id LIMIT 40`, [lane.id, doc.verified.through_return_id ?? 0]);
+    FROM returns r JOIN users u ON u.id = r.user_id WHERE r.lane_id = $1 AND r.status = 'accepted' AND NOT r.provisional AND r.id > $2 ORDER BY r.id LIMIT ${UPKEEP_RETURNS}`, [lane.id, doc.verified.through_return_id ?? 0]);
   const last = since.length ? Number(since[since.length - 1].id) : null;
+  const mark = (await one<{ rejected_through: Date | null }>(`SELECT rejected_through FROM lane_states WHERE lane_id = $1`, [lane.id]))?.rejected_through ?? null;
+  const rejected = await rejectedUnread(lane.id, mark, job.assigned_at ?? null, "ASC", UPKEEP_RETURNS);
   const template = stateTemplate(project.slug);
   return `A routine trusted task, like a review: keep the state of the art of lane \`${lane.slug}\` (${lane.title}) current. ${job.brief_md}
 
-You are a reviewer trusted by grant; only you can write the Verified section. Read the lane's state of the art at the top of this brief (every open entry included), the accepted returns listed after it (GET ${base}/return/<id>; read each one you fold in), and every open unverified entry (its source return). Then:
+You are a reviewer trusted by grant; only you can write the Verified section. Read the lane's state of the art at the top of this brief (every open entry included), the accepted returns listed after it (GET ${base}/return/<id>; read each one you fold in), the rejected returns listed after those (each with its reviews), and every open unverified entry (its source return). Then:
 
-1. **Rewrite the Verified summary** (\`summary_md\`, at most ${SUMMARY_MAX} characters) so a new agent can build on it in two minutes. Use these headings, in this order: ${template.headings.map((h) => `\`${h}\``).join(", ")}. Each claim names its source return (\`#1234\`) and its calibration.${template.measured ? " This file is mostly a performance playbook: lead with the fastest known way to do the work on each machine class (the technique, code path or tool, the exact hardware, the measured throughput and its source), say what to try first on a given machine, and which dead ends were slow. A throughput goes in Verified only when you checked it against its source (a return's receipts, a rerun, or a trusted-accepted measurement); a server-verified submission verifies its score, not the rate it declared." : ""} Keep what still holds, correct what a newer return overturned, and drop nothing settled without saying why. The records above it are the server's; do not restate them as your own.
+1. **Rewrite the Verified summary** (\`summary_md\`, at most ${SUMMARY_MAX} characters) so a new agent can build on it in two minutes. Use these headings, in this order: ${template.headings.map((h) => `\`${h}\``).join(", ")}. Each claim names its source return (\`#1234\`) and its calibration.${template.measured ? " This file is mostly a performance playbook: lead with the fastest known way to do the work on each machine class (the technique, code path or tool, the exact hardware, the measured throughput and its source), say what to try first on a given machine, and which dead ends were slow. A throughput goes in Verified only when you checked it against its source (a return's receipts, a rerun, or a trusted-accepted measurement); a server-verified submission verifies its score, not the rate it declared." : ""} Keep what still holds, correct what a newer return overturned, and drop nothing settled without saying why. The summary has room: a learning is cut for being wrong or superseded, never to make space. **Dead ends come from rejected returns too**: for each one listed below whose trusted review shows an approach that cannot work or a claim that fails (a refutation, a method that did not reach its target at the stated scope), write one line under the dead-ends heading saying what was tried, why it failed and at what scope, citing the return and its review as "rejected, #1234", so the next agent does not retry it. State it as what the review established and no further: a rejection for a missing source, an unverifiable run or an overclaim says the work was not shown, not that the approach is dead, and is left out or noted as untested. The records above it are the server's; do not restate them as your own.
 2. **Decide each open entry** you checked: \`promote\` it (its content is now in your summary, so send \`summary_md\` with it), \`reject\` it with a note saying why (refuted, unsupported, duplicate, out of scope), or leave it for a later upkeep. Promote only what you checked against its source; a return settled by the server's recomputation verifies its candidate, not its explanation.
-3. Set \`through_return_id\` to the newest accepted return you read${last ? ` (the newest listed below is #${last}${since.length === 40 ? "; more follow it, and the next upkeep takes them" : ""})` : ""}.
+3. Set \`through_return_id\` to the newest accepted return you read${last ? ` (the newest listed below is #${last}${since.length === UPKEEP_RETURNS ? "; more follow it, and the next upkeep takes them" : ""})` : ""}. The rejected returns need no marker from you: the ones listed below count as read when your return is received.
 
 Return through \`POST ${base}/result\` with this job's \`job_id\`, a short \`report_md\` (what changed and why), your \`transcript\`, and:
 
@@ -269,8 +331,12 @@ Return through \`POST ${base}/result\` with this job's \`job_id\`, a short \`rep
 
 The update applies when your return is received: it is the trusted check, so it waits for no review. If nothing needs changing, send only \`through_return_id\`.
 
-### Accepted returns since the last update (${since.length}${since.length === 40 ? ", the first 40" : ""})
+### Accepted returns since the last update (${since.length}${since.length === UPKEEP_RETURNS ? `, the first ${UPKEEP_RETURNS}` : ""})
 
-${since.length ? since.map((r) => `- #${r.id} (${r.type}, @${r.handle}${r.model ? `, ${r.model}` : ""}, ${r.final_rung ?? "?"}, decided by ${r.decided_by ?? "?"}): ${r.head}`).join("\n") : "None: this upkeep is for the open entries or a new record."}
+${since.length ? since.map((r) => `- #${r.id} (${r.type}, @${r.handle}${r.model ? `, ${r.model}` : ""}, ${r.final_rung ?? "?"}, decided by ${r.decided_by ?? "?"}): ${r.head}`).join("\n") : "None: this upkeep is for the open entries, the rejected returns or a new record."}
+
+### Rejected returns no upkeep has read (${rejected.length}${rejected.length === UPKEEP_RETURNS ? `, the oldest ${UPKEEP_RETURNS}; the next upkeep takes the rest` : ""})
+
+${rejected.length ? rejected.map((r) => `- #${r.id} (${r.type}, @${r.handle}${r.model ? `, ${r.model}` : ""}; rejected as ${r.reasons ?? "no reason class recorded"}), ${base}/return/${r.id}: ${r.head}`).join("\n") : "None."}
 `;
 }
