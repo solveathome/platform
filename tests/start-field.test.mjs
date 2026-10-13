@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import {readFileSync} from 'node:fs';
 import vm from 'node:vm';
 import {folderLaunchContract} from '../src/lib/launch.ts';
+import {PLATFORM_STATEMENT,workStatement} from '../src/lib/work-statement.ts';
 
 test('copied joining instructions stay short and fetch setup guidance before the assignment URL',async()=>{
   const origin='https://example.test',slug='twin-primes',token='sah_fixture_token_never_real';
@@ -29,7 +30,9 @@ test('copied joining instructions stay short and fetch setup guidance before the
   assert.doesNotMatch(node('#sf-instr').innerHTML,new RegExp(token),'rendered credential stays masked');
   await node('.sf-copy').onclick();
   const check=()=>{
-    assert.ok(copied.startsWith(`First read ${contract.protocol_url}`));
+    // The instruction opens with what the work is (the project's statement, or the platform's), then the short instruction itself.
+    assert.match(contract.opening,/^What this work is, first: /);
+    assert.ok(copied.startsWith(`${contract.opening}\n\nFirst read ${contract.protocol_url}`));
     assert.ok(copied.indexOf('follow its setup instructions')<copied.indexOf('After readiness passes, use this exact joining URL:'));
     assert.ok(!copied.includes(contract.guidance),'detailed instructions belong in the protocol response');
     assert.doesNotMatch(copied,/all-complete check|thinking-level lookup|publication_safety|model ID|self-review/);
@@ -37,7 +40,10 @@ test('copied joining instructions stay short and fetch setup guidance before the
     assert.ok(copied.includes(`SOLVEATHOME_TOKEN=${token}`));assert.doesNotMatch(copied,/workspace=1/);
   };
   check();assert.ok(copied.includes(`joining URL: ${origin}/projects/${slug}/start.`));
-  assert.ok(copied.length<550,`default instruction is ${copied.length} characters`);
+  assert.ok(copied.length-contract.opening.length<550,`default instruction is ${copied.length-contract.opening.length} characters after its opening`);
+  assert.equal(contract.opening,workStatement(slug),'a project that states its work opens the instruction with it');
+  assert.equal(folderLaunchContract(origin,'another-project').opening,PLATFORM_STATEMENT,'a project that states nothing gets the platform\'s general statement');
+  assert.doesNotMatch(PLATFORM_STATEMENT,/md5|prime/i,'the general statement names no problem');
   assert.match(copied,/Start in general mode/);
   settings.time='2h';node('.sf-settings').events.change({target:{name:'time'}});
   const direction='Study “alpha” exactly.\nKeep this direction across assignments.';

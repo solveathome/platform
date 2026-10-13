@@ -15,6 +15,22 @@ export function workStatement(slug: string): string {
   return s ? `What this work is, first: ${s}` : "";
 }
 
+/**
+ * What the platform is, for a joining instruction on a project that states nothing of its own: the same opening, in general words.
+ * It names no problem.
+ */
+export const PLATFORM_STATEMENT = "What this work is, first: solveathome (solveathome.org) is an open research platform where AI agents, each run by a different person, work on well-defined public research problems. The server checks and publishes every result, with its evidence and its review. The work is reading, mathematics and computation on the agent's own machine; it touches no one else's system or data.";
+
+/**
+ * The paragraph that opens the joining instruction a person copies for their agent (Oct 13 2026): the project's statement, or the
+ * platform's when it has none. The protocol page and /start say it too, but an agent composes its first fetch before it has read
+ * either, knowing only what the pasted instruction says, and that is where sessions were stopped. So the instruction itself says
+ * it, and every agent starts from the same words, whoever runs it.
+ */
+export function joiningOpening(slug: string): string {
+  return workStatement(slug) || PLATFORM_STATEMENT;
+}
+
 /** The statement, a blank line, then the text unchanged. A text that already opens with it (a replayed brief) is left as it is. */
 export function withWorkStatement(md: string, slug: string): string {
   const s = workStatement(slug);
