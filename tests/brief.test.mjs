@@ -489,3 +489,40 @@ test('historical comparison notes are quoted without changing their current stag
   for(const research_stage of ['first_look','rescue'])assert.doesNotMatch(stepCheckContext({...source,research_stage}),/This assignment is pursuit/);
   assert.equal(stepCheckContext({...source,step_check_notes_md:''}),'');
 });
+
+test("a project's work statement opens the protocol page and every /start answer, whatever the job's kind, and changes nothing after it", async () => {
+  const { workStatement, withWorkStatement, workStatementFirst } = await import('../src/lib/work-statement.ts');
+  const { renderChatBrief } = await import('../src/lib/brief.ts');
+  const s = workStatement('md5');
+  assert.match(s, /^What this work is, first: /);
+  assert.ok(!s.includes('\n'), 'one paragraph');
+  const sentences = s.split(/(?<=[.)])\s+(?=[A-Z])/).length;
+  assert.ok(sentences >= 2 && sentences <= 4, `two to four sentences, got ${sentences}`);
+  assert.equal(workStatement('another-project'), '', 'a project that states nothing gets nothing');
+  assert.equal(withWorkStatement('# Brief', 'another-project'), '# Brief');
+  assert.equal(withWorkStatement(withWorkStatement('# Brief', 'md5'), 'md5'), `${s}\n\n# Brief`, 'a replayed brief is not opened twice');
+  // The middleware as /start mounts it: the answer is sent after the project is known.
+  const answer = (slug, kind, body) => {
+    const sent = {}; let type = kind === 'md' ? 'text/markdown; charset=utf-8' : 'application/json';
+    const res = { get: () => type, json(b) { sent.body = b; return res; }, send(b) { sent.body = b; return res; } };
+    const req = { params: { slug } };
+    workStatementFirst(req, res, () => {});
+    req.project = { slug };
+    if (kind === 'json') res.json(body); else res.send(body);
+    return sent.body;
+  };
+  const base = 'https://x.test/projects/md5';
+  for (const type of ['explore', 'measure', 'direction', 'break', 'formalize', 'source', 'curate', 'audit', 'paper', 'review', 'triage', 'check', 'upkeep', 'challenge']) {
+    const issued = { ...job, type }, full = renderBrief(issued, base, session);
+    const compact = compactDepartmentBrief(full, issued, session, null), chat = renderChatBrief(issued, base, { id: 's1', host: 'other', handle: 'h' });
+    for (const text of [full, compact, chat]) {
+      assert.equal(answer('md5', 'md', text), `${s}\n\n${text}`, `${type}: the statement, a blank line, the brief unchanged`);
+      const payload = answer('md5', 'json', { job_id: 78, type, brief_md: text });
+      assert.equal(payload.brief_md, `${s}\n\n${text}`); assert.equal(payload.job_id, 78);
+      assert.equal(answer('another-project', 'md', text), text);
+    }
+  }
+  assert.equal(answer('md5', 'json', { session: null, orientation_md: '# solveathome' }).orientation_md, `${s}\n\n# solveathome`, 'the orientation and the no-work answers too');
+  assert.deepEqual(answer('md5', 'json', { error: 'unknown session' }), { error: 'unknown session' }, 'a refusal without a brief is left alone');
+  assert.equal(answer('md5', 'send', '{"a":1}'), '{"a":1}', 'a JSON body is never rewritten as text');
+});

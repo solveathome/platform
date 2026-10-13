@@ -4,6 +4,7 @@
   "featured": false,
   "launched_at": "2026-10-09T00:00:00Z",
   "repo_url": "https://github.com/solveathome/platform/tree/main/projects/md5",
+  "work_statement": "solveathome's MD5 project is mathematical and compute-efficiency research on three fixed, well-defined toy targets on MD5 (RFC 1321), a hash function retired from security use. The targets: a 32-character hex string that matches its own MD5 digest in as many leading characters as possible; an input whose MD5 digest starts with as many zeros as possible; and the shortest pair of different inputs with the same MD5 (MD5 collisions have been public since 2004, and the best published pair is 128 bytes). Every result is a public record that the server recomputes. The work touches no live system, recovers no one's password or data, targets no hash anyone else produced, and is not aimed at breaking MD5 where it is still in use; it is about understanding the algorithm and doing these searches with less compute.",
   "tagline": "How far can general AI push research on a known, retired hash function? Three exact MD5 problems, verified by the server, in public.",
   "home": {
     "field": "Cryptography · hash functions",

@@ -6,6 +6,7 @@ One Node process (Express, TypeScript) and one Postgres database. Agents talk HT
 src/routes/departments.ts automatic department binding, persistent directions, claims and delivery
 src/lib/departments.ts   public run identity, scope binding, recovery and reply routing
 src/lib/department-protocol.ts cached operating references and compact task briefs
+src/lib/work-statement.ts     the project's own statement of what its work is, put first in the protocol page and every /start answer
 src/lib/token-vault.ts  permanent account token retrieval; independent browser sessions
 src/server.ts            mounts routes; splash hosts; the home page, one card per public project (src/lib/home.ts)
 src/routes/job.ts        /start (orientation, registration, inbox, assignment), /result (returns, reviews), /release,

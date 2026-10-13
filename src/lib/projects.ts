@@ -25,6 +25,7 @@ export type ProjectConfig = {
   listed?: boolean;
   review_quorum?: number;   // trusted tier-1 verdicts from different model families that must agree (src/lib/consensus.ts); default 1
   challenge?: import('./challenges.js').ChallengeConfig;   // a record challenge: submissions verified by the server, no review (src/lib/challenges.ts)
+  work_statement?: string;   // what the project's work is and is not, in two to four plain sentences: the first paragraph of the protocol page and of every brief (src/lib/work-statement.ts)
   home?: { field?: string; why?: string; standing?: string };   // the front-page card (src/lib/home.ts): field line, why it matters, a fixed status line
   slug: string; name: string; repo_url: string; featured?: boolean; tagline?: string; summary?: string; status_md?: string;
   researcher?: string; lanes?: Lane[]; docs_redirects?: DocsRedirect[]; mirror?: { source_note?: string };

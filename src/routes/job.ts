@@ -62,6 +62,7 @@ import { inbox, renderInbox } from "../lib/inbox.js";
 import { parseOffer, describeOffer, shareOffer, diskFor, reviewComputeHint, SHARES, DISKS, SHARE_DEFAULT, DISK_DEFAULT, type ComputeOffer } from "../lib/compute.js";
 import { join } from "node:path";
 import { readProjectConfig, reviewQuorum } from "../lib/projects.js";
+import { workStatement, workStatementFirst } from "../lib/work-statement.js";
 import { unservedNote } from "../lib/served-paths.js";
 import { parseTranscript } from "../lib/tokens.js";
 import { needsSourceReview, SOURCE_REVIEW_MESSAGE, sourceReviewHit, readPublication } from "../lib/document-publication.js";
@@ -554,13 +555,15 @@ job.get('/department-protocol',project,(req:any,res) => {
   }
   const selected=typeof section === 'string' ? {[section]:sections[section]} : sections;
   const version=`${DEPARTMENT_PROTOCOL}.${GUIDANCE_VERSION}`;
+  // The project's own statement of what its work is opens the page in both forms (src/lib/work-statement.ts): this is the first thing a department reads.
+  const work=workStatement(req.project.slug);
   if ((req.header('accept') ?? '').includes('text/markdown')) {
-    res.type('text/markdown').send(`# Local research department guidance\n\n${PROTOCOL_PROVENANCE}\n\nVersion: ${version}. Framework version: ${FRAMEWORK_GUIDANCE_VERSION}.\n\n${Object.entries(selected).map(([name,body])=>`## ${name}\n\n${body}`).join('\n\n')}`); return;
+    res.type('text/markdown').send(`${work ? `${work}\n\n` : ''}# Local research department guidance\n\n${PROTOCOL_PROVENANCE}\n\nVersion: ${version}. Framework version: ${FRAMEWORK_GUIDANCE_VERSION}.\n\n${Object.entries(selected).map(([name,body])=>`## ${name}\n\n${body}`).join('\n\n')}`); return;
   }
-  res.json({about:PROTOCOL_PROVENANCE,version,framework_version:FRAMEWORK_GUIDANCE_VERSION,distribution:'guidance',launch:folderLaunchContract(BASE(),req.project.slug),sections:selected});
+  res.json({...(work ? {work_statement:work} : {}),about:PROTOCOL_PROVENANCE,version,framework_version:FRAMEWORK_GUIDANCE_VERSION,distribution:'guidance',launch:folderLaunchContract(BASE(),req.project.slug),sections:selected});
 });
-job.get("/start", checkInstruction, bearer, project, assignmentMutation(start, { commitErrors: true }));
-job.get("/job", checkInstruction, bearer, project, assignmentMutation(start, { commitErrors: true }));
+job.get("/start", workStatementFirst, checkInstruction, bearer, project, assignmentMutation(start, { commitErrors: true }));
+job.get("/job", workStatementFirst, checkInstruction, bearer, project, assignmentMutation(start, { commitErrors: true }));
 
 /** A pursuit step served past requirements nobody has declared (`requirementClause` in the scheduler): the names are the proposer's notes. */
 export function requirementsNote(unmet: { tools: string[]; sources: string[] }, P: string, row: any): string {
@@ -1069,7 +1072,7 @@ async function openSession(req: any, o: OpenOpts): Promise<{ session: any; membe
 }
 
 /** POST /start with a body: the registration shape agents used before Sep 12 2026 (kept for agents mid-flight; the instruction URL is the way in now). */
-job.post("/start", bearer, project, assignmentMutation(async (req: any, res: any) => {
+job.post("/start", workStatementFirst, bearer, project, assignmentMutation(async (req: any, res: any) => {
   const b = req.body ?? {};
   if (req.termsStale) { res.status(403).json({ error: req.termsStale }); return; }
   if (b.agreed !== true) { res.status(400).json({ error: "agreed:true is required on a posted registration. The usual way in is the instruction from the project page: GET /start with the arguments in its URL registers on the first fetch." }); return; }
