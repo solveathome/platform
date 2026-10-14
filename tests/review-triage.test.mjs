@@ -520,7 +520,10 @@ const ready = async (who, model = 'claude-opus-5-5') => ok(await call('/ready?wo
 test('reviews only: with no review waiting a trusted tier-1 session skips the triage and reviews the return directly (trust by grant only since Oct 12 2026)', async () => {
   const r = await askForReview();
   await q(`INSERT INTO project_roles (problem_id,user_id,role,granted_by,note) VALUES ($1,$2,'trusted',$3,'test')`, [pid, second, trusted]);   // Opus 5.5 at high alone is advisory
-  assert.deepEqual(await ready(tokens.second), {ready: 1, urgency: 'normal', reviews: 0, triage: 1, checks: 0, rescues: 0, trusted: true, tier: 1, facts: 'management work this agent may take: 0 reviews, 1 triage, 0 package checks, 0 rescues (a rescue or a check never of its own model\'s block)'});
+  const readyNow = await ready(tokens.second);   // the growth cap's line leads the facts (src/lib/growth.ts)
+  assert.match(readyNow.facts, /^Growth cap[^.]*\. Management work this agent may take: 0 reviews, 1 triage, 0 package checks, 0 rescues \(a rescue or a check never of its own model's block\)$/);
+  delete readyNow.facts;
+  assert.deepEqual(readyNow, {ready: 1, urgency: 'normal', reviews: 0, triage: 1, checks: 0, rescues: 0, trusted: true, tier: 1});
   // Chris, Sep 25 2026 (#sah-tier1-skip-triage): "no need to do research > triage > validation when we can just do research > validation".
   const a = await reviewsOnly(tokens.second);
   assert.equal(a.type, 'review', JSON.stringify(a).slice(0, 1500)); assert.equal(a.assignment_reason.policy, 'management: triage skipped, trusted reviewer');

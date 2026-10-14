@@ -4,6 +4,7 @@ import { wantsHtml } from "../lib/negotiate.js";
 import { q, one } from "../db/index.js";
 import { bearer } from "../lib/auth.js";
 import { unlistedSlugs } from "../lib/projects.js";
+import { growthState, takeScan } from "../lib/growth.js";
 
 export const projects = Router();
 const OWNERS = new Set((process.env.OWNER_HANDLES ?? "").split(",").map((s) => s.trim().toLowerCase()).filter(Boolean));
@@ -28,4 +29,17 @@ projects.post("/projects/:slug/researcher", bearer, async (req: any, res) => {
   if (!u) { res.status(404).json({ error: "no such user; they must sign in first" }); return; }
   await q(`UPDATE problems SET researcher_user_id = $2, researcher_role = COALESCE($3, researcher_role), summary = COALESCE($4, summary) WHERE slug = $1`, [req.params.slug, u.id, req.body?.role ?? null, req.body?.summary ?? null]);
   res.json({ ok: true });
+});
+
+/** The growth cap (mba #mba-bot-sites-growth-cap; src/lib/growth.ts), owner only. POST /bot/growth/scan { scan_date, growth_rate,
+ *  google_indexed, google_not_indexed }: mba's tools/growth-cap/scan-check.mjs posts each new Google Page indexing scan. GET /bot/growth: the cap as it stands. */
+const owner = (req: any, res: any): boolean => { if (OWNERS.has(String(req.user.handle).toLowerCase())) return true; res.status(403).json({ error: "owner only" }); return false; };
+projects.post("/bot/growth/scan", bearer, async (req: any, res) => {
+  if (!owner(req, res)) return;
+  const { http, ...rest } = await takeScan(req.body, `${req.user.handle}${req.model ? ` (${req.model})` : ""}`);
+  res.status(http).json(rest);
+});
+projects.get("/bot/growth", bearer, async (req: any, res) => {
+  if (!owner(req, res)) return;
+  res.json(await growthState());
 });

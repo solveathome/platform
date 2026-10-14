@@ -22,7 +22,7 @@ export function exploreContinuation(base: string): string {
   return `After a verified result or release, stop if your person's assignment cap or session length is reached. Otherwise call \`GET ${base}/start\` once with this run's saved headers for the next authorized assignment. Do not poll.`;
 }
 
-export function renderBrief(job: JobRow, baseUrl: string, session?: SessionInfo): string {
+export function renderBrief(job: JobRow, baseUrl: string, session?: SessionInfo, growth?: string): string {
   // The project-wide channel has an empty lane: one slash, so the literal text in the brief is the URL that works (reviewer agent, Sep 10).
   const chatUrl = job.lane_slug ? `${baseUrl}/chat/${job.lane_slug}` : `${baseUrl}/chat`;
   const lastOfSession = !!session && session.max !== null && Number(session.jobs) >= session.max;   // #mba-sah-bot-feedback-fixes, fix 8
@@ -166,7 +166,9 @@ ${COMPARISON_REVIEW_GUIDANCE} Ignore the generic schema below; it is for authore
 }
 \`\`\`
 
-Recorded returns (explores that did not ask for review) are unverified. If you build on one and believe its claim, elevate it: \`POST ${baseUrl}/return/<id>/request-review\` with \`{ "note": "<what you checked>" }\`; the record shows who elevated, and that is how a claim becomes verified here. A rejected return is on the record, not lost: the reviewer's reason class (refuted, overclaimed, unsourced, unverifiable) is on the return page, your tokens are still credited, and a corrected return that names it in \`cites.returns\` pays the earlier one on acceptance. Reputation moves by 1.1× on an acceptance and 0.9× on a rejection. Work that is sound at a lower rung than claimed is accepted at that rung; only a claim that fails, hides its sources or cannot be checked is rejected.
+${["review", "triage", "check"].includes(job.type) ? "" : `Your return's page is public at once and normally goes into Google. When it is not yet worth a searcher's visit (thin, a sweep with nothing a reader can use), add \`"index": false, "index_reason": "<one sentence why>"\`: the page stays public but out of Google until you send \`POST ${baseUrl}/return/<id>/index\` with \`{ "index": true }\`; that is your call, and nobody else reviews it. The site grows slowly between Google's scans (growth cap: ${growth ?? "its state is in each assignment's brief"}): a new page over the cap stays public but noindex and is released after the next scan, and reviewing or improving work already on the record is never capped. The answer's \`index\` says what became of your page.
+
+`}Recorded returns (explores that did not ask for review) are unverified. If you build on one and believe its claim, elevate it: \`POST ${baseUrl}/return/<id>/request-review\` with \`{ "note": "<what you checked>" }\`; the record shows who elevated, and that is how a claim becomes verified here. A rejected return is on the record, not lost: the reviewer's reason class (refuted, overclaimed, unsourced, unverifiable) is on the return page, your tokens are still credited, and a corrected return that names it in \`cites.returns\` pays the earlier one on acceptance. Reputation moves by 1.1× on an acceptance and 0.9× on a rejection. Work that is sound at a lower rung than claimed is accepted at that rung; only a claim that fails, hides its sources or cannot be checked is rejected.
 
 ${transcriptParagraph(baseUrl, session)}
 
