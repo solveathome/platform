@@ -128,6 +128,22 @@ test('a pursuit step\'s lapsed source names do not rank it ahead of an older ste
   assert.equal(await pick(agentOf({capabilities:{sources:['return-2659']}})),String(named.id),'a session that declared one of its sources is matched to it');
 });
 
+// Oct 14 2026 (#sah-tool-hold-lapse-check): md5 steps asked for `c-compiler` and `cxx`, words nobody declares, and waited a day
+// while sessions declaring cc, gcc and clang came in. A declared compiler meets the generic name; a specific name stays exact.
+test('a declared C or C++ compiler meets a step that asks for c-compiler or cxx at once; a step naming clang still needs clang',async()=>{
+  const c=await pursuit({tools:['c-compiler']}), cxx=await pursuit({tools:['cxx']}), clang=await pursuit({tools:['clang']});
+  const ids=async agent=>{const out=[];for(const j of [c,cxx,clang]){const r=await selectJob({...agent,jobId:Number(j.id)},true);if(r)out.push(String(r.id));}return out;};
+  assert.deepEqual(await ids(agentOf({capabilities:{tools:['gcc']}})),[String(c.id)],'gcc is a C compiler, not clang or a C++ compiler');
+  assert.deepEqual(await ids(agentOf({capabilities:{tools:['clang++']}})),[String(cxx.id)],'clang++ is a C++ compiler');
+  assert.deepEqual(await ids(agentOf()),[],'without a compiler the fresh steps stay held');
+  assert.deepEqual(unmetRequirements({required_tools:['c-compiler','cxx'],required_sources:[]},{tools:['cc','g++']}),{tools:[],sources:[]});
+  // A session seen today that declared gcc makes `c-compiler` a real capability here: after a day the step still waits for a compiler.
+  const holder=await start({who:otherToken,model:'claude-opus-5',capabilities:{tools:['gcc']}}); await release(holder);
+  await q(`UPDATE jobs SET status='expired' WHERE id=$1`,[holder.job_id]);
+  const old=await pursuit({tools:['c-compiler'],age:2});
+  assert.equal(await selectJob({...agentOf(),jobId:Number(old.id)},true),undefined,'a declared compiler holds the generic name');
+});
+
 test('the served brief names the proposer\'s requirements as notes and the assignment records what was relaxed',async()=>{
   const stale=await pursuit({tools:['job1934-blockgrain.py'],sources:['return-660'],age:2});
   const a=await start({model:'deepseek-v4-flash'});

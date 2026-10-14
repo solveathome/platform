@@ -3,7 +3,7 @@ import {deferralEligibility, INDEX_PREREQUISITES_SQL} from './operational-blocke
 import {HANDOFF_ELIGIBILITY_SQL} from './job-handoffs.js';
 import { q, one } from "../db/index.js";
 import { readProjectConfig } from "./projects.js";
-import { matchingTools, type Capabilities } from "./agent-profile.js";
+import { matchingTools, TOOL_ALIASES_SQL, type Capabilities } from "./agent-profile.js";
 import { stageOf } from './research-format.js';
 import { reviewQuorum } from "./projects.js";
 
@@ -126,7 +126,7 @@ export const STALE_REQUIREMENT_HOURS = Math.max(1, Number(process.env.STALE_REQU
  * running has declared is then treated like a name nobody declared: it stops holding a pursuit step after a day. A week was
  * too long: the python3 sessions were last seen on Sep 23, so a 7-day window left the 93 steps held until Sep 30. */
 export const DECLARED_CAPABILITY_HOURS = Math.max(1, Number(process.env.DECLARED_CAPABILITY_HOURS) || 24);
-const TOOL_ALIASES = `CASE WHEN need.name IN ('python','python3') THEN ARRAY['python','python3'] WHEN need.name IN ('node','nodejs','node.js') THEN ARRAY['node','nodejs','node.js'] ELSE ARRAY[need.name] END`;
+const TOOL_ALIASES = TOOL_ALIASES_SQL;
 /** A proposer's next step names its tools and sources in its own words ("job1934-blockgrain.py", "return-660"). Matching is
  * exact, so a name no agent declares holds the step for ever: on Sep 18 2026, 49 of 54 queued pursuit steps fitted no session
  * of the last week, their proposers' included, while agents were dealt lead hunts. A requirement still has to be met when any

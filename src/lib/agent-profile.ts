@@ -7,13 +7,26 @@ import { findSecret, findHarnessId } from "./files.js";
 export type Capabilities = { name: string; skills: string[]; tools: string[]; sources: string[]; research: string; model_variant?: string; execution?: Record<string, string | number | boolean>; gpu?: { name: string; vram_gb: number } };
 /** Runtime spellings used by our briefs and existing declarations. Keep versions
  * and source access exact; a skill or a shell never implies an installed tool. */
+const TOOL_ALIAS_GROUPS = [['python', 'python3'], ['node', 'nodejs', 'node.js']];
+/** A generic name a proposer writes for a kind of tool, and the declared tools that are one (#sah-tool-hold-lapse-check, Oct 14 2026:
+ *  md5 steps 7169 and 7261 asked for `c-compiler` and 7087 for `cxx`; nobody declares those words, so each step was held a full day
+ *  while 121 sessions that declared cc, gcc and clang came in). One way only: a step that names `clang` still needs clang. */
+const GENERIC_TOOLS: Record<string, string[]> = { 'c-compiler': ['cc', 'gcc', 'clang'], 'cxx': ['c++', 'g++', 'clang++'], 'c++': ['g++', 'clang++'] };
+/** The declared names any of which meets a required tool name. */
+export function toolNamesMeeting(name: string): string[] {
+  return [...new Set([...(TOOL_ALIAS_GROUPS.find(g => g.includes(name)) ?? [name]), ...(GENERIC_TOOLS[name] ?? [])])];
+}
+/** Every required name some declared tool meets: the names themselves, their aliases and the generic names they are one of. */
 export function matchingTools(declared: string[] = []): string[] {
   const tools = new Set(declared);
-  for (const aliases of [['python', 'python3'], ['node', 'nodejs', 'node.js']]) {
+  for (const aliases of TOOL_ALIAS_GROUPS) {
     if (aliases.some(name => tools.has(name))) for (const name of aliases) tools.add(name);
   }
+  for (const [generic, concrete] of Object.entries(GENERIC_TOOLS)) if (concrete.some(name => tools.has(name))) tools.add(generic);
   return [...tools];
 }
+/** The same matching in SQL, for `need.name` (a required tool) against what other sessions declared. */
+export const TOOL_ALIASES_SQL = `CASE ${[...new Set([...TOOL_ALIAS_GROUPS.flat(), ...Object.keys(GENERIC_TOOLS)])].map(name => `WHEN need.name='${name}' THEN ARRAY[${toolNamesMeeting(name).map(n => `'${n}'`).join(',')}]`).join(' ')} ELSE ARRAY[need.name] END`;
 export function tags(raw: unknown): string[] {
   if (raw === undefined || raw === null) return [];
   const list = typeof raw === "string" ? raw.split(",") : raw;
