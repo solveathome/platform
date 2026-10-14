@@ -107,7 +107,6 @@ import { ABANDON_AFTER_MIN } from "../lib/liveness.js";
 import { plainDescription, notFoundPage, abs } from "../lib/seo.js";
 import { noticeChannel } from "../lib/lane-channel.js";
 import { challengeConfig, challengeJob, challengeTaskBrief, challengeTrackOfJob, challengeSlugs } from "../lib/challenges.js";
-import { gate, growthBriefLine, growthLine, returnIndexState, unitIndexable } from "../lib/growth.js";
 import { addEntry, applyStateUpdate, insertStateSection, laneBySlug, lanesNeedingUpkeep, parseStateUpdate, queueStateUpkeep, stateBrief, StateError, upkeepBrief } from "../lib/lane-state.js";
 async function sweepExpired(problemId: number): Promise<void> {
   if (await one(`SELECT 1 FROM problems WHERE id = $1 AND slug = ANY($2::text[])`, [problemId, challengeSlugs()])) await settlePendingChallengeRuns(problemId);
@@ -497,7 +496,7 @@ ${ENDED_LAUNCH_GUIDANCE}
   }
   row.repair_context = await repairContext(Number(req.project.id),req.project.slug,row);
   row.brief_md += repairContextMarkdown(row.repair_context);
-  let md = insertStateSection(chat ? renderChatBrief(row, `${BASE()}/projects/${req.project.slug}`, { id: String(session.id), host: String(req.oauth?.host ?? "other"), handle: req.user!.handle }) : renderBrief(row, `${BASE()}/projects/${req.project.slug}`, sess, await growthBriefLine()), stateSection);
+  let md = insertStateSection(chat ? renderChatBrief(row, `${BASE()}/projects/${req.project.slug}`, { id: String(session.id), host: String(req.oauth?.host ?? "other"), handle: req.user!.handle }) : renderBrief(row, `${BASE()}/projects/${req.project.slug}`, sess), stateSection);
   if (!chat && ["explore", "measure"].includes(row.type) && negativeQuorum(req.project.slug) !== null) md += negativeAuthorNote(req.project.slug);
   if (!chat) {
   { const note = unservedNote(String(row.brief_md ?? ""), req.project.slug, `${BASE()}/projects/${req.project.slug}`); if (note) md = md.replace(/\n## /, () => `\n${note}## `); }
@@ -833,9 +832,7 @@ job.get("/ready", bearer, project, async (req: any, res) => {
     reviewStreak: 0, capabilities: latest?.capabilities ?? {} };
   // /start refuses a new session at the handle's caps before it looks at any work: so does /ready, with the same limits.
   const capped = await handleCapRefusal(Number(req.project.id), uid);
-  // The growth cap's line leads the facts (compute's card shows it under the site's bot; facts are cut at 500 characters there).
-  const growth = await growthLine();
-  if (capped) { res.json({ ready: 0, urgency: "normal", reviews: 0, trusted, tier, capped: true, facts: `${growth}. ${capped}` }); return; }
+  if (capped) { res.json({ ready: 0, urgency: "normal", reviews: 0, trusted, tier, capped: true, facts: capped }); return; }
   const workChecks=(await workComparisonDue(agent)) ? (await backlogFor({...agent,workCheckOnly:true}, false)).research : 0;
   // Upkeeps a session of this caller would be handed first: the queued ones it may take, and the lanes /start would queue one for.
   const upkeep = granted ? (await queuedUpkeepFor(agent)) + (await lanesNeedingUpkeep(Number(req.project.id), req.project.slug)).length : 0;
@@ -848,7 +845,7 @@ job.get("/ready", bearer, project, async (req: any, res) => {
     const other = Math.max(0, u.total - u.reviews);   // reviews (and the triages a trusted session reviews directly) are counted by reviewWorkFor
     const ready = w.reviews + w.triage + other + rescuable + upkeep + workChecks;
     res.json({ ready, ...(workChecks ? {work_comparisons:workChecks} : {}), urgency: "normal", reviews: w.reviews, triage: trusted ? w.triage : u.triage, checks: u.checks, rescues: u.rescues + rescuable, ...(upkeep ? { upkeep } : {}), trusted, tier,
-      facts: `${growth}. Management work this agent may take: ${upkeep ? `${upkeep} state-of-the-art upkeep${upkeep === 1 ? "" : "s"} (taken first), ` : ""}${w.reviews} review${w.reviews === 1 ? "" : "s"}, ${trusted ? w.triage : u.triage} triage, ${u.checks} package check${u.checks === 1 ? "" : "s"}, ${u.rescues + rescuable} rescue${u.rescues + rescuable === 1 ? "" : "s"}${u.corrections ? `, ${u.corrections} required correction${u.corrections === 1 ? "" : "s"}` : ""}${workChecks ? `, ${workChecks} assignment comparisons` : ""} (${trusted ? "a rescue or a check never of its own model's block" : "never its own model's returns or blocks"}${granted ? "" : ", nor its handle's"})` });
+      facts: `management work this agent may take: ${upkeep ? `${upkeep} state-of-the-art upkeep${upkeep === 1 ? "" : "s"} (taken first), ` : ""}${w.reviews} review${w.reviews === 1 ? "" : "s"}, ${trusted ? w.triage : u.triage} triage, ${u.checks} package check${u.checks === 1 ? "" : "s"}, ${u.rescues + rescuable} rescue${u.rescues + rescuable === 1 ? "" : "s"}${u.corrections ? `, ${u.corrections} required correction${u.corrections === 1 ? "" : "s"}` : ""}${workChecks ? `, ${workChecks} assignment comparisons` : ""} (${trusted ? "a rescue or a check never of its own model's block" : "never its own model's returns or blocks"}${granted ? "" : ", nor its handle's"})` });
     return;
   }
   const b = await backlogFor(agent, false);
@@ -856,7 +853,7 @@ job.get("/ready", bearer, project, async (req: any, res) => {
   // challenge's run): counted here, so a scheduler that starts agents on ready > 0 is not told 0 while /start would assign.
   const queued = b.reviews + b.research + workChecks + (granted ? (await lanesNeedingUpkeep(Number(req.project.id), req.project.slug)).length : 0), made = queued === 0 ? 1 : 0;
   res.json({ ready: queued + made, ...(workChecks ? {work_comparisons:workChecks} : {}), urgency: "normal", reviews: b.reviews, research: b.research, ...(upkeep ? { upkeep } : {}), ...(made ? { made_on_request: made } : {}), trusted, tier,
-    facts: `${growth}. ${b.reviews} reviews and ${b.research} other assignments this agent may take${made ? "; none queued fits, so /start makes one (a question to explore or a challenge run)" : ""}` });
+    facts: `${b.reviews} reviews and ${b.research} other assignments this agent may take${made ? "; none queued fits, so /start makes one (a question to explore or a challenge run)" : ""}` });
 });
 
 /** POST /sessions/:id/end { note? } : end one of this handle's sessions; its held assignment returns to the queue. */
@@ -916,8 +913,7 @@ These investigations led to the current experiment. Their claims retain their ow
 
 ${route.events.map((e: any) => `- ${e.return_id ? `[Return #${e.return_id}](${P}/return/${e.return_id})` : 'Premise reassessment'}: ${String(e.outcome).replaceAll('_', ' ')}. ${e.evidence_md}`).join('\n')}
 `;
-  if (wantsHtml(req) && !unitIndexable(route)) res.setHeader('X-Robots-Tag', 'noindex');   // held by the growth cap (src/lib/growth.ts): public, noindex
-  if (wantsHtml(req)) res.type('text/html').send(page({ title: `Research route #${id}`, heading: route.title, ...(unitIndexable(route) ? {} : { robots: 'noindex, follow' }), path: `${P}/research-routes/${id}`, description: plainDescription(`${route.state}. ${route.contribution_md ?? ''} ${route.uncertainty_md ?? ''}`, 300), crumbs: `<a href="${P}">${escHtml(req.project.name)}</a> / <a href="${P}/research-routes">Research routes</a>`, body: (() => { const m = protectMath(text.replace(/</g, '&lt;').replace(/>/g, '&gt;')); return m.restore(marked.parse(m.text) as string); })() }));
+  if (wantsHtml(req)) res.type('text/html').send(page({ title: `Research route #${id}`, heading: route.title, path: `${P}/research-routes/${id}`, description: plainDescription(`${route.state}. ${route.contribution_md ?? ''} ${route.uncertainty_md ?? ''}`, 300), crumbs: `<a href="${P}">${escHtml(req.project.name)}</a> / <a href="${P}/research-routes">Research routes</a>`, body: (() => { const m = protectMath(text.replace(/</g, '&lt;').replace(/>/g, '&gt;')); return m.restore(marked.parse(m.text) as string); })() }));
   else res.type('text/markdown').send(text);
 });
 
@@ -1254,18 +1250,6 @@ job.post("/result", bearer, project, assignmentMutation(async (req: any, res) =>
     if (pm?.ai?.transcript_preapproved !== true) { res.status(400).json({ error: "transcript_approved:true is required on this session: it was registered with a posted body that did not pre-approve transcripts, so show your person the scrubbed transcript and send only if they approve (if they decline, POST /release instead). A session started from the instruction on the site publishes transcripts as the person agreed there." }); return; }
   }
   if (!b.report_md && !b.verdict && typeof b.escalate !== "boolean" && b.notes_md === undefined) { res.status(400).json({ error: "report_md is required" }); return; }
-  // The author's own judgement of its page (mba #mba-bot-sites-growth-cap; src/lib/growth.ts): index:false with a reason keeps the
-  // return public but noindex and out of the sitemap; nobody else reviews it. The answer says what became of the page.
-  if (b.index !== undefined && typeof b.index !== "boolean") { res.status(400).json({ error: "index must be true or false (false: the page is not yet worth indexing; give index_reason). Nothing was recorded." }); return; }
-  if (b.index === false && (typeof b.index_reason !== "string" || !b.index_reason.trim())) { res.status(400).json({ error: "index:false needs index_reason: one sentence saying why the page is not yet worth indexing. Nothing was recorded." }); return; }
-  const indexJudgement = b.index === false ? { ok: false, reason: String(b.index_reason).replace(/\s+/g, " ").trim().slice(0, 500) } : null;
-  let indexNote: Awaited<ReturnType<typeof returnIndexState>> | null = null;
-  const recordIndex = async (id: number) => {
-    if (indexJudgement) await q(`UPDATE returns SET index_ok = false, index_reason = $2 WHERE id = $1`, [id, indexJudgement.reason]);
-    await gate({ wait: false });
-    indexNote = await returnIndexState(id);
-  };
-  { const json = res.json; res.json = (body: any) => json.call(res, indexNote && body && typeof body === "object" && !Array.isArray(body) && body.return_id != null ? { ...body, index: indexNote } : body); }
   const scrubWarnings: string[] = [];
   for (const field of ["report_md", "notes_md", "transcript", "patch", "human_md", "recipe_md", "needs_md", "verification_sufficiency_md", "verification_conflict_resolution_md"]) {
     if (typeof b[field] !== "string") continue;
@@ -1368,7 +1352,6 @@ job.post("/result", bearer, project, assignmentMutation(async (req: any, res) =>
     const ret=await one(`INSERT INTO returns(job_id,problem_id,lane_id,type,user_id,model,provider,report_md,transcript,cpu_hours,status,final_rung,session,effort,tokens,transcript_mode,known_work,cites)
       VALUES($1,$2,$3,'explore',$4,$5,$6,$7,$8,0,'recorded','recorded',$9,$10,$11,$12,$13,$14) RETURNING id`,
       [jobRow.id,req.project.id,source.lane_id,uid,req.model??'unknown',req.provider??'unknown',b.report_md,b.transcript,jobRow.assigned_session??xs,effortEff,JSON.stringify(tokens),transcriptMode,JSON.stringify({...nomination,task,legacy_return_id:Number(source.id)}),JSON.stringify({returns:[Number(source.id),...nomination.predecessor_returns]})]);
-    await recordIndex(Number(ret!.id));
     await registerEntries(uid,'return',Number(ret!.id),entryKeys);
     await credit.payTokens({id:Number(ret!.id),user_id:uid,model:req.model??null,provider:req.provider??null,problem_id:Number(req.project.id),lane_id:source.lane_id===null?null:Number(source.lane_id),tokens});
     const checkId=await queueWorkCheck(Number(req.project.id),req.project.slug,source.lane_id,task,{...nomination,predecessor_returns:[...new Set([Number(source.id),...nomination.predecessor_returns])]},{source_return_id:Number(ret!.id),author_model:req.model,allow_covered:allowCovered,legacy_return_id:same&&allowCovered?Number(source.id):null,nomination_md:nomination.comparison_md});
@@ -1702,7 +1685,6 @@ job.post("/result", bearer, project, assignmentMutation(async (req: any, res) =>
      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17) RETURNING id`,
     [jobRow?.id ?? null, problem.id, laneId, rtype, uid, req.model ?? "unknown", req.provider ?? "unknown",
      b.report_md, b.patch ?? null, b.transcript, cpuHours, JSON.stringify(b.hashes ?? {}), authorRung, repoUrl, commit, jobRow?.assigned_session ?? xs, effortEff]);
-  await recordIndex(Number(ret!.id));
   if (recipe) await q(`UPDATE returns SET recipe_md = $2 WHERE id = $1`, [ret!.id, recipe]);
   if (target || finding || humanMd) await q(`UPDATE returns SET target = $2, finding = $3, human_md = $4 WHERE id = $1`, [ret!.id, target ? JSON.stringify(target) : null, finding, humanMd]);
   // Source-level notes (agent feedback, Sep 10): an audit that finds a figure wrong in another document routes the note there.
@@ -2859,10 +2841,7 @@ async function returnPage(req: any, res: any): Promise<void> {
   const body = quorumLine + challenged + targetLine + human + dupList + researchRecord + (await md(r.report_md)) + (evidenceRecord ? await md(evidenceRecord) : "") + fixList + (r.patch ? `<h2>Patch</h2><pre><code>${escHtml(r.patch)}</code></pre>` : "") + dlist;
   const firstLine = String(r.report_md ?? "").split("\n").map((l: string) => l.replace(/^[#>*\s-]+/, "").trim()).find((l: string) => l.length > 20) ?? "";
   // Home paths anywhere on a published return page (recipe, file notes, verification package) are shown as ~ (Oct 11 2026); the record is untouched.
-  // Held by the growth cap or sent as index:false by its author (src/lib/growth.ts): the page answers as before, noindex.
-  const unindexed = !unitIndexable(r);
-  if (unindexed) res.setHeader("X-Robots-Tag", "noindex");
-  res.type("text/html").send(redactHomePaths(page({ title: `Return #${r.id}`, dataPage: "return", type: "article", ...(unindexed ? { robots: "noindex, follow" } : {}), description: plainDescription(`${r.type} by ${creditText(r)} (${r.model}), ${r.status}${r.final_rung ? `, ${r.final_rung}` : ""}. ${firstLine}`),
+  res.type("text/html").send(redactHomePaths(page({ title: `Return #${r.id}`, dataPage: "return", type: "article", description: plainDescription(`${r.type} by ${creditText(r)} (${r.model}), ${r.status}${r.final_rung ? `, ${r.final_rung}` : ""}. ${firstLine}`),
     ld: [{ "@type": "CreativeWork", "@id": abs(`${P}/return/${r.id}`), url: abs(`${P}/return/${r.id}`), name: plainDescription(r.job_title ?? `${r.type} return #${r.id}`, 110), description: plainDescription(firstLine), genre: `research result (${r.type})`, creativeWorkStatus: r.status, author: { "@type": "Person", name: creditText(r), url: abs(`/@${r.handle}`) }, dateCreated: new Date(r.created_at).toISOString(), inLanguage: "en", license: "https://creativecommons.org/licenses/by/4.0/", isPartOf: { "@type": "ResearchProject", name: req.project.name, url: abs(P) } }], path: `${P}/return/${r.id}`, crumbs: `<a href="${P}">${escHtml(req.project.name)}</a><span>/ results /</span>#${r.id}`, eyebrow: "Result", heading: r.job_title ?? `${r.type} return #${r.id}`, meta, aside, body })).text);
 }
 /** POST /return/:id/reopen { note } : a trusted reviewer puts a decided return back before the group, with a public note. */
@@ -2876,21 +2855,6 @@ job.post("/return/:id/reopen", bearer, project, assignmentMutation(async (req: a
   await reopen(ret, Number(req.user!.id), note, "reopen");
   res.json({ ok: true, return_id: Number(ret.id), status: "pending", note });
 }));
-
-/** POST /return/:id/index { index, index_reason } : the author changes its own judgement of its return's page (mba
- *  #mba-bot-sites-growth-cap; src/lib/growth.ts). false (with a reason): public but noindex and out of the sitemap; true: the page goes
- *  through the growth cap's gate like a new one (in, or held until Google's next scan). Only the author; nobody else reviews it. */
-job.post("/return/:id/index", bearer, project, async (req: any, res) => {
-  const b = req.body ?? {};
-  if (typeof b.index !== "boolean") { res.status(400).json({ error: "index must be true or false" }); return; }
-  if (b.index === false && (typeof b.index_reason !== "string" || !b.index_reason.trim())) { res.status(400).json({ error: "index:false needs index_reason: one sentence saying why the page is not yet worth indexing" }); return; }
-  const ret = await one(`SELECT id, user_id FROM returns WHERE id = $1 AND problem_id = $2`, [Number(req.params.id) || 0, req.project.id]);
-  if (!ret) { res.status(404).json({ error: "no such return" }); return; }
-  if (Number(ret.user_id) !== Number(req.user!.id)) { res.status(403).json({ error: "only the return's author judges whether its page is worth indexing" }); return; }
-  await q(`UPDATE returns SET index_ok = $2, index_reason = $3 WHERE id = $1`, [ret.id, b.index ? null : false, b.index ? null : String(b.index_reason).replace(/\s+/g, " ").trim().slice(0, 500)]);
-  await gate();
-  res.json({ ok: true, return_id: Number(ret.id), index: await returnIndexState(Number(ret.id)) });
-});
 
 /** POST /return/:id/request-review { note } : elevate a recorded return (an explore that did not ask for review) into the review queue.
  *  Anyone with a token may, the author included (Chris, Sep 11 2026: "we need a way for claims like this to be elevated and verified; that is

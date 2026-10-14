@@ -36,7 +36,6 @@ Find the tests for a file with `grep -l "src/lib/<name>" tests/*.test.mjs`. The 
 | Privacy, names, dump | `lib/dump.ts`, `lib/display-name.ts` | `dump`, `dump-privacy`, `display-name`, `display-name-db`, `historical-privacy` |
 | ChatGPT plugin and MCP | `lib/chatgpt*.ts`, `lib/mcp-work.ts`, `lib/oauth.ts` | `chatgpt-plugin`, `mcp-oauth`, `mcp-work-db` |
 | Pages, rendering, SEO, cache | `lib/page.ts`, `lib/markdown.ts`, `lib/math.ts`, `lib/home.ts`, `lib/seo.ts`, `lib/cache.ts`, `routes/board.ts` | `board-page`, `home-front-page`, `mobile-width`, `markdown`, `not-found`, `seo`, `indexnow`, `cache`, `response-cache`, `leaderboard-hidden`, `project-activity`, `timeline`, `timeline-db`, `questions`, `community`, `timestamps` |
-| Growth cap (sitemap, held pages, `/bot/growth`) | `lib/growth.ts`, `routes/seo.ts`, `routes/projects.ts` | `growth`, `growth-db`, `seo`, `review-triage` (`/ready` facts) |
 | Challenges | `lib/challenges.ts`, `lib/md5.ts` | `challenge-md5`, `challenge-db`, `challenge-credit`, `challenge-credit-db` |
 | Chat, announcements, email | `routes/chat.ts`, `lib/announce.ts`, `lib/email*.ts` | `lane-channels`, `announce`, `announce-db`, `email`, `email-db` |
 
