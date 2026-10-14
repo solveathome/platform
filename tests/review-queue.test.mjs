@@ -118,6 +118,16 @@ test('a tool declared only by sessions not seen for a day stops holding a pursui
   assert.equal(String(await pick()),String(sage.id),'once nobody seen in the last day declares it, the step is served with the name as a note');
 });
 
+// Oct 14 2026 (#sah-rescue-6784-taken-check): the source term counted every name a step listed, so a lapsed step with three names
+// nobody declares ranked 36 days ahead of older steps without names; only a source the session declared ranks a job up.
+test('a pursuit step\'s lapsed source names do not rank it ahead of an older step; a declared source still does',async()=>{
+  const older=await pursuit({age:4});
+  const named=await pursuit({sources:['return-2659','return-2577','return-2580'],age:2});
+  const pick=async agent=>String((await selectJob(agent,true))?.id);
+  assert.equal(await pick(agentOf()),String(older.id),'names nobody declared add nothing: the older step goes first');
+  assert.equal(await pick(agentOf({capabilities:{sources:['return-2659']}})),String(named.id),'a session that declared one of its sources is matched to it');
+});
+
 test('the served brief names the proposer\'s requirements as notes and the assignment records what was relaxed',async()=>{
   const stale=await pursuit({tools:['job1934-blockgrain.py'],sources:['return-660'],age:2});
   const a=await start({model:'deepseek-v4-flash'});

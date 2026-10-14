@@ -301,7 +301,7 @@ export async function upkeepFor(a: SchedulingAgent) {
 }
 export async function selectJob(a: SchedulingAgent, preferResearch: boolean, discoveryOnly = false, bucket?: ResearchBucket, checkedJudgment = false, reviewsOnly = false, triageOnly = false, requiredCorrectionOnly = false, manageOnly = false): Promise<any> {
   const e = eligibility(a);
-  const skills = e.p(a.capabilities.skills ?? []), provider = e.p(a.provider), uid = e.p(a.uid);
+  const skills = e.p(a.capabilities.skills ?? []), sources = e.p(a.capabilities.sources ?? []), provider = e.p(a.provider), uid = e.p(a.uid);
   const routeRepeat = routeRepeatSql(uid, e.p(a.model)), progress=researchProgressSql();
   const typeOrder = a.tier === 1
     ? preferResearch
@@ -315,6 +315,10 @@ export async function selectJob(a: SchedulingAgent, preferResearch: boolean, dis
   const order = e.p(typeOrder);
   const bucketFilter = (bucket ? `AND CASE WHEN ${STAGE_SQL}='first_look' THEN 'pursue' ELSE ${STAGE_SQL} END=${e.p(bucket)}` : '') + (checkedJudgment ? ` AND ${CHECKED_JUDGMENT_SQL}` : '') + (reviewsOnly ? ` AND j.type='review'` : '') + (triageOnly ? ` AND j.type='triage'` : '') + (requiredCorrectionOnly ? ` AND ${REQUIRED_CORRECTION_SQL}` : '') + (manageOnly ? ` AND ${upkeepSql()}` : '');
   // Prioritize judgments that further research already relies on, without changing trust or eligibility.
+  // Only the required sources this session declared rank a job up: the term matches a specialised source with the session that
+  // holds it (Sep 12 2026). A pursuit step's names nobody declares lapse after a day and open the step to anyone (Sep 18), and
+  // counted whole they put it up to 36 days ahead of every step without names: in the week to Oct 14 2026, 31 of 77 twin-primes
+  // pursuits taken had such names while 20 of 122 queued did, and steps without names waited from Oct 10 (#sah-rescue-6784-taken-check).
   // Every non-age term is bounded; one point per waiting day eventually lifts older work.
   return one(`SELECT j.*, l.slug AS lane_slug, (${REQUIRED_CORRECTION_SQL}) AS required_correction,
     (SELECT count(*) FROM unnest(CASE WHEN cardinality(j.preferred_skills) > 0 THEN j.preferred_skills ELSE ${DEFAULT_SKILLS} END) tag WHERE tag = ANY(${skills}::text[])) AS skill_matches,
@@ -335,7 +339,7 @@ export async function selectJob(a: SchedulingAgent, preferResearch: boolean, dis
           OR EXISTS (SELECT 1 FROM jobs next WHERE next.research_source_return_id=pr.id AND next.research_stage='pursue')
         ) THEN 8 ELSE 0 END
       + LEAST(3, (SELECT count(*) FROM unnest(CASE WHEN cardinality(j.preferred_skills) > 0 THEN j.preferred_skills ELSE ${DEFAULT_SKILLS} END) tag WHERE tag = ANY(${skills}::text[]))) * 12
-      + LEAST(3, cardinality(j.required_sources)) * 12
+      + LEAST(3, (SELECT count(*) FROM unnest(j.required_sources) need WHERE need = ANY(${sources}::text[]))) * 12
       - coalesce(array_position(${order}::text[], j.type), 10) * 4
       - CASE WHEN ${routeRepeat} THEN ${ROUTE_REPEAT_PENALTY} ELSE 0 END
     ) DESC,
