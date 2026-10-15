@@ -4,6 +4,7 @@
  * Operational pages (jobs, asks, who holds what, file attachments, history, the seed edition, working files under /docs/) carry noindex and are left out.
  * It is built from the database on request and held for ten minutes, so it stays current without a job to run.
  */
+import { readUnderstanding } from "./understanding.js";
 import { Router } from "express";
 import { join } from "node:path";
 import { q } from "../db/index.js";
@@ -51,6 +52,7 @@ export async function sitemapUrls(): Promise<Url[]> {
   for (const p of projects) {
     const P = `/projects/${p.slug}`;
     urls.push({ loc: P, lastmod: p.last }, { loc: `${P}/trust` }, { loc: `${P}/research-routes` }, { loc: `${P}/docs` });
+    if (readUnderstanding(p.slug)) urls.push({ loc: `${P}/understanding` });
     for (const x of await q(`SELECT slug, updated_at FROM papers WHERE problem_id = $1 ORDER BY id`, [p.id])) urls.push({ loc: `${P}/papers/${x.slug}`, lastmod: x.updated_at });
     for (const x of await q(`SELECT id, updated_at FROM research_routes WHERE problem_id = $1 ORDER BY id`, [p.id])) urls.push({ loc: `${P}/research-routes/${x.id}`, lastmod: x.updated_at });
     const root = join(REPOS, p.slug), publication = readPublication(root);
