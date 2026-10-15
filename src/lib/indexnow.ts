@@ -5,9 +5,13 @@
  * pings owns the host, and the URLs pinged must be on it. It is INDEXNOW_KEY or, unset, derived from BASE_URL, so an instance
  * needs no configuration. Nothing is pinged from a localhost or plain-http BASE_URL; INDEXNOW_ENABLED=0 stops it everywhere.
  * Each ping logs its HTTP status: 200 or 202 is accepted.
+ * What was accepted is kept in indexnow_pings (Oct 16 2026, #sah-bing-index-week-check): the first week sent Bing 213.5K urls for a
+ * 4.1K-url sitemap, because every deploy started a container that pinged the whole sitemap again. A start now sends only what is new or
+ * changed since the last accepted ping, whichever container sent it; an instance whose table is empty sends everything once.
  */
 import { createHash } from "node:crypto";
 import { BASE } from "./seo.js";
+import { q } from "../db/index.js";
 
 export const ENDPOINT = "https://api.indexnow.org/indexnow";
 const BATCH = 10_000;   // the protocol's limit per request
@@ -42,15 +46,25 @@ export async function ping(urls: string[], fetchImpl: typeof fetch = fetch): Pro
   return statuses;
 }
 
-/** Pings the whole sitemap once at start, then every ten minutes whatever in it is new or changed. */
-export function startIndexNow(snapshot: () => Promise<Map<string, string>>): void {
+/** Where the last accepted url -> lastmod survives a restart. */
+export type PingStore = { load(): Promise<Map<string, string>>; save(sent: Map<string, string>): Promise<void> };
+export const dbStore: PingStore = {
+  load: async () => new Map((await q<{ url: string; lastmod: string }>(`SELECT url, lastmod FROM indexnow_pings`)).map((r) => [r.url, r.lastmod])),
+  save: async (sent) => { const e = [...sent]; for (let i = 0; i < e.length; i += 1000) { const b = e.slice(i, i + 1000); await q(`INSERT INTO indexnow_pings (url, lastmod, pinged_at) SELECT u, m, now() FROM unnest($1::text[], $2::text[]) AS t(u, m) ON CONFLICT (url) DO UPDATE SET lastmod = EXCLUDED.lastmod, pinged_at = now()`, [b.map(([u]) => u), b.map(([, m]) => m)]); } },
+};
+
+/** One check: ping what is new or changed since the last accepted ping, and record it once accepted. */
+export async function indexNowTick(snapshot: () => Promise<Map<string, string>>, store: PingStore, pingImpl: (urls: string[]) => Promise<number[]> = ping): Promise<string[]> {
+  const next = await snapshot(), urls = changedUrls(await store.load(), next);
+  // Recorded only once accepted, so a refused or failed ping is sent again at the next tick.
+  if (urls.length && (await pingImpl(urls)).every((s) => s === 200 || s === 202)) await store.save(new Map(urls.map((u) => [u, next.get(u)!])));
+  return urls;
+}
+
+/** A minute after start, then every ten minutes: pings whatever in the sitemap is new or changed since the last accepted ping. */
+export function startIndexNow(snapshot: () => Promise<Map<string, string>>, store: PingStore = dbStore): void {
   if (!indexNowEnabled()) return;
-  let last: Map<string, string> | null = null;
-  const tick = async () => {
-    const next = await snapshot(), urls = changedUrls(last, next);
-    // Kept only once accepted, so a refused or failed ping is sent again at the next tick.
-    if (!urls.length || (await ping(urls)).every((s) => s === 200 || s === 202)) last = next;
-  };
+  const tick = () => indexNowTick(snapshot, store);
   // A minute in, so the new slot is the one serving the key file when Bing fetches it.
   setTimeout(() => { tick().catch((e) => console.error("indexnow:", e)); setInterval(() => { tick().catch((e) => console.error("indexnow:", e)); }, EVERY_MS).unref(); }, 60_000).unref();
 }

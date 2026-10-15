@@ -1826,3 +1826,11 @@ UPDATE jobs SET brief_md = replace(replace(brief_md, 'than generic search would 
 -- (true confirms, false overrides, NULL not stated). Anything short of a confirmation leaves the project's review_quorum in force.
 ALTER TABLE returns ADD COLUMN IF NOT EXISTS negative_result boolean;
 ALTER TABLE reviews ADD COLUMN IF NOT EXISTS negative_result boolean;
+
+-- IndexNow (#sah-bing-index-week-check, Oct 16 2026): the url -> sitemap lastmod last accepted by api.indexnow.org, so a restart pings
+-- only what changed since (src/lib/indexnow.ts). Every deploy used to ping the whole sitemap again: 213.5K urls in a week for 4.1K.
+CREATE TABLE IF NOT EXISTS indexnow_pings (
+  url text PRIMARY KEY,
+  lastmod text NOT NULL DEFAULT '',
+  pinged_at timestamptz NOT NULL DEFAULT now()
+);

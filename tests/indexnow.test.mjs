@@ -4,7 +4,7 @@ import assert from "node:assert/strict";
 // #sah-bing-indexnow: IndexNow's key file, what is pinged and from where. Bing had never indexed the site.
 process.env.BASE_URL = "https://example.org";
 delete process.env.INDEXNOW_KEY; delete process.env.INDEXNOW_ENABLED;
-const { indexNowKey, indexNowEnabled, changedUrls, ping, ENDPOINT } = await import("../src/lib/indexnow.ts");
+const { indexNowKey, indexNowEnabled, changedUrls, ping, indexNowTick, ENDPOINT } = await import("../src/lib/indexnow.ts");
 const { seo } = await import("../src/routes/seo.ts");
 const express = (await import("express")).default;
 
@@ -49,4 +49,19 @@ test("/<key>.txt serves the key as text; any other .txt falls through", async ()
     assert.equal((await fetch(`${base}/nope.txt`)).status, 404);
     assert.equal((await fetch(`${base}/robots.txt`)).status, 200);
   } finally { srv.close(); }
+});
+
+// #sah-bing-index-week-check: every deploy pinged the whole sitemap again (213.5K urls in a week for 4.1K); what was accepted now outlives the container.
+test("a restart pings only what changed since the last accepted ping; a refused ping is not recorded", async () => {
+  const kept = new Map(), store = { load: async () => new Map(kept), save: async (m) => { for (const [u, d] of m) kept.set(u, d); } };
+  let map = new Map([["https://example.org/", ""], ["https://example.org/x", "2026-10-01"]]), status = 202;
+  const sent = [], pingImpl = async (urls) => { sent.push(urls); return [status]; }, tick = () => indexNowTick(async () => map, store, pingImpl);
+  assert.deepEqual(await tick(), ["https://example.org/", "https://example.org/x"]);
+  assert.deepEqual(await tick(), [], "a second container start sends nothing");
+  map = new Map([...map, ["https://example.org/x", "2026-10-02"]]); status = 429;
+  assert.deepEqual(await tick(), ["https://example.org/x"]);
+  status = 200;
+  assert.deepEqual(await tick(), ["https://example.org/x"], "refused, so sent again");
+  assert.deepEqual(await tick(), []);
+  assert.equal(sent.length, 3);
 });
