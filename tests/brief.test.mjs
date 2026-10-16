@@ -4,7 +4,7 @@ import { renderBrief, exploreContinuation } from "../src/lib/brief.ts";
 import { compactDepartmentBrief, protocolSections } from "../src/lib/department-protocol.ts";
 import { BASELINE_DUTY, BASELINE_REVIEW_DUTY, GUIDANCE_VERSION, taskGuidance } from "../src/lib/research-guidance.ts";
 import { tangentJob } from "../src/lib/tangent.ts";
-import { ARTIFACT_PACKAGING_GUIDANCE, EFFORT_GUIDANCE, FRAMEWORK_GUIDANCE_VERSION, FRAMEWORK_RECHECK_HOURS, WORKER_ISOLATION_RECOMMENDATION, workspaceSections } from "../src/lib/workspace-guidance.ts";
+import { ARTIFACT_PACKAGING_GUIDANCE, EFFORT_GUIDANCE, SETUP_READING_GUIDANCE, FRAMEWORK_GUIDANCE_VERSION, FRAMEWORK_RECHECK_HOURS, WORKER_ISOLATION_RECOMMENDATION, workspaceSections } from "../src/lib/workspace-guidance.ts";
 import { WORK_DISPOSITION_GUIDANCE } from "../src/lib/work-disposition-format.ts";
 import { createHash } from "node:crypto";
 import { MODEL_IDENTITY_GUIDANCE } from "../src/lib/model-id.ts";
@@ -125,6 +125,9 @@ test('a recent framework stamp at the current framework guidance version skips t
     assert.match(brief,/ALL issued attempts, including those with no submission/,'the outstanding-work check is never part of the skip');
   }
   const sections=workspaceSections('https://x.test/projects/p');
+  // The files every run reads before asking for work say what to run and what was done; tool internals and history live elsewhere.
+  assert.ok(sections.tooling.endsWith(SETUP_READING_GUIDANCE),'the tooling section carries the setup-reading rule');
+  assert.match(SETUP_READING_GUIDANCE,/Keep version history in a separate changelog[^]*A run log records the work[^]*not in these documents[^]*At the next framework review/);
   assert.match(sections.bootstrap,/keeps its readiness record: skip re-exercising and continue to step 7/);
   assert.match(sections.framework,/unless the framework stamp allows the skip/);
   assert.match(sections.framework,/within 24 hours, skip the startup self-review and self-tests/);assert.match(sections.framework,/recheck when a tool fails/);
