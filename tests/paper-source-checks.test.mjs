@@ -77,6 +77,8 @@ test("a manuscript without a map says so first, and lists every claim", async ()
   assert.equal(c.counts.claims, 2);
   assert.equal(c.counts.unmapped, 2);
   assert.match(c.flags[0], /no Claim sources table, so none of its 2 claims/);
+  const one = await checkClaimSources("**Theorem 1 (proven; return #10).** A result.\n\n## Data\n\nThe ratio is 2.0123.\n", ctx);
+  assert.match(one.flags[0], /no Claim sources table; 1 of its 2 claims name no source/, "a heading source is counted in the summary line");
 });
 
 test("a map row's sources: returns, receipts, Lean, files, reference keys, and pointers inside the paper", () => {

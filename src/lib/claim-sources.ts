@@ -199,8 +199,8 @@ export async function checkClaimSources(md: string, ctx: SourceContext): Promise
   }
   claims.sort((a, b) => a.line - b.line);
   const unmapped = claims.filter((c) => !c.mapped);
-  const flags = mapLine === null && claims.length
-    ? [`This paper has no Claim sources table, so none of its ${claims.length} claims names its source. Add a "## Claim sources" table with one row per theorem, table and result number, naming the return, receipt, Lean package, file or reference each comes from.`, ...unmapped.map((c) => c.flag!)]
+  const flags = mapLine === null && unmapped.length
+    ? [`This paper has no Claim sources table${unmapped.length === claims.length ? `, so none of its ${claims.length} claims names its source` : `; ${unmapped.length} of its ${claims.length} claims name no source`}. Add a "## Claim sources" table with one row per theorem, table and result number, naming the return, receipt, Lean package, file or reference each comes from.`, ...unmapped.map((c) => c.flag!)]
     : unmapped.map((c) => c.flag!);
   return { has_map: mapLine !== null, map_line: mapLine, claims, rows, counts: { claims: claims.length, mapped: claims.length - unmapped.length, unmapped: unmapped.length, bad_source: claims.filter((c) => c.flag && /: its (source|row) /.test(c.flag)).length }, flags };
 }
