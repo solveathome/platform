@@ -28,7 +28,9 @@ const MAILTO = () => process.env.CROSSREF_MAILTO || "support@solveathome.org";
 const UA = () => `solveathome-reference-check/1.0 (https://solveathome.org; mailto:${MAILTO()})`;
 
 const cleanDoi = (d: string) => d.replace(/[*_]+$/g, "").replace(/[.,;:)\]]+$/g, "").replace(/\)$/, "");
-export const refSha = (text: string) => createHash("sha256").update(text.replace(/\s+/g, " ").trim().toLowerCase()).digest("hex");
+// The key carries the lookup rules' version: a change to how a reference is judged looks every reference up again once.
+const LOOKUP_VERSION = 2;
+export const refSha = (text: string) => createHash("sha256").update(`v${LOOKUP_VERSION}:` + text.replace(/\s+/g, " ").trim().toLowerCase()).digest("hex");
 const plain = (s: string) => s.replace(/\*\*?|__?|`/g, "").replace(/\[([^\]]*)\]\([^)]*\)/g, "$1").replace(/\s+/g, " ").trim();
 
 function entry(text: string, line: number, inline: boolean): RefEntry {
@@ -210,7 +212,7 @@ export async function lookupReference(e: RefEntry, f: Fetcher = fetch, arxivKnow
       return { status: "unresolved", source: null, identifier: e.dois[0] ? `doi:${e.dois[0]}` : `arXiv:${e.arxiv[0]}`, found_title: alt?.title ?? null, found_doi: alt?.doi ?? null, note: `${notes.join("; ")}.${alt ? ` Crossref has this reference as DOI ${alt.doi}: probably a typo.` : " Check the identifier for a typo."}` };
     }
     // Not publications: an OEIS sequence, a blog post, the project's own files. The claim check looks project files up.
-    if (!e.dois.length && !e.arxiv.length && /\bOEIS\b|\bA\d{6}\b/.test(e.text) && !e.title) return { status: "skipped", source: null, identifier: null, found_title: null, found_doi: null, note: "an OEIS sequence, not looked up" };
+    if (!e.dois.length && !e.arxiv.length && /\bOEIS\b/.test(e.text)) return { status: "skipped", source: null, identifier: null, found_title: null, found_doi: null, note: "an OEIS sequence, not looked up" };
     if (/\bblog\b/i.test(e.text)) return { status: "skipped", source: null, identifier: e.urls[0] ?? null, found_title: null, found_doi: null, note: "a blog post, not looked up" };
     if (!e.title && /(?:^|\s)`?(?:research|paper|tools|bench)\/[\w./-]+\.\w+/.test(e.text)) return { status: "skipped", source: null, identifier: null, found_title: null, found_doi: null, note: "the project's own files, not a publication" };
     if (!e.title && e.urls.length && !/\b(1[6-9]\d\d|20[0-4]\d)\b/.test(e.text.replace(/https?:\/\/\S+/g, ""))) return { status: "skipped", source: null, identifier: e.urls[0], found_title: null, found_doi: null, note: "a web page, not a publication: not looked up" };
@@ -218,7 +220,7 @@ export async function lookupReference(e: RefEntry, f: Fetcher = fetch, arxivKnow
     if (hit) return { status: "found", source: "crossref", identifier: null, found_title: hit.title, found_doi: hit.doi, note: `found in Crossref as DOI ${hit.doi}; add it to the entry.` };
     if (e.title) { const a = await arxivSearch(f, e.title); if (a) return { status: "found", source: "arxiv", identifier: null, found_title: a.title, found_doi: null, note: `found on arXiv as arXiv:${a.id}; add it to the entry.` }; }
     if (e.urls.length) return { status: "skipped", source: null, identifier: e.urls[0], found_title: null, found_doi: null, note: "not in Crossref or arXiv; it names a web page, which is not looked up" };
-    if (!e.title) return { status: "unresolved", source: null, identifier: null, found_title: null, found_doi: null, note: "gives no title, DOI or arXiv id, so it could not be looked up: add the title, and the DOI or arXiv id if it has one." };
+    if (!e.title) return { status: "unresolved", source: null, identifier: null, found_title: null, found_doi: null, note: "not found in Crossref or arXiv, and it has no DOI, arXiv id or title in italics to look up by. Check it by hand; put the title in italics, and add the DOI or arXiv id if it has one." };
     return { status: "unresolved", source: null, identifier: null, found_title: null, found_doi: null, note: "not found in Crossref or arXiv. A book or an old paper may have no DOI: check it by hand at the page and say so in the entry; if it has a DOI or arXiv id, add it." };
   } catch (err) {
     if (err instanceof Unavailable) return { status: "error", source: null, identifier: null, found_title: null, found_doi: null, note: err.message };

@@ -139,8 +139,8 @@ test("lookups: resolved, wrong identifier, typo with a suggestion, registered ou
   assert.match(book.note, /check it by hand at the page/);
   const inline = parseReferences("The nearest hits do not match the *survivor progressions* of arXiv:2302.00459 at all.\n")[0];
   assert.equal((await lookupReference(inline, fake)).status, "resolved", "a word in italics in running text is not a title to compare (first run, Oct 16: three false mismatches)");
-  assert.equal((await lookupReference(ref("- OEIS A144311, the maximal gap between twin-admissible residues, 2008."), fake)).status, "skipped");
-  assert.match((await lookupReference(ref("- L. Lu and L. A. Székely, Electron. J. Combin. 14 (2007) #R63."), fake)).note, /gives no title/);
+  assert.equal((await lookupReference(ref("- OEIS A144311, *The length of the longest sequence of consecutive integers*, 2008."), fake)).status, "skipped");
+  assert.match((await lookupReference(ref("- L. Lu and L. A. Székely, Electron. J. Combin. 14 (2007) #R63."), fake)).note, /no DOI, arXiv id or title in italics/);
   const down = await lookupReference(ref("- A. Kalmynin, *A polynomial analogue of Jacobsthal function*, 2024, DOI 10.4213/im9467e."), async () => new Response("", { status: 503 }));
   assert.equal(down.status, "error", "an index that does not answer leaves the reference pending, never flagged");
 });
