@@ -323,7 +323,7 @@ test('a series decided through also_verdicts pays and scores each return as its 
   const repAfter = await one(`SELECT accepted, rejected FROM reputation WHERE user_id=$1`, [author]);
   assert.equal(repAfter.accepted - repBefore.accepted, 2, 'the lead and the covered acceptance both count for the author');
   assert.equal((await one(`SELECT rejected FROM reputation WHERE user_id=$1`, [second])).rejected >= 1, true);
-  for (const id of [two.return_id, three.return_id]) assert.equal((await q(`SELECT 1 FROM jobs WHERE parent_return_id=$1 AND status IN ('queued','assigned')`, [id])).length, 0);
+  for (const id of [two.return_id, three.return_id]) assert.equal((await q(`SELECT 1 FROM jobs WHERE parent_return_id=$1 AND second_review_id IS NULL AND status IN ('queued','assigned')`, [id])).length, 0);
 });
 
 test('a lead decided by a review outside its review job still releases its series: each covered return gets its own review', async () => {

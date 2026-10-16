@@ -277,7 +277,7 @@ test('a declared negative result closes on one confirming trusted tier-1 verdict
     const out = await rv.json(); assert.equal(rv.status, 200, JSON.stringify(out).slice(0, 300)); return out;
   };
   const paid = async (id) => Number((await one(`SELECT coalesce(sum(points),0)::float AS p FROM credits WHERE source_type = 'return' AND source_id = $1 AND kind = 'result'`, [String(id)])).p);
-  const open = async (id) => Number((await one(`SELECT count(*) AS c FROM jobs WHERE parent_return_id = $1 AND status IN ('queued','assigned')`, [id])).c);
+  const open = async (id) => Number((await one(`SELECT count(*) AS c FROM jobs WHERE parent_return_id = $1 AND second_review_id IS NULL AND status IN ('queued','assigned')`, [id])).c);   // a blind second review drawn at acceptance is not a verdict waiting
   const declared = async (id) => (await one(`SELECT negative_result FROM returns WHERE id = $1`, [id])).negative_result;
 
   // 1. Declared and confirmed: one verdict decides, the open review jobs close, the points are paid.
