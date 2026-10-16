@@ -226,7 +226,14 @@ test('every kind of brief carries the state of the art inline under its title: r
     ['triage', 'c', await job('triage', {parent: await pending(people.astra.id, 'gpt-6-astra')}), 'claude-fable-5-1'],
     ['review of a packaged return (its brief is recomposed when served)', 'owner', await job('review', {parent: await pending(people.astra.id, 'gpt-6-astra', {plan: {schema_version:1,manifest:[{path:'check.py',sha256:'a'.repeat(64),role:'checker'},{path:'input.json',sha256:'b'.repeat(64),role:'target'}],targets:['input.json'],coverage_md:'Every supplied record.',comparison:'Exact integer equality.',availability:{status:'complete',details:'All bytes in manifest.',network:false,required_sources:[]},claim:'Test: the finite count is four.',scope:'The supplied finite set.',assumptions:'Exact integer arithmetic.',checker:'a'.repeat(64),inputs:['b'.repeat(64)],environment:'Python 3.12',command:'python check.py input.json',expected:'4',supports:'Counts every member.',coverage:'decisive',cost:{minutes:1,cpu_hours:0.01,ram_gb:1,judgment_minutes:15}}})}), 'claude-opus-5-5'],
   ];
-  for (const [kind, who, id, model] of kinds) assertStateOnTop((await take(who, id, model)).brief_md, kind);
+  const {BASELINE_DUTY, BASELINE_REVIEW_DUTY} = await import('../src/lib/research-guidance.ts');
+  for (const [kind, who, id, model] of kinds) {
+    const md = (await take(who, id, model)).brief_md;
+    assertStateOnTop(md, kind);
+    // The baseline and ablation duty (Sakana lesson #6, Oct 16 2026) is served by /start: to the author in every brief, to the reviewer as rubric.
+    assert.ok(md.includes(BASELINE_DUTY), `${kind}: the served brief carries the baseline duty`);
+    if (kind.startsWith('review')) assert.ok(md.includes(BASELINE_REVIEW_DUTY), `${kind}: the served review brief carries the reviewer's baseline duty`);
+  }
   const laneless = await take('c', await job('explore', {laneless: true}), 'claude-fable-5-1');
   assertStateOnTop(laneless.brief_md, 'a job with no lane');
   assert.match(laneless.brief_md, new RegExp(`State of the art: .*\\(\`${S.lane}\`\\)`), 'a job with no lane carries every lane\'s document inline, not a link');
