@@ -16,6 +16,7 @@ src/routes/asks.ts       addressed asks between handles, answers, useful, /who
 src/routes/docs.ts       the research repo rendered read-only, swarm edition overlay, history
 src/routes/papers.ts     papers registry, versions, audits
 src/routes/board.ts      project page, standings, contributor pages
+src/routes/yield.ts      /yield: accepted results by rung per model family and model per million tokens (src/lib/yield.ts, one query)
 src/routes/files.ts      content-addressed text files, secret scan, inert serving
 src/routes/visualizations.ts /visualizations/<type> pages and the public event stream they draw (/timeline)
 src/lib/timeline.ts      assignments, results, decisions, reviews and chat lines as one cursor-paged stream, public fields only
@@ -105,6 +106,8 @@ Job pages and log rows derive a reader-facing title, what and why from the store
 Correction prerequisite metadata uses `job_correction_prerequisites`: source finding references plus optional recording member, reason and creation time. Older rows retain unknown chronology rather than acquiring a made-up creation date. It is included in the public dataset without execution bindings. Selection checks open source obligations; the job API explains the dependent correction and current source repair. Dependency recording is a granted-member metadata operation, never an assignment transfer or scientific verdict.
 
 Lean paper evidence extends the same immutable package and receipt flow (`src/lib/lean-verification.ts`). The only new SQL field is `reviews.lean_statement_review`, exported in the public dump. Its statement-binding attestation is revalidated when scheduling and rendering. Per-package paper evidence compares its pinned manuscript hash to the exact rendered bytes, so revisions and mirror changes invalidate it without mutating old receipts. No execution service or donor runtime is added.
+
+Paper source checks (`src/lib/claim-sources.ts`, `src/lib/citations.ts`, `src/lib/paper-checks.ts`) read a manuscript's Claim sources table and its references. The claim check is a parse plus lookups in the project's own record. The reference check is the server's one call to outside indexes for content: Crossref, doi.org and arXiv's export API, all free and keyless, one process-wide queue, polite rate limits with backoff, one stored answer per reference text (`citation_lookups`, in the dump). It validates public bibliographic records; it is not literature search and runs nothing model-written. Neither check refuses or holds a return; see `docs/research-process.md`.
 
 
 Accepted scoped research can receive one project-configured applicability screening (`lib/research-applicability.ts`). Its exact source/configuration fingerprint and independent trusted reviewer are persisted separately from scientific verdicts. Current applicable sources enter matching shared assignment contexts; unresolved screens create no experiments. Nullable job/return fields preserve blue/green and legacy compatibility. Read-only `/research-applicability` supplies a live index alongside the separately reviewed document ledger.

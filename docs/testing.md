@@ -29,9 +29,11 @@ Find the tests for a file with `grep -l "src/lib/<name>" tests/*.test.mjs`. The 
 | Lane specs and the locked evaluator | `lib/lane-spec.ts`, `projects/*/lanes/`, the check path of `lib/verification.ts` | `lane-spec` (unit: every lane has a spec whose files match their pinned hashes, each starting script passes its evaluator, a corrupted claim fails), `lane-evaluator-db` (matching, mismatched and missing evaluator hashes on a check receipt) |
 | Lean evidence | `lib/lean-*.ts` | `lean-verification`, `lean-identity-v2`, `lean-identity-v2-db`, `lean-v2-integration`, `lean-kernel`, `lean-kernel-db`, `lean-canonical-db`, `lean-same-user`, `lean-display`, `lean-milestone-client`, `paper-lean-list` |
 | Credit, ledger, standings | `lib/credit.ts`, `lib/ledger.ts`, `lib/standings.ts` | `credit`, `ledger`, `contributor-ledger`, `standings`, `job-titles` |
+| Yield per model per million tokens, usage status | `lib/yield.ts`, `routes/yield.ts`, `usageStatus` in `lib/tokens.ts` | `model-yield-db`, `tokens`, `url-registration` (usage missing and unmeasured at intake) |
 | Briefs and guidance | `lib/brief.ts`, `lib/orientation.ts`, `lib/*-guidance.ts`, `projects/*/briefs` | `brief`, `brief-sections`, `patch-guidance`, `departments`, `compute` |
 | Auth, tokens, models | `lib/auth.ts`, `lib/tokens.ts`, `lib/model-id.ts` | `tokens`, `transcript-mode` (summary or full), `transcript-mode-db`, `model-id`, `rungs`, `ratelimit` |
 | Files, documents, revisions | `lib/files.ts`, `lib/revisions.ts`, `lib/document-*.ts` | `revisions`, `document-record`, `document-publication`, `files-quota`, `served-paths`, `traversal`, `portability`, `transcript-scrub`, `sequences`, `paper-review-integrity`, `paper-exposition`, `paper-exposition-db`, `paper-list-status` |
+| Paper source checks (claim map, reference lookup) | `lib/claim-sources.ts`, `lib/citations.ts`, `lib/paper-checks.ts` | `paper-source-checks` |
 | Database pool (JIT off) | `db/index.ts` | `db-jit` |
 | Boot schema locks (no deadlock with live requests) | `db/index.ts` (`migrate`) | `boot-schema-locks` |
 | Privacy, names, dump | `lib/dump.ts`, `lib/display-name.ts` | `dump`, `dump-privacy`, `display-name`, `display-name-db`, `historical-privacy` |

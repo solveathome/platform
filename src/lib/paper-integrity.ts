@@ -9,6 +9,8 @@ import { liveRepairSql } from "./findings.js";
 import * as files from "./files.js";
 import { mirrorPath } from "./revisions.js";
 import { listPapers } from "../routes/papers.js";
+import { paperChecks, checkCounts } from "./paper-checks.js";
+import { paperSource } from "./paper-state.js";
 
 export async function inventory(problemId: number, slug: string) {
   const papers = (await listPapers(problemId, slug)).map((p: any) => ({ slug: p.slug, path: p.path ?? `paper/${p.slug}.md`, registry_status: p.registry_status, status: p.status, review: p.review.state, served_sha: p.review.current_sha, review_return_id: p.review.review_return_id, earlier_return_id: p.review.earlier_return_id, open_findings: p.review.findings.map((f: any) => f.id), awaiting_integration: p.review.awaiting_integration }));
@@ -35,6 +37,13 @@ export async function inventory(problemId: number, slug: string) {
       AND (r.integration IN ('conflict','missing') OR (r.integration IS NULL AND NOT EXISTS (SELECT 1 FROM document_versions v WHERE v.return_id = r.id))) ORDER BY r.id`, [problemId])).map((r: any) => ({ return_id: Number(r.id), path: r.revision_path, integration: r.integration ?? "never recorded" }));
   const unworked = (await q(`SELECT f.id, f.path, f.scope, f.note, f.job_id, j.status AS job_status FROM findings f LEFT JOIN jobs j ON j.id = f.job_id WHERE f.problem_id = $1 AND f.status = 'open' AND f.scope <> 'advisory' AND (j.id IS NULL OR NOT ${liveRepairSql}) ORDER BY f.id`, [problemId])).map((f: any) => ({ ...f, id: Number(f.id) }));
   const reassessing = (await q(`SELECT r.id, r.revision_path FROM returns r WHERE r.problem_id = $1 AND r.status = 'pending' AND r.revision_sha IS NOT NULL AND EXISTS (SELECT 1 FROM return_decisions d WHERE d.return_id = r.id AND d.status = 'accepted' AND NOT d.provisional) ORDER BY r.id`, [problemId])).map((r: any) => ({ return_id: Number(r.id), path: r.revision_path }));
-  return { project: slug, observed_at: new Date().toISOString(), papers, mislabelled, displaced, stale_mirror: staleMirror, unintegrated, findings_without_work: unworked, under_reassessment: reassessing,
+  // Claim sources and references (Oct 16 2026, Sakana lessons #3 and #4): a claim with no source and a reference that does not resolve fail.
+  const sourceChecks: any[] = [];
+  for (const p of await q<any>(`SELECT * FROM papers WHERE problem_id = $1 ORDER BY slug`, [problemId])) {
+    const text = paperSource(p, slug).source; if (text === null) continue;
+    const c = await paperChecks(problemId, slug, text);
+    sourceChecks.push({ slug: p.slug, ...checkCounts(c), failing: c.claims.counts.unmapped + c.references.counts.unresolved + c.references.counts.mismatch, flags: [...c.claims.flags, ...c.references.flags], url: `/projects/${slug}/papers/${p.slug}/checks` });
+  }
+  return { project: slug, observed_at: new Date().toISOString(), papers, source_checks: sourceChecks, mislabelled, displaced, stale_mirror: staleMirror, unintegrated, findings_without_work: unworked, under_reassessment: reassessing,
     not_checked: "Whether a manuscript and a research note share one address (a paper derived from a note that replaced it) is a reviewer's judgment; this inventory does not infer it." };
 }
