@@ -16,6 +16,7 @@ src/routes/asks.ts       addressed asks between handles, answers, useful, /who
 src/routes/docs.ts       the research repo rendered read-only, swarm edition overlay, history
 src/routes/papers.ts     papers registry, versions, audits
 src/routes/board.ts      project page, standings, contributor pages
+src/routes/yield.ts      /yield: accepted results by rung per model family and model per million tokens (src/lib/yield.ts, one query)
 src/routes/files.ts      content-addressed text files, secret scan, inert serving
 src/routes/visualizations.ts /visualizations/<type> pages and the public event stream they draw (/timeline)
 src/lib/timeline.ts      assignments, results, decisions, reviews and chat lines as one cursor-paged stream, public fields only

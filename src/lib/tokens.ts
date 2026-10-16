@@ -24,7 +24,7 @@ export type LogKind = "claude-code" | "codex" | "copilot" | "opencode" | "antigr
 export type Mismatch = { reason: string; job: number; jobs_named?: number[]; ends_at?: string };
 /** Usage entries of this transcript that were already counted on the person's earlier returns or reviews, and where. */
 export type AlreadyCounted = { entries: number; of: number; on: string[] };
-export type Tokens = { input: number; output: number; cache_read: number; cache_write: number; entries: number; source: "claude-jsonl" | "codex-jsonl" | "copilot-jsonl" | "opencode-jsonl" | "freebuff-jsonl" | "custom-jsonl" | "reported" | "none"; models?: Record<string, number>; observed_models?: string[]; log?: LogKind; mismatch?: Mismatch; already_counted?: AlreadyCounted };
+export type Tokens = { input: number; output: number; cache_read: number; cache_write: number; entries: number; source: "claude-jsonl" | "codex-jsonl" | "copilot-jsonl" | "opencode-jsonl" | "freebuff-jsonl" | "custom-jsonl" | "reported" | "none"; models?: Record<string, number>; observed_models?: string[]; log?: LogKind; mismatch?: Mismatch; already_counted?: AlreadyCounted; unmeasured?: string };
 
 /**
  * The assignments a transcript names: the brief's title line ("# solveathome job #N", the GET /start result) and the job_id the agent
@@ -312,6 +312,8 @@ export function parseTranscriptWithKeys(text: string, reported?: any, exclude?: 
     t.input = Number(reported.input ?? 0); t.output = Number(reported.output ?? 0); t.cache_read = Number(reported.cache_read ?? 0); t.cache_write = Number(reported.cache_write ?? 0);
     t.source = (t.input || t.output) ? "reported" : "none";
   }
+  // A harness that keeps no usage record says so (Oct 16 2026): the return is flagged unmeasured, not missing. Never an estimate.
+  if (t.source === "none" && reported && typeof reported === "object" && reported.unmeasured) t.unmeasured = typeof reported.unmeasured === "string" && reported.unmeasured.trim() ? reported.unmeasured.replace(/\s+/g, " ").trim().slice(0, 200) : "declared by the agent";
   for (const k of ["input", "output", "cache_read", "cache_write"] as const) t[k] = Math.min(Math.max(0, Number.isFinite(t[k]) ? t[k] : 0), MAX_TOKENS_PER_FIELD);
   for (const k of Object.keys(t.models ?? {})) t.models![k] = Math.min(Math.max(0, t.models![k] || 0), MAX_TOKENS_PER_FIELD);
   t.log = logKind(text);
@@ -361,4 +363,17 @@ export function effortFromTranscript(text: string): string | null {
     const e = parseEffort(raw); if (e) last = e;
   }
   return last;
+}
+
+/**
+ * Whether a record carries token usage (Chris, Oct 16 2026: yield per model per million tokens needs it). Usage is required on
+ * every return; a return without it is accepted (Chris, Sep 12 2026: accept, warn, resubmit, never refuse) and flagged "missing". "unmeasured" is the
+ * documented exception: a chat return over MCP, or a harness the agent says keeps no usage record. USAGE_STATUS_SQL in src/lib/yield.ts is the same rule.
+ */
+export type UsageStatus = "counted" | "reported" | "unmeasured" | "missing";
+export function usageStatus(t: Partial<Tokens> | null | undefined): UsageStatus {
+  if (!t) return "missing";
+  const total = Number(t.input ?? 0) + Number(t.output ?? 0) + Number(t.cache_read ?? 0) + Number(t.cache_write ?? 0);
+  if (total > 0 || t.already_counted) return t.source === "reported" ? "reported" : "counted";
+  return t.log === "mcp-observed" || t.unmeasured ? "unmeasured" : "missing";
 }
