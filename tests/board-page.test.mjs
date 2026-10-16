@@ -52,7 +52,7 @@ test('agents keep the JSON, the same records whatever they send, and ?format=jso
   const answers = [await get('/board'), await get('/board', '*/*'), await get('/board', 'application/json'), await get('/board', 'text/markdown, text/html, */*'), await get('/board?format=json', BROWSER)];
   for (const a of answers) { assert.equal(a.status, 200); assert.match(a.type, /application\/json/); }
   const b = JSON.parse(answers[0].body);
-  assert.deepEqual(Object.keys(b), ['project', 'activity', 'rungs', 'lanes', 'queue', 'health', 'recent', 'contributors', 'recorded', 'recorded_total', 'research']);
+  assert.deepEqual(Object.keys(b), ['project', 'activity', 'rungs', 'lanes', 'queue', 'health', 'second_review', 'recent', 'contributors', 'recorded', 'recorded_total', 'research']);
   assert.equal(String(b.recent[0].id), String(rid));
   // The same records for every agent; only as_of, the moment each part was built, may differ between cache classes.
   const timeless = (body) => JSON.parse(body, (k, v) => k === 'as_of' ? undefined : v);

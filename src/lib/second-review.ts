@@ -1,5 +1,5 @@
 /**
- * Blind second review (Chris, Oct 16 2026, card 2009 "Build all 8", Sakana lesson #2). Most verdicts come from a few people and one
+ * Blind second review (Chris, Oct 16 2026, Sakana lesson #2). Most verdicts come from a few people and one
  * model family, and a trusted reviewer may judge its own family's work, so an accepted result can be one family agreeing with
  * itself. A sample of accepted results is reviewed again by another model family on another handle, who is not shown the first
  * verdict; the share of second verdicts that agree is published on the board.

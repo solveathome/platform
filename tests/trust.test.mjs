@@ -160,7 +160,8 @@ test('trust by grant only (Chris, Oct 12 2026): Astra, Opus 5.5 and GPT-6.1 Sol 
   for (const [model, effort] of [['gpt-6-astra', 'max'], ['claude-opus-5-5', 'high'], ['gpt-6.1-sol', 'high']]) {
     assert.equal(await roles.isTrusted(pid, people.adv3.id, people.adv3.handle, {model, effort}), false, `${model} at ${effort} is not trusted`);
     const s = await okJson(await call('adv3', 'POST', '/start', {model, effort, body: {agreed: true, ai: {max_assignments: 1}, transcript_preapproved: true}}));
-    assert.notEqual(s.type, 'review', `a ${model} session at ${effort} was handed a trusted review job`);
+    // A blind second review is the one review job such a session may get: advisory by design (src/lib/second-review.ts).
+    assert.ok(s.type !== 'review' || s.assignment_reason?.policy === 'blind second review', `a ${model} session at ${effort} was handed a trusted review job`);
     if (s.job_id) await okJson(await call('adv3', 'POST', '/release', {model, effort, session: s.session, body: {job_id: s.job_id, note: 'test'}}));
   }
   const r = await one(`INSERT INTO returns (problem_id, type, user_id, model, provider, report_md, transcript, status) VALUES ($1,'source',$2,'claude-opus-5','anthropic','page 4 says so','t','pending') RETURNING id`, [pid, people.author.id]);
