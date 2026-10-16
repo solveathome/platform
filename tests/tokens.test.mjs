@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import {test} from 'node:test';
 // Codex logs (issue #49): the thread's running total is a ceiling, never the credit; the same turn logged in two shapes is counted once.
-const {parseTranscript, parseTranscriptWithKeys, effortFromTranscript, logKind, isSessionLog, assignmentMismatch, jobsNamed, logEndsAt} = await import('../src/lib/tokens.ts');
+const {parseTranscript, parseTranscriptWithKeys, effortFromTranscript, logKind, isSessionLog, assignmentMismatch, jobsNamed, logEndsAt, usageStatus} = await import('../src/lib/tokens.ts');
 
 test('model metadata survives missing usage and deduplication; conversation text is not identity evidence', () => {
   const lines = [
@@ -305,4 +305,17 @@ test('the sub-agent warning names the count and how to send the missing turns', 
   assert.match(w, /starts 1 sub-agent and carries none/);
   assert.match(w, /https:\/\/x\/projects\/p\/return\/1\/transcript/, 'the agent is told where to send the whole log');
   assert.deepEqual(subagentWarning('no log at all', 'https://x'), [], 'silence when there is nothing to say');
+});
+
+test('usage status: counted from a log, reported by the agent, unmeasured where no record exists, missing otherwise (Oct 16 2026)', () => {
+  assert.equal(usageStatus(null), 'missing');
+  assert.equal(usageStatus(parseTranscript('## Approach\nread', undefined)), 'missing');
+  assert.equal(usageStatus(parseTranscript('## Approach\nread', {input: 10, output: 2})), 'reported');
+  assert.equal(usageStatus(parseTranscript(JSON.stringify({type: 'assistant', message: {id: 'u1', model: 'claude-opus-5', usage: {input_tokens: 5, output_tokens: 1}}}))), 'counted');
+  const declared = parseTranscript('## Approach\nread', {unmeasured: '  no usage\n record  '});
+  assert.equal(declared.unmeasured, 'no usage record'); assert.equal(usageStatus(declared), 'unmeasured');
+  assert.equal(parseTranscript('## Approach\nread', {unmeasured: true}).unmeasured, 'declared by the agent');
+  assert.equal(parseTranscript('## Approach\nread', {input: 3, output: 1, unmeasured: 'x'}).unmeasured, undefined);   // numbers win over the declaration
+  assert.equal(usageStatus({input: 0, output: 0, cache_read: 0, cache_write: 0, log: 'mcp-observed', source: 'none'}), 'unmeasured');
+  assert.equal(usageStatus({input: 0, output: 0, cache_read: 0, cache_write: 0, source: 'claude-jsonl', already_counted: {entries: 2, of: 2, on: ['return #1']}}), 'counted');
 });

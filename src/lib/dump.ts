@@ -61,6 +61,8 @@ export const DUMP_TABLES: Record<string, string> = {
   announcements: `SELECT a.id, p.slug AS project, a.return_id, a.review_id, u.handle AS finder, a.kind, a.final_rung, a.decided_at, a.due_at, a.status, a.flag, a.approved_at, g.handle AS approved_by, a.suppressed_reason, a.payload, a.discord_message_id, a.sent_at, a.corrected_at, a.correction, a.created_at FROM announcements a JOIN problems p ON p.id = a.problem_id JOIN users u ON u.id = a.finder_user_id LEFT JOIN users g ON g.id = a.approved_by ORDER BY a.id`,
   // IndexNow's record of what api.indexnow.org accepted (src/lib/indexnow.ts): public urls and sitemap days.
   indexnow_pings: `SELECT url, lastmod, pinged_at FROM indexnow_pings ORDER BY url`,
+  // The reference check's lookups (src/lib/citations.ts): public reference text and what Crossref, doi.org or arXiv answered.
+  citation_lookups: `SELECT ref_sha, ref_text, status, source, identifier, found_title, found_doi, note, checked_at FROM citation_lookups ORDER BY ref_sha`,
   files:     `SELECT f.sha256, u.handle, f.model, f.name, f.ext, f.bytes, f.created_at, f.deleted_at, f.deleted_note, (SELECT json_agg(json_build_object('type', r.ref_type, 'id', r.ref_id)) FROM file_refs r WHERE r.file_sha = f.sha256) AS refs FROM files f JOIN users u ON u.id = f.user_id ORDER BY f.created_at`,
 };
 

@@ -336,7 +336,8 @@ test('a lead decided by a review outside its review job still releases its serie
   assert.equal((await jobsOf(two.return_id, 'review')).length, 0);
   const self = ok(await call('/result', {method: 'POST', who: tokens.trusted, model: 'claude-fable-5-1', effort: 'max', body: {type: 'review', return_id: lead.return_id, verdict: 'accept', rung: 'measured', notes_md: 'The interval bound holds at this fold.', transcript: 't', transcript_approved: true}}));
   assert.equal(self.return_status, 'accepted');
-  assert.equal((await jobsOf(lead.return_id, 'review')).every(j => j.status === 'expired'), true);
+  // A blind second review drawn at the acceptance (src/lib/second-review.ts) is a new job, not one of the lead's old ones.
+  assert.equal((await q(`SELECT status FROM jobs WHERE parent_return_id=$1 AND type='review' AND second_review_id IS NULL`, [lead.return_id])).every(j => j.status === 'expired'), true);
   assert.ok((await jobsOf(two.return_id, 'review')).some(j => j.status === 'queued'), 'the covered return is not left pending with no job');
   assert.ok((await q(`SELECT note FROM return_decisions WHERE return_id=$1`, [two.return_id])).some(x => /gave no verdict on this return/.test(x.note)));
 });

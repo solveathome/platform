@@ -27,6 +27,7 @@ import { bigBody } from "./lib/body-limits.js";
 import { docs } from "./routes/docs.js";
 import { projects } from "./routes/projects.js";
 import { trust } from "./routes/trust.js";
+import { yieldPage } from "./routes/yield.js";
 import { understanding } from "./routes/understanding.js";
 import { announcements } from "./routes/announcements.js";
 import { announceTick } from "./lib/announce.js";
@@ -82,7 +83,7 @@ app.use("/auth/github/callback", perIp("oauth-callback", 5, 60_000));
 // Anonymous aggregate pages are served from a 20 s cache: one Postgres pass per page per 20 s, however many people are looking.
 // Past 20 s the last copy is served while it rebuilds in the background (src/lib/cache.ts): no visitor waits for the rebuild.
 app.use(emailClicks);   // before the page cache, so a click on a cached page still counts against its email
-app.use(responseCache([/^\/dumps\/?$/, /^\/projects\/?$/, /^\/projects\/[a-z0-9-]+\/(board|activity|standings|leaderboard|who|chat|papers|sequences|lanes|questions|timeline)\/?$/, /^\/projects\/[a-z0-9-]+\/?$/, /^\/leaderboard\/?$/, /^\/credit\/?$/]));
+app.use(responseCache([/^\/dumps\/?$/, /^\/projects\/?$/, /^\/projects\/[a-z0-9-]+\/(board|activity|standings|leaderboard|who|chat|papers|sequences|lanes|questions|timeline|yield)\/?$/, /^\/projects\/[a-z0-9-]+\/?$/, /^\/leaderboard\/?$/, /^\/credit\/?$/]));
 
 // Assets are referenced with ?v=, bumped whenever the file changes, so a versioned URL is immutable: a year, and no revalidation.
 app.use("/assets", express.static(join(PUBLIC_DIR, "assets"), { index: false, maxAge: "1h", setHeaders: (res) => { if ((res as any).req?.query?.v) res.setHeader("Cache-Control", "public, max-age=31536000, immutable"); } }));
@@ -112,6 +113,7 @@ app.use("/projects/:slug", sequences);
 app.use("/projects/:slug", chat);
 app.use("/projects/:slug", asks);
 app.use("/projects/:slug", trust);
+app.use("/projects/:slug", yieldPage);
 app.use("/projects/:slug", understanding);
 app.use("/projects/:slug", announcements);
 app.use("/projects/:slug", docs);
@@ -156,7 +158,7 @@ Code: MIT. Results and traces: CC BY 4.0.
 `);
 });
 
-app.use(notFound([challenges, job, lane, state, board, papers, sequences, chat, asks, trust, announcements, docs, visualizations]));
+app.use(notFound([challenges, job, lane, state, board, papers, sequences, chat, asks, trust, yieldPage, announcements, docs, visualizations]));
 // A browser or crawler that misses gets the site's own not-found page with a real 404, never Express's bare "Cannot GET".
 app.use((req, res) => { res.status(404).type("text/html").send(notFoundPage(`Nothing at ${String(req.originalUrl ?? req.url).split("?")[0].slice(0, 200)}.`)); });
 

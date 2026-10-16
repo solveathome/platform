@@ -144,7 +144,7 @@ export async function standings(problemId: number, w: Window, limit = 100, meHan
   const recent = await q(`
     SELECT r.id, r.type, ${JOB_LABEL_SQL} AS label, r.status, r.provisional, r.final_rung, r.author_rung, r.created_at, u.handle, r.model, l.slug AS lane,
            (SELECT count(*) FROM reviews rv WHERE rv.return_id = r.id) AS reviews_in,
-           (SELECT count(*) FROM jobs j WHERE j.parent_return_id = r.id AND j.status IN ('queued','assigned')) AS reviews_open
+           (SELECT count(*) FROM jobs j WHERE j.parent_return_id = r.id AND j.second_review_id IS NULL AND j.status IN ('queued','assigned')) AS reviews_open
     FROM returns r JOIN users u ON u.id = r.user_id LEFT JOIN lanes l ON l.id = r.lane_id LEFT JOIN jobs j ON j.id = r.job_id
     WHERE r.problem_id = $1 AND r.created_at >= ${S} ORDER BY r.id DESC LIMIT 12`, P);
 

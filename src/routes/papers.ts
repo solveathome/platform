@@ -29,6 +29,7 @@ import { shareMeta } from "../lib/share.js";
 import { jsonLd, breadcrumbs, plainDescription, demoteHeadings, notFoundPage, abs, ORGANIZATION } from "../lib/seo.js";
 import { questions } from "../lib/questions.js";
 import { page as sitePage } from "../lib/page.js";
+import { paperChecks, checksPanel, checkCounts } from "../lib/paper-checks.js";
 import { paperSource, paperReview, coarseStatus, type PaperReview } from "../lib/paper-state.js";
 import { openFindings } from "../lib/findings.js";
 import { posix } from "node:path";
@@ -172,6 +173,23 @@ papers.get("/history/*path", async (req: any, res) => {
   res.type("text/html").send(sitePage({ title: `History of ${rel}`, dataPage: "history", path: `/projects/${p.slug}/history/${rel}`, robots: "noindex, follow", crumbs: `<a href="/projects/${esc(p.slug)}">${esc(p.name)}</a><span>/ history /</span>${esc(rel)}`, eyebrow: "Track record", heading: rel, meta: `<p class="doc-meta"><span><a href="/projects/${esc(p.slug)}/docs/${esc(rel)}">current</a></span><span><a href="/projects/${esc(p.slug)}/docs/${esc(rel)}?original=1">original</a></span></p>`, body }));
 });
 
+/** The source checks on a paper (Oct 16 2026): the claim-to-source map and the reference lookup, for the served text or a submitted
+ * return (?return=N). Read-only; a reference not yet looked up is queued and shows as pending. */
+papers.get("/papers/:paper/checks", async (req: any, res) => {
+  const p = await one(`SELECT id, slug FROM problems WHERE slug = $1`, [req.params.slug]);
+  if (!p) { res.status(404).type("text/plain").send("unknown project"); return; }
+  const paper = await one(`SELECT * FROM papers WHERE problem_id = $1 AND slug = $2`, [p.id, req.params.paper]);
+  if (!paper) { res.status(404).type("text/plain").send("no such paper"); return; }
+  const rid = /^\d+$/.test(String(req.query.return ?? "")) ? Number(req.query.return) : null;
+  const ret = rid ? await one<{ revision_sha: string | null }>(`SELECT revision_sha FROM returns WHERE id = $1 AND problem_id = $2 AND paper_slug = $3 AND paper_exposition IS NULL`, [rid, p.id, paper.slug]) : null;
+  if (rid && !ret?.revision_sha) { res.status(404).type("text/plain").send("no manuscript on that return for this paper"); return; }
+  const source = ret?.revision_sha ? files.read(ret.revision_sha) : paperSource(paper, p.slug).source;
+  if (source === null) { res.status(404).type("text/plain").send("no manuscript yet"); return; }
+  const c = await paperChecks(Number(p.id), p.slug, source);
+  res.set("Cache-Control", "no-store").json({ paper: paper.slug, text: rid ? `manuscript of return #${rid}` : "the served manuscript", manuscript_sha256: sha256(source), counts: checkCounts(c), flags: [...c.claims.flags, ...c.references.flags], claims: c.claims.claims, claim_map_rows: c.claims.rows.map(({ refs, ...r }) => ({ ...r, sources: refs })), references: c.references.references.map(({ ref_sha, ...r }) => r),
+    how: "Claims: every theorem, table and result number should name its source in the manuscript's Claim sources table (or a theorem in its own heading). References are looked up in Crossref, doi.org and arXiv; 'found' means Crossref or arXiv has the work under an identifier the entry does not give. Both are flags for a person, not verdicts." });
+});
+
 papers.get("/papers/:paper", async (req: any, res) => {
   const credit = await crediter();
   const p = await one(`SELECT id, slug, name FROM problems WHERE slug = $1`, [req.params.slug]);
@@ -195,12 +213,13 @@ papers.get("/papers/:paper", async (req: any, res) => {
   const expositionJobs = await q(`SELECT id,status,exposition_source_return_id AS source_return_id FROM jobs WHERE problem_id=$1 AND exposition_source_return_id IS NOT NULL AND brief_md LIKE $2 ORDER BY id DESC`, [p.id, `%paper.slug: ${paper.slug}\n%`]);
   const lean = await paperLeanVerification(Number(p.id), paper.slug, source === null ? null : sha256(source));
   const designation = mainTheoremDesignation(readProjectConfig(p.slug)?.lean_main_theorems, paper.slug, source === null ? null : sha256(source));
+  const checks = source === null ? null : await paperChecks(Number(p.id), p.slug, source);
   if (!wantsHtml(req)) {
     const request = typeof req.query.lean_request === 'string' && /^[a-zA-Z0-9-]{1,100}$/.test(req.query.lean_request) ? req.query.lean_request : null;
     res.set('Cache-Control','no-store').json({ paper, versions, reports, expositions, exposition_jobs:expositionJobs, lean_verification: lean,
       lean_milestone_request: request,
       lean_milestone_html: mainTheoremCallout(mainTheoremEvidence(lean, designation), designation, p.slug, paper.slug, paper.title),
-      source_from: from, manuscript_md: source }); return;
+      source_from: from, manuscript_md: source, source_checks: checks ? { ...checkCounts(checks), url: `/projects/${p.slug}/papers/${paper.slug}/checks` } : null }); return;
   }
   const baseDir = paper.path ? posix.dirname(paper.path) : "paper";
   const pages = await paperPages(p.slug);
@@ -209,7 +228,7 @@ papers.get("/papers/:paper", async (req: any, res) => {
   const linkFn = renderer.link.bind(renderer);
   renderer.link = ({ href, title, tokens }: any) => { let h = String(href ?? ""); if (!/^(?:[a-z]+:|\/|#)/i.test(h)) { const rel = posix.normalize(posix.join(baseDir, h)).replace(/^\/+/, ""); h = pages.get(rel) ?? docsBase + rel; } return linkFn({ href: h, title, tokens } as any); };
   const md = (t: string) => { const m = protectMath(t.replace(/<!--[\s\S]*?-->/g, "")); return linkPaths(m.restore(marked.parse(escapeSource(m.text), { gfm: true, renderer }) as string), p.slug, baseDir, pages); };
-  const body = challengeBanner(await challengesFor(Number(p.id), "paper", paper.slug), `/projects/${p.slug}`) + reviewPanel(paper.review, p.slug) + leanEvidencePanel(lean, p.slug, designation) + expositionPanel(expositions,p.slug,paper.slug,credit) + (source ? demoteHeadings(await linkPeople(md(source))) : "<p class=\"muted\">No manuscript yet.</p>");
+  const body = challengeBanner(await challengesFor(Number(p.id), "paper", paper.slug), `/projects/${p.slug}`) + reviewPanel(paper.review, p.slug) + leanEvidencePanel(lean, p.slug, designation) + expositionPanel(expositions,p.slug,paper.slug,credit) + (checks ? checksPanel(checks, `/projects/${p.slug}/papers/${paper.slug}/checks`) : "") + (source ? demoteHeadings(await linkPeople(md(source))) : "<p class=\"muted\">No manuscript yet.</p>");
   const page = readFileSync(join(PUBLIC_DIR, "paper.html"), "utf8");
   const meta = recordHtml(paper.timestamps, paper.history_url) + `<p class="paper-meta"><span>Registered: ${timeHtml(paper.created_at)}</span><span>Registry updated: ${timeHtml(paper.updated_at)}</span><span class="paper-status ${esc(paper.status)}">${esc(paper.review.label)}</span>${paper.grade ? `<span title="The registry's own grade line, written by the manuscript's authors; not a review conclusion">registry grade: ${esc(paper.grade)}</span>` : ""}${paper.version_by ? `<span>current version by @${esc(paper.version_by)}, ${timeHtml(paper.version_at)}${paper.final_rung ? `, ${esc(paper.final_rung)}` : ""}</span>` : ""}<span>${esc(from)}</span></p>`;
   const tlist = track.slice().reverse().map((v: any) => `<li>Version ${v.version}: ${v.author ? `changed by ${credit(v.author)}${v.model ? ` (${esc(v.model)})` : ""}${(v.verified_by ?? []).length ? `, verified by ${v.verified_by.map((h: string) => { const vm = (v.verified_models ?? []).find((x: any) => x.handle === h); return `${credit(h)}${vm?.model ? ` (${esc(vm.model)}${vm.verification && vm.verification !== "read" ? `, ${esc(vm.verification)}` : ""})` : ""}`; }).join(", ")}` : ""}` : esc(v.summary)}, ${timeHtml(v.created_at)}${v.version > 1 ? ` · <a href="/projects/${esc(p.slug)}/history/${esc(docPath)}/${v.version}/diff">diff</a>` : ""}</li>`).join("");

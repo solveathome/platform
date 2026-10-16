@@ -2,7 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { renderBrief, exploreContinuation } from "../src/lib/brief.ts";
 import { compactDepartmentBrief, protocolSections } from "../src/lib/department-protocol.ts";
-import { GUIDANCE_VERSION, taskGuidance } from "../src/lib/research-guidance.ts";
+import { BASELINE_DUTY, BASELINE_REVIEW_DUTY, GUIDANCE_VERSION, taskGuidance } from "../src/lib/research-guidance.ts";
 import { tangentJob } from "../src/lib/tangent.ts";
 import { ARTIFACT_PACKAGING_GUIDANCE, EFFORT_GUIDANCE, FRAMEWORK_GUIDANCE_VERSION, FRAMEWORK_RECHECK_HOURS, WORKER_ISOLATION_RECOMMENDATION, workspaceSections } from "../src/lib/workspace-guidance.ts";
 import { WORK_DISPOSITION_GUIDANCE } from "../src/lib/work-disposition-format.ts";
@@ -532,4 +532,20 @@ test("a project's work statement opens the protocol page and every /start answer
   assert.equal(answer('md5', 'json', { session: null, orientation_md: '# solveathome' }).orientation_md, `${s}\n\n# solveathome`, 'the orientation and the no-work answers too');
   assert.deepEqual(answer('md5', 'json', { error: 'unknown session' }), { error: 'unknown session' }, 'a refusal without a brief is left alone');
   assert.equal(answer('md5', 'send', '{"a":1}'), '{"a":1}', 'a JSON body is never rewritten as text');
+});
+
+// Baseline and ablation duty (Sakana lesson #6, Oct 16 2026): every work brief tells the author, every review brief tells the reviewer, compact department briefs included.
+test('an improves-on claim needs the strongest published baseline, the starting point and one-at-a-time ablations, in work and review briefs', () => {
+  const base = 'https://x.test/projects/p';
+  for (const type of ['explore', 'measure', 'source', 'direction', 'paper', 'audit']) {
+    const md = renderBrief({ ...job, type, brief_md: 'Do it.' }, base, session);
+    assert.ok(md.includes(BASELINE_DUTY), type);
+  }
+  assert.match(BASELINE_DUTY, /strongest published method/); assert.match(BASELINE_DUTY, /starting point/); assert.match(BASELINE_DUTY, /one component at a time/);
+  assert.match(BASELINE_DUTY, /source obligation/); assert.match(BASELINE_DUTY, /measure obligation/); assert.match(BASELINE_DUTY, /Do not estimate a missing baseline/);
+  const review = { ...job, type: 'review', title: 'Review return #5', brief_md: 'Review return #5.' };
+  const full = renderBrief(review, base, session);
+  for (const md of [full, compactDepartmentBrief(full, review, session, null), taskGuidance({ type: 'review' })]) assert.ok(md.includes(BASELINE_REVIEW_DUTY), 'the reviewer rubric carries the duty');
+  assert.match(BASELINE_REVIEW_DUTY, /strongest published method/); assert.match(BASELINE_REVIEW_DUTY, /one-component-at-a-time ablations/);
+  assert.match(BASELINE_REVIEW_DUTY, /unverifiable: true/); assert.match(BASELINE_REVIEW_DUTY, /needs_md/); assert.match(BASELINE_REVIEW_DUTY, /source work/); assert.match(BASELINE_REVIEW_DUTY, /measure work/);
 });

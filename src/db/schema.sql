@@ -1869,3 +1869,16 @@ CREATE TABLE IF NOT EXISTS second_reviews (
 CREATE INDEX IF NOT EXISTS second_reviews_problem_idx ON second_reviews (problem_id, sampled);
 ALTER TABLE jobs ADD COLUMN IF NOT EXISTS second_review_id BIGINT;
 CREATE INDEX IF NOT EXISTS jobs_second_review_idx ON jobs (second_review_id) WHERE second_review_id IS NOT NULL;
+-- Reference check (Oct 16 2026, src/lib/citations.ts): one lookup per distinct reference text against Crossref, doi.org and arXiv,
+-- so an unchanged reference is never asked again. Public bibliographic text and the index's answer; exported in the dump.
+CREATE TABLE IF NOT EXISTS citation_lookups (
+  ref_sha TEXT PRIMARY KEY,
+  ref_text TEXT NOT NULL,
+  status TEXT NOT NULL CHECK (status IN ('resolved','found','mismatch','unresolved','skipped','error')),
+  source TEXT,
+  identifier TEXT,
+  found_title TEXT,
+  found_doi TEXT,
+  note TEXT,
+  checked_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
