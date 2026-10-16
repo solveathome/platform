@@ -36,9 +36,10 @@ function entry(text: string, line: number, inline: boolean): RefEntry {
   const dois = [...new Set([...text.matchAll(DOI)].map((m) => cleanDoi(m[1])))];
   const arxiv = [...new Set([...text.matchAll(ARXIV)].map((m) => (m[1] ?? m[2])))];
   const urls = [...new Set([...text.matchAll(/https?:\/\/[^\s)>\]]+/g)].map((m) => m[0]))];
-  // The title is the first emphasised span that is not a provenance note (those start with a verb or a bracket tag).
-  const em = [...text.matchAll(/(?<![*\w])\*(?!\*)([^*]{6,}?)\*(?!\*)|"([^"]{6,})"|“([^”]{6,})”/g)].map((m) => (m[1] ?? m[2] ?? m[3]).trim())
-    .filter((t) => !/^\[|^(record|read|bibliograph|entry|cited|not |confirmed|carried|abbreviated)/i.test(t));
+  // The title is the first emphasised span that is not a provenance note (those start with a verb or a bracket tag), or a quoted
+  // span standing between commas: a quoted phrase inside a title (The "Riemann hypothesis" for …) is not the title.
+  const em = [...text.matchAll(/(?<![*\w])\*(?!\*)([^*]{6,}?)\*(?!\*)|(?:^|[,;:.]\s*)"([^"]{6,})"(?=\s*[,.;:]|$)|(?:^|[,;:.]\s*)“([^”]{6,})”(?=\s*[,.;:]|$)/g)].map((m) => (m[1] ?? m[2] ?? m[3]).trim())
+    .filter((t) => !/^\[|^(record|read|bibliograph|entry|cited|not |confirmed|carried|abbreviated)/i.test(t) && words(t).length >= 2);
   const years = [...new Set([...text.matchAll(/\b(1[6-9]\d\d|20[0-4]\d)\b/g)].map((m) => Number(m[1])))];
   return { key, text: plain(text), line, inline, dois, arxiv, urls, title: em[0] ? plain(em[0]) : null, years };
 }
@@ -137,15 +138,16 @@ async function doiRegistered(f: Fetcher, doi: string): Promise<boolean> {
 }
 async function crossrefSearch(f: Fetcher, e: RefEntry): Promise<{ title: string; doi: string } | null> {
   const query = e.text.replace(DOI, "").replace(ARXIV, "").replace(/https?:\/\/\S+/g, "").slice(0, 300);
-  const r = await polite(f, `https://api.crossref.org/works?rows=3&select=DOI,title,issued,author&query.bibliographic=${encodeURIComponent(query)}`, "crossref");
+  const r = await polite(f, `https://api.crossref.org/works?rows=5&select=DOI,title,issued,author&query.bibliographic=${encodeURIComponent(query)}`, "crossref");
   if (!r) throw new Unavailable("Crossref did not answer");
   if (!r.ok) throw new Unavailable(`Crossref answered ${r.status}`);
   const items = ((await r.json() as any).message?.items ?? []) as any[];
   for (const it of items) {
-    const title = String(it.title?.[0] ?? ""); if (!title) continue;
+    // A corrigendum or erratum shares its paper's title and is never the work cited (first run, Oct 16: "Long gaps in sieved sets").
+    const title = String(it.title?.[0] ?? ""); if (!title || /^(corrigendum|erratum|correction|retraction|addendum)\b/i.test(title)) continue;
     const year = it.issued?.["date-parts"]?.[0]?.[0];
     const family = String(it.author?.[0]?.family ?? "");
-    const titleOk = e.title ? contained(e.title, title) >= 0.8 && contained(title, e.title) >= 0.6 : contained(title, e.text) >= 0.85 && words(title).length >= 3;
+    const titleOk = e.title ? contained(e.title, title) >= 0.8 && contained(title, e.title) >= (words(e.title).length >= 3 ? 0.4 : 0.6) : contained(title, e.text) >= 0.85 && words(title).length >= 3;
     const yearOk = !e.years.length || !year || e.years.some((y) => Math.abs(y - year) <= 1);
     const authorOk = !family || contained(family, e.text) > 0;
     if (titleOk && yearOk && authorOk) return { title, doi: it.DOI };
@@ -181,8 +183,9 @@ async function arxivSearch(f: Fetcher, title: string): Promise<{ id: string; tit
 const quote = (t: string) => `"${t.length > 90 ? t.slice(0, 87) + "…" : t}"`;
 /** One reference against the indexes. arxivKnown carries a batch lookup for the paper's arXiv ids, so a paper costs one arXiv call. */
 export async function lookupReference(e: RefEntry, f: Fetcher = fetch, arxivKnown?: Map<string, string>): Promise<Lookup> {
-  // An identifier quoted in running text, with no title beside it, is checked for existence only.
-  const titleFits = (found: string) => e.inline && !e.title ? true : e.title ? contained(e.title, found) >= 0.6 || contained(found, e.title) >= 0.6 : (contained(found, e.text) >= 0.5 || words(found).length < 3);
+  // An identifier quoted in running text, or in an entry with no title, is checked for existence only: there is no title to compare
+  // (a word in italics in a sentence is not one; reading those as titles gave three false mismatches on the first run, Oct 16).
+  const titleFits = (found: string) => e.inline || !e.title ? true : contained(e.title, found) >= 0.6 || contained(found, e.title) >= 0.6;
   const notes: string[] = [];
   try {
     for (const doi of e.dois) {
@@ -206,11 +209,16 @@ export async function lookupReference(e: RefEntry, f: Fetcher = fetch, arxivKnow
       const alt = await crossrefSearch(f, e);
       return { status: "unresolved", source: null, identifier: e.dois[0] ? `doi:${e.dois[0]}` : `arXiv:${e.arxiv[0]}`, found_title: alt?.title ?? null, found_doi: alt?.doi ?? null, note: `${notes.join("; ")}.${alt ? ` Crossref has this reference as DOI ${alt.doi}: probably a typo.` : " Check the identifier for a typo."}` };
     }
+    // Not publications: an OEIS sequence, a blog post, the project's own files. The claim check looks project files up.
+    if (!e.dois.length && !e.arxiv.length && /\bOEIS\b|\bA\d{6}\b/.test(e.text) && !e.title) return { status: "skipped", source: null, identifier: null, found_title: null, found_doi: null, note: "an OEIS sequence, not looked up" };
+    if (/\bblog\b/i.test(e.text)) return { status: "skipped", source: null, identifier: e.urls[0] ?? null, found_title: null, found_doi: null, note: "a blog post, not looked up" };
+    if (!e.title && /(?:^|\s)`?(?:research|paper|tools|bench)\/[\w./-]+\.\w+/.test(e.text)) return { status: "skipped", source: null, identifier: null, found_title: null, found_doi: null, note: "the project's own files, not a publication" };
     if (!e.title && e.urls.length && !/\b(1[6-9]\d\d|20[0-4]\d)\b/.test(e.text.replace(/https?:\/\/\S+/g, ""))) return { status: "skipped", source: null, identifier: e.urls[0], found_title: null, found_doi: null, note: "a web page, not a publication: not looked up" };
     const hit = await crossrefSearch(f, e);
     if (hit) return { status: "found", source: "crossref", identifier: null, found_title: hit.title, found_doi: hit.doi, note: `found in Crossref as DOI ${hit.doi}; add it to the entry.` };
     if (e.title) { const a = await arxivSearch(f, e.title); if (a) return { status: "found", source: "arxiv", identifier: null, found_title: a.title, found_doi: null, note: `found on arXiv as arXiv:${a.id}; add it to the entry.` }; }
     if (e.urls.length) return { status: "skipped", source: null, identifier: e.urls[0], found_title: null, found_doi: null, note: "not in Crossref or arXiv; it names a web page, which is not looked up" };
+    if (!e.title) return { status: "unresolved", source: null, identifier: null, found_title: null, found_doi: null, note: "gives no title, DOI or arXiv id, so it could not be looked up: add the title, and the DOI or arXiv id if it has one." };
     return { status: "unresolved", source: null, identifier: null, found_title: null, found_doi: null, note: "not found in Crossref or arXiv. A book or an old paper may have no DOI: check it by hand at the page and say so in the entry; if it has a DOI or arXiv id, add it." };
   } catch (err) {
     if (err instanceof Unavailable) return { status: "error", source: null, identifier: null, found_title: null, found_doi: null, note: err.message };
@@ -251,7 +259,8 @@ const queued = new Set<string>();
 /** Starts the lookup in the background (intake, a paper page with references not yet on record) and returns at once. */
 export function queueReferenceLookup(md: string): void {
   const key = refSha(md);
-  if (queued.has(key) || process.env.CITATION_LOOKUP === "off") return;
+  // Off under the test runner: a test that submits a paper must not reach Crossref or leave lookups behind.
+  if (queued.has(key) || process.env.CITATION_LOOKUP === "off" || process.env.NODE_TEST_CONTEXT) return;
   queued.add(key);
   queue = queue.then(() => resolveReferences(md)).catch((e) => console.error("reference lookup failed:", e?.message ?? e)).finally(() => queued.delete(key));
 }
