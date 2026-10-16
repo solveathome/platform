@@ -10,7 +10,7 @@ import { ROOT } from "./paths.js";
 
 export const PROJECTS_DIR = process.env.PROJECTS_DIR ?? join(ROOT, "projects");
 
-export type Lane = { slug: string; title: string; variant?: string };
+export type Lane = { slug: string; title: string; variant?: string; /** Goal, metric, starting script and pinned evaluator: src/lib/lane-spec.ts. */ spec?: unknown };
 export type DocsRedirect = { match: string; flags?: string; to: string; why?: string };
 export type ProjectConfig = {
   research_collaboration?: { enabled: boolean; topics: import('./shared-research-format.js').ResearchTopic[]; applicability_targets?: import('./research-applicability-format.js').ApplicabilityTarget[] };

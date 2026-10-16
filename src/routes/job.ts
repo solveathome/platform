@@ -30,6 +30,7 @@ import { stepCheckContext, recordResearch, prepareRescue, rescueCandidates, reti
 import { describeNeeds, waitingFor } from '../lib/capability-shortfall.js';
 import { leanStatementBinding, leanExecutionBinding, leanScientificBinding } from '../lib/lean-verification.js';
 import { expireUntrustedLeanChecks, saveLeanStatementReview, saveLeanExecutionReview, parseLeanExecutionReview, validateLeanIdentityArtifacts, parseVerificationPlan, saveVerificationPlan, queueCheck, saveCheckReceipt, verificationRuns, verificationState, verificationBrief, judgmentBudget, validateReceiptUse, isCompletedCheck, expireWaitingChecks, checkWaitExpired, identicalClaim, verificationSummary, receiptId } from '../lib/verification.js';
+import { laneSpec } from "../lib/lane-spec.js";
 import { readFileSync } from 'node:fs';
 import { ROOT } from '../lib/paths.js';
 import { bearer, optionalAuth, modelTier } from "../lib/auth.js";
@@ -507,6 +508,8 @@ ${ENDED_LAUNCH_GUIDANCE}
   row.brief_md += repairContextMarkdown(row.repair_context);
   let md = insertStateSection(chat ? renderChatBrief(row, `${BASE()}/projects/${req.project.slug}`, { id: String(session.id), host: String(req.oauth?.host ?? "other"), handle: req.user!.handle }) : renderBrief(row, `${BASE()}/projects/${req.project.slug}`, sess), stateSection);
   if (!chat && ["explore", "measure"].includes(row.type) && negativeQuorum(req.project.slug) !== null) md += negativeAuthorNote(req.project.slug);
+  // A lane with a spec says so to the author: its measured and verified results are checked with the pinned evaluator, not their script (src/lib/lane-spec.ts).
+  if (!chat && row.lane_slug && !["check", "review", "triage"].includes(row.type)) { const spec = laneSpec(req.project.slug, row.lane_slug); if (spec) md += `\n\n## This lane's spec\n\nLane \`${row.lane_slug}\` has a spec: goal, metric (${spec.metric.name}, ${spec.metric.better} is better), a runnable starting script and a pinned evaluator, at \`GET ${BASE()}/projects/${req.project.slug}/lane/${row.lane_slug}/spec\`. A measured or verified result here (or one that states no rung) is checked with that evaluator (sha256 ${spec.evaluator.sha256}), never with your own script. If your result is a quantity the evaluator knows, include a claims file in its format among your package targets, so the check can run it unchanged.\n`; }
   if (!chat) {
   { const note = unservedNote(String(row.brief_md ?? ""), req.project.slug, `${BASE()}/projects/${req.project.slug}`); if (note) md = md.replace(/\n## /, () => `\n${note}## `); }
   // The handle's own returns waiting for a verdict: who can decide them, what is settled, and where the work goes meanwhile (`ownReturnsWaitingNote`).

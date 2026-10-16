@@ -29,32 +29,170 @@
     {
       "slug": "g2-exponent",
       "title": "Lower the G₂ upper-bound exponent (4.27 toward 2)",
-      "variant": "g2-exponent"
+      "variant": "g2-exponent",
+      "spec": {
+        "goal_md": "Lower the exponent β in the proven bound G2(x#) ≪ x^(β+ε) from 4.26645 toward 2; a fixed exponent below 2 would prove the twin prime conjecture.",
+        "metric": {
+          "name": "proven G2 exponent β",
+          "unit": "exponent",
+          "better": "lower",
+          "baseline_md": "4.26645 from the DHR dimension-2 sieve (`research/G2-STATE.md` section 0). The band (2, 4.26645] is a proof gap; several routes across it are closed (`research/OUTCOMES.md`)."
+        },
+        "doc": "lanes/g2-exponent/spec.md",
+        "start": {
+          "path": "lanes/g2-exponent/start.mjs",
+          "sha256": "a54e61d90d5f48208ac62cf7d34d2dd67f58a82c227e2211c8bde0692400c63a",
+          "command": "node start.mjs > claims.json"
+        },
+        "evaluator": {
+          "path": "lanes/g2-exponent/evaluate.mjs",
+          "sha256": "582e870b3efbf73200df6d5709f35a2a0a30b1a84d8df90aaa7c06fd40c2d666",
+          "command": "node evaluate.mjs claims.json",
+          "tools": [
+            "node"
+          ]
+        }
+      }
     },
     {
       "slug": "adversarial",
       "title": "Break accepted lemmas: counterexample search against validators",
-      "variant": "adversarial"
+      "variant": "adversarial",
+      "spec": {
+        "goal_md": "Break accepted lemmas by attacking their validators with independent code: a counterexample (rung refuted) or a statement of exactly what held (rung measured), never \"confirmed\".",
+        "metric": {
+          "name": "accepted claims rechecked by an independent method",
+          "unit": "claims",
+          "better": "higher",
+          "baseline_md": "The config keeps no count; the lane's record is the closed-routes table in `research/OUTCOMES.md` and the lane state page."
+        },
+        "doc": "lanes/adversarial/spec.md",
+        "start": {
+          "path": "lanes/adversarial/start.mjs",
+          "sha256": "5002dc3e96ff89111bd2b2b87f6dbd2d1c2df30c131e45ae3055a2008ce76a89",
+          "command": "node start.mjs > claims.json"
+        },
+        "evaluator": {
+          "path": "lanes/adversarial/evaluate.mjs",
+          "sha256": "3946f639bfe3d2313b4ba575df9d78f131275ba9465849adcd09ee9ca919ce19",
+          "command": "node evaluate.mjs claims.json",
+          "tools": [
+            "node"
+          ]
+        }
+      }
     },
     {
       "slug": "formalize",
       "title": "Lean 4 formalization of accepted lemmas",
-      "variant": "formalize"
+      "variant": "formalize",
+      "spec": {
+        "goal_md": "Sorry-free Lean 4 proofs of accepted lemmas, inside the project's axiom policy.",
+        "metric": {
+          "name": "sorry-free Lean files inside the axiom policy",
+          "unit": "files",
+          "better": "higher",
+          "baseline_md": "10 accepted files plus the kk-lower-bound main theorem under lean-kernel-v1 (`state-seed/formalize.md`)."
+        },
+        "doc": "lanes/formalize/spec.md",
+        "start": {
+          "path": "lanes/formalize/start.mjs",
+          "sha256": "317f202870f8bd45fb4959bca344668c6602a0ccd683c1793146d9fcd7c382d3",
+          "command": "node start.mjs > claims.json"
+        },
+        "evaluator": {
+          "path": "lanes/formalize/evaluate.mjs",
+          "sha256": "27f57bf7c41bcf1dd9eff6b6ed9cd31777150395de7dc3a34589c056841399d3",
+          "command": "node evaluate.mjs claims.json",
+          "tools": [
+            "node"
+          ]
+        }
+      }
     },
     {
       "slug": "measure",
       "title": "Extend numbered measurement scripts to larger ranges",
-      "variant": "measure"
+      "variant": "measure",
+      "spec": {
+        "goal_md": "Extend the numbered measurement scripts to larger ranges, with values that agree exactly across independent donors.",
+        "metric": {
+          "name": "range over which a statistic agrees exactly across independent donors",
+          "unit": "largest n checked",
+          "better": "higher",
+          "baseline_md": "The strong Zone Postulate is recorded as checked for every prime to 1e11 in `research/ZONE-POSTULATE.md`; the lane state says 1e10 (#74). Which is current is unclear."
+        },
+        "doc": "lanes/measure/spec.md",
+        "start": {
+          "path": "lanes/measure/start.mjs",
+          "sha256": "2ffc6ffab68c26e6487b33b5c4745e286cbfec15f1949bf70f779d5502e79a83",
+          "command": "node start.mjs > claims.json"
+        },
+        "evaluator": {
+          "path": "lanes/measure/evaluate.mjs",
+          "sha256": "8297d5a4a69d29c2a68a8a27599262bccb6b396ab1b4213f614473956cafb177",
+          "command": "node evaluate.mjs claims.json",
+          "tools": [
+            "node"
+          ]
+        }
+      }
     },
     {
       "slug": "infinitude",
       "title": "Routes toward infinitude not in the refuted registry",
-      "variant": "infinitude"
+      "variant": "infinitude",
+      "spec": {
+        "goal_md": "Find a signed margin that implies infinitely many twin primes, along routes not already closed in the refuted registry.",
+        "metric": {
+          "name": "dyadic scales j at which the signed margin is measured",
+          "unit": "largest j",
+          "better": "higher",
+          "baseline_md": "Open: no route to infinitude is accepted. The centered-discrepancy measurement pre-registers falsifier F1, D_y(2^j)/2^j < −0.16 at any j ≥ 26 (`research/centered-discrepancy-measurement.js`)."
+        },
+        "doc": "lanes/infinitude/spec.md",
+        "start": {
+          "path": "lanes/infinitude/start.mjs",
+          "sha256": "02da814e2bea5a4df855ed58803c21b3974a8d0750bf5c07c086f89695360a4e",
+          "command": "node start.mjs > claims.json"
+        },
+        "evaluator": {
+          "path": "lanes/infinitude/evaluate.mjs",
+          "sha256": "940a4af0e063fa2266c1c2f1c4bbd8ca3ff16d2b67fe312507f72babe578b668",
+          "command": "node evaluate.mjs claims.json",
+          "tools": [
+            "node"
+          ]
+        }
+      }
     },
     {
       "slug": "finiteness-structure",
       "title": "What structure a finite twin count would force (disproof-shaped lane)",
-      "variant": "finiteness"
+      "variant": "finiteness",
+      "spec": {
+        "goal_md": "Work out what structure a finite number of twin primes would force, and measure that structure where it can be measured.",
+        "metric": {
+          "name": "zone levels p at which the zone structure is measured",
+          "unit": "largest p",
+          "better": "higher",
+          "baseline_md": "The margin x′²/G2(x#) has its minimum 3.18 at x = 37 (`research/G2-STATE.md` section 2); Z2(p) is measured by `research/zonegap-01.js`."
+        },
+        "doc": "lanes/finiteness-structure/spec.md",
+        "start": {
+          "path": "lanes/finiteness-structure/start.mjs",
+          "sha256": "79bf3ab8c5b383138549bd3a6056e8e4b6abb1f25217d7425d49c569019cd9fd",
+          "command": "node start.mjs > claims.json"
+        },
+        "evaluator": {
+          "path": "lanes/finiteness-structure/evaluate.mjs",
+          "sha256": "b5d08b0820736dbcbbdd585d2428edfad8520c6fba6752ce2fa65aa2ecc537e5",
+          "command": "node evaluate.mjs claims.json",
+          "tools": [
+            "node"
+          ]
+        }
+      }
     }
   ],
   "docs_redirects": [

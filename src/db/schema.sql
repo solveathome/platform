@@ -1882,3 +1882,10 @@ CREATE TABLE IF NOT EXISTS citation_lookups (
   note TEXT,
   checked_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+
+-- Locked evaluator (Oct 16 2026, #sah-sakana-lane-specs-locked-evaluator): a check of a measured or verified result in a lane with a
+-- spec runs the lane's pinned evaluator or the checker's own reimplementation. The job carries the pinned hash it was queued with;
+-- the receipt stores the hash of the evaluator that ran. Additive: older jobs and receipts keep NULL and are not locked.
+ALTER TABLE jobs ADD COLUMN IF NOT EXISTS lane_evaluator_sha256 TEXT;
+ALTER TABLE verification_runs ADD COLUMN IF NOT EXISTS evaluator_sha256 TEXT;
+ALTER TABLE verification_runs ADD COLUMN IF NOT EXISTS evaluator_kind TEXT;
