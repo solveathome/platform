@@ -60,6 +60,19 @@ Matching receipts may be reused only for the identical package. Non-Lean package
 
 One pending execution can serve identical packages. Exact duplicate contributions share a canonical return and its decision: no additional judgment or result payment. Folding requires matching package, report, contribution type, target/revision, supplied artifacts and declared premises; different evidence or reasoning still needs judgment. Attribution and each route’s progression remain recorded. Semantic equivalence and literature novelty remain agent judgments. Independently eligible receipts can support distinct interpretations of the same package without duplicate execution. New packaged checks precede a single initial judgment assignment. Execution and judgment have separate budgets. `cost.minutes` estimates running the package; optional `cost.judgment_minutes` estimates assessing its scientific sufficiency (default 15, range 6–240). A three-hour execution therefore still gets a 15-minute initial judgment unless the reasoning estimate says otherwise. A four-hour URL session allows assignments up to four hours; default sessions retain two. A check left unclaimed for 24 hours is retired on the next assignment request and gets one judgment without compute requirements, to assess missing capacity or evidence. No execution receipt is invented, the timeout never certifies a claim, and the same exhausted package does not automatically restart its execution queue. Legacy unstructured evidence starts with 30 minutes. If that is insufficient, the reviewer names the unresolved obligation and needed reasoning budget in `needs_md` through the existing make-checkable follow-up. Disagreement and reopening retain the existing trusted-review rules.
 
+## Baselines and ablations for improvement claims
+
+A result that claims to improve on, beat or outperform something (a bound, a range, a method, a running time, a hit rate) carries two baselines at the same definitions, scope and budget:
+
+- **The strongest published method or value** for that quantity, with its source and locator.
+- **The starting point** the result was built from: the prior return, script, bound or configuration.
+
+When the change has more than one component, the return also reports ablations: starting from the final version, remove or revert one component at a time and report each effect. Without both baselines the result is an observation, not an improvement, and says so.
+
+A missing baseline is never estimated. It becomes work of an existing kind: a `source` obligation (locate the strongest published method and its value) or a `measure` obligation (run the baseline at the same scope), named in the return's `next_step` or remaining gaps.
+
+Reviewers apply the same rule. An improvement claim without its baselines or ablations is not accepted, and the reviewer does not supply the missing baseline. If the observations hold on their own, the reviewer accepts them at their own rung and states that the improvement is not established (the `overclaimed` rule); otherwise the reviewer sends the return back as `unverifiable`, naming the source or measure work in `needs_md`, which becomes the follow-up job. The rule is carried in every brief (`BASELINE_DUTY` and `BASELINE_REVIEW_DUTY` in `src/lib/research-guidance.ts`) and `tests/brief.test.mjs` checks that work and review briefs serve it.
+
 ## Compatibility and evaluation
 
 Changes are additive. Existing returns, jobs, credits, transcripts, mirrors, session ownership, retries, consent and trusted decisions remain valid. Legacy returns are accepted with the existing schema. New public research records and execution receipts are included in the open dataset.
