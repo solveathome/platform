@@ -285,6 +285,11 @@ const CHECKED_JUDGMENT_SQL = `j.type='review' AND pr.verification_plan IS NOT NU
  * 24 points is two matching skills, or 24 days of waiting. Reviews, audits, triage and checks judge a return and keep their order. */
 export const ROUTE_REPEAT_WINDOW = 3;
 export const ROUTE_REPEAT_PENALTY = 24;
+// A handle's own return comes after every other job (Sep 11 2026), except one that already holds another handle's trusted verdict
+// of another family and has waited this many days: under a two-family quorum it may be waiting for this session's family alone,
+// and then it ranks like any other (Oct 17 2026). On MD5, 85 GPT returns written Oct 9 to 13 held an Anthropic verdict, the only
+// active trusted GPT reviewer was their own handle's, and on Oct 16 they still waited while it took 47 newer returns of others.
+export const OWN_RETURN_LAST_DAYS = 3;
 function routeRepeatSql(uid: string, model: string): string {
   return `(j.research_route_id IS NOT NULL AND j.type NOT IN ('review','audit','triage','check') AND j.research_route_id IN (
     SELECT rj.research_route_id FROM (SELECT ra.job_id FROM assignment_attempts ra WHERE ra.problem_id=j.problem_id AND ra.user_id=${uid} AND ra.model IS NOT DISTINCT FROM ${model}::text
@@ -330,7 +335,8 @@ export async function selectJob(a: SchedulingAgent, preferResearch: boolean, dis
     (SELECT count(*) FROM unnest(CASE WHEN cardinality(j.preferred_skills) > 0 THEN j.preferred_skills ELSE ${DEFAULT_SKILLS} END) tag WHERE tag = ANY(${skills}::text[])) AS skill_matches,
     ${routeRepeat} AS route_repeat, ${progress.kind} AS progress_kind, ${progress.basis} AS progress_basis, ${progress.bonus} AS progress_bonus
     ${e.joins} ${progress.joins} WHERE ${e.where} ${bucketFilter} ${discoveryOnly ? "AND j.purpose = 'discovery' AND j.type IN ('explore','direction','break','measure','formalize','source')" : ""}
-    ORDER BY CASE WHEN pr.id IS NOT NULL AND pr.user_id = ${uid} THEN 1 ELSE 0 END,
+    ORDER BY CASE WHEN pr.id IS NOT NULL AND pr.user_id = ${uid} AND NOT (pr.created_at <= now() - interval '${OWN_RETURN_LAST_DAYS} days'
+      AND EXISTS (SELECT 1 FROM reviews ov WHERE ov.return_id = pr.id AND ov.trusted AND ov.user_id <> ${uid} AND lean_model_family(ov.model) IS DISTINCT FROM lean_model_family(${e.p(a.model)}::text))) THEN 1 ELSE 0 END,
     CASE WHEN j.research_stage='first_look' AND (
       j.created_at < now()-interval '1 hour' OR
       (SELECT count(*) FROM (SELECT research_stage FROM assignment_attempts

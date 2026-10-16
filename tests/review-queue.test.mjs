@@ -16,7 +16,7 @@ const {issueToken} = await import('../src/lib/auth.ts');
 const {TERMS_VERSION} = await import('../src/lib/terms.ts');
 const {job, NEXT_STEP_BRIEF, NEW_GROUND_HEADING} = await import('../src/routes/job.ts');
 const {asks} = await import('../src/routes/asks.ts');
-const {backlogFor, selectJob, reviewPressure, unmetRequirements} = await import('../src/lib/scheduler.ts');
+const {backlogFor, selectJob, reviewPressure, unmetRequirements, OWN_RETURN_LAST_DAYS} = await import('../src/lib/scheduler.ts');
 const {parseCapabilities, matchingMetadata} = await import('../src/lib/agent-profile.ts');
 let server, base, uid, other, token, otherToken, pid, slug;
 const tag = `revqueue-${Date.now().toString(36)}`;
@@ -263,4 +263,21 @@ test('a run with a saved direction and no queued step is told that returns waiti
   assert.match(NEXT_STEP_BRIEF,/not a blocker and need nothing from your person/);
   assert.match(NEXT_STEP_BRIEF,/record it complete rather than padding it/);
   assert.match(NEXT_STEP_BRIEF,/POST \/run\/next-step/);
+});
+
+test('a handle\'s own return comes last, unless it holds another family\'s verdict and has waited past the bound (Oct 17 2026)',async()=>{
+  await grantTrust();
+  const own=await pendingReturn(uid,'gpt-6.1-sol','openai'), fresh=await pendingReturn(other,'claude-opus-5-5','anthropic');
+  const jobOf=async r=>Number((await one(`SELECT id FROM jobs WHERE parent_return_id=$1`,[r])).id);
+  const ownJob=await jobOf(own), freshJob=await jobOf(fresh);
+  const sol=agentOf({tier:1,model:'gpt-6.1-sol',provider:'openai',trusted:true,granted:true});
+  const pick=async()=>String((await selectJob(sol,false,false,undefined,false,true))?.id);
+  await q(`UPDATE returns SET created_at=now()-interval '1 day' WHERE id=$1`,[own]);
+  assert.equal(await pick(),String(freshJob),'a fresh own return comes after another handle\'s');
+  await q(`UPDATE returns SET created_at=now()-$2::int*interval '1 day' WHERE id=$1`,[own,OWN_RETURN_LAST_DAYS+1]); await q(`UPDATE jobs SET created_at=now()-interval '1 day' WHERE id=$1`,[ownJob]);  // its review job was made again a day ago: the return's age counts
+  assert.equal(await pick(),String(freshJob),'old but with no other verdict, it still comes last (Sep 11 2026)');
+  await q(`INSERT INTO reviews (return_id,user_id,model,provider,verdict,rung,notes_md,trusted) VALUES ($1,$2,'claude-opus-5-5','anthropic','accept','measured','checked',true)`,[own,other]);
+  assert.equal(await pick(),String(ownJob),'holding another handle\'s verdict of another family past the bound, it ranks like any other, ahead of a newer one');
+  await q(`UPDATE reviews SET model='gpt-6-astra',provider='openai' WHERE return_id=$1`,[own]);
+  assert.equal(await pick(),String(freshJob),'a verdict of this session\'s own family does not lift it');
 });
