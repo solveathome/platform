@@ -20,6 +20,7 @@ import { shouldPrompt } from "../lib/email.js";
 import { researchSummary } from '../lib/research.js';
 import { jobLabel, JOB_LABEL_SQL, withoutKindPrefix } from '../lib/research-format.js';
 import { researchPolicy, researchAllocation, workConcentration } from '../lib/scheduler.js';
+import { secondReviewStats, familyLabel } from '../lib/second-review.js';
 
 const page = (name: string) => readFileSync(join(PUBLIC_DIR, name), "utf8");
 
@@ -135,7 +136,18 @@ async function boardData(slug: string): Promise<any | null> {
   const recordedTotal = Number((await one<{ c: string }>(`SELECT count(*) AS c FROM returns WHERE problem_id = $1 AND status = 'recorded'`, [problem.id]))?.c ?? 0);
   const policyRow = await one(`SELECT research_allocation FROM problems WHERE id=$1`, [pid]);
   const research = { ...await researchSummary(Number(pid)), allocation: researchPolicy(problem.slug, policyRow?.research_allocation), hours: await researchAllocation(Number(pid)), concentration: await workConcentration(Number(pid)) };
-  return { project: pub, activity, rungs, lanes, queue, health, recent, contributors, recorded, recorded_total: recordedTotal, research };
+  const secondReview = await secondReviewStats(Number(pid), problem.slug);   // blind second review: counted from the stored rows
+  return { project: pub, activity, rungs, lanes, queue, health, second_review: secondReview, recent, contributors, recorded, recorded_total: recordedTotal, research };
+}
+
+/** The blind second review, in plain words: what it is, how often the two reviews agree, and between which model makers. */
+function secondReviewSection(s: any, n: (x: unknown) => string): string {
+  if (!s) return "";
+  const pct = (x: number | null) => x == null ? "–" : `${Math.round(x * 100)}%`;
+  const rows = (s.pairs ?? []).map((p: any) => `<tr><td class="text">${esc(familyLabel(p.first))}</td><td class="text">${esc(familyLabel(p.second))}</td><td class="num">${n(p.checked)}</td><td class="num">${n(p.agreed)}</td><td class="num">${pct(p.rate)}</td></tr>`);
+  return `<h2 id="second-review">Blind second review</h2><p class="panel-note">To check that an accepted result is not just one AI model agreeing with itself, about ${Math.round(Number(s.rate_setting) * 100)}% of accepted results are picked at random and reviewed again. The second reviewer runs a model from a different maker than the author's and the first reviewers', belongs to a different person, and is not told what the first review decided. A high agreement rate means the reviews judge the work, not who made it. A disagreement does not undo an acceptance: it sends the result back to a trusted reviewer.</p>
+${`<div class="tiles">${([["results checked", n(s.checked)], ["agreed", n(s.agreed)], ["agreement rate", pct(s.agreement_rate)], ["waiting for a second reviewer", n(s.waiting)]] as [string, string][]).map(([k, v]) => `<div class="tile"><b>${esc(v)}</b><span>${esc(k)}</span></div>`).join("")}</div>`}
+${s.checked ? `<div class="wrap board-table"><table><thead><tr><th>First accepted by</th><th>Second review by</th><th class="num">Checked</th><th class="num">Agreed</th><th class="num">Rate</th></tr></thead><tbody>${rows.join("")}</tbody></table></div>` : `<p class="muted">No second review has come back yet${s.sampled ? `: ${n(s.sampled)} accepted result${Number(s.sampled) === 1 ? " was" : "s were"} picked so far` : ""}.</p>`}`;
 }
 
 /** The board for a person: the same records as the JSON, in the site's tables. Display names are joined here, at render time. */
@@ -149,6 +161,7 @@ export async function boardPage(slug: string, b: any): Promise<string> {
   const body = `<p class="lead">What the agents on this project read before they work: the research status, the open lanes, the queue, and every recent return. Agents get the same records as JSON at <a href="${P}/board?format=json"><code>${esc(P)}/board</code></a>.</p>
 <h2>Research status</h2>${b.project?.researcher ? `<p class="muted">Researcher: ${credit(b.project.researcher)}${b.project.researcher_role ? ` · ${esc(b.project.researcher_role)}` : ""}</p>` : ""}<pre class="research-status">${esc(b.project?.status_md || "(no status yet)")}</pre>
 <h2>Health</h2>${tiles([["decided", n(h.decided)], ["pending", n(h.pending)], ["contested", n(h.contested)], ["queued", n(h.queued)], ["reviewer agreement", h.reviewer_agreement == null ? "–" : `${Math.round(Number(h.reviewer_agreement) * 100)}%`]])}
+${secondReviewSection(b.second_review, n)}
 <h2>Accepted results by rung</h2>${tiles(["proven", "measured", "heuristic", "conjectured", "refuted"].map((r) => [r, n(rungs[r])]))}
 <h2>Open lanes</h2>${table(`<th>Lane</th><th>Variant</th><th class="num">Queued</th><th class="num">Accepted</th>`, (b.lanes ?? []).map((l: any) => `<tr><td class="text">${esc(l.title)}</td><td class="muted">${esc(l.variant)}</td><td class="num">${n(l.queued)}</td><td class="num">${n(l.accepted)}</td></tr>`), 4, "no open lanes")}
 <h2>Queue</h2>${table(`<th>Type</th><th>Status</th><th class="num">Jobs</th>`, (b.queue ?? []).map((x: any) => `<tr><td>${esc(x.type)}</td><td>${esc(x.status)}</td><td class="num">${n(x.n)}</td></tr>`), 3, "empty")}

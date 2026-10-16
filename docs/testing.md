@@ -24,6 +24,7 @@ Find the tests for a file with `grep -l "src/lib/<name>" tests/*.test.mjs`. The 
 |---|---|---|
 | Scheduler, assignment, `/start` | `lib/scheduler.ts`, `routes/job.ts` | `ready-start-agree` (`/ready` counts what `/start` assigns), `scheduler`, `assignment-time`, `queue-alternate`, `explore-fallback`, `sessions`, `inbox-sessions`, `start-field`, `tangent` |
 | Review, triage, consensus, trust | `lib/consensus.ts`, `lib/reputation.ts`, `routes/job.ts` (review intake) | `review-queue`, `review-triage`, `review-quorum`, `review-brief-serve`, `trust` |
+| Blind second review | `lib/second-review.ts`, `routes/job.ts` (the draw at acceptance, intake, the blind return), `lib/scheduler.ts` (the family rule), `routes/board.ts` | `second-review`, `second-review-db` |
 | Shared research collaboration | `lib/shared-research*.ts`, `lib/research.ts`, `lib/challenges.ts`, `routes/job.ts` | `research-applicability`, `research-applicability-db`, `shared-research`, `shared-research-db`, `work-disposition`, `work-disposition-db`, `research-regressions`, `challenge-db`; seeded simulations |
 | Research process and returns | `lib/research*.ts`, `lib/verification.ts` | `research-process`, `research-regressions`, `research-format`, `recipe-artifacts`, `patch-receipt`, `paper-return`, `url-registration`, `chat-claims` |
 | Lean evidence | `lib/lean-*.ts` | `lean-verification`, `lean-identity-v2`, `lean-identity-v2-db`, `lean-v2-integration`, `lean-kernel`, `lean-kernel-db`, `lean-canonical-db`, `lean-same-user`, `lean-display`, `lean-milestone-client`, `paper-lean-list` |

@@ -6,7 +6,7 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { PUBLIC_DIR } from "./lib/paths.js";
 import { migrate, flushFileEffects, q } from "./db/index.js";
-import { job, settlePendingChallengeRuns } from "./routes/job.js";
+import { job, settlePendingChallengeRuns, backfillSecondReviews } from "./routes/job.js";
 import { challenges } from "./routes/challenges.js";
 import { ensureChallengeProjects, challengeSlugs } from "./lib/challenges.js";
 import { ensureChannels } from "./routes/chat.js";
@@ -174,6 +174,8 @@ migrate().then(async () => {
   // Runs that returned before their submission settled them (or before the rule existed) are settled now (src/routes/job.ts).
   for (const p of await q(`SELECT id FROM problems WHERE slug = ANY($1::text[])`, [challengeSlugs()])) await settlePendingChallengeRuns(Number(p.id));
   await recordAllPublications();
+  // Blind second review: recent acceptances from before the draw existed get it, once, after a blue/green switch has retired the old container.
+  setTimeout(() => { backfillSecondReviews().then((n) => { if (n) console.log(`second review: ${n} backfilled`); }).catch(error => console.error("second review backfill:", error)); }, 5 * 60_000).unref();
   setInterval(() => { flushFileEffects().catch(error => console.error("publication retry:", error)); }, 30000).unref();
   // Announcements (#sah-discord-announcer): scan and send once a minute; off unless a project turns it on, ANNOUNCE_ENABLED=0 stops it.
   setInterval(() => { announceTick().catch(error => console.error("announce:", error)); }, 60_000).unref();

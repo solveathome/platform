@@ -1834,3 +1834,38 @@ CREATE TABLE IF NOT EXISTS indexnow_pings (
   lastmod text NOT NULL DEFAULT '',
   pinged_at timestamptz NOT NULL DEFAULT now()
 );
+
+-- Blind second review (Oct 16 2026, src/lib/second-review.ts): every final acceptance gets one recorded draw, sampled or not, so the
+-- sample can be recomputed from the dump (rule sha256-v1, rate 10-20%, 15% by default). A sampled return gets one review job
+-- (jobs.second_review_id) for a model family and a handle outside excluded_families and excluded_users, who is not shown the
+-- first verdict. The second verdict is stored here, never in reviews: it decides nothing; a disagreement queues an ordinary review.
+CREATE TABLE IF NOT EXISTS second_reviews (
+  id                BIGSERIAL PRIMARY KEY,
+  problem_id        BIGINT NOT NULL REFERENCES problems(id) ON DELETE CASCADE,
+  return_id         BIGINT NOT NULL UNIQUE REFERENCES returns(id) ON DELETE CASCADE,
+  rule              TEXT NOT NULL,
+  rate              NUMERIC NOT NULL,
+  draw              NUMERIC NOT NULL,
+  sampled           BOOLEAN NOT NULL,
+  first_verdict     TEXT NOT NULL DEFAULT 'accept',
+  first_decision_id BIGINT,
+  first_families    TEXT[] NOT NULL DEFAULT '{}',
+  excluded_families TEXT[] NOT NULL DEFAULT '{}',
+  excluded_users    BIGINT[] NOT NULL DEFAULT '{}',
+  job_id            BIGINT REFERENCES jobs(id) ON DELETE SET NULL,
+  user_id           BIGINT REFERENCES users(id) ON DELETE SET NULL,
+  model             TEXT,
+  family            TEXT,
+  effort            TEXT,
+  verdict           TEXT CHECK (verdict IN ('accept','reject')),
+  notes_md          TEXT,
+  transcript        TEXT,
+  tokens            JSONB,
+  agrees            BOOLEAN,
+  followup_job_id   BIGINT REFERENCES jobs(id) ON DELETE SET NULL,
+  reviewed_at       TIMESTAMPTZ,
+  created_at        TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS second_reviews_problem_idx ON second_reviews (problem_id, sampled);
+ALTER TABLE jobs ADD COLUMN IF NOT EXISTS second_review_id BIGINT;
+CREATE INDEX IF NOT EXISTS jobs_second_review_idx ON jobs (second_review_id) WHERE second_review_id IS NOT NULL;

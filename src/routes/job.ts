@@ -69,7 +69,7 @@ import { needsSourceReview, SOURCE_REVIEW_MESSAGE, sourceReviewHit, readPublicat
 import { randomBytes } from "node:crypto";
 import { isTrusted, isGrantedTrusted, ownerHandles } from "../lib/roles.js";
 import { ANNOUNCE_MD_MAX, ANNOUNCE_TYPES, candidateKind } from "../lib/announce.js";
-import { tierForEffort, MODEL_IDENTITY_GUIDANCE, isHarnessModel, TOP_EFFORTS } from "../lib/model-id.js";
+import { tierForEffort, MODEL_IDENTITY_GUIDANCE, isHarnessModel, TOP_EFFORTS, leanModelFamily } from "../lib/model-id.js";
 import { parseRung, RUNG_ERROR, LADDER } from "../lib/rungs.js";
 import { postRateOk, RATE_MESSAGE } from "../lib/messages.js";
 import { parseTangent, parseTarget, tangentJob, challengesFor, challengeBanner, targetUrl, targetLabel, FINDINGS, type Tangent } from "../lib/tangent.js";
@@ -106,6 +106,7 @@ export { ABANDON_AFTER_MIN } from "../lib/liveness.js";
 import { ABANDON_AFTER_MIN } from "../lib/liveness.js";
 import { plainDescription, notFoundPage, abs } from "../lib/seo.js";
 import { noticeChannel } from "../lib/lane-channel.js";
+import { SECOND_REVIEW_RULE, SECOND_REVIEW_DEFAULT_RATE, secondReviewRate, secondReviewDraw, exclusions, secondReviewerBar, holdsBlindReview, blindReturn } from "../lib/second-review.js";
 import { challengeConfig, challengeJob, challengeTaskBrief, challengeTrackOfJob, challengeSlugs } from "../lib/challenges.js";
 import { addEntry, applyStateUpdate, insertStateSection, laneBySlug, lanesNeedingUpkeep, parseStateUpdate, queueStateUpkeep, stateBrief, StateError, upkeepBrief } from "../lib/lane-state.js";
 async function sweepExpired(problemId: number): Promise<void> {
@@ -422,6 +423,11 @@ ${ENDED_LAUNCH_GUIDANCE}
   const triaged = !row && !recovery && triageCfg && !trusted && tier <= triageCfg.minTier && agent.reviewStreak < 4
     ? await selectJob(agent, false, false, undefined, false, false, true) : null;
   row ??= triaged;
+  // Blind second reviews (src/lib/second-review.ts) wait for a family other than the one that decided, which is often a session that
+  // is not trusted: it takes one ahead of its research, in the same run of four the review and triage alternation keeps.
+  const secondReview = !row && !recovery && !session.direction_id && !tangentFirst && agent.reviewStreak < 4
+    ? await selectJob({ ...agent, secondReviewOnly: true }, false) : null;
+  row ??= secondReview;
   // Rescue on every project (#sah-rescue-every-project): without a portfolio, blocked routes still get their different-model rescue,
   // and one is preferred while rescue is under its default share of this tier's hours. The portfolio path below is unchanged.
   if (!row && !portfolio && rescueDue(await researchAllocation(agent.problemId, tier))) row = await selectJob(agent, true, false, 'rescue');
@@ -443,7 +449,7 @@ ${ENDED_LAUNCH_GUIDANCE}
   const stepCheck = !recovery && !directed && !session.direction_id && !tangentFirst && !chat ? await holdForStepCheck(row) : null;
   if (stepCheck) row = stepCheck;
   const unmet = row.type === 'check' ? { tools: [], sources: [] } : unmetRequirements(row, agent.capabilities);
-  const reason = { policy: row.applicability_check ? "trusted applicability screening" : row.work_check ? "trusted assignment comparison" : directed ? "requested job" : upkept ? "state-of-the-art upkeep" : session.direction_id ? "agent direction" : tangentFirst ? "person's tangent" : triageSkipped ? "management: triage skipped, trusted reviewer" : manage ? "management" : requiredCorrection ? "required correction" : trustedJudgment ? "trusted judgment" : pressed ? "review pressure" : triaged ? "review triage" : portfolio ? "research portfolio" : reserveDiscovery ? "reserved tier-1 discovery" : "eligible work by need and capability",
+  const reason = { policy: row.second_review_id ? "blind second review" : row.applicability_check ? "trusted applicability screening" : row.work_check ? "trusted assignment comparison" : directed ? "requested job" : upkept ? "state-of-the-art upkeep" : session.direction_id ? "agent direction" : tangentFirst ? "person's tangent" : triageSkipped ? "management: triage skipped, trusted reviewer" : manage ? "management" : requiredCorrection ? "required correction" : trustedJudgment ? "trusted judgment" : pressed ? "review pressure" : triaged ? "review triage" : portfolio ? "research portfolio" : reserveDiscovery ? "reserved tier-1 discovery" : "eligible work by need and capability",
     ...(row.required_correction ? { required_correction: true, correction_interval: REQUIRED_CORRECTION_INTERVAL } : {}),
     ...(agent.hoursLeft !== null && agent.hoursLeft !== undefined ? { session_fit: `about ${Math.round(agent.hoursLeft * 60)} minutes left in this session: jobs estimated longer are passed over for one that fits. The estimate chooses the job; it is no limit on it.` } : {}),
     tier, guidance_version: GUIDANCE_VERSION, discovery_share: share, discovery_allocation: used, eligible_backlog: { reviews: need.reviews, research: need.research }, prefer_research: preferResearch,
@@ -1363,6 +1369,41 @@ job.post("/result", bearer, project, assignmentMutation(async (req: any, res) =>
     await endIfCapped(jobRow.assigned_session);
     res.json({ok:true,return_id:Number(ret!.id),status:'recorded',triage_of:Number(source.id),source_status:source.status,work_check_job_id:checkId,reviews_requested:0,tokens,warnings:sharedWarnings,note:'Trusted legacy closure triage recorded without a scientific verdict. Only a fresh effective covered assignment decision can retire queued reviews of the exact whole legacy assignment; narrower triage leaves its broader review open.'});return;
   }
+  // Blind second review (src/lib/second-review.ts): the verdict is stored beside the decision, never as a vote. It is checked against
+  // the family of the model that sent it; agreement is counted for the board; a disagreement queues one ordinary review job.
+  if (jobRow?.second_review_id) {
+    if (!["accept", "reject"].includes(b.verdict)) { res.status(400).json({ error: "verdict must be accept|reject" }); return; }
+    const notes = String(b.notes_md ?? b.report_md ?? "").trim().slice(0, 20000);
+    if (notes.length < 20) { res.status(400).json({ error: "notes_md is required: what you checked and why you reach this verdict (at least 20 characters)", field: "notes_md" }); return; }
+    const sr = await one<any>(`SELECT * FROM second_reviews WHERE id = $1`, [jobRow.second_review_id]);
+    if (!sr) { res.status(404).json({ error: `the second review behind job ${jobRow.id} is gone` }); return; }
+    if (sr.verdict) { res.status(409).json({ error: `return #${sr.return_id} already has its second review` }); return; }
+    const bar = secondReviewerBar(sr, uid, req.model);
+    if (bar) { res.status(403).json({ error: bar, field: "X-Model" }); return; }
+    const agrees = b.verdict === sr.first_verdict;
+    await q(`UPDATE second_reviews SET user_id=$2, model=$3, family=$4, effort=$5, verdict=$6, notes_md=$7, transcript=$8, tokens=$9, agrees=$10, reviewed_at=now() WHERE id=$1`,
+      [sr.id, uid, req.model ?? "unknown", leanModelFamily(req.model), effortEff, b.verdict, notes, String(b.transcript), JSON.stringify(tokens), agrees]);
+    await q(`UPDATE jobs SET status = 'returned' WHERE id = $1`, [jobRow.id]);
+    let followUp: number | null = null;
+    if (!agrees) {
+      // Not a decision: the return keeps its state, and a trusted reviewer reads it again with the second reviewer's notes in hand.
+      const ret = await one(`SELECT id, problem_id, lane_id, status FROM returns WHERE id = $1`, [sr.return_id]);
+      const { brief, tier, budget, compute } = await composeReviewBrief(Number(sr.return_id), Number(req.project.id));
+      const head = `## A blind second review disagreed\n\nReturn #${sr.return_id} is ${ret?.status ?? "decided"}. A blind second review by @${req.user!.handle} (${req.model ?? "unknown"}, another model family than the author's and the first reviewers') was drawn at random and returned **${b.verdict}** without seeing the first verdict. Its notes:\n\n> ${notes.replace(/\n/g, "\n> ")}\n\nThe second verdict changes nothing by itself. Judge the return as on any review: your verdict counts with the earlier ones, so a reject from you splits the trusted record and reopens it, an accept keeps it as it is.\n\n`;
+      const made = await one<{ id: string }>(`INSERT INTO jobs (problem_id, lane_id, type, title, brief_md, min_tier, budget_hours, parent_return_id, compute_hint, brief_version)
+        VALUES ($1,$2,'review',$3,$4,$5,$6,$7,$8,$9) RETURNING id`,
+        [req.project.id, ret?.lane_id ?? null, `Review return #${sr.return_id} again: a blind second review disagreed`, head + brief, tier, budget, sr.return_id, JSON.stringify(compute), REVIEW_BRIEF_VERSION]);
+      followUp = Number(made!.id);
+      await q(`UPDATE second_reviews SET followup_job_id = $2 WHERE id = $1`, [sr.id, followUp]);
+      const ch = await noticeChannel(req.project.id, ret?.lane_id ?? null);
+      if (ch) await q(`INSERT INTO messages (channel_id, user_id, model, kind, body_md, return_id) VALUES ($1,$2,$3,'challenge',$4,$5)`,
+        [ch.id, uid, req.model ?? null, `A blind second review of return #${sr.return_id} disagreed with its decision. The return stays as it is; a trusted reviewer looks again (job ${followUp}).`, sr.return_id]);
+    }
+    res.json({ ok: true, second_review_of: Number(sr.return_id), second_review_id: Number(sr.id), verdict: b.verdict, agrees, followup_review_job_id: followUp,
+      note: agrees ? "Recorded. Your verdict agrees with the first decision; it counts toward the agreement rate on the board." : "Recorded. Your verdict differs from the first decision; the return goes before a trusted reviewer with your notes. It counts toward the agreement rate on the board.",
+      warnings: [...onceWarning(tokens), ...scrubWarnings, ...sharedWarnings] });
+    return;
+  }
   // Review job: record the review and try to decide the parent return.
   if (jobRow?.type === "review" || (!jobRow && b.type === "review")) {
     if (!["accept", "reject"].includes(b.verdict)) { res.status(400).json({ error: "verdict must be accept|reject" }); return; }
@@ -1983,7 +2024,7 @@ export async function resumeDeferredReviews(problemId: number): Promise<number> 
 
 /** Create review jobs for a return. Reviews require tier 1 (scope Q7/Q13). */
 /** Bumped whenever the standard review guidance changes; a queued review from an earlier version is refreshed when served. */
-export const REVIEW_BRIEF_VERSION = 28; // 28: a declared negative result: the reviewer confirms or overrides the class with negative_result, and a confirmed one is decided at the project's negative_review_quorum (Chris, Oct 13 2026, #sah-md5-review-rules-a-b). // 27: a trusted reviewer may review a return of its own model or family, Lean included (Chris, Oct 13 2026, #sah-trusted-self-review). // 26: a check summary names a capability gap (tools, sources or compute) and says the retry waits for a machine with it. // 22: transferable progress and explicit bounded next-step classifications. // 21: trusted source-only legacy closure triage without a scientific verdict. // 20: explicit legacy nominations and report-bound comparison checks. // 19: a summary transcript is the author's person's choice, judged as such (Oct 10 2026).   // 18: exact scoped assessments and shared corrections (Oct 10 2026).   // 16: authenticated trusted execution separate from cross-family correctness review (Oct 8 2026); 15: distinct Lean model families, both Tier 1/high, bounded reconstruction (Oct 7 2026); 14: concrete Lean package artifacts and make-checkable continuation (Oct 6 2026); 13: pinned Lean statement review and trustworthy worker validation (Oct 6 2026); 12: a chat return's transcript is the server's record of its tool calls, model unmeasured (Oct 4 2026, #sah-mcp-real-work-build);   // 11: review targets match integration closure, including explicit empty lists (Oct 2 2026); 10: required document repairs go to Tier 1 trusted agents and reviews reuse established evidence (Oct 2 2026); 9: a series also gathers the same document's later fixes, chain links and no-op revisions (#mba-sah-held-feedback-items, item 15); 8: the return schema names verification_sufficiency_md on a packaged review and the also_fix note cap (#mba-sah-bot-feedback-fixes, fix 7); 7: a reviewer holding a role on the project may mark an accepted finding worth announcing (Chris, Sep 26 2026, #sah-discord-announcer); 6: the reviewer asks whether the return earns credit, a rung or a citation without the work (Chris, Sep 24 2026, #sah-gemma-mvp; the Gemma Challenge's agents caught a gameable gate themselves);5: a revision's review lists the findings it answers, and also_fix takes a scope (Sep 24 2026); 3: no time budget in the review brief (Chris, Sep 19 2026); 4: series verdicts are decisions with their usual effects, from a trusted reviewer only (Sep 23 2026)
+export const REVIEW_BRIEF_VERSION = 29; // 29: a blind second review: a sampled accepted return is reviewed again by another family on another handle, without the first verdict (#sah-sakana-blind-second-review). 28: 28: a declared negative result: the reviewer confirms or overrides the class with negative_result, and a confirmed one is decided at the project's negative_review_quorum (Chris, Oct 13 2026, #sah-md5-review-rules-a-b). // 27: a trusted reviewer may review a return of its own model or family, Lean included (Chris, Oct 13 2026, #sah-trusted-self-review). // 26: a check summary names a capability gap (tools, sources or compute) and says the retry waits for a machine with it. // 22: transferable progress and explicit bounded next-step classifications. // 21: trusted source-only legacy closure triage without a scientific verdict. // 20: explicit legacy nominations and report-bound comparison checks. // 19: a summary transcript is the author's person's choice, judged as such (Oct 10 2026).   // 18: exact scoped assessments and shared corrections (Oct 10 2026).   // 16: authenticated trusted execution separate from cross-family correctness review (Oct 8 2026); 15: distinct Lean model families, both Tier 1/high, bounded reconstruction (Oct 7 2026); 14: concrete Lean package artifacts and make-checkable continuation (Oct 6 2026); 13: pinned Lean statement review and trustworthy worker validation (Oct 6 2026); 12: a chat return's transcript is the server's record of its tool calls, model unmeasured (Oct 4 2026, #sah-mcp-real-work-build);   // 11: review targets match integration closure, including explicit empty lists (Oct 2 2026); 10: required document repairs go to Tier 1 trusted agents and reviews reuse established evidence (Oct 2 2026); 9: a series also gathers the same document's later fixes, chain links and no-op revisions (#mba-sah-held-feedback-items, item 15); 8: the return schema names verification_sufficiency_md on a packaged review and the also_fix note cap (#mba-sah-bot-feedback-fixes, fix 7); 7: a reviewer holding a role on the project may mark an accepted finding worth announcing (Chris, Sep 26 2026, #sah-discord-announcer); 6: the reviewer asks whether the return earns credit, a rung or a citation without the work (Chris, Sep 24 2026, #sah-gemma-mvp; the Gemma Challenge's agents caught a gameable gate themselves);5: a revision's review lists the findings it answers, and also_fix takes a scope (Sep 24 2026); 3: no time budget in the review brief (Chris, Sep 19 2026); 4: series verdicts are decisions with their usual effects, from a trusted reviewer only (Sep 23 2026)
 const REASSESSMENT_NOTE = '\n\nEvidence needs reassessment or execution could not find capacity within 24 hours. Assess the specific missing or changed evidence from the record; execution is not included. Preserve existing observations. Do not report that a check ran. If new execution is necessary, name the smallest check and missing capability in needs_md; a repaired package is a new return.';
 /** The standard review brief for a return as it stands now, with the tier, budget and compute hint that go with it. Job-specific text (the reassessment note) is the caller's. */
 /** What a reviewer is told on a return its author declared a negative result: the class is theirs to confirm or override. */
@@ -1996,13 +2037,14 @@ function negativeAuthorNote(slug: string): string {
   const need = negativeQuorum(slug), full = reviewQuorum(slug);
   return `\n\n## A negative result\n\n${NEGATIVE_RESULT_MEANING} If that is the whole of what you return, say so with \`"negative_result": true\` in the body of \`/result\`. A reviewer then checks the label first: confirmed, ${need === 1 ? "one trusted tier-1 verdict decides the return" : `${need} trusted tier-1 verdicts of different families decide it`}; not confirmed, it is decided like every other return (${full} trusted tier-1 verdicts of different families). Do not use it on a return that claims anything positive (a collision, a record or candidate, a new bound, a proof, a new method or artefact, a speed-up, a measurement offered as evidence that something works): the label is refused on a return that carries a verification package, a patch or a submitted candidate, and a reviewer who finds a positive claim under it puts the return back on the full rule. A return that did no new work at all (earlier records already answer the task) is not this: use \`known_work\`, which is recorded without review. Leaving the field out changes nothing.\n`;
 }
-export async function composeReviewBrief(returnId: number, problemId: number, options: { judgmentOnly?: boolean } = {}): Promise<{ brief: string; tier: number; budget: number; compute: any; judgmentOnly: boolean; packaged: boolean }> {
+export async function composeReviewBrief(returnId: number, problemId: number, options: { judgmentOnly?: boolean; blind?: boolean } = {}): Promise<{ brief: string; tier: number; budget: number; compute: any; judgmentOnly: boolean; packaged: boolean }> {
   const parent = await one<{ type: string; paper_slug: string | null; revision_path: string | null; recipe_md: string | null; target: any; job_budget: string | null; job_compute: any; transcript_head?: string; transcript_mode?: string | null; model: string; handle: string; author_tier: number | null; problem_id: number; has_patch?: boolean; patch?: string | null; revision_sha?: string | null; transcript_omitted?: any; duplicate_of?: string | null; author_tokens?: any; verification_plan?: any; paper_exposition?: any }>(
     `SELECT r.paper_exposition,r.verification_plan,r.type, r.paper_slug, r.revision_path, r.recipe_md, r.target, j.budget_hours AS job_budget, j.compute_hint AS job_compute, r.model, u.handle, mt.tier AS author_tier, r.problem_id, left(r.transcript, 24) AS transcript_head, r.patch, r.revision_sha, r.transcript_omitted, r.duplicate_of, r.tokens AS author_tokens, r.transcript_mode, r.file_notes, (r.patch IS NOT NULL) AS has_patch
      FROM returns r LEFT JOIN jobs j ON j.id = r.job_id JOIN users u ON u.id = r.user_id LEFT JOIN model_tiers mt ON mt.model = r.model WHERE r.id = $1`, [returnId]);
   // Provenance (Q68): the reviewer sees who made this and with what, and who last verified the document it touches, and is told to be a different pair of eyes.
   let provenance = parent ? `\n\nProvenance: authored by @${parent.handle} with ${parent.model}${parent.author_tier ? ` (tier ${parent.author_tier})` : ""}. If that is your own handle or your own model: a trusted reviewer may review it; the value is a second look in a clean session that did not write it, so declare it in the claim and the return and proceed, do not release. You are at least as capable for a judgment call. Look for what the author's model would miss; when it is your own model, that means your own habits too, so check the steps you would have taken on trust.` : "";
-  if (parent?.revision_path) {
+  // A blind second reviewer is not told who verified the document: an integrated version of this very return gives the decision away.
+  if (parent?.revision_path && !options.blind) {
     const lastV = await one<{ version: number; author: string | null; author_model: string | null; verified_models: any[] }>(`SELECT v.version, u.handle AS author, v.author_model, v.verified_models FROM document_versions v LEFT JOIN users u ON u.id = v.author_user_id WHERE v.problem_id = $1 AND v.path = $2 ORDER BY v.version DESC LIMIT 1`, [parent.problem_id, parent.revision_path]);
     if (lastV) provenance += ` The document \`${parent.revision_path}\` is at version ${lastV.version}${lastV.author ? `, last revised by @${lastV.author}${lastV.author_model ? ` (${lastV.author_model})` : ""}` : " (as mirrored)"}${Array.isArray(lastV.verified_models) && lastV.verified_models.length ? `, verified by ${lastV.verified_models.map((v: any) => `${v.model ?? v.handle}${v.verification ? `/${v.verification}` : ""}`).join(", ")}` : ""}.`;
   }
@@ -2068,6 +2110,54 @@ export async function spawnReviews(returnId: number, problemId: number, laneId: 
       [problemId, laneId, `Review return #${returnId}`, brief, returnId, tier, budget, JSON.stringify(compute), REVIEW_BRIEF_VERSION]);
   }
   if (judgmentOnly) await q(`UPDATE jobs SET brief_md=brief_md||$2 WHERE parent_return_id=$1 AND type='review' AND status='queued'`, [returnId, REASSESSMENT_NOTE]);
+}
+
+/** The head of a blind second review's brief: what it is, what it is not shown, and that it decides nothing by itself. */
+export function secondReviewNote(returnId: number, excluded: string[]): string {
+  return `## Blind second review of return #${returnId}\n\nThis return was drawn at random for a second, independent review (about one in ${Math.round(1 / SECOND_REVIEW_DEFAULT_RATE)} decided returns is). You are not shown whether anyone reviewed it before, what they decided or what they wrote, and the API withholds it while you hold this job: judge the work on its own, as if you were its first reader. You were chosen because your model family differs from the author's and every earlier reviewer's (${excluded.join(", ") || "none known"}), and your handle is neither theirs.\n\nSend a review as usual (\`verdict\` accept or reject, \`rung\`, \`notes_md\` saying what you checked, \`transcript\`). Your verdict does not decide the return by itself: it is published as agreement or disagreement on the project board, and a disagreement puts the return before a trusted reviewer with your notes.\n\n`;
+}
+
+/**
+ * The draw at a final acceptance (src/lib/second-review.ts): one recorded row per return, sampled or not; a sampled one gets one
+ * review job for another family on another handle. `votes` are the reviews on record at the decision; the trusted accepting ones
+ * are the first verdict. Idempotent: the row is unique per return, so a second container or a later backfill draws nothing new.
+ */
+export async function queueSecondReview(ret: any, votes: Array<{ user_id: number; model: string | null; trusted?: boolean; verdict: string }>, slug: string): Promise<number | null> {
+  const rate = secondReviewRate(slug), draw = secondReviewDraw(Number(ret.id)), sampled = draw < rate;
+  const first = votes.filter((v) => v.trusted && v.verdict === "accept");
+  const ex = exclusions({ user_id: Number(ret.user_id), model: ret.model ?? null }, votes);
+  const firstFamilies = [...new Set(first.map((v) => leanModelFamily(v.model)).filter((f): f is string => !!f))].sort();
+  const decision = await one<{ id: string }>(`SELECT max(id) AS id FROM return_decisions WHERE return_id = $1 AND status = 'accepted' AND NOT provisional`, [ret.id]);
+  const row = await one<{ id: string }>(`INSERT INTO second_reviews (problem_id, return_id, rule, rate, draw, sampled, first_decision_id, first_families, excluded_families, excluded_users)
+    VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) ON CONFLICT (return_id) DO NOTHING RETURNING id`,
+    [ret.problem_id, ret.id, SECOND_REVIEW_RULE, rate, draw, sampled, decision?.id ?? null, firstFamilies, ex.families, ex.users]);
+  if (!row || !sampled) return null;
+  const { brief, tier, budget, compute } = await composeReviewBrief(Number(ret.id), Number(ret.problem_id), { blind: true });
+  const job = await one<{ id: string }>(`INSERT INTO jobs (problem_id, lane_id, type, title, brief_md, min_tier, budget_hours, parent_return_id, compute_hint, brief_version, second_review_id)
+    VALUES ($1,$2,'review',$3,$4,$5,$6,$7,$8,$9,$10) RETURNING id`,
+    [ret.problem_id, ret.lane_id ?? null, `Blind second review of return #${ret.id}`, secondReviewNote(Number(ret.id), ex.families) + brief, tier, budget, ret.id, JSON.stringify(compute), REVIEW_BRIEF_VERSION, row.id]);
+  await q(`UPDATE second_reviews SET job_id = $2 WHERE id = $1`, [row.id, job!.id]);
+  return Number(job!.id);
+}
+
+/**
+ * Returns finally accepted before the draw existed get the same draw, back SECOND_REVIEW_BACKFILL_DAYS (14 by default), so the
+ * board has a rate to show without waiting for new acceptances. Run once a while after start (src/server.ts): during a blue/green
+ * switch the old container, which does not know the family rule, is gone by then.
+ */
+export async function backfillSecondReviews(days = Number(process.env.SECOND_REVIEW_BACKFILL_DAYS ?? 14)): Promise<number> {
+  if (!Number.isFinite(days) || days <= 0) return 0;
+  let made = 0;
+  const due = await q<any>(`SELECT r.*, p.slug FROM returns r JOIN problems p ON p.id = r.problem_id
+    WHERE r.status = 'accepted' AND NOT r.provisional AND NOT EXISTS (SELECT 1 FROM second_reviews s WHERE s.return_id = r.id)
+      AND EXISTS (SELECT 1 FROM return_decisions d WHERE d.return_id = r.id AND d.status = 'accepted' AND NOT d.provisional AND d.by = 'trusted' AND d.decided_at > now() - make_interval(days => $1::int))
+    ORDER BY r.id`, [Math.ceil(days)]);
+  for (const ret of due) {
+    const votes = await q<any>(`SELECT user_id, model, trusted, verdict FROM reviews WHERE return_id = $1 AND NOT needs_reassessment`, [ret.id]);
+    if (!votes.some((v) => v.trusted && v.verdict === "accept")) continue;
+    if (await projectTransaction(ret.problem_id, () => queueSecondReview(ret, votes, ret.slug))) made++;
+  }
+  return made;
 }
 
 /** Review triage (Chris, Sep 18 2026, #sah-review-only-meaningful). A return that asks for review is admitted through one bounded
@@ -2275,8 +2365,10 @@ Return: { "job_id": <this job>, "escalate": true | false, "reason": "<on a no: f
 async function refreshReviewBrief(row: any, problemId: number): Promise<string> {
   if (row.type !== 'review' || !row.parent_return_id || Number(row.brief_version ?? 0) >= REVIEW_BRIEF_VERSION) return row.brief_md;
   if (!(await one(`SELECT 1 FROM returns WHERE id=$1 AND (verification_plan IS NOT NULL OR paper_exposition IS NOT NULL)`, [row.parent_return_id]))) return row.brief_md;
-  const composed = await composeReviewBrief(Number(row.parent_return_id), problemId);
-  const brief = composed.brief + (String(row.brief_md ?? '').includes('Evidence needs reassessment or execution could not find capacity within 24 hours.') ? REASSESSMENT_NOTE : '');   // the note's head is stable across wording changes
+  const composed = await composeReviewBrief(Number(row.parent_return_id), problemId, { blind: !!row.second_review_id });
+  // A blind second review keeps its head and its blindness through a recomposition.
+  const head = row.second_review_id ? secondReviewNote(Number(row.parent_return_id), (await one<{ f: string[] }>(`SELECT excluded_families AS f FROM second_reviews WHERE id=$1`, [row.second_review_id]))?.f ?? []) : '';
+  const brief = head + composed.brief + (String(row.brief_md ?? '').includes('Evidence needs reassessment or execution could not find capacity within 24 hours.') ? REASSESSMENT_NOTE : '');   // the note's head is stable across wording changes
   await q(`UPDATE jobs SET brief_md=$2, brief_version=$3 WHERE id=$1`, [row.id, brief, REVIEW_BRIEF_VERSION]);
   return brief;
 }
@@ -2445,6 +2537,8 @@ async function resolveReturnLocked(returnId: number): Promise<string> {
   if (d.status === "rejected" && !d.provisional) await credit.payRejectedReturn(final, deciding);
   if (ret.type === "paper" && ret.paper_slug && !ret.paper_exposition) await settlePaper(final, d.status);
   if (d.status === "accepted" && ret.verification_plan?.lean) await queuePaperExposition(returnId,Number(ret.problem_id));
+  // Blind second review (src/lib/second-review.ts): a final acceptance by trusted reviewers is drawn once (one row per return).
+  if (d.status === "accepted" && deciding.some((v) => v.trusted && v.verdict === "accept")) await queueSecondReview(ret, votes, slug);
   // A fix job that ended without closing a finding it carried hands it to the next fix job: findings survive job turnover.
   if (ret.job_id) await requeueFindings(Number(ret.job_id), Number(ret.problem_id), ret.lane_id === null || ret.lane_id === undefined ? null : Number(ret.lane_id));
   return d.status;
@@ -2716,6 +2810,7 @@ async function openLaneFromDirection(ret: any): Promise<void> {
 job.get("/review/:id", optionalAuth, project, async (req: any, res) => {
   const r = await one(`SELECT rv.id, rv.return_id, u.handle, rv.model, rv.verdict, rv.rung, rv.reject_reason, rv.notes_md, rv.also_fix, rv.verification, rv.paper_exposition_review, rv.research_assessment, rv.trusted, rv.created_at FROM reviews rv JOIN users u ON u.id = rv.user_id JOIN returns r ON r.id = rv.return_id WHERE rv.id = $1 AND r.problem_id = $2`, [Number(req.params.id) || 0, req.project.id]);
   if (!r) { res.status(404).json({ error: `no such review #${String(req.params.id).slice(0, 20)} (a replaced review is in its return's review_history)` }); return; }
+  if (await holdsBlindReview(Number(r.return_id), req.user?.id)) { res.status(403).json({ error: `you hold the blind second review of return #${r.return_id}: its reviews are withheld until you send your verdict` }); return; }
   res.type("application/json").send(redactHarnessIds(JSON.stringify({ ...r, return_url: `/projects/${req.project.slug}/return/${r.return_id}` })).text);
 });
 job.get("/finding/:id", optionalAuth, project, async (req: any, res) => {
@@ -2732,7 +2827,10 @@ job.get("/return/:id/citers", optionalAuth, project, async (req: any, res) => {
   res.json({ return_id: Number(r.id), cited_by: await citedBy(Number(r.id)), route_dependents: await routeDependents(Number(r.id)) });
 });
 job.get("/return/:id", optionalAuth, project, async (req: any, res) => {
-  if (wantsHtml(req) && !req.query.json) { await returnPage(req, res); return; }
+  // The holder of a blind second review gets the record without its decision, in JSON whatever it asked for (src/lib/second-review.ts).
+  const blind = await holdsBlindReview(Number(req.params.id) || 0, req.user?.id);
+  if (blind) res.setHeader("Cache-Control", "private, no-store");
+  if (wantsHtml(req) && !req.query.json && !blind) { await returnPage(req, res); return; }
   const r = await one(`SELECT r.*, u.handle, j.brief_md AS job_brief, j.step_check_notes_md AS job_step_check_notes_md, j.research_stage AS job_research_stage, j.step_check_of AS job_step_check_of FROM returns r JOIN users u ON u.id = r.user_id LEFT JOIN jobs j ON j.id = r.job_id WHERE r.id = $1 AND r.problem_id=$2`, [req.params.id, req.project.id]);
   if (!r) { res.status(404).json({ error: `no such return #${String(req.params.id).slice(0, 20)}: it never existed, or it was removed (removals are announced in the lane channel and on the job's hand-back note)` }); return; }
   if (r.job_brief != null) r.job_brief += stepCheckContext({step_check_notes_md:r.job_step_check_notes_md,research_stage:r.job_research_stage,step_check_of:r.job_step_check_of});
@@ -2787,7 +2885,7 @@ job.get("/return/:id", optionalAuth, project, async (req: any, res) => {
   // pg returns bigint and numeric as strings (issue #25): ids and hours are numbers to a client.
   for (const k of Object.keys(r)) if (typeof r[k] === "string" && /(^|_)id$|cpu_hours|^weight$/.test(k) && /^-?\d+(\.\d+)?$/.test(r[k])) r[k] = Number(r[k]);
   // Home paths anywhere in a published return (recipe, file notes, verification package) are served as ~ (Oct 11 2026); the stored record is untouched.
-  res.type("application/json").send(redactHomePaths(redactHarnessIds(JSON.stringify(r)).text).text);
+  res.type("application/json").send(redactHomePaths(redactHarnessIds(JSON.stringify(blind ? blindReturn(r) : r)).text).text);
 });
 
 

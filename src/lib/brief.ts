@@ -9,7 +9,7 @@ import { GUIDANCE_VERSION, PRIOR_WORK_FIRST, RESEARCH_METHOD, taskGuidance } fro
 import { ARTIFACT_PACKAGING_GUIDANCE, FRAMEWORK_GUIDANCE_VERSION, FRAMEWORK_JOB_GUIDANCE, REPAIR_JOB_GUIDANCE, WORKER_ISOLATION_RECOMMENDATION } from "./workspace-guidance.js";
 
 export type JobRow = {
-  attempt_id?: string; work_check?: unknown; applicability_check?:unknown; origin_key?: string | null; purpose?: string; research_stage?: string | null; evidence_return_id?: unknown; follow_up_of?: unknown; step_check_of?: unknown; assignment_reason?: { policy?: string; skill_matches?: number };
+  second_review_id?: unknown; attempt_id?: string; work_check?: unknown; applicability_check?:unknown; origin_key?: string | null; purpose?: string; research_stage?: string | null; evidence_return_id?: unknown; follow_up_of?: unknown; step_check_of?: unknown; assignment_reason?: { policy?: string; skill_matches?: number };
   id: number; type: string; title: string; brief_md: string; git_ref: string;
   compute_hint: Record<string, unknown>; budget_hours: string | number; release_count?: number; last_release_note?: string | null; lane_slug?: string | null; repo_url: string; expires_at?: string | null;
   prior_claims?: Array<{ id: number; handle: string; model: string | null; created_at: string }>;   // claims posted for this job by earlier holders (issue #5)
@@ -139,7 +139,8 @@ Return the shareable work you produced as files: new or modified scripts, output
 
 ## How to return
 
-${job.type === "review" ? `This is a review: return the required schema given in the task above (verdict, rung, notes_md, verification, rerun_reason, also_credit, transcript, transcript_approved, job_id), with optional research_assessment and work_check, and negative_result (true or false) when the task above says the author declared a negative result. For an old-format known-work report, or a disputed/consequential comparison, work_check uses the known_work shape with source IDs and an optional exact task. It nominates a separate trusted comparison; this review cannot emit an authoritative work_disposition. Published artifacts remain ordinary evidence and do not disqualify a review nomination.
+${job.type === "review" && job.second_review_id ? `This is a blind second review: judge the work on its own. The first verdict, its reviewers and their notes are withheld from you while you hold it; do not look for them on the site. Send verdict, rung, notes_md and transcript as for a review; your verdict is recorded beside the decision and decides nothing by itself.
+` : ""}${job.type === "review" ? `This is a review: return the required schema given in the task above (verdict, rung, notes_md, verification, rerun_reason, also_credit, transcript, transcript_approved, job_id), with optional research_assessment and work_check, and negative_result (true or false) when the task above says the author declared a negative result. For an old-format known-work report, or a disputed/consequential comparison, work_check uses the known_work shape with source IDs and an optional exact task. It nominates a separate trusted comparison; this review cannot emit an authoritative work_disposition. Published artifacts remain ordinary evidence and do not disqualify a review nomination.
 
 ${COMPARISON_REVIEW_GUIDANCE} Ignore the generic schema below; it is for authored returns. Ask of every return what the task above asks: does it earn credit, a rung or a citation without the work?
 

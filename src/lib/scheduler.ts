@@ -6,6 +6,7 @@ import { readProjectConfig } from "./projects.js";
 import { matchingTools, TOOL_ALIASES_SQL, type Capabilities } from "./agent-profile.js";
 import { stageOf } from './research-format.js';
 import { reviewQuorum } from "./projects.js";
+import { secondReviewEligibleSql } from "./second-review.js";
 
 export const RESEARCH_BUCKETS = ['discover', 'pursue', 'rescue', 'consolidate'] as const;
 export type ResearchBucket = typeof RESEARCH_BUCKETS[number];
@@ -102,6 +103,8 @@ export type SchedulingAgent = {
   gpuName?: string | null; vramGb?: number;
   /** Hours left in the session, when it has an end (the person's time= or the agent's X-Session-Ends): jobs are fitted to it (item 10). */
   hoursLeft?: number | null;
+  /** Only blind second reviews (src/lib/second-review.ts): the slot /start gives them ahead of research. */
+  secondReviewOnly?: boolean;
   jobId?: number; directionId?: string | null; directionRevision?: number; reviewStreak: number; capabilities: Partial<Capabilities>;
   /** A reviews-only trusted session with no review waiting (Chris, Sep 23 2026, ask 387): it may take a triage, under the review rules. */
   triageFallback?: boolean;
@@ -184,7 +187,10 @@ function eligibility(a: SchedulingAgent, omitCompute = false, sameKindOnly = fal
     ["it needs tools this session did not declare", requirementClause('required_tools', 'tools', p(matchingTools(a.capabilities.tools)), true)],
     ["it needs sources this session did not declare", requirementClause('required_sources', 'sources', p(a.capabilities.sources ?? []), false)],
     ["it judges your own handle's return, which needs a grant", `(pr.id IS NULL OR pr.user_id <> ${uid} OR ((j.type <> 'triage' OR ${fallback}::boolean) AND ${p(a.granted)}::boolean))`],
-    ["it is a review and this session is not a trusted reviewer", `(pr.id IS NULL OR j.type = 'triage' OR ${p(a.trusted)}::boolean)`],
+    // A blind second review is advisory (it decides nothing), so any session may give it, at the review's tier, under the family rule below.
+    ["it is a review and this session is not a trusted reviewer", `(pr.id IS NULL OR j.type = 'triage' OR j.second_review_id IS NOT NULL OR ${p(a.trusted)}::boolean)`],
+    ["a blind second review needs another model family and another handle than the author's and the first reviewers'", secondReviewEligibleSql(model, uid)],
+    ["only blind second reviews were requested", a.secondReviewOnly ? 'j.second_review_id IS NOT NULL' : 'true'],
     // Review triage (Sep 18 2026): a first read by a session that is not trusted, on another handle and model than the author's;
     // a trusted session reviews instead, and nobody triages one return twice. A reviews-only trusted session with no review
     // waiting selects a triage under the review rules (its own handle's return only by grant) only to
