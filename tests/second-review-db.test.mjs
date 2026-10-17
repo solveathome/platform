@@ -159,3 +159,22 @@ test('the board publishes the rate from the stored rows', async () => {
   const page = await (await fetch(`${base}/board`, {headers: {accept: 'text/html'}})).text();
   assert.match(page, /Blind second review/); assert.match(page, /Anthropic \(Claude\)/); assert.match(page, /OpenAI \(GPT\)/);
 });
+
+test('a session that is not trusted takes turns: a blind second review at an even streak, a waiting triage at an odd one', async () => {
+  // Oct 18 2026 (#sah-blind-review-returns-check): with triage always ahead, a tier-1 GPT session eligible for 36 blind reviews was
+  // dealt only triages and research. The run of four now alternates, and each falls back to the other.
+  process.env.REVIEW_TRIAGE_MIN_TIER = '2';
+  try {
+    let id = 910_000_000 + Math.floor(Math.random() * 1e7), blindId;
+    while (!blindId) { if (secondReviewDraw(id) < 0.15) blindId = id; id++; }
+    await acceptOne(blindId);
+    const pending = await one(`INSERT INTO returns (problem_id, type, user_id, model, provider, report_md, transcript, effort) VALUES ($1,'direction',$2,'claude-opus-5-5','anthropic','Return report: a pending claim about fold 43#.','t','high') RETURNING id`, [pid, ids.author]);
+    await q(`INSERT INTO jobs (problem_id,type,title,brief_md,parent_return_id,min_tier,budget_hours) VALUES ($1,'triage','Triage return','brief',$2,2,0.25)`, [pid, pending.id]);
+    const first = await start('third', 'gpt-6-1-sol');
+    assert.equal(first.assignment_reason?.policy, 'blind second review', first._text.slice(0, 400));
+    await release(first);
+    const next = await start('third', 'gpt-6-1-sol');
+    assert.equal(next.assignment_reason?.policy, 'review triage', next._text.slice(0, 400));
+    if (next.job_id) await release(next);
+  } finally { delete process.env.REVIEW_TRIAGE_MIN_TIER; }
+});
