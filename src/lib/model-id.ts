@@ -54,12 +54,13 @@ export function providerFromModel(raw: string): string {
   if (/^claude/.test(m)) return "anthropic";
   if (/^(gpt|o\d|chatgpt)|codex|astra/.test(m)) return "openai";
   if (/^gemini|^gemma|^palm/.test(m)) return "google";
-  if (/^llama/.test(m)) return "meta";
+  if (/^(llama|muse(-|$))/.test(m)) return "meta";
   if (/^(mistral|mixtral|codestral|magistral)/.test(m)) return "mistral";
   if (/^deepseek/.test(m)) return "deepseek";
   if (/^(qwen|qwq)/.test(m)) return "alibaba";
   if (/^grok/.test(m)) return "xai";
   if (/^kimi|^moonshot/.test(m)) return "moonshot";
+  if (/^(chat)?glm(\d|-|$)/.test(m)) return "zhipu";
   return "unknown";
 }
 
@@ -99,7 +100,8 @@ export function underlyingModelIdentity(raw: unknown): string {
 }
 
 /** Conservative proof-review families: versions and sibling models share a provider lineage.
- * Unknown identities cannot establish independence; routing-provider labels are not evidence. */
+ * Unknown identities cannot establish independence; routing-provider labels are not evidence. Muse is Meta's, so it shares Llama's family.
+ * The SQL twin is lean_model_family() in schema.sql: change both together. */
 export function leanModelFamily(raw: unknown): string | null {
   const m = underlyingModelIdentity(raw);
   if (/^(?:claude-(?:opus|sonnet|haiku|fable|mythos)(?:-|$)|(?:fable|mythos)(?:-|$))/.test(m)) return 'anthropic';
@@ -108,9 +110,11 @@ export function leanModelFamily(raw: unknown): string | null {
   if (/^llama(?:-|$)/.test(m)) return 'meta';
   if (/^(?:mistral|mixtral|codestral|magistral)(?:-|$)/.test(m)) return 'mistral';
   if (/^deepseek(?:-|$)/.test(m)) return 'deepseek';
-  if (/^(?:qwen|qwq)(?:-|$)/.test(m)) return 'alibaba';
+  if (/^(?:qwen|qwq)\d*(?:-|$)/.test(m)) return 'alibaba';
   if (/^grok(?:-|$)/.test(m)) return 'xai';
   if (/^(?:kimi|moonshot)(?:-|$)/.test(m)) return 'moonshot';
+  if (/^(?:chat)?glm\d*(?:-|$)/.test(m)) return 'zhipu';
+  if (/^muse(?:-|$)/.test(m)) return 'meta';
   return null;
 }
 export function distinctLeanFamilies(a: unknown, b: unknown): boolean {

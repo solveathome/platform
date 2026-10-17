@@ -73,8 +73,8 @@ const start = async (who, model) => { const r = await call('/start?share=0', {wh
 const release = (a) => call('/release', {method: 'POST', ...a._as, session: a.session, attempt: a.attempt_id, body: {job_id: a.job_id, note: 'test complete'}});
 
 /** An accepted return: an Opus author, a trusted Opus review, decided by the ordinary resolver. */
-async function acceptOne(id) {
-  const r = await one(`INSERT INTO returns (id, problem_id, type, user_id, model, provider, report_md, transcript, status, effort) VALUES ($3,$1,'direction',$2,'claude-opus-5-5','anthropic','Return report: the gap statistic is exactly 3 at every fold to 41#.','t','pending','high') RETURNING id`, [pid, ids.author, id]);
+async function acceptOne(id, authorModel = 'claude-opus-5-5') {
+  const r = await one(`INSERT INTO returns (id, problem_id, type, user_id, model, provider, report_md, transcript, status, effort) VALUES ($3,$1,'direction',$2,$4,'anthropic','Return report: the gap statistic is exactly 3 at every fold to 41#.','t','pending','high') RETURNING id`, [pid, ids.author, id, authorModel]);
   await q(`INSERT INTO reviews (return_id, user_id, model, provider, verdict, rung, notes_md, weight, transcript, trusted, effort) VALUES ($1,$2,'claude-opus-5-5','anthropic','accept','verified',$3,1,'',true,'high')`, [r.id, ids.first, MARK]);
   await resolveReturn(Number(r.id));
   assert.equal((await one(`SELECT status FROM returns WHERE id=$1`, [r.id])).status, 'accepted');
@@ -177,4 +177,32 @@ test('a session that is not trusted takes turns: a blind second review at an eve
     assert.equal(next.assignment_reason?.policy, 'review triage', next._text.slice(0, 400));
     if (next.job_id) await release(next);
   } finally { delete process.env.REVIEW_TRIAGE_MIN_TIER; }
+});
+
+test('a GLM return goes blind to another family: never to a GLM or Anthropic session, to a Muse (Meta) one on another handle', async () => {
+  // Oct 18 2026 (#sah-lean-family-glm-muse): glm-5.3-flash and muse-spark had no family, so their returns excluded nothing of their
+  // own kind and their sessions could take no blind review at all. A judgment review asks tier 1, so the test's own GLM and Muse ids
+  // are tier 1 here: the GLM sessions are then kept off by their family alone.
+  const glm = `glm-9-${tag}`, glm2 = `glm-8-${tag}`, muse = `muse-${tag}`, tiers = [];
+  for (const [model, provider] of [[glm, 'zhipu'], [glm2, 'zhipu'], [muse, 'meta']])
+    if (await one(`INSERT INTO model_tiers (model, provider, tier, note) VALUES ($1,$2,1,'second review test') ON CONFLICT (model) DO NOTHING RETURNING model`, [model, provider])) tiers.push(model);
+  try {
+    let id = 920_000_000 + Math.floor(Math.random() * 1e7), glmId;
+    while (!glmId) { if (secondReviewDraw(id) < 0.15) glmId = id; id++; }
+    await q(`UPDATE jobs SET status='expired' WHERE problem_id=$1 AND status='queued'`, [pid]);
+    await acceptOne(glmId, glm);
+    const row = await one(`SELECT * FROM second_reviews WHERE return_id=$1`, [glmId]);
+    assert.deepEqual(row.excluded_families, ['anthropic', 'zhipu']);
+    for (const [who, model] of [['second', glm2], ['third', glm], ['third', 'claude-opus-5-5']]) {
+      const a = await start(who, model);
+      assert.notEqual(a.assignment_reason?.policy, 'blind second review', `${who} on ${model} must not get it`);
+      if (a.job_id) await release(a);
+    }
+    const a = await start('third', muse);
+    assert.equal(a.assignment_reason?.policy, 'blind second review', a._text.slice(0, 400));
+    assert.equal(Number(a.job_id), Number(row.job_id));
+    const sent = await call('/result', {method: 'POST', who: 'third', model: muse, session: a.session, attempt: a.attempt_id, body: {job_id: a.job_id, verdict: 'accept', rung: 'verified', notes_md: 'I reran the fold table to 41# and the gap statistic is 3 at every fold.', transcript: 't', transcript_approved: true}});
+    assert.equal(sent.status, 200, sent.text);
+    assert.equal((await one(`SELECT family FROM second_reviews WHERE return_id=$1`, [glmId])).family, 'meta');
+  } finally { await q(`DELETE FROM model_tiers WHERE model = ANY($1)`, [tiers]); }
 });

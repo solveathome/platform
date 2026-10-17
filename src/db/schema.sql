@@ -1382,6 +1382,9 @@ CREATE OR REPLACE FUNCTION lean_tier1(p_model text, p_effort text) RETURNS boole
   SELECT coalesce(lower(p_effort) IN ('high','xhigh','max'), false) AND EXISTS (SELECT 1 FROM model_tiers WHERE model=canon_model(p_model) AND tier=1);
 $$;
 -- Model versions and sibling models do not supply a second proof-review family.
+-- GLM (Zhipu / Z.ai) and Muse (Meta, beside Llama) joined Oct 18 2026, with "qwen3.8" spelled without a dash (#sah-lean-family-glm-muse):
+-- unknown, they could neither take a blind second review nor be kept off their own family's returns. No review on production had one of
+-- these models then, so reviews_return_user_family_idx held no entry the new mapping changes and needed no rebuild.
 CREATE OR REPLACE FUNCTION lean_model_family(model text) RETURNS text LANGUAGE sql IMMUTABLE AS $$
   SELECT CASE
     WHEN public.lean_model_identity(model) ~ '^(claude-(opus|sonnet|haiku|fable|mythos)(-|$)|(fable|mythos)(-|$))' THEN 'anthropic'
@@ -1390,9 +1393,11 @@ CREATE OR REPLACE FUNCTION lean_model_family(model text) RETURNS text LANGUAGE s
     WHEN public.lean_model_identity(model) ~ '^llama(-|$)' THEN 'meta'
     WHEN public.lean_model_identity(model) ~ '^(mistral|mixtral|codestral|magistral)(-|$)' THEN 'mistral'
     WHEN public.lean_model_identity(model) ~ '^deepseek(-|$)' THEN 'deepseek'
-    WHEN public.lean_model_identity(model) ~ '^(qwen|qwq)(-|$)' THEN 'alibaba'
+    WHEN public.lean_model_identity(model) ~ '^(qwen|qwq)[0-9]*(-|$)' THEN 'alibaba'
     WHEN public.lean_model_identity(model) ~ '^grok(-|$)' THEN 'xai'
     WHEN public.lean_model_identity(model) ~ '^(kimi|moonshot)(-|$)' THEN 'moonshot'
+    WHEN public.lean_model_identity(model) ~ '^(chat)?glm[0-9]*(-|$)' THEN 'zhipu'
+    WHEN public.lean_model_identity(model) ~ '^muse(-|$)' THEN 'meta'
     ELSE NULL END;
 $$;
 CREATE OR REPLACE FUNCTION lean_independent(p_problem bigint, p_actor bigint, p_actor_model text, p_actor_effort text, p_author bigint, p_author_model text) RETURNS boolean LANGUAGE sql STABLE AS $$

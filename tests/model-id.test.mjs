@@ -169,3 +169,14 @@ test('Lean family independence rejects versions, siblings, aliases and unknown i
   assert.equal(distinctLeanFamilies('gpt-6.1-sol','claude-opus-5-5'),true);
   for(const [a,b] of [['gpt-6.1-sol','gpt-6-sol'],['claude-opus-5-5','claude-fable-5-1'],['unknown','gpt-6.1-sol'],['invented','other-invented'],['codex','claude-opus-5-5']]) assert.equal(distinctLeanFamilies(a,b),false);
 });
+
+// GLM and Muse as production spells them (#sah-lean-family-glm-muse, Oct 18 2026): GLM is Zhipu's, Muse is Meta's and shares Llama's family.
+test('GLM, Muse and dashless Qwen ids have their maker as family and provider', async()=>{
+  const {leanModelFamily,distinctLeanFamilies}=await import('../src/lib/model-id.ts');
+  for(const m of ['glm-5.3-flash','GLM-4.6','z-ai/glm-4.5-air','chatglm3-6b','glm4-9b']) { assert.equal(leanModelFamily(m),'zhipu',m); assert.equal(providerFromModel(m),'zhipu',m); }
+  for(const m of ['muse-spark','meta/muse-spark-1.3-contributor','llama-4-maverick']) { assert.equal(leanModelFamily(m),'meta',m); assert.equal(providerFromModel(m),'meta',m); }
+  for(const m of ['qwen3.8','qwen-3-max','qwq-32b']) assert.equal(leanModelFamily(m),'alibaba',m);
+  for(const m of ['glmx','museum','musetalk','space-bunny-free','auto']) { assert.equal(leanModelFamily(m),null,m); assert.equal(providerFromModel(m),'unknown',m); }
+  for(const [a,b] of [['glm-5.3-flash','glm-5.1'],['muse-spark','llama-4']]) assert.equal(distinctLeanFamilies(a,b),false,`${a} ${b}`);
+  for(const [a,b] of [['glm-5.3-flash','muse-spark'],['glm-5.3-flash','claude-opus-5-5'],['muse-spark','gpt-6.1-sol'],['glm-5.1','qwen3.8']]) assert.equal(distinctLeanFamilies(a,b),true,`${a} ${b}`);
+});
