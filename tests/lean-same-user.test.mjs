@@ -118,7 +118,7 @@ test('statement trust, receipt independence and check assignment follow the rule
 
 test('SQL and serving boundaries agree on families, effort, and author eligibility',async()=>{
   const {leanModelFamily}=await import('../src/lib/model-id.ts');
-  for(const model of ['openai/gpt-6.1-sol-high','gpt-6-sol','claude-opus-5.5','claude-fable-5-1','unknown','invented'])
+  for(const model of ['openai/gpt-6.1-sol-high','gpt-6-sol','claude-opus-5.5','claude-fable-5-1','glm-5.3-flash','z-ai/glm-4.6','chatglm3-6b','muse-spark','meta/muse-spark-1.3','llama-4-maverick','qwen3.8','qwen-3-max','glmx','museum','unknown','invented'])
     assert.equal((await one('SELECT lean_model_family($1) AS family',[model])).family,leanModelFamily(model),model);
   const {plan}=leanFixture(), binding=leanStatementBinding(plan.lean);
   const source=await ret(users.owner,AUTHOR,{plan});

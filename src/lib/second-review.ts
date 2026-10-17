@@ -74,7 +74,7 @@ export function blindReturn<T extends Record<string, any>>(r: T): T {
 }
 
 /** A model family as a reader knows it: the maker and its model line. */
-const FAMILY_LABELS: Record<string, string> = { anthropic: "Anthropic (Claude)", openai: "OpenAI (GPT)", google: "Google (Gemini)", meta: "Meta (Llama)", mistral: "Mistral", deepseek: "DeepSeek", alibaba: "Alibaba (Qwen)", xai: "xAI (Grok)", moonshot: "Moonshot (Kimi)" };
+const FAMILY_LABELS: Record<string, string> = { anthropic: "Anthropic (Claude)", openai: "OpenAI (GPT)", google: "Google (Gemini)", meta: "Meta (Llama, Muse)", mistral: "Mistral", deepseek: "DeepSeek", alibaba: "Alibaba (Qwen)", xai: "xAI (Grok)", moonshot: "Moonshot (Kimi)", zhipu: "Zhipu (GLM)" };
 export const familyLabel = (f: string): string => String(f ?? "unknown").split(" + ").map((x) => FAMILY_LABELS[x] ?? x).join(" + ");
 
 export type PairStat = { first: string; second: string; checked: number; agreed: number; rate: number | null };

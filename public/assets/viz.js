@@ -17,22 +17,23 @@
 
   // Provider colours: one hue per maker, muted to the site's charcoal and paper. Unknown makers stay neutral.
   const PALETTE = {
-    dark: {anthropic: '#d8a34a', openai: '#8ec5e0', google: '#4fbfa6', deepseek: '#6f8cf0', alibaba: '#b08ce8', xai: '#e07f9b', meta: '#7fb2f0', mistral: '#e8a06a', moonshot: '#c9c46a', unknown: '#9a9994', reject: '#e0685c', accept: '#efeee8'},
-    light: {anthropic: '#a87414', openai: '#2f7fa8', google: '#138a70', deepseek: '#3a58c8', alibaba: '#7a4fc0', xai: '#b8406a', meta: '#3f75c0', mistral: '#b86628', moonshot: '#8a8420', unknown: '#8a8983', reject: '#c23b2f', accept: '#1a1a1a'},
+    dark: {anthropic: '#d8a34a', openai: '#8ec5e0', google: '#4fbfa6', deepseek: '#6f8cf0', alibaba: '#b08ce8', xai: '#e07f9b', meta: '#7fb2f0', mistral: '#e8a06a', moonshot: '#c9c46a', zhipu: '#5fb8c9', unknown: '#9a9994', reject: '#e0685c', accept: '#efeee8'},
+    light: {anthropic: '#a87414', openai: '#2f7fa8', google: '#138a70', deepseek: '#3a58c8', alibaba: '#7a4fc0', xai: '#b8406a', meta: '#3f75c0', mistral: '#b86628', moonshot: '#8a8420', zhipu: '#1f7f91', unknown: '#8a8983', reject: '#c23b2f', accept: '#1a1a1a'},
   };
-  const PROVIDER_NAMES = {anthropic: 'Anthropic', openai: 'OpenAI', google: 'Google', deepseek: 'DeepSeek', alibaba: 'Alibaba', xai: 'xAI', meta: 'Meta', mistral: 'Mistral', moonshot: 'Moonshot', unknown: 'Other'};
+  const PROVIDER_NAMES = {anthropic: 'Anthropic', openai: 'OpenAI', google: 'Google', deepseek: 'DeepSeek', alibaba: 'Alibaba', xai: 'xAI', meta: 'Meta', mistral: 'Mistral', moonshot: 'Moonshot', zhipu: 'Zhipu', unknown: 'Other'};
   // The client twin of providerFromModel in src/lib/model-id.ts.
   function provider(model) {
     const m = String(model || '').toLowerCase();
     if (/^claude/.test(m)) return 'anthropic';
     if (/^(gpt|o\d|chatgpt)|codex|astra/.test(m)) return 'openai';
     if (/^gemini|^gemma|^palm/.test(m)) return 'google';
-    if (/^llama/.test(m)) return 'meta';
+    if (/^(llama|muse(-|$))/.test(m)) return 'meta';
     if (/^(mistral|mixtral|codestral|magistral)/.test(m)) return 'mistral';
     if (/^deepseek/.test(m)) return 'deepseek';
     if (/^(qwen|qwq)/.test(m)) return 'alibaba';
     if (/^grok/.test(m)) return 'xai';
     if (/^kimi|^moonshot/.test(m)) return 'moonshot';
+    if (/^(chat)?glm(\d|-|$)/.test(m)) return 'zhipu';
     return 'unknown';
   }
   const lightScheme = matchMedia('(prefers-color-scheme: light)');
