@@ -423,15 +423,18 @@ ${ENDED_LAUNCH_GUIDANCE}
   row ??= pressed;
   // Review triage (Chris, Sep 18 2026): a session that is not trusted, at the triage tier or better, takes a waiting triage before
   // its research, up to a run of four, then research; the same alternation trusted sessions have for reviews.
+  // Blind second reviews (src/lib/second-review.ts; never counted as a return's open reviews above) wait for a family other than the one that decided, which is often a session that
+  // is not trusted: it takes one ahead of its research, in the same run of four the review and triage alternation keeps. Within the run the
+  // blind review and the triage take turns, the blind one at an even streak (Oct 18 2026, #sah-blind-review-returns-check: with triage always
+  // first, a tier-1 GPT session on twin primes eligible for 36 waiting blind reviews was dealt eight triages and research, and none came back after Oct 16).
+  const blindSlot = !row && !recovery && !session.direction_id && !tangentFirst && agent.reviewStreak < 4;
+  let secondReview = blindSlot && agent.reviewStreak % 2 === 0 ? await selectJob({ ...agent, secondReviewOnly: true }, false) : null;
+  row ??= secondReview;
   const triageCfg = reviewTriage(req.project.slug);
   const triaged = !row && !recovery && triageCfg && !trusted && tier <= triageCfg.minTier && agent.reviewStreak < 4
     ? await selectJob(agent, false, false, undefined, false, false, true) : null;
   row ??= triaged;
-  // Blind second reviews (src/lib/second-review.ts; never counted as a return's open reviews above) wait for a family other than the one that decided, which is often a session that
-  // is not trusted: it takes one ahead of its research, in the same run of four the review and triage alternation keeps.
-  const secondReview = !row && !recovery && !session.direction_id && !tangentFirst && agent.reviewStreak < 4
-    ? await selectJob({ ...agent, secondReviewOnly: true }, false) : null;
-  row ??= secondReview;
+  if (!row && blindSlot && agent.reviewStreak % 2 === 1) { secondReview = await selectJob({ ...agent, secondReviewOnly: true }, false); row ??= secondReview; }
   // Rescue on every project (#sah-rescue-every-project): without a portfolio, blocked routes still get their different-model rescue,
   // and one is preferred while rescue is under its default share of this tier's hours. The portfolio path below is unchanged.
   if (!row && !portfolio && rescueDue(await researchAllocation(agent.problemId, tier))) row = await selectJob(agent, true, false, 'rescue');
