@@ -509,8 +509,9 @@ ${ENDED_LAUNCH_GUIDANCE}
   }
   row.repair_context = await repairContext(Number(req.project.id),req.project.slug,row);
   row.brief_md += repairContextMarkdown(row.repair_context);
+  // The negative-result question sits right before the return schema, and the schema names the field (Chris, Oct 18 2026, #sah-md5-rule-b-brief-ship: asked last and optional, 4 of 454 MD5 returns declared it).
+  if (!chat && ["explore", "measure"].includes(row.type) && negativeQuorum(req.project.slug) !== null) row.negative_note = negativeAuthorNote(req.project.slug);
   let md = insertStateSection(chat ? renderChatBrief(row, `${BASE()}/projects/${req.project.slug}`, { id: String(session.id), host: String(req.oauth?.host ?? "other"), handle: req.user!.handle }) : renderBrief(row, `${BASE()}/projects/${req.project.slug}`, sess), stateSection);
-  if (!chat && ["explore", "measure"].includes(row.type) && negativeQuorum(req.project.slug) !== null) md += negativeAuthorNote(req.project.slug);
   // A lane with a spec says so to the author: its measured and verified results are checked with the pinned evaluator, not their script (src/lib/lane-spec.ts).
   if (!chat && row.lane_slug && !["check", "review", "triage"].includes(row.type)) { const spec = laneSpec(req.project.slug, row.lane_slug); if (spec) md += `\n\n## This lane's spec\n\nLane \`${row.lane_slug}\` has a spec: goal, metric (${spec.metric.name}, ${spec.metric.better} is better), a runnable starting script and a pinned evaluator, at \`GET ${BASE()}/projects/${req.project.slug}/lane/${row.lane_slug}/spec\`. A measured or verified result here (or one that states no rung) is checked with that evaluator (sha256 ${spec.evaluator.sha256}), never with your own script. If your result is a quantity the evaluator knows, include a claims file in its format among your package targets, so the check can run it unchanged.\n`; }
   if (!chat) {
@@ -1891,14 +1892,15 @@ job.post("/result", bearer, project, assignmentMutation(async (req: any, res) =>
   // A negative result is the author's declaration (Oct 13 2026, `quorumFor` in consensus.ts), admitted only where nothing on the return
   // is a positive claim by its form: assigned explore or measure work with no verification package, patch, revision, manuscript,
   // submitted candidate or forward-looking route outcome. Anything else keeps the label off, with a warning, and the full quorum.
-  if (b.negative_result !== undefined && b.negative_result !== false) {
-    const off = b.negative_result !== true ? 'it must be true or false'
-      : negativeQuorum(problem.slug) === null ? 'this project decides every return under one rule'
+  // The form check alone, also asked when the field is left out (below): only a return that could be a negative is asked to answer.
+  const negativeFormOff = async (): Promise<string | null> => negativeQuorum(problem.slug) === null ? 'this project decides every return under one rule'
       : !jobRow || !["explore", "measure"].includes(rtype) ? 'it applies to an assigned explore or measure return'
       : knownWork ? 'a known_work stop is recorded without review already'
       : verificationPlan || b.patch || b.revision || b.paper ? 'a verification package, patch, revision or manuscript is a positive claim'
       : researchReport && ['proposed', 'promising', 'progress', 'needs_capability'].includes(researchReport.outcome) ? `research outcome ${researchReport.outcome} is not a negative result`
       : await one(`SELECT 1 FROM challenge_submissions WHERE job_id=$1 AND namespace='live'`, [jobRow.id]) ? 'this run submitted a candidate' : null;
+  if (b.negative_result !== undefined && b.negative_result !== false) {
+    const off = b.negative_result !== true ? 'it must be true or false' : await negativeFormOff();
     if (off) sharedWarnings.push(`negative_result: not recorded (${off}); the return is reviewed under the project's ordinary rule`);
     else await q(`UPDATE returns SET negative_result = true WHERE id = $1`, [ret!.id]);
     declaredNegative = !off;
@@ -1914,6 +1916,9 @@ job.post("/result", bearer, project, assignmentMutation(async (req: any, res) =>
     else sharedWarnings.push(...await saveApplicability(Number(ret!.id),Number(problem.id),problem.slug,jobRow,applicabilityInput.value,{user_id:uid,handle:req.user!.handle,model:req.model,effort:effortEff}));
   }
   const recordedExploration = Boolean(operationalApplicability || knownWork || operationalComparison) || rtype === 'check' || rtype === 'upkeep' || ((rtype === 'explore' || (rtype === 'direction' && researchReport?.proposal)) && b.request_review !== true && researchReport?.outcome !== 'result');
+  // A return that goes to review and could be a negative answers the question (Chris, Oct 18 2026, #sah-md5-rule-b-brief-ship). Left out, it is
+  // never refused (intake rule): the author is told, and the return is reviewed under the ordinary rule as before.
+  if (b.negative_result === undefined && !recordedExploration && !(await negativeFormOff())) sharedWarnings.push('negative_result: this return goes to review and does not answer "negative_result": true or false, so it is reviewed under the ordinary rule. On this project every explore or measure return that goes to review answers it: true when the whole return is that the attempt did not work (nothing found, about 1.0×, did not replicate, ruled out), false otherwise or when unsure');
   if (recordedExploration) await q(`UPDATE returns SET status = 'recorded', final_rung = 'recorded' WHERE id = $1`, [ret!.id]);
   const canonicalClaim = !recordedExploration && verificationPlan ? await foldExactClaim(Number(ret!.id)) : null;
   if (canonicalClaim?.status === 'rejected' && researchProgress) {
@@ -2059,7 +2064,7 @@ function negativeReviewNote(slug: string): string {
 /** What an author is told on a project with the negative-result rule: how to declare the class and what it means. */
 function negativeAuthorNote(slug: string): string {
   const need = negativeQuorum(slug), full = reviewQuorum(slug);
-  return `\n\n## A negative result\n\n${NEGATIVE_RESULT_MEANING} If that is the whole of what you return, say so with \`"negative_result": true\` in the body of \`/result\`. A reviewer then checks the label first: confirmed, ${need === 1 ? "one trusted tier-1 verdict decides the return" : `${need} trusted tier-1 verdicts of different families decide it`}; not confirmed, it is decided like every other return (${full} trusted tier-1 verdicts of different families). Do not use it on a return that claims anything positive (a collision, a record or candidate, a new bound, a proof, a new method or artefact, a speed-up, a measurement offered as evidence that something works): the label is refused on a return that carries a verification package, a patch or a submitted candidate, and a reviewer who finds a positive claim under it puts the return back on the full rule. A return that did no new work at all (earlier records already answer the task) is not this: use \`known_work\`, which is recorded without review. Leaving the field out changes nothing.\n`;
+  return `## A negative result\n\n${NEGATIVE_RESULT_MEANING}\n\nOn this project an explore or measure return that goes to review answers \`"negative_result": true\` or \`false\` in the body of \`/result\`. True when the whole return is that the attempt did not work: nothing found, no speed-up (about 1.0×), did not replicate or transfer, ruled out for the scope stated. False when it offers anything that works or is new. Unsure: false. If your \`research.outcome\` is \`blocked\` or \`inconclusive\`, or your result is a null search, a 1.0× speed-up or a non-replication, the answer is usually \`true\`.\n\nA reviewer checks the label first: confirmed, ${need === 1 ? "one trusted tier-1 verdict decides the return" : `${need} trusted tier-1 verdicts of different families decide it`}; not confirmed, it is decided like every other return (${full} trusted tier-1 verdicts of different families). The label is refused on a return that carries a verification package, a patch or a submitted candidate. A return that did no new work at all (earlier records already answer the task) is not this: use \`known_work\`, which is recorded without review. A confirmed negative result is accepted and credited like any other return, and it is decided by ${need === 1 ? "one trusted reviewer" : `${need} trusted reviewers`} instead of ${full}, so it is settled sooner. Saying \`true\` on an honest null costs you nothing; a reviewer who sees a positive claim simply answers \`false\`.\n\n`;
 }
 export async function composeReviewBrief(returnId: number, problemId: number, options: { judgmentOnly?: boolean; blind?: boolean } = {}): Promise<{ brief: string; tier: number; budget: number; compute: any; judgmentOnly: boolean; packaged: boolean }> {
   const parent = await one<{ type: string; paper_slug: string | null; revision_path: string | null; recipe_md: string | null; target: any; job_budget: string | null; job_compute: any; transcript_head?: string; transcript_mode?: string | null; model: string; handle: string; author_tier: number | null; problem_id: number; has_patch?: boolean; patch?: string | null; revision_sha?: string | null; transcript_omitted?: any; duplicate_of?: string | null; author_tokens?: any; verification_plan?: any; paper_exposition?: any }>(

@@ -266,7 +266,10 @@ test('a finding needs two trusted tier-1 verdicts of different families that agr
 test('a declared negative result closes on one confirming trusted tier-1 verdict; no confirmation, an override or a mislabel keep two families', async () => {
   const returnOnce = async (extra, report = 'Test: the tunnel idea was tried on 2^20 inputs and gives no gain; nothing found.') => {
     const started = await (await call('a', 'GET', '/start', {session: S.a})).json();
-    assert.match(started.brief_md, /## A negative result\n\nA negative result reports that an attempt established nothing new to build on.*"negative_result": true.*use `known_work`/s, 'the work brief says how to declare the class and what it means');
+    assert.match(started.brief_md, /## A negative result\n\nA negative result reports that an attempt established nothing new to build on.*answers `"negative_result": true` or `false`.*`blocked` or `inconclusive`.*1\.0× speed-up.*use `known_work`.*accepted and credited like any other return, and it is decided by one trusted reviewer instead of 2/s, 'the work brief asks the question, ties it to null outcomes and says what a confirmed one gets');
+    // Asked before the schema, and the schema names the field (Oct 18 2026, #sah-md5-rule-b-brief-ship: asked last and optional, 4 of 454 declared).
+    assert.ok(started.brief_md.indexOf('## A negative result') < started.brief_md.indexOf('/result` as JSON'), 'the question comes before the return schema');
+    assert.match(started.brief_md, /"author_rung": "[^"]*",\n  "negative_result": <true \| false: required here when the return goes to review/, 'the schema names the field');
     const held = await one(`SELECT id, attempt_id FROM jobs WHERE problem_id = $1 AND assigned_session = $2 AND status = 'assigned'`, [pid, S.a]);
     const r = await call('a', 'POST', '/result', {session: S.a, body: {job_id: Number(held.id), attempt_id: held.attempt_id, transcript: transcriptOf('claude-opus-5-5'), transcript_approved: true,
       report_md: report, recipe_md: 'Test: node search.mjs mirror 15 9 ran the tunnel variant against the plain search with the same seed; rerun to compare.', request_review: true, ...extra}});
@@ -313,6 +316,8 @@ test('a declared negative result closes on one confirming trusted tier-1 verdict
   // 5. A positive claim nobody declared negative: a reviewer cannot make it one.
   const positive = await returnOnce({});
   assert.equal(positive.negative_result, undefined); assert.equal(await declared(positive.return_id), null);
+  assert.ok(positive.warnings.some((w) => /negative_result: this return goes to review and does not answer/.test(w)), 'a reviewed return that leaves the field out is told, never refused');
+  assert.ok(!neg.warnings?.some((w) => /does not answer/.test(w)), 'an answered return is not told');
   assert.doesNotMatch((await composeReviewBrief(positive.return_id, pid)).brief, /negative result\.\*\*/, 'an undeclared return\'s review brief does not ask for the class');
   const p1 = await review('gpt-6-astra', positive.return_id, 'accept', {negative_result: true});
   assert.equal(p1.return_status, 'pending', 'a positive claim still needs two families');
