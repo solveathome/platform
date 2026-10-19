@@ -276,7 +276,7 @@ function sourceHtml(source: Awaited<ReturnType<typeof submissionSource>>, P: str
   const title = source.job.title ? `: ${esc(redactHarnessIds(source.job.title).text)}` : "";
   const job = `<a href="${P}/job/${source.job.id}">job #${source.job.id}${title}</a>`;
   if (!source.returns.length) return `Sent during ${job}. Its write-up is not in yet; the job page links it when it arrives.`;
-  const rets = source.returns.map((r) => `<a href="${P}/return/${r.id}">return #${r.id}</a> <span class="cc-tag">${esc(r.status)}${r.final_rung ? `, ${esc(r.final_rung)}` : ""}</span>`).join(", ");
+  const rets = source.returns.map((r) => `<a href="${P}/return/${r.id}">return #${r.id}</a> <span class="cc-tag">${esc(r.status)}${r.final_rung && r.final_rung !== r.status ? `, ${esc(r.final_rung)}` : ""}</span>`).join(", ");
   return `Sent during ${job}. How it was done and the route taken: ${rets}.`;
 }
 
