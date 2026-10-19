@@ -25,7 +25,7 @@ function currentManuscript(slug: string, r: { path: string | null; current_file_
 
 export async function queueTypesetJobs(problemId: number, slug: string): Promise<number> {
   let n = 0;
-  for (const r of await q<{ slug: string; title: string; path: string | null; current_file_sha: string | null }>(`SELECT slug, title, path, current_file_sha FROM papers WHERE problem_id = $1 ORDER BY id`, [problemId])) {
+  for (const r of await q<{ slug: string; title: string; path: string | null; current_file_sha: string | null }>(`SELECT slug, title, path, current_file_sha FROM papers WHERE problem_id = $1 AND retracted_at IS NULL ORDER BY id`, [problemId])) {
     const text = currentManuscript(slug, r);
     const lines = text === null ? [] : plainMathLines(text);
     if (!lines.length) continue;

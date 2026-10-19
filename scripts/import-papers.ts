@@ -50,9 +50,11 @@ for (const e of entries) {
   const t = title(text); if (!t) continue;
   const pslug = e.file.replace(/\.md$/, "").replace(/^prop-/, "");
   const g = e.kind === "proposal" ? (registryGrades[e.file] ?? grade(text)) : grade(text);
-  const existing = await one(`SELECT id, status FROM papers WHERE problem_id = $1 AND slug = $2`, [p.id, pslug]);
+  const existing = await one<any>(`SELECT id, status, retracted_at FROM papers WHERE problem_id = $1 AND slug = $2`, [p.id, pslug]);
   if (existing) await q(`UPDATE papers SET title = $3, path = $4, kind = $5, grade = $6, summary = $7, status = CASE WHEN status = 'proposed' AND $5 = 'draft' THEN 'draft' ELSE status END WHERE problem_id = $1 AND slug = $2`, [p.id, pslug, t, e.path, e.kind, g, summary(text)]);
   else { await q(`INSERT INTO papers (problem_id, slug, title, path, kind, status, grade, summary) VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`, [p.id, pslug, t, e.path, e.kind, e.kind === "proposal" ? "proposed" : "draft", g, summary(text)]); seeded++; }
+  // A retracted paper keeps its registry row up to date but gets no new work (Oct 19 2026, src/lib/paper-retraction.ts); a restore lets the next run queue it.
+  if (existing?.retracted_at) continue;
   // Drafts get audit jobs (find issues, propose the change); proposals get write jobs. Earlier queued "referee-ready revision" paper jobs become audits.
   await q(`UPDATE jobs SET type = 'audit', title = regexp_replace(title, '^(Paper: referee-ready revision of|Referee-ready revision of) ', ''), budget_hours = 3, brief_md = $3 WHERE problem_id = $1 AND type = 'paper' AND status = 'queued' AND brief_md LIKE '%paper.slug: ' || $2 || '%' AND title LIKE 'Paper: referee-ready revision%'`,
     [p.id, pslug, auditBrief(pslug, e.path, t)]);

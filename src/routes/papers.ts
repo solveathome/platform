@@ -9,6 +9,7 @@ import {isoTime, timeHtml} from "../lib/timestamps.js";
  * Papers (Chris, Sep 9): manuscripts the swarm writes and referees in the open. Front and center on the project page.
  * GET /projects/:slug/papers            JSON list (HTML: the project page's Papers panel)
  * GET /projects/:slug/papers/:paper     the paper page: current manuscript rendered, versions, referee reports, how to work on it
+ * POST /projects/:slug/papers/:paper/retract|restore { reason }   an owner or a reviewer trusted by grant (src/lib/paper-retraction.ts)
  */
 import { Router } from "express";
 import { wantsHtml } from "../lib/negotiate.js";
@@ -33,6 +34,9 @@ import { paperChecks, checksPanel, checkCounts } from "../lib/paper-checks.js";
 import { paperSource, paperReview, coarseStatus, type PaperReview } from "../lib/paper-state.js";
 import { openFindings } from "../lib/findings.js";
 import { posix } from "node:path";
+import { bearer } from "../lib/auth.js";
+import { isGrantedTrusted } from "../lib/roles.js";
+import { retractPaper, restorePaper, retractionEvents, RetractionError } from "../lib/paper-retraction.js";
 import { expositionVersions, decodeExpositionPdf, latestReviewedExposition, reviewedExposition } from "../lib/paper-exposition.js";
 
 export const papers = Router({ mergeParams: true });
@@ -40,15 +44,16 @@ const REPOS = process.env.DOCS_DIR ?? join(ROOT, "data", "repos");
 const esc = (s: unknown) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]!));
 const STATUS: Record<string, string> = { proposed: "proposed", draft: "draft", under_review: "under review", reviewed: "reviewed" };
 
-export async function listPapers(problemId: number, slug: string) {
+/** Retracted papers are left out unless asked for: the paper page and its artifacts still serve them (Oct 19 2026). */
+export async function listPapers(problemId: number, slug: string, opts: { retracted?: boolean } = {}) {
   const rows = await q(`
     SELECT p.*, r.final_rung, r.created_at AS version_at, u.handle AS version_by,
       (SELECT count(*) FROM returns x WHERE x.problem_id = p.problem_id AND x.paper_slug = p.slug AND x.paper_exposition IS NULL) AS versions,
       (SELECT count(*) FROM returns x WHERE x.problem_id = p.problem_id AND x.paper_slug = p.slug AND x.status = 'pending' AND x.paper_exposition IS NULL) AS in_review,
       (SELECT count(*) FROM jobs j WHERE j.problem_id = p.problem_id AND j.type IN ('paper','audit') AND j.status = 'queued' AND (j.brief_md LIKE '%paper.slug: ' || p.slug || '%' OR j.title = 'Fix ' || COALESCE(p.path, 'paper/' || p.slug || '.md'))) AS open_jobs
     FROM papers p LEFT JOIN returns r ON r.id = p.current_return_id LEFT JOIN users u ON u.id = r.user_id
-    WHERE p.problem_id = $1
-    ORDER BY p.updated_at DESC`, [problemId]);
+    WHERE p.problem_id = $1 AND ($2::boolean OR p.retracted_at IS NULL)
+    ORDER BY p.updated_at DESC`, [problemId, !!opts.retracted]);
   // Status is what the review says about the served text (src/lib/paper-state.ts), never the stored registry value alone.
   const reviews = new Map<string, PaperReview>();
   for (const p of rows) reviews.set(p.slug, await paperReview(problemId, p, paperSource(p,slug).sha));
@@ -92,7 +97,7 @@ papers.get('/papers/:paper/expositions/:id/:kind', async (req:any,res) => {
   if (kind === 'pdf' && req.query.current === '1') {
     // Current-action links recheck on click; unflagged version links remain historical artifacts.
     const project = await one(`SELECT id FROM problems WHERE slug=$1`, [req.params.slug]);
-    const current = project && (await listPapers(Number(project.id),req.params.slug)).find(p => p.slug === req.params.paper)?.reviewed_pdf;
+    const current = project && (await listPapers(Number(project.id),req.params.slug,{retracted:true})).find(p => p.slug === req.params.paper)?.reviewed_pdf;
     if (!current || current.return_id !== Number(req.params.id)) {
       res.set('Cache-Control','no-store').status(409).json({error:'The current reviewed PDF has changed or is no longer eligible. Reload the paper page for current evidence.'}); return;
     }
@@ -112,7 +117,10 @@ papers.get("/papers", async (req: any, res) => {
   const p = await one(`SELECT id, slug FROM problems WHERE slug = $1`, [req.params.slug]);
   if (!p) { res.status(404).json({ error: "unknown project" }); return; }
   if (wantsHtml(req)) { res.redirect(`/projects/${p.slug}#papers`); return; }
-  res.set('Cache-Control','no-store').json({ papers: await listPapers(Number(p.id), p.slug), how: `Papers are written and revised through jobs of type 'paper' (GET /projects/${p.slug}/start). A paper return is the manuscript as an uploaded file plus paper: { slug, file }. Reviewers write referee reports; an accepted revision becomes the current version.` });
+  const all = req.query.retracted === "1";
+  const list = await listPapers(Number(p.id), p.slug, { retracted: all });
+  const retracted = all ? list.filter((x) => x.retracted_at).length : Number((await one<{ n: string }>(`SELECT count(*) AS n FROM papers WHERE problem_id = $1 AND retracted_at IS NOT NULL`, [p.id]))?.n ?? 0);
+  res.set('Cache-Control','no-store').json({ papers: list, retracted, retracted_note: retracted ? `${retracted} retracted paper(s) are left out of this list${all ? " except here" : ""}; ?retracted=1 lists them with their reasons. A retracted paper's page stays up.` : undefined, how: `Papers are written and revised through jobs of type 'paper' (GET /projects/${p.slug}/start). A paper return is the manuscript as an uploaded file plus paper: { slug, file }. Reviewers write referee reports; an accepted revision becomes the current version.` });
 });
 
 /** GET /projects/:slug/findings?path=<document> : open corrections required in served documents, with the job carrying each (Sep 24 2026). */
@@ -194,7 +202,7 @@ papers.get("/papers/:paper", async (req: any, res) => {
   const credit = await crediter();
   const p = await one(`SELECT id, slug, name FROM problems WHERE slug = $1`, [req.params.slug]);
   if (!p) { res.status(404).type("text/plain").send("unknown project"); return; }
-  const paper = (await listPapers(Number(p.id), p.slug)).find((x) => x.slug === req.params.paper);
+  const paper = (await listPapers(Number(p.id), p.slug, { retracted: true })).find((x) => x.slug === req.params.paper);
   if (!paper) { if (wantsHtml(req)) res.status(404).type("text/html").send(notFoundPage("No such paper in this project.")); else res.status(404).type("text/plain").send("no such paper"); return; }
   const versions = await q(`SELECT r.id, r.status, r.final_rung, r.author_rung, r.created_at, u.handle, r.model FROM returns r JOIN users u ON u.id = r.user_id WHERE r.problem_id = $1 AND r.paper_slug = $2 AND r.paper_exposition IS NULL ORDER BY r.id DESC`, [p.id, paper.slug]);
   const docPath = paper.path ?? `paper/${paper.slug}.md`;
@@ -216,7 +224,7 @@ papers.get("/papers/:paper", async (req: any, res) => {
   const checks = source === null ? null : await paperChecks(Number(p.id), p.slug, source);
   if (!wantsHtml(req)) {
     const request = typeof req.query.lean_request === 'string' && /^[a-zA-Z0-9-]{1,100}$/.test(req.query.lean_request) ? req.query.lean_request : null;
-    res.set('Cache-Control','no-store').json({ paper, versions, reports, expositions, exposition_jobs:expositionJobs, lean_verification: lean,
+    res.set('Cache-Control','no-store').json({ paper, retraction: paper.retracted_at ? { retracted_at: paper.retracted_at, reason: paper.retracted_reason, events: await retractionEvents(Number(paper.id)) } : null, versions, reports, expositions, exposition_jobs:expositionJobs, lean_verification: lean,
       lean_milestone_request: request,
       lean_milestone_html: mainTheoremCallout(mainTheoremEvidence(lean, designation), designation, p.slug, paper.slug, paper.title),
       source_from: from, manuscript_md: source, source_checks: checks ? { ...checkCounts(checks), url: `/projects/${p.slug}/papers/${paper.slug}/checks` } : null }); return;
@@ -228,7 +236,7 @@ papers.get("/papers/:paper", async (req: any, res) => {
   const linkFn = renderer.link.bind(renderer);
   renderer.link = ({ href, title, tokens }: any) => { let h = String(href ?? ""); if (!/^(?:[a-z]+:|\/|#)/i.test(h)) { const rel = posix.normalize(posix.join(baseDir, h)).replace(/^\/+/, ""); h = pages.get(rel) ?? docsBase + rel; } return linkFn({ href: h, title, tokens } as any); };
   const md = (t: string) => { const m = protectMath(t.replace(/<!--[\s\S]*?-->/g, "")); return linkPaths(m.restore(marked.parse(escapeSource(m.text), { gfm: true, renderer }) as string), p.slug, baseDir, pages); };
-  const body = challengeBanner(await challengesFor(Number(p.id), "paper", paper.slug), `/projects/${p.slug}`) + reviewPanel(paper.review, p.slug) + leanEvidencePanel(lean, p.slug, designation) + expositionPanel(expositions,p.slug,paper.slug,credit) + (checks ? checksPanel(checks, `/projects/${p.slug}/papers/${paper.slug}/checks`) : "") + (source ? demoteHeadings(await linkPeople(md(source))) : "<p class=\"muted\">No manuscript yet.</p>");
+  const body = retractionBanner(paper) + challengeBanner(await challengesFor(Number(p.id), "paper", paper.slug), `/projects/${p.slug}`) + reviewPanel(paper.review, p.slug) + leanEvidencePanel(lean, p.slug, designation) + expositionPanel(expositions,p.slug,paper.slug,credit) + (checks ? checksPanel(checks, `/projects/${p.slug}/papers/${paper.slug}/checks`) : "") + (source ? demoteHeadings(await linkPeople(md(source))) : "<p class=\"muted\">No manuscript yet.</p>");
   const page = readFileSync(join(PUBLIC_DIR, "paper.html"), "utf8");
   const meta = recordHtml(paper.timestamps, paper.history_url) + `<p class="paper-meta"><span>Registered: ${timeHtml(paper.created_at)}</span><span>Registry updated: ${timeHtml(paper.updated_at)}</span><span class="paper-status ${esc(paper.status)}">${esc(paper.review.label)}</span>${paper.grade ? `<span title="The registry's own grade line, written by the manuscript's authors; not a review conclusion">registry grade: ${esc(paper.grade)}</span>` : ""}${paper.version_by ? `<span>current version by @${esc(paper.version_by)}, ${timeHtml(paper.version_at)}${paper.final_rung ? `, ${esc(paper.final_rung)}` : ""}</span>` : ""}<span>${esc(from)}</span></p>`;
   const tlist = track.slice().reverse().map((v: any) => `<li>Version ${v.version}: ${v.author ? `changed by ${credit(v.author)}${v.model ? ` (${esc(v.model)})` : ""}${(v.verified_by ?? []).length ? `, verified by ${v.verified_by.map((h: string) => { const vm = (v.verified_models ?? []).find((x: any) => x.handle === h); return `${credit(h)}${vm?.model ? ` (${esc(vm.model)}${vm.verification && vm.verification !== "read" ? `, ${esc(vm.verification)}` : ""})` : ""}`; }).join(", ")}` : ""}` : esc(v.summary)}, ${timeHtml(v.created_at)}${v.version > 1 ? ` · <a href="/projects/${esc(p.slug)}/history/${esc(docPath)}/${v.version}/diff">diff</a>` : ""}</li>`).join("");
@@ -246,6 +254,22 @@ papers.get("/papers/:paper", async (req: any, res) => {
   for (const [k, v] of Object.entries({ __SHARE__: shareMeta({ title: `${paper.title} · ${p.name}`, description: plainDescription(paper.summary || `A paper written in the open on ${p.name}, refereed by other people's agents.`), path: url, type: "article" }) + ld, __SLUG__: esc(p.slug), __PROJECT__: esc(p.name), __TITLE__: esc(paper.title), __PDF_ACTION__: paper.reviewed_pdf ? `<a class="button" href="${esc(paper.reviewed_pdf.url)}">View PDF</a>` : "", __META__: meta, __SUMMARY__: await linkPeople(paper.summary_html ?? esc(paper.summary)), __BODY__: body, __VERSIONS__: vlist, __REPORTS__: demoteHeadings(rlist, 2), __PAPER__: esc(paper.slug), __OPEN_JOBS__: String(paper.open_jobs) })) html = fill(html, k, v);
   res.set("Cache-Control","no-store").type("text/html").send(html);
 });
+
+/** A retracted paper keeps its page; the reason sits above everything else on it. */
+function retractionBanner(p: any): string {
+  if (!p.retracted_at) return "";
+  return `<div class="panel retracted" role="note" style="margin:0 0 1.5rem;padding:.9rem 1.1rem;border-left:4px solid #b42318"><p style="margin:0 0 .4rem"><b>Retracted</b> ${timeHtml(p.retracted_at)}</p><p style="margin:.25rem 0">${esc(p.retracted_reason)}</p><p class="muted" style="margin:.25rem 0">The project no longer lists this paper and no new work is queued on it. The manuscript, its versions and its reviews stay below as they were.</p></div>`;
+}
+
+async function retraction(req: any, res: any, act: (problemId: number, slug: string, userId: number | null, reason: unknown) => Promise<object>) {
+  const p = await one<{ id: number; slug: string }>(`SELECT id, slug FROM problems WHERE slug = $1`, [req.params.slug]);
+  if (!p) { res.status(404).json({ error: "unknown project" }); return; }
+  if (!await isGrantedTrusted(Number(p.id), Number(req.user.id), req.user.handle)) { res.status(403).json({ error: "only the project's owners and reviewers trusted by grant retract or restore a paper" }); return; }
+  try { res.json(await act(Number(p.id), String(req.params.paper), Number(req.user.id), req.body?.reason)); }
+  catch (e) { if (e instanceof RetractionError) res.status(e.status).json({ error: e.message }); else throw e; }
+}
+papers.post("/papers/:paper/retract", bearer, (req: any, res) => retraction(req, res, retractPaper));
+papers.post("/papers/:paper/restore", bearer, (req: any, res) => retraction(req, res, restorePaper));
 
 /** The review state above the manuscript: what was reviewed, what is still required, what could not be applied. */
 function reviewPanel(r: PaperReview, slug: string): string {
