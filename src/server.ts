@@ -31,6 +31,7 @@ import { yieldPage } from "./routes/yield.js";
 import { understanding } from "./routes/understanding.js";
 import { announcements } from "./routes/announcements.js";
 import { announceTick } from "./lib/announce.js";
+import { recordTick } from "./lib/record-announce.js";
 import { email, emailClicks } from "./routes/email.js";
 import { emailTick } from "./lib/email-update.js";
 import { settings } from "./routes/settings.js";
@@ -181,6 +182,8 @@ migrate().then(async () => {
   setInterval(() => { flushFileEffects().catch(error => console.error("publication retry:", error)); }, 30000).unref();
   // Announcements (#sah-discord-announcer): scan and send once a minute; off unless a project turns it on, ANNOUNCE_ENABLED=0 stops it.
   setInterval(() => { announceTick().catch(error => console.error("announce:", error)); }, 60_000).unref();
+  // Record posts (#sah-discord-record-posts): a verified new best on a challenge track, posted through the same webhook and kill switch.
+  setInterval(() => { recordTick().catch(error => console.error("record posts:", error)); }, 60_000).unref();
   // Progress emails (#sah-progress-emails): queue items and write whoever's daily email is due, once a minute. Off unless EMAIL_ENABLED=1.
   setInterval(() => { emailTick().catch(error => console.error("email:", error)); }, 60_000).unref();
   const srv = app.listen(port, () => {

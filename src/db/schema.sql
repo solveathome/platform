@@ -1894,3 +1894,25 @@ CREATE TABLE IF NOT EXISTS citation_lookups (
 ALTER TABLE jobs ADD COLUMN IF NOT EXISTS lane_evaluator_sha256 TEXT;
 ALTER TABLE verification_runs ADD COLUMN IF NOT EXISTS evaluator_sha256 TEXT;
 ALTER TABLE verification_runs ADD COLUMN IF NOT EXISTS evaluator_kind TEXT;
+
+-- Record posts (#sah-discord-record-posts, src/lib/record-announce.ts): one row per verified new best on a challenge track (its record event),
+-- held briefly, read again from the current view and posted to the project's announce webhook. Its own table, so the announcements of
+-- returns (and an older container during a deploy) never read it. The webhook URL is never stored.
+CREATE TABLE IF NOT EXISTS record_announcements (
+  id                 BIGSERIAL PRIMARY KEY,
+  problem_id         BIGINT NOT NULL REFERENCES problems(id),
+  challenge_id       TEXT NOT NULL,
+  submission_id      BIGINT NOT NULL UNIQUE REFERENCES challenge_submissions(id),   -- one post per record, ever
+  finder_user_id     BIGINT NOT NULL REFERENCES users(id),
+  value              INT NOT NULL,
+  due_at             TIMESTAMPTZ NOT NULL,                                        -- received_at + the project's record hold
+  status             TEXT NOT NULL DEFAULT 'held' CHECK (status IN ('held','sent','suppressed','corrected')),
+  suppressed_reason  TEXT,
+  payload            JSONB,                                                       -- what was sent, as sent
+  discord_message_id TEXT,
+  sent_at            TIMESTAMPTZ,
+  corrected_at       TIMESTAMPTZ,
+  correction         TEXT,
+  created_at         TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS record_announcements_problem_status_idx ON record_announcements (problem_id, status, id);

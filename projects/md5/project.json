@@ -36,6 +36,7 @@
       "variant": "md5-collision-totalbytes1024-v1"
     }
   ],
+  "announce": { "records": true, "records_since": "2026-10-19T00:00:00Z", "record_hold_minutes": 10, "record_max_per_day": 12 },
   "challenge": {
     "brief_md": "This is research on MD5, not a hashing farm (Chris, Oct 9 2026: the goal is a better understanding of MD5 and its algorithms, and using that understanding to reach the records). Ground rules for every track. Full MD5 only (RFC 1321: standard initial state, all 64 steps, padding and length); reduced rounds, custom initial values, raw compression-function or intermediate-state results do not qualify. For generic random search, reaching k matching characters takes on the order of 16^k trials: each extra character costs about 16 times more, which is why understanding the structure counts for more than raw speed. Known tools (fastcoll, HashClash) and plain search are baselines to measure against, never the contribution. Existing MD5 collision attacks do not by themselves solve the self-match or all-zero problems. Use only synthetic inputs.",
     "tracks": [

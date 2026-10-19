@@ -14,6 +14,7 @@ import { wantsHtml } from "../lib/negotiate.js";
 import { page, esc } from "../lib/page.js";
 import * as roles from "../lib/roles.js";
 import { announceConfig, announceEnabled, approve, buildPost, suppress, webhookUrl } from "../lib/announce.js";
+import { recordAnnounceConfig } from "../lib/record-announce.js";
 import { readProjectConfig } from "../lib/projects.js";
 
 export const announcements = Router({ mergeParams: true });
@@ -44,7 +45,10 @@ announcements.get("/announcements", optionalAuth, project, owner, async (req: an
   const held = await q(`${ROWS} AND a.status = 'held' ORDER BY a.due_at, a.id`, [pid]);
   const done = await q(`${ROWS} AND a.status <> 'held' ORDER BY a.id DESC LIMIT 50`, [pid]);
   const state = { discord: cfg.discord, enabled: announceEnabled(), webhook: webhookUrl(cfg) ? "set" : "unset", webhook_env: cfg.webhook_env, hold_hours: cfg.hold_hours, approval: cfg.approval, max_per_day: cfg.max_per_day, route_cooldown_hours: cfg.route_cooldown_hours, burst_per_hour: cfg.burst_per_hour };
-  if (!wantsHtml(req)) { res.json({ project: slug, config: state, held, recent: done }); return; }
+  const rc = recordAnnounceConfig(readProjectConfig(slug));
+  const records = await q(`SELECT a.*, u.handle AS finder FROM record_announcements a JOIN users u ON u.id = a.finder_user_id WHERE a.problem_id = $1 ORDER BY a.id DESC LIMIT 50`, [pid]);
+  const recordState = { records: rc.records, since: rc.since, hold_minutes: rc.hold_minutes, max_per_day: rc.max_per_day };
+  if (!wantsHtml(req)) { res.json({ project: slug, config: state, held, recent: done, record_config: recordState, records }); return; }
   const P = `/projects/${slug}`;
   const base = (process.env.BASE_URL ?? "").replace(/\/$/, "");
   const preview = (a: any) => {
@@ -62,6 +66,9 @@ ${preview(a)}
   const body = `
 <p>A post goes out when a reviewer holding a role on this project accepts a finding and marks it worth announcing, the acceptance is trusted and final, and it is a proof, a refutation, an upheld challenge, a reproduced computation or a validated direction. It names one person: the return's author. It goes out ${cfg.hold_hours ? `${esc(cfg.hold_hours)} hours after the decision` : "on the next pass after the decision (once a minute)"}${cfg.approval ? ", once you approve it here" : ", with nobody approving it"}. The record is read again just before sending: a decision reversed before then drops the row. A validator's note or route title that overclaims is left out of the post and noted here; a post whose credit the ledger does not back is skipped. A later decision that changes the acceptance corrects a sent post.</p>
 <p class="muted">Posting to Discord: ${cfg.discord ? "on" : "off"} for this project. Kill switch: ${announceEnabled() ? "not set" : "<b>set (ANNOUNCE_ENABLED=0): nothing is sent</b>"}. Webhook (${esc(cfg.webhook_env)}): ${webhookUrl(cfg) ? "set" : "<b>unset: nothing is sent</b>"}. At most ${esc(cfg.max_per_day)} posts a day and one per route per ${esc(cfg.route_cooldown_hours)} h; sending pauses when more than ${esc(cfg.burst_per_hour)} rows queue in an hour.</p>
+<h2>Record posts</h2>
+<p class="muted">Record posts: ${rc.records ? `on, for record events from ${when(rc.since)}` : "off"} for this project. A verified new best on a track is posted ${esc(rc.hold_minutes)} min after its receipt, if it is still the record; at most ${esc(rc.max_per_day)} a day. A withdrawn record corrects its post.</p>
+${records.length ? `<div class="wrap"><table><thead><tr><th>Submission</th><th>Track</th><th>Value</th><th>Finder</th><th>Status</th><th>When</th><th>Note</th></tr></thead><tbody>${records.map((a: any) => `<tr><td><a href="${P}/submissions/${esc(a.submission_id)}">#${esc(a.submission_id)}</a></td><td>${esc(a.challenge_id)}</td><td>${esc(a.value)}</td><td>@${esc(a.finder)}</td><td>${esc(a.status)}</td><td>${when(a.sent_at ?? a.corrected_at ?? a.due_at)}</td><td>${esc(a.suppressed_reason ?? a.correction ?? "")}</td></tr>`).join("")}</tbody></table></div>` : `<p class="muted">None yet.</p>`}
 <h2>Waiting to go out</h2>${heldHtml}
 <h2>Recent</h2>${doneHtml ? `<div class="wrap"><table><thead><tr><th>Return</th><th>Kind</th><th>Finder</th><th>Status</th><th>When</th><th>Note</th></tr></thead><tbody>${doneHtml}</tbody></table></div>` : `<p class="muted">Nothing yet.</p>`}
 <script>
