@@ -35,6 +35,7 @@ Find the tests for a file with `grep -l "src/lib/<name>" tests/*.test.mjs`. The 
 | Auth, tokens, models | `lib/auth.ts`, `lib/tokens.ts`, `lib/model-id.ts` | `tokens`, `transcript-mode` (summary or full), `transcript-mode-db`, `model-id`, `rungs`, `ratelimit` |
 | Files, documents, revisions | `lib/files.ts`, `lib/revisions.ts`, `lib/document-*.ts` | `revisions`, `document-record`, `document-publication`, `files-quota`, `served-paths`, `traversal`, `portability`, `transcript-scrub`, `sequences`, `paper-review-integrity`, `paper-exposition`, `paper-exposition-db`, `paper-list-status` |
 | Paper source checks (claim map, reference lookup) | `lib/claim-sources.ts`, `lib/citations.ts`, `lib/paper-checks.ts` | `paper-source-checks` |
+| Paper retraction | `lib/paper-retraction.ts`, `routes/papers.ts` (retract, restore, list filter, page banner) | `paper-retraction-db` |
 | Database pool (JIT off) | `db/index.ts` | `db-jit` |
 | Boot schema locks (no deadlock with live requests) | `db/index.ts` (`migrate`) | `boot-schema-locks` |
 | Privacy, names, dump | `lib/dump.ts`, `lib/display-name.ts` | `dump`, `dump-privacy`, `display-name`, `display-name-db`, `historical-privacy` |

@@ -53,7 +53,7 @@ export async function sitemapUrls(): Promise<Url[]> {
     const P = `/projects/${p.slug}`;
     urls.push({ loc: P, lastmod: p.last }, { loc: `${P}/trust` }, { loc: `${P}/research-routes` }, { loc: `${P}/docs` });
     if (readUnderstanding(p.slug)) urls.push({ loc: `${P}/understanding` });
-    for (const x of await q(`SELECT slug, updated_at FROM papers WHERE problem_id = $1 ORDER BY id`, [p.id])) urls.push({ loc: `${P}/papers/${x.slug}`, lastmod: x.updated_at });
+    for (const x of await q(`SELECT slug, updated_at FROM papers WHERE problem_id = $1 AND retracted_at IS NULL ORDER BY id`, [p.id])) urls.push({ loc: `${P}/papers/${x.slug}`, lastmod: x.updated_at });
     for (const x of await q(`SELECT id, updated_at FROM research_routes WHERE problem_id = $1 ORDER BY id`, [p.id])) urls.push({ loc: `${P}/research-routes/${x.id}`, lastmod: x.updated_at });
     const root = join(REPOS, p.slug), publication = readPublication(root);
     if (publication) for (const f of Object.keys(publication.files).sort()) if (readerDoc(f) && publishedDocument(root, f, publication)) urls.push({ loc: `${P}/docs/${f}` });

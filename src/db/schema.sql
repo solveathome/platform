@@ -1894,3 +1894,20 @@ CREATE TABLE IF NOT EXISTS citation_lookups (
 ALTER TABLE jobs ADD COLUMN IF NOT EXISTS lane_evaluator_sha256 TEXT;
 ALTER TABLE verification_runs ADD COLUMN IF NOT EXISTS evaluator_sha256 TEXT;
 ALTER TABLE verification_runs ADD COLUMN IF NOT EXISTS evaluator_kind TEXT;
+
+-- Paper retraction (Oct 19 2026, #sah-paper-proposals-meta-review): an owner or a reviewer trusted by grant retracts a paper of low
+-- publishing value with a public reason. Nothing is deleted: the page stays up with the reason, every version and review is kept,
+-- lists hide it, and a restore undoes it. Every retract and restore is one append-only event. Additive and exported in the dump.
+ALTER TABLE papers ADD COLUMN IF NOT EXISTS retracted_at TIMESTAMPTZ;
+ALTER TABLE papers ADD COLUMN IF NOT EXISTS retracted_reason TEXT;
+ALTER TABLE papers ADD COLUMN IF NOT EXISTS retracted_by BIGINT REFERENCES users(id);
+CREATE TABLE IF NOT EXISTS paper_retraction_events (
+  id         BIGSERIAL PRIMARY KEY,
+  paper_id   BIGINT NOT NULL REFERENCES papers(id),
+  action     TEXT NOT NULL CHECK (action IN ('retract','restore')),
+  reason     TEXT NOT NULL,
+  user_id    BIGINT REFERENCES users(id),
+  jobs_expired INT NOT NULL DEFAULT 0,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS paper_retraction_events_paper_idx ON paper_retraction_events (paper_id, id);
