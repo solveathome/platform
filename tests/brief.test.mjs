@@ -550,5 +550,7 @@ test('an improves-on claim needs the strongest published baseline, the starting 
   const full = renderBrief(review, base, session);
   for (const md of [full, compactDepartmentBrief(full, review, session, null), taskGuidance({ type: 'review' })]) assert.ok(md.includes(BASELINE_REVIEW_DUTY), 'the reviewer rubric carries the duty');
   assert.match(BASELINE_REVIEW_DUTY, /strongest published method/); assert.match(BASELINE_REVIEW_DUTY, /one-component-at-a-time ablations/);
+  // Oct 20 2026 (#sah-reviewer-baseline-check): a gain over the return's own earlier version is one baseline, a reviewer-run arm is supplying it, and notes_md opens with the claim line.
+  assert.match(BASELINE_REVIEW_DUTY, /the starting point is one baseline, not two/); assert.match(BASELINE_REVIEW_DUTY, /do not run a missing arm/); assert.match(BASELINE_REVIEW_DUTY, /Start notes_md with one line: `Improvement claim: none`/);
   assert.match(BASELINE_REVIEW_DUTY, /unverifiable: true/); assert.match(BASELINE_REVIEW_DUTY, /needs_md/); assert.match(BASELINE_REVIEW_DUTY, /source work/); assert.match(BASELINE_REVIEW_DUTY, /measure work/);
 });
