@@ -426,6 +426,18 @@ export function fmtValue(track: ChallengeTrack, v: number | null): string {
   return track.better === "lower" ? `${v} bytes` : `${v} of ${track.max ?? 32}`;
 }
 
+/**
+ * Where a verified site record beats the best published result, by how much (Chris, Oct 19 2026: "clearly mark that we are the gold
+ * standard", keeping the published one as "best known before solveathome"). Strictly better only, in the track's own direction; a
+ * reproduction of a known answer never counts. Null keeps the ordinary display.
+ */
+export function recordLead(track: ChallengeTrack, best: { value: number; known_result?: boolean } | null, target: { value: number } | null): { margin: number; phrase: string } | null {
+  if (!best || !target || best.known_result || !beats(track, best.value, target.value)) return null;
+  const margin = Math.abs(best.value - target.value);
+  const unit = track.display?.reference_unit ?? track.unit, word = margin === 1 ? unit.replace(/s$/, "") : unit;
+  return { margin, phrase: `${margin} ${word} ${track.better === "lower" ? "below" : "above"} the best known before solveathome` };
+}
+
 /** The task of a track run, composed when it is served: the frozen rules, where the record stands now, how to submit and return. */
 export async function challengeTaskBrief(job: any, project: { id: number; slug: string; name: string }, base: string): Promise<string> {
   const cfg = challengeConfig(project.slug)!;

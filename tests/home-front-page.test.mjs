@@ -73,6 +73,8 @@ test("the live figures are in the first render: nothing says Loading, numbers an
   const past = at(64);
   assert.match(past, /<i style="width:66\.7%"><\/i><u style="left:66\.7%;width:calc\(83\.3% - 66\.7%\)"><\/u>/, '64 bytes: filled to the goal, then overshoot');
   assert.match(past, /This one is past the record\./);
+  assert.match(past, /here: 64 bytes <b>record<\/b> · previous best known: 128 bytes/, 'a verified record past the published one is marked');
+  assert.doesNotMatch(short, /<b>record<\/b>/);
   assert.match(html, /<span class="credit-name">Ada L<\/span> <span class="credit-handle">@ada<\/span><\/a><b>50,074<\/b>/);   // whole points
   const board = homeLeaders(list, data);
   assert.match(board.rows, /@bo<\/a><span class="chips"><span>Twin Prime Conjecture 9<\/span><span>MD5 Research Challenge 39<\/span><\/span><\/span><b>48<\/b>/);

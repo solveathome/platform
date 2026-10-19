@@ -23,7 +23,7 @@
  */
 import { q, one } from "../db/index.js";
 import { readProjectConfig } from "./projects.js";
-import { challengeConfig, currentTarget, fmtValue, trackByLane, trackView } from "./challenges.js";
+import { challengeConfig, currentTarget, fmtValue, recordLead, trackByLane, trackView } from "./challenges.js";
 
 export const SUMMARY_MAX = 12000;
 export const ENTRY_MAX = 1200;
@@ -74,10 +74,10 @@ export async function laneBySlug(problemId: number, slug: string): Promise<LaneR
 export async function laneRecords(problemId: number, projectSlug: string, lane: LaneRef): Promise<string[]> {
   const cfg = challengeConfig(projectSlug), track = cfg ? trackByLane(cfg, lane.slug) : null;
   if (track) {
-    const view = await trackView(problemId, track), target = currentTarget(track);
+    const view = await trackView(problemId, track), target = currentTarget(track), lead = recordLead(track, view.best, target);
     return [
-      `Platform best (verified by the server): ${view.best ? `${fmtValue(track, view.best.value)}, submission #${view.best.submission_id} by @${view.best.handle}, ${new Date(view.best.received_at).toISOString().slice(0, 10)}` : fmtValue(track, null)}.`,
-      `Best published result: ${target ? `${fmtValue(track, target.value)}, ${target.credit} (${target.source_url})` : "none recorded"}.`,
+      `Platform best (verified by the server): ${view.best ? `${fmtValue(track, view.best.value)}, submission #${view.best.submission_id} by @${view.best.handle}, ${new Date(view.best.received_at).toISOString().slice(0, 10)}` : fmtValue(track, null)}${lead ? `. Record, new best known: ${lead.phrase}` : ""}.`,
+      `${lead ? "Best known before solveathome" : "Best published result"}: ${target ? `${fmtValue(track, target.value)}, ${target.credit} (${target.source_url})` : "none recorded"}.`,
     ];
   }
   const r = await one<{ n: string; last: string | null }>(`SELECT count(*) AS n, max(id) AS last FROM returns WHERE lane_id = $1 AND status = 'accepted' AND NOT provisional`, [lane.id]);

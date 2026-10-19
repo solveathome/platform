@@ -184,6 +184,29 @@ test('overview charts step up for prefix improvements and down for fewer collisi
   }
 });
 
+test('a verified record past the published best is marked as the record, the published one kept as best known before solveathome', async () => {
+  const {recordCard, recordChartSvg} = await import('../src/routes/challenges.ts');
+  const {recordLead} = await import('../src/lib/challenges.ts');
+  const [self, , coll] = config.challenge.tracks;
+  assert.equal(recordLead(coll, { value: 124 }, { value: 128 })?.phrase, '4 bytes below the best known before solveathome');
+  assert.equal(recordLead(coll, { value: 127 }, { value: 128 })?.phrase, '1 byte below the best known before solveathome');
+  assert.equal(recordLead(coll, { value: 128 }, { value: 128 }), null, 'a tie is not a record');
+  assert.equal(recordLead(coll, { value: 130 }, { value: 128 }), null);
+  assert.equal(recordLead(coll, { value: 124, known_result: true }, { value: 128 }), null, 'a reproduction never counts');
+  assert.equal(recordLead(self, { value: 14 }, { value: 12 })?.phrase, '2 hex characters above the best known before solveathome');
+  assert.equal(recordLead(self, { value: 11 }, { value: 12 }), null);
+  const now = new Date('2026-10-19T12:00:00Z'), name = h => `@${h}`;
+  const ahead = recordCard(coll, recordView(coll, [256, 124]), '/projects/test', name, now);
+  assert.match(ahead, /Record · new best known/);
+  assert.match(ahead, /4 bytes below the best known before solveathome\./);
+  assert.match(ahead, /Best known before solveathome<\/span>/);
+  assert.match(ahead, /https:\/\/marc-stevens.nl\/research\/md5-1block-collision\//, 'the published source keeps its link');
+  assert.match(recordChartSvg(coll, recordView(coll, [124]), '/projects/test', now), /Best known before solveathome, verified by us: 128 bytes/);
+  const behind = recordCard(coll, recordView(coll, [256]), '/projects/test', name, now);
+  assert.doesNotMatch(behind, /Record · new best known|before solveathome/);
+  assert.match(behind, /Best known verified/);
+});
+
 test('record summaries separate the current score, credited reference and ultimate goal and escape attribution', async () => {
   const {recordCard} = await import('../src/routes/challenges.ts');
   const track = config.challenge.tracks[2], view = recordView(track, [256]);
