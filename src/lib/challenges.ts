@@ -362,8 +362,36 @@ export function publicSubmission(s: any): any {
     inputs: s.inputs, digest: s.digest, score: s.score, byte_length: s.byte_length, a_bytes: s.a_bytes, b_bytes: s.b_bytes, total_bytes: s.total_bytes,
     duplicate_of: s.duplicate_of === null ? null : Number(s.duplicate_of), known_result: s.known_result, attribution: s.current_attribution ?? s.attribution, attribution_submitted: s.attribution,
     method_md: s.method_md, ai_involvement: s.ai_involvement, runtime_s: s.runtime_s === null ? null : Number(s.runtime_s), hardware: s.hardware,
-    verifier_version: s.verifier_version, checks: s.checks, withdrawn: !!s.withdrawn, identity_sha256: s.identity_sha256,
+    verifier_version: s.verifier_version, checks: s.checks, withdrawn: !!s.withdrawn, identity_sha256: s.identity_sha256, job_id: s.job_id === null || s.job_id === undefined ? null : Number(s.job_id),
     ...(s.record_credit ? { record_credit: s.record_credit } : {}) };
+}
+
+/**
+ * Where a submission came from (user feedback, Oct 19 2026: "Link to the job / return that led to the record ... how it was
+ * accomplished / what route was taken"). job_id has been stored with every submission sent under an assignment since the first one,
+ * so this is a read, not a backfill. Jobs and returns are public pages; a submission sent outside an assignment has neither.
+ */
+export async function submissionSource(problemId: number, jobId: unknown): Promise<{ job: { id: number; title: string | null; type: string; status: string }; returns: { id: number; status: string; final_rung: string | null; created_at: any }[] } | null> {
+  if (jobId === null || jobId === undefined) return null;
+  const job = await one(`SELECT id, title, type, status FROM jobs WHERE id = $1 AND problem_id = $2`, [jobId, problemId]);
+  if (!job) return null;
+  const returns = await q(`SELECT id, status, final_rung, created_at FROM returns WHERE job_id = $1 AND problem_id = $2 ORDER BY id`, [job.id, problemId]);
+  return { job: { id: Number(job.id), title: job.title, type: job.type, status: job.status }, returns: returns.map((r: any) => ({ id: Number(r.id), status: r.status, final_rung: r.final_rung, created_at: r.created_at })) };
+}
+/** The other way: the live receipts sent under one job, per track, with its best and the site records it set, for the job and return pages. */
+export async function jobSubmissions(problemId: number, slug: string, jobId: unknown): Promise<{ track: ChallengeTrack; count: number; best_id: number; best: number; records: number[] }[]> {
+  const cfg = challengeConfig(slug);
+  if (!cfg || jobId === null || jobId === undefined) return [];
+  const rows = await q(`SELECT s.id, s.challenge_id, s.score, s.total_bytes, EXISTS (SELECT 1 FROM challenge_events e WHERE e.submission_id = s.id AND e.kind = 'record') AS record
+    FROM challenge_submissions s WHERE s.problem_id = $1 AND s.job_id = $2 AND s.namespace = 'live' AND ${LIVE_SQL} ORDER BY s.id`, [problemId, jobId]);
+  const out = new Map<string, { track: ChallengeTrack; count: number; best_id: number; best: number; records: number[] }>();
+  for (const r of rows) {
+    const track = trackById(cfg, r.challenge_id); if (!track) continue;
+    const v = metricOf(track, r), id = Number(r.id), t = out.get(track.id);
+    if (!t) out.set(track.id, { track, count: 1, best_id: id, best: v, records: r.record ? [id] : [] });
+    else { t.count++; if (beats(track, v, t.best)) { t.best = v; t.best_id = id; } if (r.record) t.records.push(id); }
+  }
+  return [...out.values()];
 }
 
 // ---------------------------------------------------------------------------------------------------------------------------

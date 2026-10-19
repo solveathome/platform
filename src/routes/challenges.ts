@@ -15,7 +15,8 @@ import { crediter } from "../lib/display-name.js";
 import { assignmentMutation } from "../lib/assignments.js";
 import { isListed, projectPartial, readProjectConfig } from "../lib/projects.js";
 import { ChallengeError, challengeConfig, currentTarget, fmtValue, prefix, publicSubmission, submissionRow, submit, trackByLane, trackById, trackView, verify, metricOf, recordLead,
-  type ChallengeConfig, type ChallengeTrack, type TrackView, type Namespace, VERIFIER_VERSION, LIVE_SQL, reconcileRecordCredit } from "../lib/challenges.js";
+  type ChallengeConfig, type ChallengeTrack, type TrackView, type Namespace, VERIFIER_VERSION, LIVE_SQL, reconcileRecordCredit, submissionSource, jobSubmissions } from "../lib/challenges.js";
+import { redactHarnessIds } from "../lib/files.js";
 import { RFC1321_IMPLEMENTATION } from "../lib/md5.js";
 
 export const challenges = Router({ mergeParams: true });
@@ -269,13 +270,32 @@ ${track.better === "higher" ? `<section class="panel"><h2>Site milestones</h2>${
 /** Highlight the first n characters with <mark>, and say it in words too: the match never depends on colour alone. */
 const marked = (text: string, n: number) => `${n ? `<mark>${esc(text.slice(0, n))}</mark>` : ""}${esc(text.slice(n))}`;
 
+/** The job a submission was sent under and the return that closed it: the write-up of the route taken (user feedback, Oct 19 2026). */
+function sourceHtml(source: Awaited<ReturnType<typeof submissionSource>>, P: string): string {
+  if (!source) return "Sent outside an assignment, so no write-up is linked. The method above is the submitter's own account.";
+  const title = source.job.title ? `: ${esc(redactHarnessIds(source.job.title).text)}` : "";
+  const job = `<a href="${P}/job/${source.job.id}">job #${source.job.id}${title}</a>`;
+  if (!source.returns.length) return `Sent during ${job}. Its write-up is not in yet; the job page links it when it arrives.`;
+  const rets = source.returns.map((r) => `<a href="${P}/return/${r.id}">return #${r.id}</a> <span class="cc-tag">${esc(r.status)}${r.final_rung ? `, ${esc(r.final_rung)}` : ""}</span>`).join(", ");
+  return `Sent during ${job}. How it was done and the route taken: ${rets}.`;
+}
+
+/** The records one job produced, for its job and return pages: the link back from the write-up to its receipts. Empty off a challenge project. */
+export async function jobRecordsHtml(problemId: number, slug: string, jobId: unknown): Promise<string> {
+  const tracks = await jobSubmissions(problemId, slug, jobId);
+  if (!tracks.length) return "";
+  const P = `/projects/${slug}`;
+  return `<div><h3>Verified submissions from this run</h3><ul>${tracks.map((t) => `<li><a href="${P}/tracks/${esc(t.track.lane)}">${esc(t.track.name)}</a>: ${t.count} verified, best <a href="${P}/submissions/${t.best_id}">${esc(fmtValue(t.track, t.best))} (#${t.best_id})</a>${t.records.length ? `; site record${t.records.length > 1 ? "s" : ""} ${t.records.slice(-5).map((id) => `<a href="${P}/submissions/${id}">#${id}</a>`).join(", ")}${t.records.length > 5 ? ` and ${t.records.length - 5} earlier` : ""}` : ""}</li>`).join("")}</ul></div>`;
+}
+
 /** GET /submissions/:id : the record page: exact inputs, digest, metric, receipt, submitter, attribution, verifier. */
 challenges.get("/submissions/:id", async (req: any, res) => {
   const p = req.project, cfg: ChallengeConfig = req.challenge, P = `/projects/${p.slug}`;
   const id = Number(req.params.id);
   const s = Number.isInteger(id) && id > 0 ? await submissionRow(Number(p.id), id) : null;
   if (!s) { if (wantsHtml(req)) res.status(404).type("text/html").send(notFoundPage("No such submission.")); else res.status(404).json({ error: "no such submission" }); return; }
-  if (!wantsHtml(req)) { res.json({ ...publicSubmission(s), corrections: s.corrections, events: s.events }); return; }
+  const source = await submissionSource(Number(p.id), s.job_id);
+  if (!wantsHtml(req)) { res.json({ ...publicSubmission(s), source: source && { job_id: source.job.id, return_ids: source.returns.map((r) => r.id) }, corrections: s.corrections, events: s.events }); return; }
   const track = trackById(cfg, s.challenge_id)!;
   const name = await crediter();
   const higher = track.better === "higher";
@@ -305,6 +325,7 @@ ${s.duplicate_of ? `<dt>Duplicate</dt><dd>The same input was first received as <
 ${s.known_result ? `<dt>Known result</dt><dd>Reproduces a published result: recorded as a reproduction, not a new discovery.</dd>` : ""}
 <dt>AI involvement (self-reported)</dt><dd>${s.ai_involvement ? esc(s.ai_involvement) : "not stated"}</dd>
 <dt>Method (self-reported)</dt><dd>${s.method_md ? `<span style="white-space:pre-wrap">${esc(s.method_md)}</span>` : "not stated"}</dd>
+<dt>How it was found</dt><dd>${sourceHtml(source, P)}</dd>
 <dt>Runtime and hardware (self-reported)</dt><dd>${s.runtime_s !== null ? `${esc(Number(s.runtime_s))} s` : "runtime not stated"}${s.hardware ? `; ${esc(s.hardware)}` : ""}</dd>
 <dt>Verifier</dt><dd>${esc(s.verifier_version)}: ${Object.entries(checks).map(([k, v]) => `${esc(k)} ${esc((v as string[]).join(", "))}`).join("; ")}</dd>
 ${s.events.length ? `<dt>Earned on arrival</dt><dd>${s.events.map((e: any) => esc(e.kind === "milestone" ? `site milestone ${e.value}` : e.kind === "record" ? `site record ${fmtValue(track, e.value)}` : (e.note ?? `published target ${e.value}`))).join("; ")}</dd>` : ""}

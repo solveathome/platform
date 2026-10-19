@@ -389,6 +389,21 @@ test('pages render: overview with three charts, track, record; JSON for agents',
   assert.match(csv.split('\n')[0], /^id,challenge_id,handle/);
 });
 
+test('a submission page links the job and return it came from, and those pages link back (user feedback, Oct 19 2026)', async () => {
+  const s = await one(`SELECT s.id, s.job_id, r.id AS return_id FROM challenge_submissions s JOIN returns r ON r.job_id = s.job_id WHERE s.problem_id = $1 AND s.namespace = 'live' ORDER BY s.id LIMIT 1`, [pid]);
+  assert.ok(s, 'a run with a verified submission and its return');
+  const page = await (await call('a', 'GET', `/submissions/${s.id}`, {accept: 'text/html'})).text();
+  assert.ok(page.includes(`<a href="/projects/${slug}/job/${s.job_id}">job #${s.job_id}`), 'links the job');
+  assert.ok(page.includes(`<a href="/projects/${slug}/return/${s.return_id}">return #${s.return_id}</a>`), 'links the return');
+  const json = await (await call('a', 'GET', `/submissions/${s.id}`)).json();
+  assert.equal(json.job_id, Number(s.job_id)); assert.ok(json.source.return_ids.includes(Number(s.return_id)));
+  for (const back of [`/job/${s.job_id}`, `/return/${s.return_id}`]) {
+    const html = await (await call('a', 'GET', back, {accept: 'text/html'})).text();
+    assert.match(html, /Verified submissions from this run/, `${back} names its submissions`);
+    assert.match(html, new RegExp(`/projects/${slug}/submissions/\\d+`), `${back} links a submission`);
+  }
+});
+
 test('a hidden project is reachable but never listed, featured or indexed', async () => {
   assert.equal(isListed(slug), false);
   const list = await (await fetch(`${base}/projects`, {headers: {accept: 'application/json'}})).json();
