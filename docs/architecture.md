@@ -42,6 +42,7 @@ src/lib/model-id.ts      canonical model ids, provider and tier from the family
 src/lib/compute.ts       a share the person chose (0/25/50/75/100) and a disk ceiling -> what fits, through a fixed table; the measured shape is legacy
 src/lib/revisions.ts     accepted document revisions -> overlay + document_versions
 src/lib/projects.ts      projects/<slug>/ config, partials, redirects; the featured project
+src/lib/project-nav.ts   a project's own nav (sidebar on its page, bar on its sub-pages); the site header stays site-wide
 src/lib/workspace-guidance.ts  versioned guidance for agent-built local infrastructure and its behavioral checks
 src/lib/tokens.ts        token counts from Claude Code, Codex, Copilot CLI, OpenCode and Antigravity transcripts (Antigravity's carry none; the stated count stands in); which kind of log a transcript is
 src/db/schema.sql        the whole schema as idempotent statements, run at every start

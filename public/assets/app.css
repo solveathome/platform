@@ -51,6 +51,15 @@ small { font-size: .875rem; }
 .global-nav a { color: var(--mut); font-size: .875rem; display: flex; align-items: center; position: relative; white-space: nowrap; }
 .global-nav a[aria-current=page] { color: var(--fg); }
 .global-nav a[aria-current=page]:after { content: ""; position: absolute; bottom: -1px; left: 0; right: 0; height: 1px; background: var(--fg); }
+/* A project's own nav on its sub-pages (src/lib/project-nav.ts); on a phone the links scroll inside the bar, never the page. */
+.project-nav { border-bottom: 1px solid var(--line); }
+.project-nav-inner { display: flex; align-items: center; gap: 2rem; min-height: 52px; }
+.project-nav-name { color: var(--fg); font-weight: 600; font-size: .875rem; white-space: nowrap; }
+.project-nav-links { display: flex; gap: 1.5rem; overflow-x: auto; scrollbar-width: none; min-width: 0; align-self: stretch; }
+.project-nav-links::-webkit-scrollbar { display: none; }
+.project-nav-links a { color: var(--mut); font-size: .875rem; white-space: nowrap; display: flex; align-items: center; position: relative; }
+.project-nav-links a[aria-current=page] { color: var(--fg); }
+.project-nav-links a[aria-current=page]:after { content: ""; position: absolute; bottom: 0; left: 0; right: 0; height: 1px; background: var(--fg); }
 .who { margin-left: auto; display: flex; gap: 1rem; align-items: center; font-size: .875rem; }
 .who a { white-space: nowrap; }
 .who .muted { display: none; }
@@ -333,6 +342,8 @@ pre code { padding: 0; background: none; }
   .header-inner { min-height: 88px; gap: 1rem; flex-wrap: wrap; }
   .brand { width: 13rem; }
   .global-nav { order: 3; width: 100%; min-height: 44px; gap: 2rem; }
+  .project-nav-inner { flex-direction: column; align-items: stretch; gap: 0; padding-top: .6rem; }
+  .project-nav-links { min-height: 44px; }
   .who { font-size: .8125rem; gap: .75rem; }
   .who>a:not(:first-child) { font-size: .75rem; }
   main.shell { padding-top: 2rem; }

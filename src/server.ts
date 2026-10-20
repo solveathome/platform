@@ -1,5 +1,6 @@
 import {recordAllPublications} from "./lib/document-record.js";
 import express from "express";
+import { projectNavBar } from "./lib/project-nav.js";
 import { wantsHtml } from "./lib/negotiate.js";
 import { notFound } from "./lib/not-found.js";
 import { readFileSync } from "node:fs";
@@ -84,6 +85,7 @@ app.use("/auth/github/callback", perIp("oauth-callback", 5, 60_000));
 // Anonymous aggregate pages are served from a 20 s cache: one Postgres pass per page per 20 s, however many people are looking.
 // Past 20 s the last copy is served while it rebuilds in the background (src/lib/cache.ts): no visitor waits for the rebuild.
 app.use(emailClicks);   // before the page cache, so a click on a cached page still counts against its email
+app.use("/projects/:slug", projectNavBar);   // ahead of the cache: it writes the project's own nav into every sub-page it sends, cached or not
 app.use(responseCache([/^\/dumps\/?$/, /^\/projects\/?$/, /^\/projects\/[a-z0-9-]+\/(board|activity|standings|leaderboard|who|chat|papers|sequences|lanes|questions|timeline|yield)\/?$/, /^\/projects\/[a-z0-9-]+\/?$/, /^\/leaderboard\/?$/, /^\/credit\/?$/]));
 
 // Assets are referenced with ?v=, bumped whenever the file changes, so a versioned URL is immutable: a year, and no revalidation.
