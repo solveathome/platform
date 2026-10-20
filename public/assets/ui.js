@@ -29,6 +29,9 @@
     header.className = 'site-header';
     header.innerHTML = `<a class="skip-link" href="#main">Skip to content</a><div class="shell header-inner"><a class="brand" href="/" aria-label="solveathome home"><img src="/brand/solveathome-logo.png" alt="solveathome" width="2146" height="733"></a><nav class="global-nav" aria-label="Main navigation"><a href="/" ${current === 'home' ? 'aria-current="page"' : ''}>Overview</a><a href="/#problems">Problems</a><a href="/dumps" ${current === 'dataset' ? 'aria-current="page"' : ''}>Open dataset</a></nav><div class="who" id="who"><a href="/auth/github">Sign in with GitHub</a></div></div>`;
   }
+  // A project's bar scrolls sideways on a phone: start it at the current page's item, not at its first (#sah-nav-context-split).
+  const navCurrent = document.querySelector('.project-nav-links [aria-current]');
+  if (navCurrent) { const bar = navCurrent.parentElement; bar.scrollLeft += navCurrent.getBoundingClientRect().left - bar.getBoundingClientRect().left - 16; }
   const footer = document.querySelector('[data-site-footer]');
   // Inside a project the footer's asks go to that project; elsewhere to the list of problems (#sah-nav-context-split).
   const inProject = (/^\/projects\/([a-z0-9-]+)/.exec(location.pathname) || [])[1];
