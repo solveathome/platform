@@ -185,6 +185,7 @@ test('core runtime instructions require self-discovery and avoid application-spe
   assert.match(sections.execution,/Allocation bookkeeping is advisory/);
   assert.match(sections.execution,/confirm cleanup or quarantine the capacity/);
   assert.match(sections.publication_safety,/refuse to send anything/);
+  assert.match(sections.publication_safety,/^What this section is for: everything a run sends to solveathome is published\./);
   assert.match(sections.acceptance,/method \(simulation or real application\/OS run\)/);
   assert.match(sections.accounting,/derive model, thinking level, transcript slice and attributable usage together/);
   assert.match(sections.accounting,/Keep model\/effort changes on their original turns/);
