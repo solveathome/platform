@@ -1,6 +1,7 @@
 /**
  * robots.txt and sitemap.xml (Sep 25 2026, #sah-seo-optimize). The sitemap lists every public page worth finding: the projects,
- * their papers, research routes, results, the published documents of the body of work, and the people with work on the record.
+ * their papers, research routes, results, record-challenge tracks and the submissions that moved a record, the published documents of the
+ * body of work, and the people with work on the record.
  * Operational pages (jobs, asks, who holds what, file attachments, history, the seed edition, working files under /docs/) carry noindex and are left out.
  * It is built from the database on request and held for ten minutes, so it stays current without a job to run.
  */
@@ -13,6 +14,7 @@ import { readPublication, publishedDocument } from "../lib/document-publication.
 import { BASE, readerDoc } from "../lib/seo.js";
 import { unlistedSlugs } from "../lib/projects.js";
 import { indexNowKey } from "../lib/indexnow.js";
+import { challengeConfig, trackView } from "../lib/challenges.js";
 
 export const seo = Router();
 const REPOS = process.env.DOCS_DIR ?? join(ROOT, "data", "repos");
@@ -58,6 +60,14 @@ export async function sitemapUrls(): Promise<Url[]> {
     const root = join(REPOS, p.slug), publication = readPublication(root);
     if (publication) for (const f of Object.keys(publication.files).sort()) if (readerDoc(f) && publishedDocument(root, f, publication)) urls.push({ loc: `${P}/docs/${f}` });
     for (const x of await q(`SELECT r.id, GREATEST(r.created_at, (SELECT max(d.decided_at) FROM return_decisions d WHERE d.return_id = r.id)) AS lastmod FROM returns r WHERE r.problem_id = $1 ORDER BY r.id`, [p.id])) urls.push({ loc: `${P}/return/${x.id}`, lastmod: x.lastmod });
+    // A record challenge's track pages and the submissions that moved its record (Oct 23 2026, #sah-bing-indexing-look-20261023: Bing
+    // had found /tracks/self-match only by a link and left it unindexed). The thousands of other submissions are trial entries and stay out.
+    const cfg = challengeConfig(p.slug);
+    if (cfg) for (const t of cfg.tracks) {
+      const v = await trackView(Number(p.id), t);
+      urls.push({ loc: `${P}/tracks/${t.lane}`, lastmod: v.best?.received_at });
+      for (const st of v.steps) urls.push({ loc: `${P}/submissions/${st.submission_id}`, lastmod: st.received_at });
+    }
   }
   // People with work on the record; a handle with none is served with noindex, so it is not listed.
   for (const u of await q(`SELECT u.handle, GREATEST((SELECT max(created_at) FROM returns r WHERE r.user_id = u.id), (SELECT max(created_at) FROM reviews v WHERE v.user_id = u.id)) AS lastmod FROM users u
