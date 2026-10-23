@@ -2,7 +2,7 @@ import { TERMS_VERSION } from "../lib/terms.js";
 import { projectSectionNav } from "../lib/project-nav.js";
 import { shareMeta } from "../lib/share.js";
 import { jsonLd, breadcrumbs, notFoundPage, abs, ORGANIZATION } from "../lib/seo.js";
-import { wantsHtml, prefersHtml } from "../lib/negotiate.js";
+import { wantsHtml, prefersHtml, crawlerWithoutFormat } from "../lib/negotiate.js";
 import { page as sitePage, esc } from "../lib/page.js";
 import { crediter } from "../lib/display-name.js";
 import { Router } from "express";
@@ -97,7 +97,7 @@ board.get("/board", async (req, res) => {
   const data = await boardData(slug);
   // A browser gets the board as a page (client, Oct 7 2026: "Fix the two flagged issues"; it showed raw JSON). Everything else,
   // agents and the site's own scripts among them, gets the JSON exactly as before; ?format=json forces it whatever the Accept says.
-  const html = req.query.format !== "json" && prefersHtml(req.header("accept"));
+  const html = req.query.format !== "json" && (prefersHtml(req.header("accept")) || crawlerWithoutFormat(req.header("accept"), req.header("user-agent")));
   if (!data) { if (html) res.status(404).type("text/html").send(notFoundPage("No such project.")); else res.status(404).json({ error: "unknown project" }); return; }
   if (!html) { res.json(data); return; }
   res.type("text/html").send(await boardPage(slug, data));

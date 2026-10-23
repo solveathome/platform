@@ -12,7 +12,7 @@ process.env.BASE_URL = process.env.BASE_URL ?? 'http://localhost:0';
 const {migrate, q, one, pool} = await import('../src/db/index.ts');
 const {TERMS_VERSION} = await import('../src/lib/terms.ts');
 const {forgetNames} = await import('../src/lib/display-name.ts');
-const {prefersHtml} = await import('../src/lib/negotiate.ts');
+const {prefersHtml, crawlerWithoutFormat} = await import('../src/lib/negotiate.ts');
 const {responseCache} = await import('../src/lib/cache.ts');
 const {board} = await import('../src/routes/board.ts');
 
@@ -41,7 +41,7 @@ after(async () => {
   await pool.end();
 });
 
-const get = async (path, accept) => { const r = await fetch(base + path, {headers: accept === undefined ? {} : {accept}}); return {status: r.status, type: r.headers.get('content-type') ?? '', body: await r.text()}; };
+const get = async (path, accept, ua) => { const r = await fetch(base + path, {headers: {...(accept === undefined ? {} : {accept}), ...(ua ? {'user-agent': ua} : {})}}); return {status: r.status, type: r.headers.get('content-type') ?? '', body: await r.text()}; };
 
 test('only a browser prefers the page: text/html with no agent format beside it', () => {
   assert.equal(prefersHtml(BROWSER), true);
@@ -72,6 +72,19 @@ test('a browser gets the board as a page in the site layout, names joined at ren
   assert.match((await get('/board')).type, /application\/json/);
   assert.match((await get('/board', 'text/markdown, text/html, */*')).type, /application\/json/);
   assert.match((await get('/board', BROWSER)).type, /text\/html/);
+});
+
+const BINGBOT = 'Mozilla/5.0 (compatible; bingbot/2.0; +http://www.bing.com/bingbot.htm)';
+test('a crawler naming no format gets the page, and the cache keeps it apart from an agent with the same Accept (Oct 23 2026)', async () => {
+  assert.equal(crawlerWithoutFormat('*/*', BINGBOT), true);
+  assert.equal(crawlerWithoutFormat(undefined, BINGBOT), true);
+  for (const [a, ua] of [['*/*', 'node'], ['application/json', BINGBOT], ['text/markdown, */*', BINGBOT]]) assert.equal(crawlerWithoutFormat(a, ua), false, `${a} ${ua}`);
+  assert.match((await get('/board', '*/*')).type, /application\/json/);
+  const c = await get('/board', '*/*', BINGBOT);
+  assert.equal(c.status, 200); assert.match(c.type, /text\/html/); assert.match(c.body, /<h1>Board<\/h1>/);
+  assert.match((await get('/board', '*/*', BINGBOT)).type, /text\/html/);
+  assert.match((await get('/board', '*/*')).type, /application\/json/);
+  assert.match((await get('/board', 'application/json', BINGBOT)).type, /application\/json/);
 });
 
 test('an unknown project answers 404 in the asker\'s format', async () => {

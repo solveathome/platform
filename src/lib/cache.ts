@@ -10,9 +10,9 @@
  */
 import type { NextFunction, Request, Response } from "express";
 import { randomBytes } from "node:crypto";
-import { prefersHtml } from "./negotiate.js";
+import { crawlerWithoutFormat, prefersHtml } from "./negotiate.js";
 
-type Entry = { at: number; status: number; type: string; body: Buffer | string; accept: string };
+type Entry = { at: number; status: number; type: string; body: Buffer | string; accept: string; ua: string };
 const store = new Map<string, Entry>();
 const refreshing = new Set<string>();
 const MAX_ENTRIES = 2000;
@@ -22,10 +22,10 @@ const STALE_MS = 10 * 60_000;
 const REFRESH = randomBytes(16).toString("hex");
 let origin: string | null = null;
 
-function rebuild(key: string, url: string, accept: string): void {
+function rebuild(key: string, url: string, accept: string, ua: string): void {
   if (!origin || refreshing.has(key)) return;
   refreshing.add(key);
-  fetch(origin + url, { headers: { accept, "x-cache-refresh": REFRESH } }).then((r) => r.arrayBuffer()).catch((e) => console.error(`cache rebuild ${url}:`, e?.message ?? e)).finally(() => refreshing.delete(key));
+  fetch(origin + url, { headers: { accept, "user-agent": ua, "x-cache-refresh": REFRESH } }).then((r) => r.arrayBuffer()).catch((e) => console.error(`cache rebuild ${url}:`, e?.message ?? e)).finally(() => refreshing.delete(key));
 }
 
 export function responseCache(patterns: RegExp[], ttlMs = 20_000, staleMs = STALE_MS) {
@@ -33,13 +33,14 @@ export function responseCache(patterns: RegExp[], ttlMs = 20_000, staleMs = STAL
   return (req: Request, res: Response, next: NextFunction): void => {
     if (req.method !== "GET" || req.header("authorization") || req.header("cookie") || !patterns.some((p) => p.test(req.path))) { next(); return; }
     origin ??= `http://127.0.0.1:${req.socket.localPort}`;
-    const acc = req.header("accept") ?? "";
+    const acc = req.header("accept") ?? "", ua = req.header("user-agent") ?? "";
     // "mixed" (text/html beside an agent format) is its own class: most pages answer it with HTML, the board with JSON (negotiate.ts).
-    const key = `${req.originalUrl}|${prefersHtml(acc) ? "html" : acc.includes("text/html") ? "mixed" : acc.includes("application/json") ? "json" : "text"}`;
+    // A crawler naming no format gets the page where an agent with the same Accept gets text, so it is a class of its own too.
+    const key = `${req.originalUrl}|${prefersHtml(acc) ? "html" : acc.includes("text/html") ? "mixed" : acc.includes("application/json") ? "json" : crawlerWithoutFormat(acc, ua) ? "crawler" : "text"}`;
     const hit = req.header("x-cache-refresh") === REFRESH ? undefined : store.get(key);
     const age = hit ? Date.now() - hit.at : Infinity;
     if (hit && age < staleMs) {
-      if (age >= ttlMs) rebuild(key, req.originalUrl, hit.accept);
+      if (age >= ttlMs) rebuild(key, req.originalUrl, hit.accept, hit.ua);
       if (hit.type.includes("json")) res.set("X-Robots-Tag", "noindex");
       res.status(hit.status).type(hit.type).set("X-Cache", age < ttlMs ? "hit" : "stale").send(hit.body);
       return;
@@ -49,7 +50,7 @@ export function responseCache(patterns: RegExp[], ttlMs = 20_000, staleMs = STAL
       const noStore = /(?:^|,)\s*no-store(?:\s*(?:,|$))/i.test(String(res.getHeader("cache-control") ?? ""));
       if (!noStore && res.statusCode === 200 && (typeof body === "string" || Buffer.isBuffer(body))) {
         if (!store.has(key) && store.size >= MAX_ENTRIES) store.delete(store.keys().next().value as string);
-        store.set(key, { at: Date.now(), status: 200, type: String(res.getHeader("content-type") ?? "text/plain"), body, accept: acc });
+        store.set(key, { at: Date.now(), status: 200, type: String(res.getHeader("content-type") ?? "text/plain"), body, accept: acc, ua });
       }
       return send(body);
     }) as any;
@@ -60,7 +61,7 @@ export function responseCache(patterns: RegExp[], ttlMs = 20_000, staleMs = STAL
 /** Build these addresses now and again every everyMs (below STALE_MS), so the pages every visitor opens are never cold. */
 export function warmCache(port: number, pages: { url: string; accept: string }[], everyMs = 5 * 60_000): void {
   origin = `http://127.0.0.1:${port}`;
-  const run = () => { for (const p of pages) rebuild(`warm|${p.url}|${p.accept}`, p.url, p.accept); };
+  const run = () => { for (const p of pages) rebuild(`warm|${p.url}|${p.accept}`, p.url, p.accept, ""); };
   run();
   setInterval(run, everyMs).unref();
 }

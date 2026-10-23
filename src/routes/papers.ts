@@ -116,7 +116,7 @@ papers.get('/papers/:paper/expositions/:id/:kind', async (req:any,res) => {
 papers.get("/papers", async (req: any, res) => {
   const p = await one(`SELECT id, slug FROM problems WHERE slug = $1`, [req.params.slug]);
   if (!p) { res.status(404).json({ error: "unknown project" }); return; }
-  if (wantsHtml(req)) { res.redirect(`/projects/${p.slug}#papers`); return; }
+  if (wantsHtml(req)) { res.redirect(301, `/projects/${p.slug}#papers`); return; }   // permanent, so a search engine drops /papers for the project page (Oct 23 2026)
   const all = req.query.retracted === "1";
   const list = await listPapers(Number(p.id), p.slug, { retracted: all });
   const retracted = all ? list.filter((x) => x.retracted_at).length : Number((await one<{ n: string }>(`SELECT count(*) AS n FROM papers WHERE problem_id = $1 AND retracted_at IS NOT NULL`, [p.id]))?.n ?? 0);

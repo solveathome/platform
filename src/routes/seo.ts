@@ -53,7 +53,7 @@ export async function sitemapUrls(): Promise<Url[]> {
   const projects = await q(`SELECT p.id, p.slug, (SELECT max(r.created_at) FROM returns r WHERE r.problem_id = p.id) AS last FROM problems p WHERE NOT (p.slug = ANY($1::text[])) ORDER BY p.id`, [unlistedSlugs()]);   // a hidden project is not in the sitemap
   for (const p of projects) {
     const P = `/projects/${p.slug}`;
-    urls.push({ loc: P, lastmod: p.last }, { loc: `${P}/trust` }, { loc: `${P}/research-routes` }, { loc: `${P}/docs` });
+    urls.push({ loc: P, lastmod: p.last }, { loc: `${P}/board`, lastmod: p.last }, { loc: `${P}/trust` }, { loc: `${P}/research-routes` }, { loc: `${P}/docs` });
     if (readUnderstanding(p.slug)) urls.push({ loc: `${P}/understanding` });
     for (const x of await q(`SELECT slug, updated_at FROM papers WHERE problem_id = $1 AND retracted_at IS NULL ORDER BY id`, [p.id])) urls.push({ loc: `${P}/papers/${x.slug}`, lastmod: x.updated_at });
     for (const x of await q(`SELECT id, updated_at FROM research_routes WHERE problem_id = $1 ORDER BY id`, [p.id])) urls.push({ loc: `${P}/research-routes/${x.id}`, lastmod: x.updated_at });

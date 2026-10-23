@@ -18,3 +18,10 @@ export function prefersHtml(accept: string | undefined): boolean {
   const a = accept ?? "";
   return a.includes("text/html") && !/text\/markdown|text\/plain|application\/json/.test(a);
 }
+
+/** A search or preview crawler that names no format (a wildcard or no Accept), which wantsHtml answers with the page. The board and
+ *  the response cache use it beside prefersHtml (Oct 23 2026, #sah-bing-indexing-look-20261023: bingbot sends Accept: *\/*, so the
+ *  board answered it with noindex JSON and Bing listed the page as not indexed). */
+export function crawlerWithoutFormat(accept: string | undefined, userAgent: string | undefined): boolean {
+  return !/text\/html|text\/markdown|text\/plain|application\/json/.test(accept ?? "") && CRAWLER.test(userAgent ?? "");
+}
