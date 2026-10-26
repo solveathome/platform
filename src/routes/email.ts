@@ -26,9 +26,12 @@ const esc = (s: unknown) => String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&
 const safeNext = (n: unknown) => { const s = String(n ?? ""); return /^\/(?!\/)[^\s]*$/.test(s) && !s.startsWith("/welcome") ? s : "/"; };
 
 /** A person on the site, never an agent: browser session cookie, no bearer header, same origin for writes. */
-function personOnSite(req: Request, res: Response, write: boolean): boolean {
+function personOnSite(req: Request, res: Response, write: boolean, olderCookieOk = false): boolean {
   if (!req.user) { res.status(401).json({ error: "Sign in first." }); return false; }
-  if ((req.header("authorization") ?? "").startsWith("Bearer ") || !cookieToken(req).startsWith("sahweb_")) { res.status(403).json({ error: "Your email address is set by you, signed in on the site. An agent cannot read or set it." }); return false; }
+  if ((req.header("authorization") ?? "").startsWith("Bearer ") || !cookieToken(req)) { res.status(403).json({ error: "Your email address is set by you, signed in on the site. An agent cannot read or set it." }); return false; }
+  // A browser still on an older cookie (the agent token itself) is refused like an agent, but told the way out: the email step showed
+  // only the refusal and no form, so the person was stuck there (user report, Oct 26 2026).
+  if (!olderCookieOk && !cookieToken(req).startsWith("sahweb_")) { res.status(403).json({ error: "This browser is signed in with an older kind of session. Sign in again and you can set your email here.", code: "sign_in_again" }); return false; }
   const site = req.header("sec-fetch-site");
   if (write && site && site !== "same-origin") { res.status(403).json({ error: "Change this on the site itself." }); return false; }
   if (write && hit(`email:${req.user.id}`, 20, 60_000).over) { res.status(429).json({ error: "Too many tries. Wait a minute." }); return false; }
@@ -63,7 +66,9 @@ async function sendConfirmation(userId: number, address: string): Promise<{ sent
 /** GET /welcome : the email step, right after the terms at sign-in. */
 email.get("/welcome", optionalAuth, async (req, res) => {
   res.setHeader("Cache-Control", "no-store");
-  if (!req.user) { res.redirect(`/auth/github?next=${encodeURIComponent(req.originalUrl)}`); return; }
+  // An older cookie cannot read or set the address (personOnSite), so the step would show no form: sign in again first, which issues
+  // a browser session and comes straight back here (user report, Oct 26 2026).
+  if (!req.user || !cookieToken(req).startsWith("sahweb_")) { res.redirect(`/auth/github?next=${encodeURIComponent(req.originalUrl)}`); return; }
   const addr = await E.addressOf(req.user.id);
   if (addr.email) { res.redirect(safeNext(req.query.next)); return; }
   await E.markPrompted(req.user.id);
@@ -107,9 +112,10 @@ email.post("/me/email/confirm-again", optionalAuth, async (req, res) => {
   res.json({ confirmation: await sendConfirmation(req.user!.id, a.email) });
 });
 
-/** POST /me/email/dismiss : "Not now". Counts as one of the two times the site asks. */
+/** POST /me/email/dismiss : "Not now". Counts as one of the two times the site asks. It reads and sets no address, so an older browser
+ * cookie may say it too; refused, its banner came back on every page. */
 email.post("/me/email/dismiss", optionalAuth, async (req, res) => {
-  if (!personOnSite(req, res, true)) return;
+  if (!personOnSite(req, res, true, true)) return;
   await E.markPrompted(req.user!.id);
   res.json({ ok: true });
 });

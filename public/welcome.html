@@ -14,10 +14,12 @@
   <section id="email" aria-live="polite"><p class="muted">Checking your sign-in…</p></section>
 </main>
 <footer data-site-footer></footer>
-<script src="/assets/ui.js?v=24"></script><script src="/assets/who.js?v=6"></script><script src="/assets/email-prefs.js?v=2"></script>
+<script src="/assets/ui.js?v=24"></script><script src="/assets/who.js?v=6"></script><script src="/assets/email-prefs.js?v=3"></script>
 <script>
 const params = new URLSearchParams(location.search);
-const next = /^\/(?!\/)/.test(params.get('next') || '') ? params.get('next') : '/';
+let next = /^\/(?!\/)/.test(params.get('next') || '') ? params.get('next') : '/';
+// A sign-in from this page comes back as /welcome?next=/welcome?next=…: carry on to the page underneath, never back here.
+while (next.startsWith('/welcome')) { const n = new URL(next, location.origin).searchParams.get('next') || '/'; next = /^\/(?!\/)/.test(n) ? n : '/'; }
 loadWho(document.querySelector('#who')).then((me) => {
   if (!me.signed_in) { location.href = `/auth/github?next=${encodeURIComponent(location.pathname + location.search)}`; return; }
   emailForm(document.querySelector('#email'), { from: 'welcome', next });

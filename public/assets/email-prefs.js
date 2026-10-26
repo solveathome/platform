@@ -5,14 +5,19 @@
   async function call(method, url, body) {
     const r = await fetch(url, { method, headers: { "content-type": "application/json", accept: "application/json" }, body: body ? JSON.stringify(body) : undefined });
     const d = await r.json().catch(() => ({}));
-    if (!r.ok) throw new Error(d.error || `Request failed (${r.status})`);
+    if (!r.ok) throw Object.assign(new Error(d.error || `Request failed (${r.status})`), { code: d.code });
     return d;
   }
   // opts: { from: "welcome" | "settings", next: "/path" }
   window.emailForm = async function (el, opts) {
     let st;
-    try { st = await call("GET", "/me/email"); } catch (e) { el.innerHTML = `<p class="muted">${esc(e.message)}</p>`; return; }
     const welcome = opts.from === "welcome";
+    // Never a dead end (user report, Oct 26 2026): when the form cannot load, say why, offer signing in again, and on the email step a way on.
+    try { st = await call("GET", "/me/email"); } catch (e) {
+      const here = location.pathname + location.search + (welcome ? "" : "#email");
+      el.innerHTML = `<p class="muted">${esc(e.message)}</p><div class="email-actions">${e.code === "sign_in_again" ? `<a class="button" href="/auth/github?next=${encodeURIComponent(here)}">Sign in again</a>` : ""}${welcome ? `<a class="text-link" href="${esc(opts.next || "/")}">Not now</a>` : ""}</div>`;
+      return;
+    }
     function render(said, bad) {
       const p = st.prefs, address = st.email || st.offered || "";
       const addrNote = st.email

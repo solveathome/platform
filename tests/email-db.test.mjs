@@ -51,6 +51,7 @@ before(async () => {
   await mk('quiet', `${tag}-quiet@example.org`);
   await mk('nomail', null);
   await mk('owner', null);
+  await mk('older', null);
   const p = await one(`INSERT INTO problems (slug, name, repo_url, status_md) VALUES ($1,'Email test','https://example.org/r','open') RETURNING id`, [tag]);
   pid = Number(p.id);
   const app = express(); app.use(express.json());
@@ -179,6 +180,24 @@ test('the address is the person\'s alone: an agent token is refused, in a header
   assert.ok(log.some((l) => l.choice === 'newsletter' && l.value === 'true' && l.source === 'welcome'));
   assert.ok(log.some((l) => l.choice === 'address' && l.value === 'confirmed'));
   assert.equal((await one(`SELECT email_tz FROM users WHERE id = $1`, [p.id])).email_tz, 'Europe/Copenhagen');
+});
+
+test('a browser on an older cookie is never left at an empty email step', async () => {
+  // User report, Oct 26 2026: the step showed the refusal and no form. The page now signs in again first; the API says how.
+  const p = people.older, older = {cookie: `sah_session=${p.token}`};
+  const page = await call(null, 'GET', '/welcome?next=%2Fprojects', null, older);
+  assert.equal(page.status, 302);
+  assert.match((await fetch(base + '/welcome?next=%2Fprojects', {redirect: 'manual', headers: older})).headers.get('location'), /^\/auth\/github\?next=%2Fwelcome%3Fnext%3D%252Fprojects$/);
+  const st = await call(null, 'GET', '/me/email', null, older);
+  assert.equal(st.status, 403);
+  assert.equal(st.json.code, 'sign_in_again');
+  assert.equal((await call(null, 'POST', '/me/email', {from: 'welcome', email: `${tag}-older@example.org`}, older)).status, 403);
+  // "Not now" sets no address, so the older cookie may say it; an agent's bearer header still may not.
+  assert.equal((await call(null, 'POST', '/me/email/dismiss', null, {authorization: `Bearer ${p.token}`})).status, 403);
+  assert.equal((await call(null, 'POST', '/me/email/dismiss', null, older)).status, 200);
+  // Signed in again (a browser session), the step shows the form.
+  assert.equal((await call(p, 'GET', '/welcome')).status, 200);
+  assert.equal((await call(p, 'GET', '/me/email')).json.email, null);
 });
 
 test('one-click unsubscribe works with no sign-in; a bounce stops all mail', async () => {
