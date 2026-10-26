@@ -2,7 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { renderBrief, exploreContinuation } from "../src/lib/brief.ts";
 import { compactDepartmentBrief, protocolSections } from "../src/lib/department-protocol.ts";
-import { BASELINE_DUTY, BASELINE_REVIEW_DUTY, GUIDANCE_VERSION, taskGuidance } from "../src/lib/research-guidance.ts";
+import { BASELINE_DUTY, BASELINE_REVIEW_DUTY, GUIDANCE_VERSION, claimLineWarning, taskGuidance } from "../src/lib/research-guidance.ts";
 import { tangentJob } from "../src/lib/tangent.ts";
 import { ARTIFACT_PACKAGING_GUIDANCE, EFFORT_GUIDANCE, SETUP_READING_GUIDANCE, FRAMEWORK_GUIDANCE_VERSION, FRAMEWORK_RECHECK_HOURS, WORKER_ISOLATION_RECOMMENDATION, workspaceSections } from "../src/lib/workspace-guidance.ts";
 import { WORK_DISPOSITION_GUIDANCE } from "../src/lib/work-disposition-format.ts";
@@ -554,4 +554,8 @@ test('an improves-on claim needs the strongest published baseline, the starting 
   // Oct 20 2026 (#sah-reviewer-baseline-check): a gain over the return's own earlier version is one baseline, a reviewer-run arm is supplying it, and notes_md opens with the claim line.
   assert.match(BASELINE_REVIEW_DUTY, /the starting point is one baseline, not two/); assert.match(BASELINE_REVIEW_DUTY, /do not run a missing arm/); assert.match(BASELINE_REVIEW_DUTY, /Start notes_md with one line: `Improvement claim: none`/);
   assert.match(BASELINE_REVIEW_DUTY, /unverifiable: true/); assert.match(BASELINE_REVIEW_DUTY, /needs_md/); assert.match(BASELINE_REVIEW_DUTY, /source work/); assert.match(BASELINE_REVIEW_DUTY, /measure work/);
+  // Oct 27 2026: the line is the return's claim and comes first; proofs and extensions are claims; intake warns, never refuses.
+  assert.match(BASELINE_REVIEW_DUTY, /reports the return's claim, not yours, and comes first/); assert.match(BASELINE_REVIEW_DUTY, /a proved tighter bound/); assert.match(BASELINE_REVIEW_DUTY, /A proof establishes the new bound, not that it beats the published state/);
+  for (const ok of ['Improvement claim: none', '**Improvement claim:** none', '\n  Improvement claim: x. Published baseline: missing.', '# Improvement claim: none']) assert.equal(claimLineWarning(ok), null, ok);
+  for (const bad of ['**Accept; rung measured.** Improvement claim: none', 'Conflict of interest: own handle.\nImprovement claim: none', '', null, undefined]) assert.match(claimLineWarning(bad), /^notes_md: the first line is not the claim line/, String(bad));
 });

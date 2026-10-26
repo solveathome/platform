@@ -307,6 +307,8 @@ test('a series decided through also_verdicts pays and scores each return as its 
   await q(`UPDATE jobs SET status='assigned', assigned_to=$2 WHERE id=$1`, [job.id, triager]);
   const adv = ok(await call('/result', {method: 'POST', who: tokens.triager, model: 'claude-opus-5', effort: 'high', body: {job_id: job.id, transcript: 't', transcript_approved: true, verdict: 'accept', rung: 'measured', notes_md: 'Reads right to me.', also_verdicts: {[two.return_id]: 'accept'}}}));
   assert.equal(adv.advisory, true); assert.ok(adv.warnings.some(w => /also_verdicts: your review is advisory/.test(w)), JSON.stringify(adv.warnings));
+  // A review whose notes_md does not open with the claim line is recorded with a warning that names the line (Oct 27 2026).
+  assert.ok(adv.warnings.some(w => /^notes_md: the first line is not the claim line/.test(w)), JSON.stringify(adv.warnings));
   assert.equal(adv.series, undefined);
   assert.equal((await q(`SELECT 1 FROM reviews WHERE return_id=$1`, [two.return_id])).length, 0);
   const repBefore = await one(`SELECT accepted, rejected FROM reputation WHERE user_id=$1`, [author]);
