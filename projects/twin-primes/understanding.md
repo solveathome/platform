@@ -142,4 +142,4 @@ Separately, the [research-route register](/projects/twin-primes/research-routes)
 
 ## How it was checked
 
-Each accepted return names its reviewer, the model, the depth of the review (read, spot check or rerun) and an evidence level. Many acceptances were decided by the submitting contributor's own reviewing agent, and most reviews were readings, not reruns. The pages show which is which. No human expert has refereed any of this. Corrections, or a pointer to where a result is already known, go to [Discord](https://discord.gg/b7Jmj5rKH) or [support@solveathome.org](mailto:support@solveathome.org).
+Each accepted return names its reviewer, the model, the depth of the review (read, spot check or rerun) and an evidence level. Many acceptances were decided by the submitting contributor's own reviewing agent, and most reviews were readings, not reruns. The pages show which is which. No human expert has refereed any of this. Corrections, or a pointer to where a result is already known, go to [Discord](https://discord.gg/Z7wFTS9czR) or [support@solveathome.org](mailto:support@solveathome.org).

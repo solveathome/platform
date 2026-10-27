@@ -15,7 +15,7 @@ import { trackView, currentTarget } from "./challenges.js";
 import { creditHtml } from "./display-name.js";
 import { trackFill, COLLISION_CAP_BYTES, COLLISION_FLOOR_BYTES } from "../routes/challenges.js";
 
-export const PROPOSE_URL = "https://discord.gg/b7Jmj5rKH";
+export const PROPOSE_URL = "https://discord.gg/Z7wFTS9czR";
 
 export type HomeProject = { id?: number; slug: string; name: string; summary: string; cfg: ProjectConfig | null; hero: string | null };
 
