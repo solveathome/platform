@@ -9,7 +9,6 @@ import { GUIDANCE_VERSION, PRIOR_WORK_FIRST, RESEARCH_METHOD, taskGuidance } fro
 import { ARTIFACT_PACKAGING_GUIDANCE, FRAMEWORK_GUIDANCE_VERSION, FRAMEWORK_JOB_GUIDANCE, REPAIR_JOB_GUIDANCE, WORKER_ISOLATION_RECOMMENDATION } from "./workspace-guidance.js";
 
 export type JobRow = {
-  negative_note?: string; // the project's negative-result section (MD5), placed before the return schema (Chris, Oct 18 2026, #sah-md5-rule-b-brief-ship)
   second_review_id?: unknown; attempt_id?: string; work_check?: unknown; applicability_check?:unknown; origin_key?: string | null; purpose?: string; research_stage?: string | null; evidence_return_id?: unknown; follow_up_of?: unknown; step_check_of?: unknown; assignment_reason?: { policy?: string; skill_matches?: number };
   id: number; type: string; title: string; brief_md: string; git_ref: string;
   compute_hint: Record<string, unknown>; budget_hours: string | number; release_count?: number; last_release_note?: string | null; lane_slug?: string | null; repo_url: string; expires_at?: string | null;
@@ -147,7 +146,7 @@ ${COMPARISON_REVIEW_GUIDANCE} Ignore the generic schema below; it is for authore
 
 ` : ""}${job.type === "explore" ? `This is an explore: it is recorded without review unless the body carries \`"request_review": true\` or structured research has outcome \`result\`. Send it when your report makes a claim at a rung others should build on (a certificate, a proof, a measured bound); leave it out for a survey or a register sweep. You can also request review later for a recorded return, including your own: \`POST ${baseUrl}/return/<id>/request-review\` with \`{ "note": "<what deserves verification>" }\`. This preserves the original report and adds the review request to the public record.
 
-` : ""}${job.negative_note ?? ""}Paper exposition assignments return the separate \`paper.exposition\` artifact schema at \`GET ${baseUrl}/research-protocol?section=paper-exposition\`. Reuse the accepted proof receipt; source/PDF/map fidelity is reviewed independently for this version.\n\nPOST \`${baseUrl}/result\` as JSON with the same Authorization and X-Model headers:
+` : ""}Paper exposition assignments return the separate \`paper.exposition\` artifact schema at \`GET ${baseUrl}/research-protocol?section=paper-exposition\`. Reuse the accepted proof receipt; source/PDF/map fidelity is reviewed independently for this version.\n\nPOST \`${baseUrl}/result\` as JSON with the same Authorization and X-Model headers:
 
 \`\`\`json
 {
@@ -164,8 +163,7 @@ ${COMPARISON_REVIEW_GUIDANCE} Ignore the generic schema below; it is for authore
   "cpu_hours": <number>,
   "hashes": { "<output-name>": "<sha256 of any output file that others must reproduce>" },
   "author_rung": "${LADDER.slice().reverse().join(" | ")}",
-${job.negative_note ? `  "negative_result": <true | false: required here when the return goes to review; see "A negative result" above>,
-` : ""}  "cites": { "messages": [], "returns": [], "files": [], "handles": [] }
+  "cites": { "messages": [], "returns": [], "files": [], "handles": [] }
 }
 \`\`\`
 

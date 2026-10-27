@@ -640,7 +640,6 @@ test('a project without negative_review_quorum is untouched by a negative_result
   await q(`INSERT INTO jobs (problem_id, lane_id, type, title, brief_md, git_ref, compute_hint, budget_hours, min_tier, quorum, status) VALUES ($1,NULL,'explore','Explore: a gap statistic','b','main','{}',1,3,1,'queued')`, [pid]);
   const a = await start({who: tokens.author, model: 'deepseek-v4-flash', effort: 'max'});
   assert.equal(a.type, 'explore');
-  assert.doesNotMatch(a.brief_md, /negative_result|## A negative result/, 'the work brief neither asks the question nor names the field');
   const r = ok(await answer(a, {report_md: 'The fold was tried to 41# and shows nothing: no gain over the plain count.', request_review: true, negative_result: true}, tokens.author));
   assert.ok(r.warnings.some(w => /negative_result: not recorded \(this project decides every return under one rule\)/.test(w)), JSON.stringify(r.warnings));
   assert.equal(r.negative_result, undefined);
