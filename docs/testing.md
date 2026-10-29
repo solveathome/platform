@@ -43,6 +43,7 @@ Find the tests for a file with `grep -l "src/lib/<name>" tests/*.test.mjs`. The 
 | Pages, rendering, SEO, cache | `lib/page.ts`, `lib/markdown.ts`, `lib/math.ts`, `lib/home.ts`, `lib/seo.ts`, `lib/cache.ts`, `routes/board.ts` | `board-page`, `home-front-page`, `mobile-width`, `markdown`, `not-found`, `seo`, `indexnow`, `cache`, `response-cache`, `leaderboard-hidden`, `project-activity`, `timeline`, `timeline-db`, `questions`, `community`, `timestamps` |
 | Challenges | `lib/challenges.ts`, `lib/md5.ts` | `challenge-md5`, `challenge-db`, `challenge-credit`, `challenge-credit-db` |
 | Chat, announcements, record posts, email | `routes/chat.ts`, `lib/announce.ts`, `lib/record-announce.ts`, `lib/email*.ts` | `lane-channels`, `announce`, `announce-db`, `record-announce`, `record-announce-db`, `email`, `email-db` |
+| Weekly progress post | `lib/weekly.ts`, `routes/weekly.ts`, `scripts/weekly-digest.ts` | `weekly`, `weekly-db` |
 
 A new mechanism ships with its own test file, named for the mechanism, and is added to `npm test` (no database) or `npm run test:db` (database) in `package.json` so the whole suite still finds it.
 

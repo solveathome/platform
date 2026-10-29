@@ -1932,3 +1932,38 @@ CREATE TABLE IF NOT EXISTS record_announcements (
   created_at         TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS record_announcements_problem_status_idx ON record_announcements (problem_id, status, id);
+-- Weekly progress post (#sah-weekly-progress-build, approved by Chris 29 Oct 2026, src/lib/weekly.ts): one row per project per week
+-- (Monday to Sunday, Copenhagen). The numbers are SQL and a fixed template; only the "What moved" lines come from a model, in a compute
+-- job, checked against the week's record before they are kept. The first posts wait for the owner's approval (status 'held'). A wrong
+-- number is fixed by editing the posted message, kept in `corrections`. The webhook URL is never stored.
+CREATE TABLE IF NOT EXISTS weekly_digests (
+  id                   BIGSERIAL PRIMARY KEY,
+  problem_id           BIGINT NOT NULL REFERENCES problems(id),
+  week_start           DATE NOT NULL,                       -- first day, Copenhagen
+  week_end             DATE NOT NULL,                       -- last day, Copenhagen; the page is /projects/<slug>/weekly/<week_end>
+  from_at              TIMESTAMPTZ NOT NULL,
+  to_at                TIMESTAMPTZ NOT NULL,                -- exclusive
+  numbers              JSONB NOT NULL,
+  record               JSONB NOT NULL,                      -- the week's recorded changes: the only input the summary may use
+  summary_input        TEXT NOT NULL DEFAULT '',            -- what the summary job is given, as given
+  summary_status       TEXT NOT NULL DEFAULT 'waiting' CHECK (summary_status IN ('waiting','leased','done','none')),
+  summary_leased_until TIMESTAMPTZ,
+  summary              JSONB NOT NULL DEFAULT '[]',         -- the kept lines
+  summary_dropped      JSONB NOT NULL DEFAULT '[]',         -- the lines the check dropped, with the reason
+  summary_model        TEXT,
+  summary_at           TIMESTAMPTZ,
+  text_md              TEXT NOT NULL,                       -- the post as it reads now
+  status               TEXT NOT NULL DEFAULT 'held' CHECK (status IN ('held','ready','approved','posted','suppressed')),
+  needs_approval       BOOLEAN NOT NULL DEFAULT true,
+  approved_at          TIMESTAMPTZ,
+  approved_by          TEXT,
+  publish_at           TIMESTAMPTZ NOT NULL,                -- Monday 10:00 Copenhagen after the week
+  payload              JSONB,                               -- what was sent, as sent
+  discord_message_id   TEXT,
+  posted_at            TIMESTAMPTZ,
+  corrections          JSONB NOT NULL DEFAULT '[]',         -- [{at, reason, previous}]: every edit of a posted message
+  corrected_at         TIMESTAMPTZ,
+  created_at           TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE (problem_id, week_start)
+);
+CREATE INDEX IF NOT EXISTS weekly_digests_problem_end_idx ON weekly_digests (problem_id, week_end DESC);

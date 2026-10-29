@@ -21,6 +21,8 @@
   "status_md": "Twin-prime infinitude remains OPEN. Central object G₂(x#); proven upper bound exponent 4.26645; target exponent 2. Status is copied verbatim from the repo README at each dump.",
   "researcher": "Benjaminsen",
   "announce": { "discord": true, "webhook_env": "DISCORD_PROGRESS_WEBHOOK_URL", "hold_hours": 0, "approval": false, "max_per_day": 3, "route_cooldown_hours": 24, "burst_per_hour": 5 },
+  "weekly": { "enabled": true, "since": "2026-10-26", "webhook_env": "DISCORD_WEEKLY_WEBHOOK_URL", "exclude_handles": ["Benjaminsen"], "also": [{ "slug": "md5", "label": "MD5 challenge" }], "closing": "Nothing here settles the conjecture. The work is partial results, checks and a list of closed routes.", "approvals_required": 2, "build_hour": 6, "publish_hour": 10 },
+  "nav": [{ "label": "Weekly progress", "path": "/weekly" }],
   "sequence_proposals": [
     "research/oeis-seam-submission.md",
     "research/oeis-G2-submission.md"

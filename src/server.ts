@@ -31,6 +31,8 @@ import { trust } from "./routes/trust.js";
 import { yieldPage } from "./routes/yield.js";
 import { understanding } from "./routes/understanding.js";
 import { announcements } from "./routes/announcements.js";
+import { weekly } from "./routes/weekly.js";
+import { weeklyTick } from "./lib/weekly.js";
 import { announceTick } from "./lib/announce.js";
 import { recordTick } from "./lib/record-announce.js";
 import { email, emailClicks } from "./routes/email.js";
@@ -119,6 +121,7 @@ app.use("/projects/:slug", trust);
 app.use("/projects/:slug", yieldPage);
 app.use("/projects/:slug", understanding);
 app.use("/projects/:slug", announcements);
+app.use("/projects/:slug", weekly);
 app.use("/projects/:slug", docs);
 app.use("/projects/:slug", visualizations);
 app.use(projects);
@@ -186,6 +189,8 @@ migrate().then(async () => {
   setInterval(() => { announceTick().catch(error => console.error("announce:", error)); }, 60_000).unref();
   // Record posts (#sah-discord-record-posts): a verified new best on a challenge track, posted through the same webhook and kill switch.
   setInterval(() => { recordTick().catch(error => console.error("record posts:", error)); }, 60_000).unref();
+  // Weekly progress post (#sah-weekly-progress-build): builds last week on Monday morning and posts it at 10:00 Copenhagen; no crontab.
+  setInterval(() => { weeklyTick().catch(error => console.error("weekly:", error)); }, 60_000).unref();
   // Progress emails (#sah-progress-emails): queue items and write whoever's daily email is due, once a minute. Off unless EMAIL_ENABLED=1.
   setInterval(() => { emailTick().catch(error => console.error("email:", error)); }, 60_000).unref();
   const srv = app.listen(port, () => {
