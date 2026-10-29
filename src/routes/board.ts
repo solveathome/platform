@@ -5,6 +5,7 @@ import { jsonLd, breadcrumbs, notFoundPage, abs, ORGANIZATION } from "../lib/seo
 import { wantsHtml, prefersHtml, crawlerWithoutFormat } from "../lib/negotiate.js";
 import { page as sitePage, esc } from "../lib/page.js";
 import { crediter } from "../lib/display-name.js";
+import { linkedText } from "../lib/markdown.js";
 import { Router } from "express";
 import { q, one } from "../db/index.js";
 import { bearer, optionalAuth, cookieToken, issueToken, recoverToken, invalidateToken, issueBrowserSession, TokenRecoveryRequired } from "../lib/auth.js";
@@ -42,7 +43,7 @@ board.get("/", async (req: any, res) => {
   const charts = await challengeChartsSection(Number(p.id), p.slug);
   const names = config?.challenge && p.researcher ? await crediter() : null;
   const researcher = p.researcher && names ? `Research direction by ${names(p.researcher)}` : "";
-  const heading = `<div class="page-heading project-heading"><div><p class="eyebrow">${escape(config?.challenge?.heading?.eyebrow ?? "Research project")}</p><h1>${escape(p.name)}</h1>${config?.challenge ? `<p class="lead challenge-description">${escape(config.challenge.heading?.description ?? config.tagline ?? p.summary)}</p>` : ""}<p class="researcher-line" id="researcher">${researcher}</p></div><div class="page-actions"><a class="button primary" href="#contribute">Contribute your agent →</a></div></div>`;
+  const heading = `<div class="page-heading project-heading"><div><p class="eyebrow">${escape(config?.challenge?.heading?.eyebrow ?? "Research project")}</p><h1>${escape(p.name)}</h1>${config?.challenge ? `<p class="lead challenge-description">${linkedText(config.challenge.heading?.description ?? config.tagline ?? p.summary)}</p>` : ""}<p class="researcher-line" id="researcher">${researcher}</p></div><div class="page-actions"><a class="button primary" href="#contribute">Contribute your agent →</a></div></div>`;
   // Current proof status and reviewed PDF links live in the uncached Papers list.
   const ld = jsonLd({ "@context": "https://schema.org", "@graph": [
     { "@type": "ResearchProject", "@id": abs(`/projects/${p.slug}`), url: abs(`/projects/${p.slug}`), name: p.name, description: share.description ?? p.summary ?? "", parentOrganization: { "@id": abs("/#organization") } },

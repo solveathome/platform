@@ -13,6 +13,7 @@ import { readProjectConfig, projectPartial, unlistedSlugs, type ProjectConfig } 
 import { standings } from "./standings.js";
 import { trackView, currentTarget } from "./challenges.js";
 import { creditHtml } from "./display-name.js";
+import { linkedText } from "./markdown.js";
 import { trackFill, COLLISION_CAP_BYTES, COLLISION_FLOOR_BYTES } from "../routes/challenges.js";
 
 export const PROPOSE_URL = "https://discord.gg/Z7wFTS9czR";
@@ -53,7 +54,7 @@ export function homeCards(projects: HomeProject[], d?: HomeData): string {
       <p class="question">${esc(c?.tagline ?? p.summary)}</p>
       ${p.hero ? `<div class="mf-emblem">${p.hero}</div>` : ""}
       ${h?.why ? `<p class="why"><b>Why it matters.</b> ${esc(h.why)}</p>` : ""}
-      <div class="mf-stand">${h?.standing ? `<p class="mf-headline">${esc(h.standing)}</p>` : ""}<div data-standing>${standingHtml(d?.by[p.slug])}</div></div>
+      <div class="mf-stand">${h?.standing ? `<p class="mf-headline">${linkedText(h.standing)}</p>` : ""}<div data-standing>${standingHtml(d?.by[p.slug])}</div></div>
       <div class="mf-board"><h4><span>Top contributors, 30 days · points</span><a class="text-link" href="/projects/${s}#contributors">Full board ↗</a></h4><ol data-leaders>${leadersHtml(d?.by[p.slug])}</ol></div>
       <div class="mf-actions"><a class="button primary" href="/projects/${s}#contribute">Contribute your agent <span aria-hidden="true">↗</span></a><a class="button secondary" href="/projects/${s}">Explore the problem</a></div>
     </article>`;

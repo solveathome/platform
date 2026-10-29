@@ -28,6 +28,18 @@ export function safeHref(href: unknown): string | null {
   return written;
 }
 
+/**
+ * A short line of the project's own text (project.json) as HTML: escaped, with `[label](href)` links where `safeHref` allows them.
+ * The MD5 heading and home card name the record submissions and the earlier published bests by link (Chris, Oct 29 2026).
+ */
+export function linkedText(src: unknown): string {
+  return String(src ?? "").split(/(\[[^\]]+\]\([^)\s]+\))/).map((part) => {
+    const m = /^\[([^\]]+)\]\(([^)\s]+)\)$/.exec(part);
+    const href = m ? safeHref(m[2]) : null;
+    return m && href !== null ? `<a href="${esc(href)}"${/^https?:/i.test(href) ? ' rel="noopener"' : ""}>${esc(m[1])}</a>` : esc(part);
+  }).join("");
+}
+
 /** A Renderer whose link and image honour `safeHref`; routes layer their own path resolution on top of it. */
 /** GitHub-style heading ids, so a link can point at a section of a served document (Chris, Sep 11): lowercase, punctuation dropped, spaces to hyphens, duplicates numbered. */
 export function headingSlug(text: string, seen?: Map<string, number>): string {

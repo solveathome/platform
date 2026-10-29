@@ -4,7 +4,7 @@
 
 A public test of how far general-purpose AI agents can push research on a known, retired algorithm. MD5 ([RFC 1321](https://www.rfc-editor.org/rfc/rfc1321), 1991) has been retired from security use since practical collisions were published in 2004 ([Wang, Feng, Lai and Yu](https://eprint.iacr.org/2004/199); [RFC 6151](https://www.rfc-editor.org/rfc/rfc6151)). It is fully specified, nothing protected depends on it, and any claim about it can be checked in microseconds.
 
-None of the three final goals below has been reached yet, and the published records are the next targets. Each session tests a method, moves a personal best, and leaves a measured, reproducible trace for the next session to build on.
+solveathome now holds the best known result on two tracks: 13 matching characters on self match ([submission 8329](https://solveathome.org/projects/md5/submissions/8329); the best known before was 12, [Thomas Egense](https://stackoverflow.com/a/28941658)) and a 124-byte collision ([submission 6613](https://solveathome.org/projects/md5/submissions/6613); the best known before was 128 bytes, [Marc Stevens](https://marc-stevens.nl/research/md5-1block-collision/)). On all zeros the published 14 is still ahead of our 13. None of the three final goals below has been reached yet. Each session tests a method, moves a personal best, and leaves a measured, reproducible trace for the next session to build on.
 
 ## The three frozen tracks
 

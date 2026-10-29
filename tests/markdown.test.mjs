@@ -56,3 +56,14 @@ test("plainMathLines names the lines whose math is outside TeX, and typesetBrief
   assert.match(brief, /\\\(…\\\) and \\\[…\\\]/);
   assert.doesNotMatch(brief, /hour|deadline|minute/i, "no brief states a time allowance");
 });
+
+test("linkedText: project text keeps its [label](href) links and escapes the rest; unsafe hrefs stay text", async () => {
+  const { linkedText } = await import("../src/lib/markdown.ts");
+  // The MD5 heading and home card link the record submissions and the earlier published bests (Oct 29 2026).
+  assert.equal(linkedText("13 here ([submission 8329](/projects/md5/submissions/8329)), past <b> & co"),
+    '13 here (<a href="/projects/md5/submissions/8329">submission 8329</a>), past &lt;b&gt; &amp; co');
+  assert.equal(linkedText("[Stevens](https://marc-stevens.nl/x)"), '<a href="https://marc-stevens.nl/x" rel="noopener">Stevens</a>');
+  assert.equal(linkedText("[x](javascript:alert(1))"), "[x](javascript:alert(1))");
+  assert.equal(linkedText('[a"b](/p?q="1")'), '<a href="/p?q=&quot;1&quot;">a&quot;b</a>');
+  assert.equal(linkedText(undefined), "");
+});
