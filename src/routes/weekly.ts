@@ -39,6 +39,7 @@ function postHtml(md: string, skipTitle: boolean): string {
   const lines = md.split("\n"); if (skipTitle) lines.shift();
   for (const raw of lines) {
     const l = raw.trimEnd();
+    if (l.startsWith("Full week: ")) continue;   // the page links to itself; the archive link is at the bottom
     if (l.startsWith("- ")) { if (!list) { out.push("<ul>"); list = true; } out.push(`<li>${inline(l.slice(2))}</li>`); continue; }
     if (list) { out.push("</ul>"); list = false; }
     if (!l) continue;
@@ -49,12 +50,23 @@ function postHtml(md: string, skipTitle: boolean): string {
   return out.join("\n");
 }
 
+// Page-only rules (checked at 390, 820 and 1440 px): table cells keep their words whole, the return ids give way on a phone, links look like links.
+const STYLE = `<style>
+[data-page="weekly"] .document a{text-decoration:underline;text-underline-offset:2px}
+[data-page="weekly"] .document td,[data-page="weekly"] .document th{overflow-wrap:normal;word-break:normal}
+[data-page="weekly"] .document td.nw,[data-page="weekly"] .document th.nw{white-space:nowrap}
+[data-page="weekly"] .document h3{font-size:1rem;margin-top:1.6em}
+[data-page="weekly"] .weekly-doc{margin:0 0 1.2em}
+[data-page="weekly"] .weekly-doc p{margin:0 0 .3em}
+@media (max-width:600px){[data-page="weekly"] .document .ret{display:none}}
+</style>`;
+
 weekly.get("/weekly", project, async (req: any, res) => {
   const P = `/projects/${req.project.slug}`;
   const rows = await q<any>(`${ROW} WHERE d.problem_id = $1 AND ${PUBLISHED_SQL} ORDER BY d.week_start DESC LIMIT 520`, [req.project.id]);
   const list = rows.map((d) => ({ week_start: d.s, week_end: d.e, label: weekLabel(d.s, d.e), url: `${P}/weekly/${d.e}`, status: d.status, posted_at: d.posted_at, lines: (d.summary ?? []).length, corrected_at: d.corrected_at }));
   if (req.query.json || !wantsHtml(req)) { res.json({ project: req.project.slug, weeks: list }); return; }
-  const body = `<p class="lead">One short post a week on where the research stands: the week's numbers, counted by the server, and two to four lines on what moved, each checked against that week's record. Weeks run Monday to Sunday, Copenhagen time; each is posted on the Monday after.</p>
+  const body = `${STYLE}<p class="lead">One short post a week on where the research stands: the week's numbers, counted by the server, and two to four lines on what moved, each checked against that week's record. Weeks run Monday to Sunday, Copenhagen time; each is posted on the Monday after.</p>
 ${list.length ? `<ul class="weekly-list">${list.map((w) => `<li><a href="${esc(w.url)}">Week of ${esc(w.label)}</a>${w.corrected_at ? ' <span class="muted">corrected</span>' : ""}</li>`).join("")}</ul>` : `<p class="muted">No week has been published yet. The first one goes out on the Monday after its week.</p>`}`;
   res.type("text/html").send(page({ title: `Weekly progress · ${req.project.name}`, dataPage: "weekly", description: `Where the research on ${req.project.name} stands, week by week: the numbers and what moved.`, path: `${P}/weekly`, robots: isListed(req.project.slug) ? undefined : "noindex, nofollow", crumbs: `<a href="${P}">${esc(req.project.name)}</a><span>/</span>weekly`, eyebrow: "Week by week", heading: "Weekly progress", body }));
 });
@@ -76,12 +88,12 @@ weekly.get("/weekly/:date", optionalAuth, project, async (req: any, res, next) =
   const who = new Map(top.map((u) => [u.handle, u]));
   const ownerBox = !published ? `<div class="card"><p><b>Not published.</b> Status: ${esc(d.status)}. ${d.status === "held" ? "This week waits for an owner's approval; nobody else sees this page, and nothing is posted or emailed until then." : ""}</p>${d.status === "held" ? `<form method="post" action="${P}/weekly/${esc(d.e)}/approve"><button type="submit">Approve and post</button></form>` : ""}</div>` : "";
   const rid = (id: number) => `<a href="${P}/return/${id}">#${id}</a>`;
-  const routesHtml = r.routes.length ? `<table><thead><tr><th>Route</th><th>Now</th><th>This week</th><th>Returns</th></tr></thead><tbody>${r.routes.map((x: any) => `<tr><td><a href="${P}/research-routes/${x.id}">${x.id}</a> ${esc(x.title)}${x.new ? ' <span class="muted">new</span>' : ""}</td><td>${esc(x.state)}</td><td>${esc([...new Set(x.outcomes as string[])].join(", "))}</td><td>${x.return_ids.slice(0, 8).map(rid).join(" ")}${x.return_ids.length > 8 ? ` +${x.return_ids.length - 8}` : ""}</td></tr>`).join("")}</tbody></table>` : `<p class="muted">No route moved.</p>`;
-  const docsHtml = r.documents.length ? r.documents.map((x: any) => `<details><summary><b>${esc(x.path)}</b> version ${esc(x.version)}${x.return_id ? `, ${rid(x.return_id)}` : ""}${x.summary ? `: ${esc(x.summary)}` : ""}</summary><pre class="diff">${esc(x.diff)}${x.diff_clipped ? "\n… (cut here; the whole diff is in the document's history)" : ""}</pre></details>`).join("") : `<p class="muted">No document changed.</p>`;
+  const routesHtml = r.routes.length ? `<table><thead><tr><th>Route</th><th class="nw">Now</th><th>This week</th><th class="ret">Returns</th></tr></thead><tbody>${r.routes.map((x: any) => `<tr><td><a href="${P}/research-routes/${x.id}">${x.id}</a> ${esc(x.title)}${x.new ? ' <span class="muted">new</span>' : ""}</td><td class="nw">${esc(x.state)}</td><td class="wk">${esc([...new Set(x.outcomes as string[])].join(", "))}</td><td class="ret">${x.return_ids.slice(0, 8).map(rid).join(" ")}${x.return_ids.length > 8 ? ` +${x.return_ids.length - 8}` : ""}</td></tr>`).join("")}</tbody></table>` : `<p class="muted">No route moved.</p>`;
+  const docsHtml = r.documents.length ? r.documents.map((x: any) => `<div class="weekly-doc"><p><b>${esc(x.path)}</b> version ${esc(x.version)}${x.return_id ? `, ${rid(x.return_id)}` : ""}${x.summary ? `: ${esc(x.summary)}` : ""}</p><details><summary>The diff</summary><pre class="diff">${esc(x.diff)}${x.diff_clipped ? "\n… (cut here; the whole diff is in the document's history)" : ""}</pre></details></div>`).join("") : `<p class="muted">No document changed.</p>`;
   const fixedHtml = r.findings_resolved.length ? `<ul>${r.findings_resolved.map((f: any) => `<li><b>${esc(f.path)}</b>${f.return_id ? `, fixed by ${rid(f.return_id)}` : ""}: ${esc(f.note)}</li>`).join("")}</ul>` : `<p class="muted">None.</p>`;
   const dropped = (d.summary_dropped ?? []) as Array<{ text: string; why: string }>;
   const corrections = (d.corrections ?? []) as Array<{ at: string; reason: string }>;
-  const body = `${ownerBox}
+  const body = `${STYLE}${ownerBox}
 <article class="weekly-post">${postHtml(d.text_md, true)}</article>
 ${top.length ? `<p class="muted">Top contributors by name: ${(d.numbers.top as any[]).map((t) => who.get(t.handle) ? creditHtml(who.get(t.handle)) : esc(t.handle)).join(" · ")}</p>` : ""}
 ${corrections.length ? `<h2>Corrections</h2><ul>${corrections.map((c) => `<li>${esc(day(c.at))}: ${esc(c.reason)}</li>`).join("")}</ul>` : ""}
