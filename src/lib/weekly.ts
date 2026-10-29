@@ -291,9 +291,9 @@ export async function rebuildWeek(id: number): Promise<boolean> {
   const d = await one<any>(`SELECT d.*, p.slug FROM weekly_digests d JOIN problems p ON p.id = d.problem_id WHERE d.id = $1`, [id]);
   if (!d || ["posted", "suppressed"].includes(d.status)) return false;
   const w = await composeWeek(d.slug, iso(new Date(d.week_start)), iso(new Date(d.week_end)));
-  const lines = d.summary_status === "done" ? checkSummary(d.summary, w.input, w.record).kept : [];
+  const fit = fitPost(w.meta, w.numbers, d.summary_status === "done" ? checkSummary(d.summary, w.input, w.record).kept : []);
   await q(`UPDATE weekly_digests SET numbers = $2, record = $3, summary_input = $4, summary = $5, text_md = $6 WHERE id = $1`,
-    [id, JSON.stringify(w.numbers), JSON.stringify(w.record), w.input, JSON.stringify(lines), fitPost(w.meta, w.numbers, lines).text]);
+    [id, JSON.stringify(w.numbers), JSON.stringify(w.record), w.input, JSON.stringify(fit.lines), fit.text]);
   return true;
 }
 
@@ -326,8 +326,10 @@ export async function saveSummary(problemId: number, id: number, lines: unknown,
   if (!d) return { error: "no such week" };
   if (d.status === "posted" || d.status === "suppressed") return { error: `the week is ${d.status}; its text is changed only by a correction` };
   if (d.summary_status !== "leased") return { error: `the week's summary is ${d.summary_status}, not leased: lease it first` };
-  const res = checkSummary(lines, d.summary_input, d.record);
-  const { text } = fitPost(await rowMeta(d), d.numbers, res.kept);
+  const checked = checkSummary(lines, d.summary_input, d.record);
+  const fit = fitPost(await rowMeta(d), d.numbers, checked.kept), text = fit.text;
+  // A line the 2,000 characters have no room for is dropped too, with that reason, so the kept lines are the ones posted.
+  const res = { kept: fit.lines, dropped: [...checked.dropped, ...checked.kept.slice(fit.lines.length).map((l) => ({ text: l.text, why: "no room in Discord's 2,000 characters" }))] };
   console.log(`weekly ${id}: summary from ${model}: kept ${res.kept.length}, dropped ${res.dropped.length}${res.dropped.map((x) => `; ${x.why}`).join("")}`);
   await q(`UPDATE weekly_digests SET summary = $2, summary_dropped = $3, summary_status = 'done', summary_leased_until = NULL, summary_model = $4, summary_at = now(), text_md = $5 WHERE id = $1`,
     [id, JSON.stringify(res.kept), JSON.stringify(res.dropped), model.slice(0, 120), text]);

@@ -130,3 +130,17 @@ test('without the webhook a due week waits and says why', async () => {
   const r = await W.weeklyPass(slug, {now: at('2026-11-23T10:00Z'), env: {}, fetchImpl});
   assert.match(Object.values(r.waiting).join(' '), /webhook unset/);
 });
+
+test('a checked line with no room in 2,000 characters is dropped with that reason, so kept lines are the posted ones', async () => {
+  const route = (await one(`SELECT id FROM research_routes WHERE problem_id = $1`, [pid])).id;
+  await q(`INSERT INTO research_events (route_id, outcome, evidence_md, created_at) VALUES ($1,'progress','Checked again.','2026-11-25T12:00Z')`, [route]);
+  await W.weeklyPass(slug, {now: at('2026-11-30T06:00Z'), env: {}, fetchImpl});
+  const l = await W.leaseSummary(pid); assert.ok(l);
+  const long = (k) => `${'Agents checked the cells again and again. '.repeat(9).slice(0, 380)} ${k} (route ${route}).`;
+  const res = await W.saveSummary(pid, Number(l.id), [long('A'), long('B'), long('C'), long('D')], 'm');
+  const d = await one(`SELECT text_md, summary FROM weekly_digests WHERE id = $1`, [l.id]);
+  assert.ok(d.text_md.length <= 2000);
+  assert.equal(d.summary.length, res.kept.length);
+  assert.ok(res.dropped.some((x) => /2,000/.test(x.why)), JSON.stringify({kept: res.kept.length, dropped: res.dropped.map((x) => x.why), len: d.text_md.length}));
+  for (const k of d.summary) assert.ok(d.text_md.includes(k.text));
+});
