@@ -1,6 +1,6 @@
 # Testing
 
-No push or deploy runs the whole suite. The pre-push hook (`scripts/pre-push.sh`) runs the typecheck only. Whoever changes the code picks the tests that cover the change, updates them, runs them, and names them in the report or pull request. The whole suite is still available and is run by hand when a change warrants it.
+No push or deploy runs the whole suite. The pre-push hook (`scripts/pre-push.sh`) runs only what the pushed commits could break (Oct 30 2026): `npm run test:changed`, below. Whoever changes the code still picks the tests that cover the change, updates them, runs them, and names them in the report or pull request. The whole suite is run by hand, with `npm run test:all`, when a change warrants it; nothing runs it by default.
 
 ## Commands
 
@@ -12,9 +12,28 @@ No push or deploy runs the whole suite. The pre-push hook (`scripts/pre-push.sh`
 | All unit tests | `npm test` | nothing |
 | All DB tests | `npm run test:db` | `TEST_DATABASE_URL` (DB tests run one at a time) |
 | Simulations | `npm run test:sim` (`docs/simulation.md`) | `TEST_DATABASE_URL` whose role has `CREATEDB` |
+| What a change could break | `npm run test:changed` (what differs from `origin/main`, uncommitted work included), or `npm run test:changed -- <base>..<head>` | `TEST_DATABASE_URL` or the dev Postgres when it picks DB tests |
 | Everything | `npm run test:all` (typecheck, unit, DB) | `TEST_DATABASE_URL`, or the dev Postgres on `:5434` (a throwaway database is made and dropped) |
 
 `TEST_DATABASE_URL` points at a disposable database of your own, never a shared one. Every DB test deletes what it created.
+
+## What the hook runs
+
+`scripts/test-select.mjs` picks the checks from the changed paths; `scripts/test-changed.sh` runs them and prints how long they took. The pre-push hook passes it the pushed range (a new branch is compared with `origin/main`).
+
+| Changed | Runs |
+|---|---|
+| `docs/`, Markdown, images, `.github/`, anything no test names | nothing |
+| A file a test reads by path (a style or script under `public/`, a page template, a script under `scripts/`) | the tests that name it, which may be none |
+| `src/**/*.ts`, `scripts/**/*.ts` | the typecheck, and every test that names the file, unit and DB (`src/lib/credit.ts` runs `credit`, `challenge-credit-db`, `job-titles`, `review-triage`) |
+| `src/db/` (the schema, the pool) | every DB test, plus the tests that name the file |
+| A test file | that test |
+| `projects/<slug>/lanes/` | `lane-spec`, `lane-evaluator-db` |
+| `projects/<slug>/briefs/` | `brief`, `brief-sections` |
+| `projects/<slug>/project.json` | `brief`, `project-nav`, `lane-spec` |
+| `tsconfig.json`, `package-lock.json`, the dependencies in `package.json` | everything |
+
+"Names the file" means the test's text holds its path (`src/lib/credit.ts`, `src/lib/credit`, `public/assets/ui.js`): an import or a read. A file reached only through another module is covered by the typecheck, not by a test the hook picks; when your change moves behaviour through such a path, run the tests below by hand. DB tests need `TEST_DATABASE_URL`, or the dev Postgres on `:5434`, where a throwaway database is made and dropped (`scripts/test-db-env.sh`); without either the push is refused.
 
 ## Which tests cover what
 
