@@ -12,5 +12,7 @@ SERVER="${SERVER:-$(security find-generic-password -s solveathome.org -a SERVER 
 # minute or the checkout is reset to the previous commit and rebuilt.
 # Keys (mba rule #r2109): the env file on server01 is written from the Keychain, this service's keys only (server-env/;
 # a changed live value is refused unless SERVER_ENV_ACCEPT names it)
+# the app logs in as solveathome_app, without superuser, its password Keychain solveathome.org/APP_DB_PASSWORD (made there first)
+"${MBA_DIR:-$HOME/Files/Git/mba}/tools/bin/pg-app-role" solveathome-postgres solveathome solveathome solveathome_app solveathome.org
 "$SERVER_ENV" write "$KEYS/env.keys"
 ssh "$SERVER" 'flock -w 600 /run/lock/solveathome-deploy.lock sh -c "cd /data/services/solveathome && prev=\$(git rev-parse HEAD) && git pull -q origin main && git log --oneline -1 && bash scripts/deploy-remote.sh \$prev"'
