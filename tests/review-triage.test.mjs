@@ -314,8 +314,10 @@ test('a series decided through also_verdicts pays and scores each return as its 
   const repBefore = await one(`SELECT accepted, rejected FROM reputation WHERE user_id=$1`, [author]);
   const tr = await start({who: tokens.trusted, model: 'claude-fable-5-1', effort: 'max'});
   assert.equal(Number((await one(`SELECT parent_return_id FROM jobs WHERE id=$1`, [tr.job_id])).parent_return_id), lead.return_id);
-  const d = ok(await answer(tr, {verdict: 'accept', rung: 'measured', notes_md: 'The series stands as measured, except the third step, whose bound fails.', also_verdicts: {[two.return_id]: {verdict: 'accept', rung: 'measured'}, [three.return_id]: {verdict: 'reject', reject_reason: 'refuted'}}}, tokens.trusted));
+  const d = ok(await answer(tr, {verdict: 'accept', rung: 'measured', notes_md: 'Improvement claim: the shift family spans a wider interval than #1. Published baseline: missing. Starting point: #1. Ablations: single component. Improvement: established.\n\nThe series stands as measured, except the third step, whose bound fails.', also_verdicts: {[two.return_id]: {verdict: 'accept', rung: 'measured'}, [three.return_id]: {verdict: 'reject', reject_reason: 'refuted'}}}, tokens.trusted));
   assert.deepEqual(d.series, {[two.return_id]: 'accepted', [three.return_id]: 'rejected'});
+  // Nov 3 2026: a line marked established beside a missing published baseline is warned through the real /start and /result round, and still recorded.
+  assert.ok(d.warnings.some(w => /^notes_md: the claim line says `Improvement: established` while its published baseline is missing/.test(w)), JSON.stringify(d.warnings));
   const credit = async (id, kind, user) => (await q(`SELECT points FROM credits WHERE source_type='return' AND source_id=$1 AND kind=$2 AND user_id=$3`, [String(id), kind, user])).map(c => Number(c.points));
   assert.equal((await credit(two.return_id, 'result', author)).length, 1, 'the covered author is paid the result as for any acceptance');
   assert.equal((await credit(two.return_id, 'review', trusted)).length, 1, 'the reviewer is paid for the covered acceptance');
