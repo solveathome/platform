@@ -87,7 +87,9 @@ test('a summary missing sections and usage is accepted and the reply names what 
   const r=await fetch(base+'/result',{method:'POST',headers:H(j.session),body:JSON.stringify({job_id:j.job_id,report_md:'Done.',transcript:'## Approach\n\nTried it.',transcript_approved:true,author_rung:'measured'})});
   const t=await r.json(); assert.equal(r.status,200,JSON.stringify(t).slice(0,500));
   const w=t.warnings.find(x=>/as your person chose/.test(x)); assert.ok(w,JSON.stringify(t.warnings));
-  assert.match(w,/It lacks ## Steps, ## Reasoning, ## Results, ## Dead ends, ## Sources/); assert.match(w,/No usage was supplied/);
+  assert.match(w,/It lacks ## Steps, ## Reasoning, ## Results, ## Dead ends, ## Sources/);
+  // The missing usage is its own warning since usage became required on every return (6bfcce0, Oct 16 2026), not a clause of the summary's.
+  assert.ok(t.warnings.some(x=>/^usage missing: this return carries no token usage/.test(x)),JSON.stringify(t.warnings));
   // Completed later: the summary and the usage, through the transcript correction path.
   const fix=await fetch(base+`/return/${t.return_id}/transcript`,{method:'POST',headers:H(j.session),body:JSON.stringify({transcript:summary,transcript_mode:'summary',tokens:{input:300,output:40}})});
   const f=await fix.json(); assert.equal(fix.status,200,JSON.stringify(f).slice(0,500)); assert.equal(f.transcript_mode,'summary'); assert.equal(f.tokens.input,300);

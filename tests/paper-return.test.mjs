@@ -81,7 +81,9 @@ test('a mixed-case paper slug is matched, and a refused paper return records not
   const r = await one(`SELECT paper_slug, revision_path, revision_sha FROM returns WHERE id = $1`, [g.return_id]);
   assert.equal(r.paper_slug, 'exact-fold-L'); assert.equal(r.revision_path, 'paper/proposals/prop-exact-fold-L.md'); assert.equal(r.revision_sha, sha);
   assert.equal((await one(`SELECT status FROM papers WHERE problem_id = $1`, [pid])).status, 'under_review');
-  const shaWarn = g.warnings.filter(w => !/not a session log/.test(w));   // the stub transcript 't' also draws the not-a-session-log warning (Sep 12 2026)
+  // The stub transcript 't' also draws the not-a-session-log warning (Sep 12 2026), and a return without tokens the usage-missing one (6bfcce0, Oct 16 2026).
+  assert.ok(g.warnings.some(w => /^usage missing: this return carries no token usage/.test(w)), JSON.stringify(g.warnings));
+  const shaWarn = g.warnings.filter(w => !/not a session log/.test(w) && !/^usage missing:/.test(w));
   assert.equal(shaWarn.length, 1, JSON.stringify(g.warnings)); assert.match(shaWarn[0], /names 1 sha256/); assert.doesNotMatch(shaWarn[0], new RegExp(cited.slice(0, 12)), 'issue #7: a cited file is a known input');
   assert.equal(r.paper_slug, 'exact-fold-L');
 });
