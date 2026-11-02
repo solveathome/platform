@@ -337,6 +337,12 @@ pre code { padding: 0; background: none; }
   .two-col, .contributor-grid { grid-template-columns: 1fr; }
   .metric { padding: 1rem; }
 }
+/* Signed in, the account links ran 8 px past the edge at iPad width (820) on every page (weekly post 1 check, 2 Nov 2026). Up to 1100 px a
+   signed-in header takes the phone layout: logo and account links on the first row, the site nav on its own row. Signed out is unchanged. */
+@media (min-width: 801px) and (max-width: 1100px) {
+  .header-inner:has(#signout) { min-height: 88px; gap: 1rem; flex-wrap: wrap; }
+  .header-inner:has(#signout) .global-nav { order: 3; width: 100%; min-height: 44px; }
+}
 @media (max-width: 800px) {
   .shell { width: calc(100% - 3rem); }
   .header-inner { min-height: 88px; gap: 1rem; flex-wrap: wrap; }
