@@ -556,6 +556,14 @@ test('an improves-on claim needs the strongest published baseline, the starting 
   assert.match(BASELINE_REVIEW_DUTY, /unverifiable: true/); assert.match(BASELINE_REVIEW_DUTY, /needs_md/); assert.match(BASELINE_REVIEW_DUTY, /source work/); assert.match(BASELINE_REVIEW_DUTY, /measure work/);
   // Oct 27 2026: the line is the return's claim and comes first; proofs and extensions are claims; intake warns, never refuses.
   assert.match(BASELINE_REVIEW_DUTY, /reports the return's claim, not yours, and comes first/); assert.match(BASELINE_REVIEW_DUTY, /a proved tighter bound/); assert.match(BASELINE_REVIEW_DUTY, /A proof establishes the new bound, not that it beats the published state/);
-  for (const ok of ['Improvement claim: none', '**Improvement claim:** none', '\n  Improvement claim: x. Published baseline: missing.', '# Improvement claim: none']) assert.equal(claimLineWarning(ok), null, ok);
+  for (const ok of ['Improvement claim: none', '**Improvement claim:** none', '\n  Improvement claim: none of the kind.', '# Improvement claim: none']) assert.equal(claimLineWarning(ok), null, ok);
+  // Nov 3 2026: 21 of 336 reviews under research-2026-10-27.1 still accepted a gain with the published baseline missing, most writing "established" beside it or leaving the fields out.
+  assert.match(BASELINE_REVIEW_DUTY, /a return here, the predecessor included, is the starting point, never the published baseline/); assert.match(BASELINE_REVIEW_DUTY, /when either field says missing, it is `not established`/);
+  const fullLine = 'Improvement claim: bound O(H L) for the strip. Published baseline: Ford 2021, arXiv:2101.0001, O(H L^2). Starting point: #5570. Ablations: single component. Improvement: established.';
+  assert.equal(claimLineWarning(fullLine), null, 'a full line with an outside baseline');
+  assert.equal(claimLineWarning('Improvement claim: x. Published baseline: missing. Starting point: #1. Ablations: single component. Improvement: not established.'), null, 'missing and not established agree');
+  assert.match(claimLineWarning('Improvement claim: x. Published baseline: missing. Starting point: #1. Ablations: single component. Improvement: established.'), /says `Improvement: established` while its published baseline is missing/);
+  assert.match(claimLineWarning('Improvement claim: x. Published baseline: accepted return #5087 (review 1962). Starting point: #5087. Ablations: single component. Improvement: established for the corpus only.'), /only a return on this site/);
+  assert.match(claimLineWarning('Improvement claim: the core is O(ell log ell) past #5966. The baseline is accepted #5966.'), /states a claim without Published baseline, Starting point, Ablations, Improvement/);
   for (const bad of ['**Accept; rung measured.** Improvement claim: none', 'Conflict of interest: own handle.\nImprovement claim: none', '', null, undefined]) assert.match(claimLineWarning(bad), /^notes_md: the first line is not the claim line/, String(bad));
 });
