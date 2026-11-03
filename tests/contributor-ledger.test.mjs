@@ -31,6 +31,8 @@ after(async () => {
   await q(`DELETE FROM messages WHERE user_id = $1`, [uid]);
   await q(`DELETE FROM channels WHERE problem_id = $1`, [pid]);
   await q(`DELETE FROM credits WHERE user_id = $1`, [uid]);
+  await q(`DELETE FROM triages WHERE user_id = $1`, [uid]);
+  await q(`DELETE FROM sessions WHERE problem_id = $1`, [pid]);
   await q(`DELETE FROM jobs WHERE problem_id = $1`, [pid]);
   await q(`DELETE FROM returns WHERE problem_id = $1`, [pid]);
   await q(`DELETE FROM problems WHERE id = $1`, [pid]);
@@ -96,4 +98,19 @@ test('the profile carries standing, credit per day, rungs, work by kind, reviews
   const queued = await (await fetch(`${base}/@${tag}`, {headers: {accept: 'application/json'}})).json();
   assert.ok(Number(queued.standing.pending_points) > before, `another pending return is worth more: ${before} -> ${queued.standing.pending_points}`);
   assert.equal(Number(queued.standing.points), Number(j.standing.points), 'and none of it is added to the awarded total');
+});
+
+// #sah-contributor-credit-build: Max's profile read "0 reviews given" beside 3 triages and listed only returns (2 Nov 2026).
+test('the profile counts and lists triages, shows the jobs its agents hold now, and has a this-week box', async () => {
+  const tj = Number((await one(`INSERT INTO jobs (problem_id,type,title,brief_md,status) VALUES ($1,'triage','Triage','b','returned') RETURNING id`, [pid])).id);
+  await q(`INSERT INTO triages (return_id, triage_job_id, user_id, model, provider, escalate) VALUES ($1,$2,$3,'gpt-6.1-sol','openai',true)`, [retId, tj, uid]);
+  await q(`INSERT INTO sessions (id, problem_id, user_id, model, last_seen) VALUES ($1,$2,$3,'gpt-6.1-sol',now())`, [`${tag}-s`, pid, uid]);
+  const live = Number((await one(`INSERT INTO jobs (problem_id,type,title,brief_md,status,assigned_to,assigned_session,assigned_at,expires_at) VALUES ($1,'explore','Working on it','b','assigned',$2,$3,now(),now()+interval '1 hour') RETURNING id`, [pid, uid, `${tag}-s`])).id);
+  const j = await (await fetch(`${base}/@${tag}`, {headers: {accept: 'application/json'}})).json();
+  assert.equal(j.triages_given.total, 1); assert.equal(j.triages_given.escalated, 1);
+  assert.equal(Number(j.triages_given.recent[0].id), retId); assert.equal(j.triages_given.recent[0].escalate, true); assert.equal(j.triages_given.recent[0].model, 'gpt-6.1-sol');
+  assert.deepEqual(j.working_now.map((w) => [Number(w.id), w.model]), [[live, 'gpt-6.1-sol']]);
+  assert.equal(j.this_week.triages, 1);
+  assert.ok(j.this_week.returns >= 1);
+  assert.ok(j.this_week.points > 0); assert.ok(j.this_week.rank >= 1);
 });

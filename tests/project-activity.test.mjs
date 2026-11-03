@@ -15,7 +15,8 @@ before(async () => {
     CREATE TEMP TABLE jobs (problem_id bigint, assigned_to bigint, assigned_session text, status text, expires_at timestamptz, id bigserial, title text, type text, assigned_at timestamptz, research_stage text, follow_up_of bigint, evidence_return_id bigint, parent_return_id bigint, research_source_return_id bigint, step_check_of bigint, requires_trust boolean DEFAULT false, brief_md text);
     CREATE TEMP TABLE returns (id bigint, problem_id bigint, tokens jsonb, cpu_hours numeric, job_id bigint, report_md text);
     CREATE TEMP TABLE assignment_attempts (id text, problem_id bigint, job_id bigint, session_id text, user_id bigint, model text, started_at timestamptz, ended_at timestamptz, status text, department_id text, run_id text);
-    CREATE TEMP TABLE reviews (return_id bigint, tokens jsonb);
+    CREATE TEMP TABLE reviews (return_id bigint, tokens jsonb, id bigserial, review_job_id bigint);
+    CREATE TEMP TABLE triages (id bigserial, return_id bigint, triage_job_id bigint);
     CREATE TEMP TABLE channels (id bigint, problem_id bigint);
     CREATE TEMP TABLE messages (channel_id bigint, created_at timestamptz);
   `);
@@ -163,4 +164,21 @@ test('quiet log uses original last attempts after cleared ownership, deduplicate
   w=await read();assert.equal(Number(w.total),4);assert.equal(Number(w.recent_total),6);assert.equal(w.jobs.length,10);
   await db.query(`INSERT INTO jobs (problem_id,assigned_to,assigned_session,status,title,type,assigned_at) SELECT 7,1,'now-live','assigned','More live '||n,'explore',now() FROM generate_series(1,6)n;`);
   w=await read();assert.equal(Number(w.total),10);assert.equal(Number(w.recent_total),0);assert.equal(w.jobs.length,10);
+});
+
+test('a job in the feed links the result it became, or the result its triage or review was about (#sah-contributor-credit-build)', async () => {
+  await db.query(`
+    INSERT INTO jobs (id,problem_id,status,title,type,assigned_to,assigned_at) VALUES
+      (9001,9,'returned','First look','explore',1,now()-interval '3 minutes'),(9002,9,'returned','Triage','triage',1,now()-interval '2 minutes'),
+      (9003,9,'returned','Review','review',1,now()-interval '1 minute'),(9004,9,'returned','Nothing yet','explore',1,now()-interval '4 minutes');
+    INSERT INTO returns (id,problem_id,tokens,cpu_hours,job_id) VALUES (96801,9,'{}',0,9001);
+    INSERT INTO triages (return_id,triage_job_id) VALUES (96700,9002);
+    INSERT INTO reviews (return_id,review_job_id,tokens) VALUES (96600,9003,'{}');
+  `);
+  const {rows: [w]} = await db.query(RUNNING_WORK_SQL, [9]);
+  const by = Object.fromEntries(w.jobs.map((j) => [j.id, j]));
+  assert.equal(Number(by[9001].result_id), 96801);
+  assert.equal(Number(by[9002].triaged_return_id), 96700); assert.equal(by[9002].result_id, null);
+  assert.equal(Number(by[9003].reviewed_return_id), 96600);
+  assert.equal(by[9004].result_id, null); assert.equal(by[9004].triaged_return_id, null);
 });

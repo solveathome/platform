@@ -358,9 +358,31 @@ root.get("/@:handle", async (req, res) => {
   const proven = provenRows.map((r: any) => ({ id: r.id, project: r.project, type: r.type, model: r.model, verification: r.verification, provisional: r.provisional, created_at: r.created_at, title: titleOf(r), label: labelOf(r) }));
   const integratedPaths = await q(`SELECT DISTINCT r.revision_path AS path FROM credits c JOIN returns r ON r.id = c.source_id::bigint WHERE c.user_id = $1 AND c.kind = 'integrated' AND c.source_type = 'return' AND c.source_id ~ '^[0-9]+$' AND r.revision_path IS NOT NULL AND ${shown("c.problem_id", 2)} ORDER BY 1`, [u.id, H]);
   const cited = await one(`SELECT count(*)::int AS n, (SELECT source_id FROM credits WHERE user_id = $1 AND kind = 'insight' AND source_type = 'return' AND ${shown("problem_id", 2)} GROUP BY source_id ORDER BY count(*) DESC, source_id LIMIT 1) AS most FROM credits WHERE user_id = $1 AND kind = 'insight' AND ${shown("problem_id", 2)}`, [u.id, H]);
+  // Triages are the person's work too (#sah-contributor-credit-build): Max's profile read "0 reviews given" beside 3 triages on
+  // 2 Nov 2026, and his Recent results missed them. A triage is never a review and never a truth grade; it is counted and listed as itself.
+  const triages_given = await one(`SELECT count(*)::int AS total, count(*) FILTER (WHERE t.escalate)::int AS escalated, count(*) FILTER (WHERE NOT t.escalate)::int AS recorded
+    FROM triages t JOIN returns r ON r.id = t.return_id WHERE t.user_id = $1 AND ${shown("r.problem_id", 2)}`, [u.id, H]);
+  const triageRows = await q(`SELECT t.id AS triage_id, r.id, p.slug AS project, r.type, t.escalate, t.reason, t.model, t.created_at, j.title AS job_title, j.type AS job_type, j.research_stage, j.follow_up_of, left(r.report_md, 600) AS report_md
+    FROM triages t JOIN returns r ON r.id = t.return_id JOIN problems p ON p.id = r.problem_id LEFT JOIN jobs j ON j.id = r.job_id
+    WHERE t.user_id = $1 AND NOT (p.slug = ANY($2::text[])) ORDER BY t.id DESC LIMIT 50`, [u.id, H]);
+  // The work this person's agents hold right now, every agent of the handle (#r2081), with the model each runs.
+  const working_now = await q(`SELECT j.id, p.slug AS project, j.type, ${JOB_LABEL_SQL} AS label, j.title, j.assigned_at, s.model, s.last_seen
+    FROM jobs j JOIN problems p ON p.id = j.problem_id LEFT JOIN sessions s ON s.id = j.assigned_session
+    WHERE j.assigned_to = $1 AND j.status = 'assigned' AND (j.expires_at IS NULL OR j.expires_at > now()) AND NOT (p.slug = ANY($2::text[]))
+    ORDER BY j.assigned_at DESC NULLS LAST, j.id DESC LIMIT 20`, [u.id, H]);
+  // The last 7 days in one box: what the person's agents sent, what got in, and where that puts them among everyone paid in those days.
+  const this_week = await one(`WITH pts AS (SELECT user_id, sum(points) AS points FROM credits WHERE created_at > now() - interval '7 days' AND ${shown("problem_id", 2)} GROUP BY user_id)
+    SELECT (SELECT count(*)::int FROM returns WHERE user_id = $1 AND created_at > now() - interval '7 days' AND ${shown("problem_id", 2)}) AS returns,
+      (SELECT count(*)::int FROM returns WHERE user_id = $1 AND status = 'accepted' AND created_at > now() - interval '7 days' AND ${shown("problem_id", 2)}) AS accepted,
+      (SELECT count(*)::int FROM triages t JOIN returns r ON r.id = t.return_id WHERE t.user_id = $1 AND t.created_at > now() - interval '7 days' AND ${shown("r.problem_id", 2)}) AS triages,
+      (SELECT count(*)::int FROM reviews rv JOIN returns r ON r.id = rv.return_id WHERE rv.user_id = $1 AND rv.created_at > now() - interval '7 days' AND ${shown("r.problem_id", 2)}) AS reviews,
+      coalesce((SELECT points FROM pts WHERE user_id = $1), 0)::float AS points,
+      CASE WHEN coalesce((SELECT points FROM pts WHERE user_id = $1), 0) > 0 THEN (SELECT count(*) + 1 FROM pts WHERE points > (SELECT points FROM pts WHERE user_id = $1))::int END AS rank,
+      (SELECT count(*)::int FROM pts WHERE points > 0) AS paid`, [u.id, H]);
   const recentTitled = await q(`SELECT r.id, j.title AS job_title, j.type AS job_type, j.research_stage, j.follow_up_of, left(r.report_md, 600) AS report_md, r.type, r.model FROM returns r LEFT JOIN jobs j ON j.id = r.job_id WHERE r.user_id = $1 AND ${shown("r.problem_id", 2)} ORDER BY r.id DESC LIMIT 50`, [u.id, H]);
   const titles = new Map(recentTitled.map((r: any) => [String(r.id), { title: titleOf(r), label: labelOf(r), model: r.model }]));
   const recentOut = recent.map((r: any) => ({ ...r, ...(titles.get(String(r.id)) ?? {}) }));
+  const triagesOut = triageRows.map((r: any) => ({ triage_id: r.triage_id, id: r.id, project: r.project, escalate: r.escalate, reason: r.reason, model: r.model, created_at: r.created_at, title: titleOf(r), label: labelOf(r) }));
   const deptOut = await Promise.all(departments.map(async (d: any) => {
     const runs = d.runs ?? [];
     const live = runs.filter((r: any) => !r.ended_at && r.last_seen && Date.now() - new Date(r.last_seen).getTime() < 3600_000);
@@ -375,7 +397,7 @@ root.get("/@:handle", async (req, res) => {
              proven, kinds, reviews_given, days, models, highlights: highlights.length ? highlights : strongest, highlights_kind: highlights.length ? "breakthrough" : "strongest",
              integrated_paths: integratedPaths.map((r: any) => r.path), cited: { count: cited?.n ?? 0, most: cited?.most ?? null },
              agent_time: { accepted: less("accepted"), rejected: less("rejected"), review_agree: less("review_agree"), review_disagree: less("review_disagree") },
-             compute: { cpu_hours: less("cpu_hours") }, research_input: { directions_accepted: less("directions_accepted"), lanes }, work, released: released.map((r: any) => ({ ...r, label: jobLabel(r) })), recent: recentOut });
+             compute: { cpu_hours: less("cpu_hours") }, research_input: { directions_accepted: less("directions_accepted"), lanes }, work, released: released.map((r: any) => ({ ...r, label: jobLabel(r) })), recent: recentOut, triages_given: { ...triages_given, recent: triagesOut }, working_now, this_week });
 });
 
 root.get("/my/jobs", bearer, async (req, res) => {

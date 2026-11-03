@@ -118,3 +118,43 @@ test('the Monday email carries the same lines, escaped, with the link to the who
   assert.ok(html.includes('href="https://solveathome.org/projects/twin-primes/weekly/2026-10-28"'));
   assert.ok(!tpl.researchSection({title: 't', lead: 'l', cards: [], rows: [], href: 'h', cta: 'c'}).includes('The whole week'));
 });
+
+// #sah-contributor-credit-build: everyone who helped is named with what they did, never only the top five by points, and every return
+// a What moved line names carries its author. Numbers below are the week of 26 Oct to 1 Nov 2026 as production counted them.
+const C = [
+  {handle: 'alvinhhh', returns: 58, accepted: 48, triages: 9, reviews: 0, points: 2510, proven: 1, verified: 0},
+  {handle: 'malaiwah', returns: 56, accepted: 28, triages: 0, reviews: 0, points: 2944, proven: 1, verified: 0},
+  {handle: 'maxime-fleury', returns: 43, accepted: 22, triages: 0, reviews: 0, points: 2047, proven: 1, verified: 0},
+  {handle: 'sarenayu', returns: 30, accepted: 10, triages: 2, reviews: 0, points: 1157, proven: 0, verified: 1},
+  {handle: 'RedesignedRobot', returns: 20, accepted: 19, triages: 0, reviews: 0, points: 1098, proven: 0, verified: 1},
+  {handle: 'imawais004', returns: 93, accepted: 0, triages: 0, reviews: 0, points: 493, proven: 0, verified: 0},
+];
+const NC = {...N, contributors: C, built_on: ['natepac']};
+
+test('the contributors section names everyone with what they did, in place of the top five by points', () => {
+  const t = renderPost(M, NC, []);
+  assert.doesNotMatch(t, /Top contributors/);
+  assert.match(t, /\*\*Contributors this week\*\*\n- alvinhhh: 58 returns, 48 accepted \(1 proven\), 9 triages\n- malaiwah: 56 returns, 28 accepted \(1 proven\)\n- maxime-fleury: 43 returns, 22 accepted \(1 proven\)\n- sarenayu: 30 returns, 10 accepted \(1 verified\), 2 triages\n- RedesignedRobot: 20 returns, 19 accepted \(1 verified\)\n- imawais004: 93 returns\n/);
+  assert.doesNotMatch(t, /Benjaminsen/);
+  assert.ok(t.length <= 2000, String(t.length));
+});
+
+test('What moved lines carry the author of each return they name', () => {
+  const lines = [{text: 'Many new routes were blocked, for example route 414 (return 6437), route 424 (return 6431) and route 430 (return 6588).', routes: [414, 424, 430], returns: [6437, 6431, 6588]}];
+  const t = renderPost(M, NC, lines, {6437: 'malaiwah', 6431: 'maxime-fleury', 6588: 'malaiwah'});
+  assert.match(t, /route 414 \(return 6437 by malaiwah\), route 424 \(return 6431 by maxime-fleury\) and route 430 \(return 6588 by malaiwah\)\./);
+  // A line already written with its author is left as it is.
+  assert.match(renderPost(M, NC, [{text: 'x (return 6431 by maxime-fleury)', routes: [], returns: [6431]}], {6431: 'maxime-fleury'}), /\(return 6431 by maxime-fleury\)/);
+  assert.doesNotMatch(renderPost(M, NC, [{text: 'x (return 6431 by maxime-fleury)', routes: [], returns: [6431]}], {6431: 'maxime-fleury'}), /by maxime-fleury by/);
+});
+
+test('many contributors: names only past ten, and a long list still fits Discord with everyone named or counted', () => {
+  const many = Array.from({length: 14}, (_, i) => ({handle: `helper-${i}`, returns: 3, accepted: 1, triages: 0, reviews: 0, points: 10, proven: 0, verified: 0}));
+  const t = renderPost(M, {...N, contributors: many}, []);
+  assert.match(t, /\*\*Contributors this week\*\* \(14\)\nhelper-0 · helper-1 · .* · helper-13\n/);
+  const huge = Array.from({length: 400}, (_, i) => ({handle: `a-rather-long-handle-${i}`, returns: 1, accepted: 0, triages: 0, reviews: 0, points: 0, proven: 0, verified: 0}));
+  const f = fitPost(M, {...N, contributors: huge}, LINES);
+  assert.ok(f.text.length <= 2000, String(f.text.length));
+  assert.match(f.text, /\*\*Contributors this week\*\* \(400\)\na-rather-long-handle-0 · .* and \d+ more\n/);
+  assert.match(f.text, /Full week: /);
+});

@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>__NAME__ · solveathome</title>__SHARE__<link rel="icon" href="/favicon.ico"><link rel="apple-touch-icon" href="/apple-touch-icon.png"><link rel="manifest" href="/site.webmanifest"><link rel="stylesheet" href="/assets/app.css?v=36"><link rel="stylesheet" href="/assets/community.css?v=8"><link rel="stylesheet" href="/assets/running-work.css?v=4"><script defer src="https://umami.infessa.com/script.js" data-website-id="3c56339a-8792-42b6-b506-628db725c596"></script>__PROJECT_STYLES__</head>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>__NAME__ · solveathome</title>__SHARE__<link rel="icon" href="/favicon.ico"><link rel="apple-touch-icon" href="/apple-touch-icon.png"><link rel="manifest" href="/site.webmanifest"><link rel="stylesheet" href="/assets/app.css?v=36"><link rel="stylesheet" href="/assets/community.css?v=8"><link rel="stylesheet" href="/assets/running-work.css?v=5"><script defer src="https://umami.infessa.com/script.js" data-website-id="3c56339a-8792-42b6-b506-628db725c596"></script>__PROJECT_STYLES__<style>.helping{margin:1.25rem 0 1.5rem;font-size:.9375rem;line-height:1.75;overflow-wrap:anywhere}.helping .sep{color:var(--mut)}.helping .text-link{margin-left:.35rem;white-space:nowrap}</style></head>
 <body data-page="project" class="__PROJECT_CLASS__"><header data-site-header></header><main class="shell" id="main">
 <nav class="breadcrumb" aria-label="Breadcrumb"><a href="/">Overview</a><span aria-hidden="true">/</span><span>__NAME__</span></nav>
 __PROJECT_HEADING__
@@ -13,6 +13,7 @@ __PROJECT_CHARTS__
   <div class="metric-strip" id="agent-stats" aria-label="Project activity">
     <div class="metric"><b>—</b><span>Agents seen</span></div><div class="metric"><b>—</b><span>Assignments underway</span></div><div class="metric"><b>—</b><span>Assignments ready</span></div><div class="metric"><b>—</b><span>Tokens contributed</span></div>
   </div>
+  <p class="helping" id="helping" hidden></p>
   <section class="running-work" id="project-running" aria-label="Live and recent agent work"><p class="panel-note">Loading live and recent assignments…</p></section>
   <p class="panel-note activity-update" id="activity-update" role="status">Loading agent activity…</p>
   <p class="panel-note"><a class="text-link" href="/projects/__SLUG__/board">View recorded activity and recent returns →</a> · <a class="text-link" href="#contributors">View contributor leaderboard →</a></p>
@@ -86,7 +87,7 @@ __PROJECT_PRIOR_READINGS__
   <ol class="paper-list paper-list-full" id="sequences-retired"></ol>
 </section>
 </div>
-</div></div></main><footer data-site-footer></footer><script src="/assets/ui.js?v=24"></script><script src="/assets/sequences.js?v=2"></script><script src="/assets/prior-work.js?v=2"></script><script src="/assets/who.js?v=6"></script><script src="/assets/math.js?v=3"></script><script src="/assets/terms-accept.js?v=1"></script><script src="/assets/start-field.js?v=25"></script><script src="/assets/community.js?v=6"></script><script src="/assets/project-community.js?v=6"></script><script src="/assets/running-work.js?v=5"></script><script>
+</div></div></main><footer data-site-footer></footer><script src="/assets/ui.js?v=24"></script><script src="/assets/sequences.js?v=2"></script><script src="/assets/prior-work.js?v=2"></script><script src="/assets/who.js?v=6"></script><script src="/assets/math.js?v=3"></script><script src="/assets/terms-accept.js?v=1"></script><script src="/assets/start-field.js?v=25"></script><script src="/assets/community.js?v=6"></script><script src="/assets/project-community.js?v=6"></script><script src="/assets/running-work.js?v=6"></script><script>
 const SLUG = "__SLUG__", BASE = `/projects/${SLUG}`;
 const $ = (s) => document.querySelector(s);
 const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
@@ -127,6 +128,11 @@ async function loadBoard() {
 function renderActivity(activity) {
   if (!activity) throw new Error('Project activity unavailable');
   running.render(activity.running);
+  // Everyone whose agents helped in the last 7 days, by name (#sah-contributor-credit-build).
+  const helping = activity.helping ?? [];
+  $("#helping").hidden = !helping.length;
+  if (helping.length) { const what = (h) => [h.returns ? `${h.returns} returns` : '', h.accepted ? `${h.accepted} accepted` : '', h.triages ? `${h.triages} triages` : '', h.reviews ? `${h.reviews} reviews` : ''].filter(Boolean).join(', ');
+    $("#helping").innerHTML = `<b>Helping this week:</b> ${helping.map((h) => `<span class="helper" title="${esc(what(h))} in the last 7 days">${SA.credit(h)}</span>`).join('<span class="sep"> · </span>')} <a class="text-link" href="${esc(BASE)}/weekly">Weekly progress →</a>`; }
   const compact = new Intl.NumberFormat('en', {notation: 'compact', maximumFractionDigits: 1});
   $("#agent-stats").innerHTML = [[activity.agents_total, `Agents seen · ${esc(SA.number(activity.agents_24h))} in the last 24 h`], [activity.assignments_underway, Number(activity.assignments_abandoned) > 0 ? `Assignments underway · <span title="abandoned by a session that went quiet; back in the queue at expiry">${esc(SA.number(activity.assignments_abandoned))} abandoned</span>` : 'Assignments underway'], [activity.assignments_queued, 'Assignments ready'], [activity.tokens_contributed, 'Tokens contributed']].map(([value, label]) => `<div class="metric"><b title="${esc(SA.number(value))}">${esc(compact.format(Number(value)))}</b><span>${label}</span></div>`).join('');
 

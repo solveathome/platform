@@ -22,7 +22,7 @@ import { send, letterFromAddress } from "./postmark.js";
 import * as tpl from "./email-template.js";
 import { unlistedSlugs } from "./projects.js";
 import { challengeConfig, trackById, fmtValue, beats, LIVE_SQL, type ChallengeTrack } from "./challenges.js";
-import { emailWeek } from "./weekly.js";
+import { emailWeek, emailWeekText } from "./weekly.js";
 
 const BASE = () => (process.env.BASE_URL ?? "http://localhost:8600").replace(/\/+$/, "");
 export const SEND_HOUR = 8;
@@ -488,7 +488,7 @@ export async function compose(userId: number, opts: { weekday: number; day: stri
   // An agent that has not been seen for three days gets one clear next step at the top: start it again.
   const idle = !own && s?.agent.last_seen && Date.now() - +new Date(s.agent.last_seen) > 3 * 86400_000 ? s.agent.last_seen : null;
   const project = !own && s?.project ? await projectUpdate(s.project.id, d.edition === "weekly" ? 7 : 1, userId) : null;
-  const weekly = project && d.edition === "weekly" && s?.project ? await emailWeek(s.project.id) : null;
+  const weekly = project && d.edition === "weekly" && s?.project ? await emailWeek(s.project.id, new Date(), userId) : null;
   return { edition: d.edition, subject: "", lead, asks, rest, more, stats: own ? null : s, letters: d.letters, items: [...d.items, ...d.letters], quietSince: quiet, idleSince: idle, offerLetter, prefs, project, weekly, first: !last };
 }
 
@@ -602,9 +602,11 @@ export async function render(c: Composed, userId: number, outboxId: number): Pro
       const why = `Set by ${who}${r.model ? ` (${r.model})` : ""}. ${f.previous == null ? "The first verified result on this track. " : ""}${f.pub.text}`.trim();
       return [{ head, why, href: x.link(`/projects/${slug}/submissions/${r.submission_id}`), beyond: f.pub.beyond }];
     });
-    const wk = c.weekly && c.weekly.lines.length ? { title: `What moved, week of ${c.weekly.label}`, lines: c.weekly.lines.map((l) => l.text), href: x.link(`/projects/${slug}/weekly/${c.weekly.week_end}`) } : undefined;
+    const wt = c.weekly ? emailWeekText(c.weekly) : null;
+    // The week's lines with their authors, everyone who helped by name, and the reader's own week (#sah-contributor-credit-build).
+    const wk = c.weekly && wt && (wt.lines.length || wt.names) ? { title: `What moved, week of ${c.weekly.label}`, lines: wt.lines, names: wt.names, you: wt.you, href: x.link(`/projects/${slug}/weekly/${c.weekly.week_end}`) } : undefined;
     T.push(`THE RESEARCH: ${title.toUpperCase()}`, "", lead, "");
-    if (wk) T.push(wk.title.toUpperCase(), "", ...wk.lines.map((l) => `- ${l}`), `The whole week: ${wk.href}`, "");
+    if (wk) T.push(wk.title.toUpperCase(), "", ...(wk.you ? [wk.you, ""] : []), ...wk.lines.map((l) => `- ${l}`), ...(wk.names ? ["", wk.names] : []), `The whole week: ${wk.href}`, "");
     if (recs.length) T.push(`RECORDS BROKEN ${when.toUpperCase()}`, "", ...recs.map((r) => `- ${r.head}. ${r.why}  ${r.href}`), "");
     T.push(`Accepted ${pu.accepted} · returns ${pu.returns} · routes opened ${pu.opened}, closed ${pu.closed} · agents active ${pu.agents}`, ...rowsOut.map((r) => `- ${r.head}  ${r.href}`), "", `The project: ${x.link(`/projects/${slug}`)}`, "");
     B.push(tpl.researchSection({ title: `What moved on ${title}`, lead, weekly: wk, records: recs.length ? { title: `${recs.length === 1 ? "A record" : `${recs.length} records`} broken ${when}`, items: recs } : undefined, href: x.link(`/projects/${slug}`), cta: "See the project",

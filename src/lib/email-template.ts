@@ -91,7 +91,7 @@ export function nextStep(o: { eyebrow: string; text: string; href: string; cta: 
 export function researchSection(o: { title: string; lead: string; cards: Array<{ value: string; label: string }>; rows: Array<{ label: string; head: string; href: string }>; href: string; cta: string;
   records?: { title: string; items: Array<{ head: string; why: string; href: string; beyond?: boolean }> };
   /** The week's What moved lines from the weekly progress post (src/lib/weekly.ts), the same words as Discord and the week page. */
-  weekly?: { title: string; lines: string[]; href: string } }): string {
+  weekly?: { title: string; lines: string[]; href: string; names?: string; you?: string } }): string {
   const cell = (c: { value: string; label: string } | undefined, i: number) => c ? `<td class="stat" width="25%" valign="top" style="width:25%;padding:${i ? "0 0 0 8px" : "0"}">
       <p class="txt stat-num" style="font:600 24px/1.1 ${FONT};letter-spacing:-.03em;color:${C.ink};margin:0">${esc(c.value)}</p>
       <p class="mut" style="font:12px/1.4 ${FONT};color:${C.mut};margin:4px 0 0">${esc(c.label)}</p></td>` : `<td width="25%"></td>`;
@@ -106,10 +106,12 @@ export function researchSection(o: { title: string; lead: string; cards: Array<{
 }
 
 /** The weekly post's What moved lines inside the research section: a quiet list, then the link to the whole week. */
-export function weeklyBlock(o: { title: string; lines: string[]; href: string }): string {
+export function weeklyBlock(o: { title: string; lines: string[]; href: string; names?: string; you?: string }): string {
   return `<table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="margin:0 0 22px"><tr><td style="border-left:3px solid ${C.ink};padding:2px 0 2px 16px">
     <p class="txt" style="${eyebrowStyle(C.ink)}">${esc(o.title)}</p>
+    ${o.you ? `<p class="txt" style="font:600 15px/1.55 ${FONT};color:${C.ink};margin:0 0 10px">${esc(o.you)}</p>` : ""}
     ${o.lines.map((l, i) => `<p class="txt" style="font:15px/1.55 ${FONT};color:${C.ink};margin:${i ? "10px" : "0"} 0 0">${esc(l)}</p>`).join("")}
+    ${o.names ? `<p class="mut" style="font:14px/1.55 ${FONT};color:${C.mut};margin:12px 0 0">${esc(o.names)}</p>` : ""}
     <p style="margin:12px 0 0"><a class="txt" href="${esc(o.href)}" style="font:600 14px/1.4 ${FONT};color:${C.ink};text-decoration:underline">The whole week</a></p>
   </td></tr></table>`;
 }

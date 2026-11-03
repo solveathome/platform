@@ -144,3 +144,38 @@ test('a checked line with no room in 2,000 characters is dropped with that reaso
   assert.ok(res.dropped.some((x) => /2,000/.test(x.why)), JSON.stringify({kept: res.kept.length, dropped: res.dropped.map((x) => x.why), len: d.text_md.length}));
   for (const k of d.summary) assert.ok(d.text_md.includes(k.text));
 });
+
+// #sah-contributor-credit-build: the week names everyone who helped, one row per handle however many agents and models it ran (#r2081).
+test('contributors: one row per handle across models, triages counted, the own account apart, earlier work as built on; the email names them', async () => {
+  const C = await import('../src/lib/contributors.ts');
+  const bob = Number((await one(`INSERT INTO users (github_id, handle) VALUES ($1,$2) RETURNING id`, [-Math.floor(Math.random() * 1e9), `${tag}-bob`])).id);
+  const job = Number((await one(`INSERT INTO jobs (problem_id, type, title, brief_md, status) VALUES ($1,'triage','t','b','returned') RETURNING id`, [pid])).id);
+  const r2 = Number((await one(`INSERT INTO returns (problem_id, type, user_id, model, provider, report_md, transcript, status, created_at) VALUES ($1,'explore',$2,'m2','p','Second look','t','recorded','2026-10-31T12:00Z') RETURNING id`, [pid, alice])).id);
+  await q(`INSERT INTO triages (return_id, triage_job_id, user_id, model, provider, escalate, created_at) VALUES ($1,$2,$3,'m3','p',true,'2026-10-31T13:00Z')`, [ret, job, alice]);
+  await q(`INSERT INTO credits (user_id, problem_id, kind, points, source_type, source_id, created_at) VALUES ($1,$2,'insight',30,'return',$3,'2026-10-31T12:00Z')`, [bob, pid, String(ret)]);
+  try {
+    const w = await C.contributorsBetween(pid, at('2026-10-25T23:00Z'), at('2026-11-01T23:00Z'), [`${tag}-own`]);
+    assert.equal(w.people.length, 1);
+    const a = w.people[0];
+    assert.equal(a.handle, `${tag}-alice`); assert.equal(a.returns, 2); assert.equal(a.accepted, 1); assert.equal(a.recorded, 1); assert.equal(a.triages, 1); assert.equal(a.escalated, 1);
+    assert.deepEqual(a.models, ['m', 'm2', 'm3']); assert.equal(a.best.id, ret); assert.equal(a.best.rung, 'measured'); assert.equal(a.points, 120);
+    assert.deepEqual(w.built_on.map((b) => b.handle), [`${tag}-bob`]);
+    assert.ok(!w.people.some((p) => p.handle === `${tag}-own`));
+    assert.deepEqual(C.compact(a), {handle: `${tag}-alice`, returns: 2, accepted: 1, triages: 1, reviews: 0, points: 120, proven: 0, verified: 0});
+    assert.equal(C.workPhrase(C.compact(a)), '2 returns, 1 accepted, 1 triage');
+    // The stored week's own list was counted when it was built (one return then); the email reads it and names the reader's own week.
+    const e = await W.emailWeek(pid, at('2026-11-03T08:00Z'), alice);
+    assert.ok(e); assert.equal(e.you.handle, `${tag}-alice`);
+    const t = W.emailWeekText(e);
+    assert.equal(t.names, `Contributors this week: ${tag}-alice.`);
+    assert.match(t.you, /^Your week: 1 return, 1 accepted, 120 points\. You are named in the week's post\.$/);
+    assert.equal((await W.emailWeek(pid, at('2026-11-03T08:00Z'), bob)).you, null);
+    assert.equal(C.withAuthors(`route 1 (return ${ret})`, await C.returnAuthors([ret])), `route 1 (return ${ret} by ${tag}-alice)`);
+  } finally {
+    await q(`DELETE FROM triages WHERE triage_job_id = $1`, [job]);
+    await q(`DELETE FROM credits WHERE user_id = $1`, [bob]);
+    await q(`DELETE FROM returns WHERE id = $1`, [r2]);
+    await q(`DELETE FROM jobs WHERE id = $1`, [job]);
+    await q(`DELETE FROM users WHERE id = $1`, [bob]);
+  }
+});

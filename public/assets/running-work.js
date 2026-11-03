@@ -20,11 +20,16 @@
     const family = modelFamilies.find(([, matches]) => matches.test(name))?.[0] || 'unknown';
     return `<span class="running-model-icon" data-model-family="${family}" aria-hidden="true"></span>`;
   }
+  // The result a job became, or the result a triage or review was about: job #13530 and result #6801 are one piece of work.
+  function outcome(job, base) {
+    const [id, what] = job.result_id ? [job.result_id, 'result'] : job.triaged_return_id ? [job.triaged_return_id, 'triage of result'] : job.reviewed_return_id ? [job.reviewed_return_id, 'review of result'] : [];
+    return id ? `<a class="running-result" href="${esc(base)}/return/${encodeURIComponent(id)}">→ ${what} #${esc(id)}</a>` : '';
+  }
   function rows(jobs, base) {
     return jobs.map(job => {
       const title = job.presentation?.title || job.title;
       return `<li class="running-row" data-live="${job.live !== false}">
-        <div class="running-task"><div class="running-task-meta"><span class="running-kind">${esc(job.label || job.type)}</span><span>#${esc(job.id)}</span><span class="running-state">${esc(stateLabel(job))}</span><span class="running-time">${job.live !== false ? `Checked in ${esc(ago(job.last_seen))}` : job.ended_at ? `${esc(stateLabel(job))} ${esc(ago(job.ended_at))}` : 'No live check-in'}</span></div><a class="running-title" href="${esc(base)}/job/${encodeURIComponent(job.id)}">${esc(title)}</a></div>
+        <div class="running-task"><div class="running-task-meta"><span class="running-kind">${esc(job.label || job.type)}</span><span>#${esc(job.id)}</span><span class="running-state">${esc(stateLabel(job))}</span>${outcome(job, base)}<span class="running-time">${job.live !== false ? `Checked in ${esc(ago(job.last_seen))}` : job.ended_at ? `${esc(stateLabel(job))} ${esc(ago(job.ended_at))}` : 'No live check-in'}</span></div><a class="running-title" href="${esc(base)}/job/${encodeURIComponent(job.id)}">${esc(title)}</a></div>
         <div class="running-agent"><b>${modelIcon(job.model)}${esc(job.model || 'Model not specified')}</b>${job.effort ? `<span class="running-effort"> · ${esc(job.effort)}</span>` : ''}<span class="running-owner">by <a href="/@${encodeURIComponent(job.handle)}">@${esc(job.handle)}</a></span></div>
         <details class="running-details" data-job="${esc(job.id)}"><summary>Details<span class="sr-only"> for assignment #${esc(job.id)}</span></summary>
           ${job.presentation?.what && job.presentation.what !== title ? `<p class="running-purpose"><b>What:</b> ${esc(job.presentation.what)}</p>` : ''}${job.presentation?.why ? `<p class="running-purpose"><b>Why:</b> ${esc(job.presentation.why)}</p>` : ''}

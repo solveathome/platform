@@ -1,5 +1,8 @@
 import { one, q } from "../db/index.js";
 import { JOB_LABEL_SQL } from "./research-format.js";
+import { contributorsBetween } from "./contributors.js";
+import { readProjectConfig } from "./projects.js";
+import { weeklyConfig } from "./weekly.js";
 import { JOB_CONTEXT_COLUMNS, JOB_CONTEXT_JOINS, jobPresentation } from "./job-presentation.js";
 
 const CURRENT_ASSIGNMENT = `j.status = 'assigned' AND (j.expires_at IS NULL OR j.expires_at > now())`;
@@ -77,6 +80,11 @@ export const RUNNING_WORK_SQL = `
     SELECT * FROM running UNION ALL SELECT * FROM recent
   ), shown AS (
     SELECT selected.*, j.type, ${JOB_LABEL_SQL} AS label, j.title, j.research_stage, j.follow_up_of, j.step_check_of, j.requires_trust,
+      -- What the job became, so the feed links an assignment to its result (#sah-contributor-credit-build: Max read job #13530 and
+      -- result #6801 as two different things): the return it produced, or the return a triage or review was about.
+      (SELECT r.id FROM returns r WHERE r.job_id = j.id ORDER BY r.id DESC LIMIT 1) AS result_id,
+      (SELECT t.return_id FROM triages t WHERE t.triage_job_id = j.id ORDER BY t.id DESC LIMIT 1) AS triaged_return_id,
+      (SELECT rv.return_id FROM reviews rv WHERE rv.review_job_id = j.id ORDER BY rv.id DESC LIMIT 1) AS reviewed_return_id,
       ${JOB_CONTEXT_COLUMNS}
     FROM selected JOIN jobs j ON j.id = selected.id AND j.problem_id = $1 ${JOB_CONTEXT_JOINS}
   )
@@ -93,9 +101,19 @@ export async function runningWork(problemId: number) {
   }) };
 }
 
+/** "Helping this week" on the project page (#sah-contributor-credit-build): every person whose agents sent a return, triage or review
+ *  in the last 7 days, one entry per handle however many agents they run (#r2081); the project's own account is left out, as in the
+ *  weekly post. Display names are joined here for the page to render with SA.credit, never stored. */
+export async function helpingThisWeek(problemId: number) {
+  const p = await one<{ slug: string }>(`SELECT slug FROM problems WHERE id = $1`, [problemId]);
+  const exclude = p ? weeklyConfig(readProjectConfig(p.slug)).exclude_handles : [];
+  const to = new Date(), from = new Date(to.getTime() - 7 * 86400_000);
+  return (await contributorsBetween(problemId, from, to, exclude)).people.map((c) => ({ handle: c.handle, display_name: c.display_name, returns: c.returns, accepted: c.accepted, triages: c.triages, reviews: c.reviews }));
+}
+
 export async function projectActivity(problemId: number) {
-  const [totals, agents, running] = await Promise.all([
-    one(ACTIVITY_SQL, [problemId]), q(ACTIVE_AGENTS_SQL, [problemId]), runningWork(problemId),
+  const [totals, agents, running, helping] = await Promise.all([
+    one(ACTIVITY_SQL, [problemId]), q(ACTIVE_AGENTS_SQL, [problemId]), runningWork(problemId), helpingThisWeek(problemId),
   ]);
-  return { ...totals, agents, running };
+  return { ...totals, agents, running, helping };
 }

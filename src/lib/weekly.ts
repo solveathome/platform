@@ -22,6 +22,7 @@
 import { q, one } from "../db/index.js";
 import { listProjectConfigs, readProjectConfig, type ProjectConfig } from "./projects.js";
 import { announceEnabled, overclaim, type Fetch } from "./announce.js";
+import { compact, contributorsBetween, returnAuthors, returnIdsIn, withAuthors, workPhrase, type CompactContributor } from "./contributors.js";
 
 export const TZ = "Europe/Copenhagen";
 export type WeeklyConfig = { enabled: boolean; since: string | null; webhook_env: string; exclude_handles: string[]; also: Array<{ slug: string; label: string }>;
@@ -62,6 +63,8 @@ export type WeeklyNumbers = ProjectWeek & {
   routes: { moved: number; new: number; result: number; known: number; blocked: number; now: Record<string, number> };
   papers_accepted: number; document_versions: number; documents: number; findings_opened: number; findings_resolved: number;
   top: Array<{ handle: string; points: number }>; excluded_handles: string[];
+  /** Everyone who helped in the week, one row per handle (src/lib/contributors.ts); absent on weeks built before 4 Nov 2026, which list `top`. */
+  contributors?: CompactContributor[]; built_on?: string[];
   also: Array<{ slug: string; label: string; agents: number; returns: number; accepted: number; records: number }>;
 };
 
@@ -101,6 +104,7 @@ export async function weeklyNumbers(problemId: number, from: Date, to: Date, cfg
       (SELECT count(*)::int FROM findings WHERE problem_id = $1 AND resolved_at >= $2 AND resolved_at < $3) AS resolved`, P);
   const top = await q<any>(`SELECT u.handle, sum(c.points)::float AS points FROM credits c JOIN users u ON u.id = c.user_id
     WHERE c.problem_id = $1 AND c.created_at >= $2 AND c.created_at < $3 AND NOT (u.handle = ANY($4::text[])) GROUP BY u.handle HAVING sum(c.points) > 0 ORDER BY 2 DESC, 1 LIMIT 5`, [...P, cfg.exclude_handles]);
+  const who = await contributorsBetween(problemId, from, to, cfg.exclude_handles);
   const also: WeeklyNumbers["also"] = [];
   for (const a of cfg.also) {
     const p = await one<{ id: string }>(`SELECT id FROM problems WHERE slug = $1`, [a.slug]); if (!p) continue;
@@ -110,7 +114,8 @@ export async function weeklyNumbers(problemId: number, from: Date, to: Date, cfg
   }
   return { ...base, routes: { moved: rt.moved, new: rt.new, result: rt.result, known: rt.known, blocked: rt.blocked, now: Object.fromEntries(now.map((x) => [x.state, x.n])) },
     papers_accepted: docs.papers, document_versions: docs.versions, documents: docs.documents, findings_opened: docs.opened, findings_resolved: docs.resolved,
-    top: top.map((t) => ({ handle: t.handle, points: Math.round(t.points) })), excluded_handles: cfg.exclude_handles, also };
+    top: top.map((t) => ({ handle: t.handle, points: Math.round(t.points) })), excluded_handles: cfg.exclude_handles,
+    contributors: who.people.map(compact), built_on: who.built_on.map((b) => b.handle), also };
 }
 
 // ---------- the record: what changed, from what is stored ----------
@@ -216,7 +221,19 @@ export function aboutTokens(t: number): string {
 
 export type PostMeta = { name: string; slug: string; base: string; start: string; end: string; closing: string };
 /** The post, in Discord markdown. Every line is a number from SQL, except the What moved lines, which passed checkSummary. */
-export function renderPost(m: PostMeta, x: WeeklyNumbers, lines: SummaryLine[]): string {
+export type Authors = Record<string, string>;
+/** The contributors section: a line each, names only past CONTRIBUTOR_LINES people or when the post must shrink ("names"),
+ *  and the first `cap` names with "and N more" as the last resort. Never a ranking by points (#sah-contributor-credit-build). */
+export const CONTRIBUTOR_LINES = 10;
+function contributorsSection(x: WeeklyNumbers, mode: "lines" | "names", cap?: number): string[] {
+  const clean = (h: string) => h.replace(/[^A-Za-z0-9_.-]/g, "");
+  if (!x.contributors) return x.top.length ? ["", "**Top contributors this week** (points)", x.top.map((t) => `${clean(t.handle)} ${n(t.points)}`).join(" · ")] : [];
+  const c = x.contributors; if (!c.length) return [];
+  if (mode === "lines" && c.length <= CONTRIBUTOR_LINES) return ["", "**Contributors this week**", ...c.map((p) => `- ${clean(p.handle)}: ${workPhrase(p)}`)];
+  const shown = cap !== undefined && cap < c.length ? c.slice(0, cap) : c;
+  return ["", `**Contributors this week** (${n(c.length)})`, shown.map((p) => clean(p.handle)).join(" · ") + (shown.length < c.length ? ` and ${n(c.length - shown.length)} more` : "")];
+}
+export function renderPost(m: PostMeta, x: WeeklyNumbers, lines: SummaryLine[], authors: Authors = {}, mode: "lines" | "names" = "lines", cap?: number): string {
   const host = m.base.replace(/^https?:\/\//, "");
   const url = `${m.base}/projects/${m.slug}/weekly/${m.end}`;
   const S: string[] = [`**${m.name}: week of ${weekLabel(m.start, m.end)}**`, "", "**This week**"];
@@ -232,16 +249,25 @@ export function renderPost(m: PostMeta, x: WeeklyNumbers, lines: SummaryLine[]):
   if (closed.length) S.push(`- ${closed.join(" ")}`);
   const c = (k: string) => now[k] ?? 0;
   S.push(`- Now open: ${n(c("active"))} active, ${n(c("proposed"))} proposed, ${n(c("blocked") + c("paused"))} blocked or paused. Closed: ${n(c("result"))} results, ${n(c("known"))} known.`);
-  if (lines.length) S.push("", "**What moved**", ...lines.map((l) => `- ${l.text}`));
-  if (x.top.length) S.push("", "**Top contributors this week** (points)", x.top.map((t) => `${t.handle.replace(/[^A-Za-z0-9_.-]/g, "")} ${n(t.points)}`).join(" · "));
+  if (lines.length) S.push("", "**What moved**", ...lines.map((l) => `- ${withAuthors(l.text, authors)}`));
+  S.push(...contributorsSection(x, mode, cap));
   for (const a of x.also) S.push("", `**${a.label}:** ${plural(a.agents, "agent", "agents")}, ${plural(a.returns, "return", "returns")}, ${n(a.accepted)} accepted. ${a.records ? `${plural(a.records, "new record", "new records")} this week.` : "No new record this week."}`);
   S.push("", ...(m.closing ? [m.closing] : []), `Full week: [${host}/projects/${m.slug}/weekly/${m.end}](${url})`);
   return S.join("\n");
 }
-/** Discord takes 2,000 characters: the What moved lines go first, last one first, before anything else is cut. */
-export function fitPost(m: PostMeta, x: WeeklyNumbers, lines: SummaryLine[], max = 2000): { text: string; lines: SummaryLine[] } {
+/** Discord takes 2,000 characters: the What moved lines go first, last one first; then the contributors shrink to names, then to
+ *  the first names and "and N more". Everyone stays named on the week page. */
+export function fitPost(m: PostMeta, x: WeeklyNumbers, lines: SummaryLine[], authors: Authors = {}, max = 2000): { text: string; lines: SummaryLine[] } {
   let keep = [...lines];
-  for (;;) { const text = renderPost(m, x, keep); if (text.length <= max || !keep.length) return { text: text.slice(0, max), lines: keep }; keep = keep.slice(0, -1); }
+  for (;;) { const text = renderPost(m, x, keep, authors); if (text.length <= max || !keep.length) { if (text.length <= max) return { text, lines: keep }; break; } keep = keep.slice(0, -1); }
+  const names = renderPost(m, x, [], authors, "names"); if (names.length <= max) return { text: names, lines: [] };
+  for (let cap = (x.contributors?.length ?? 0) - 1; cap >= 0; cap--) { const t = renderPost(m, x, [], authors, "names", cap); if (t.length <= max) return { text: t, lines: [] }; }
+  return { text: names.slice(0, max), lines: [] };
+}
+/** The authors of the returns the lines name, as handles (the stored post keeps handles only: it is in the public dump). */
+export async function authorsOf(lines: SummaryLine[]): Promise<Authors> {
+  const m = await returnAuthors(returnIdsIn(lines.map((l) => l.text)));
+  return Object.fromEntries([...m].map(([id, u]) => [String(id), u.handle]));
 }
 
 // ---------- rows ----------
@@ -291,7 +317,8 @@ export async function rebuildWeek(id: number): Promise<boolean> {
   const d = await one<any>(`SELECT d.*, p.slug FROM weekly_digests d JOIN problems p ON p.id = d.problem_id WHERE d.id = $1`, [id]);
   if (!d || ["posted", "suppressed"].includes(d.status)) return false;
   const w = await composeWeek(d.slug, iso(new Date(d.week_start)), iso(new Date(d.week_end)));
-  const fit = fitPost(w.meta, w.numbers, d.summary_status === "done" ? checkSummary(d.summary, w.input, w.record).kept : []);
+  const kept = d.summary_status === "done" ? checkSummary(d.summary, w.input, w.record).kept : [];
+  const fit = fitPost(w.meta, w.numbers, kept, await authorsOf(kept));
   await q(`UPDATE weekly_digests SET numbers = $2, record = $3, summary_input = $4, summary = $5, text_md = $6 WHERE id = $1`,
     [id, JSON.stringify(w.numbers), JSON.stringify(w.record), w.input, JSON.stringify(fit.lines), fit.text]);
   return true;
@@ -327,7 +354,7 @@ export async function saveSummary(problemId: number, id: number, lines: unknown,
   if (d.status === "posted" || d.status === "suppressed") return { error: `the week is ${d.status}; its text is changed only by a correction` };
   if (d.summary_status !== "leased") return { error: `the week's summary is ${d.summary_status}, not leased: lease it first` };
   const checked = checkSummary(lines, d.summary_input, d.record);
-  const fit = fitPost(await rowMeta(d), d.numbers, checked.kept), text = fit.text;
+  const fit = fitPost(await rowMeta(d), d.numbers, checked.kept, await authorsOf(checked.kept)), text = fit.text;
   // A line the 2,000 characters have no room for is dropped too, with that reason, so the kept lines are the ones posted.
   const res = { kept: fit.lines, dropped: [...checked.dropped, ...checked.kept.slice(fit.lines.length).map((l) => ({ text: l.text, why: "no room in Discord's 2,000 characters" }))] };
   console.log(`weekly ${id}: summary from ${model}: kept ${res.kept.length}, dropped ${res.dropped.length}${res.dropped.map((x) => `; ${x.why}`).join("")}`);
@@ -414,10 +441,33 @@ export async function correctWeek(id: number, text: string, reason: string, opts
 }
 
 /** The week a Monday email carries: the newest published week of the project that ended in the last 8 days. */
-export async function emailWeek(problemId: number, now = new Date()): Promise<{ week_end: string; label: string; lines: SummaryLine[] } | null> {
-  const d = await one<any>(`SELECT to_char(d.week_start, 'YYYY-MM-DD') AS s, to_char(d.week_end, 'YYYY-MM-DD') AS e, d.summary FROM weekly_digests d
+export type EmailWeek = { week_end: string; label: string; lines: SummaryLine[]; authors: Authors; contributors: CompactContributor[]; you: CompactContributor | null };
+const emailWeekCache = new Map<string, { at: number; v: Omit<EmailWeek, "you"> }>();
+/** The week a Monday email carries, with its contributors and, for the reader (`userId`), their own row: the "Your week" line.
+ *  A week built before the contributors list existed gets it counted now from the same query, for the same window. */
+export async function emailWeek(problemId: number, now = new Date(), userId?: number): Promise<EmailWeek | null> {
+  const d = await one<any>(`SELECT d.id, to_char(d.week_start, 'YYYY-MM-DD') AS s, to_char(d.week_end, 'YYYY-MM-DD') AS e, d.summary, d.numbers, d.from_at, d.to_at, p.slug FROM weekly_digests d
+    JOIN problems p ON p.id = d.problem_id
     WHERE d.problem_id = $1 AND ${PUBLISHED_SQL} AND d.to_at > $2::timestamptz - interval '8 days' AND d.to_at <= $2 ORDER BY d.week_start DESC LIMIT 1`, [problemId, now]);
-  return d ? { week_end: d.e, label: weekLabel(d.s, d.e), lines: d.summary ?? [] } : null;
+  if (!d) return null;
+  const key = String(d.id); let hit = emailWeekCache.get(key);
+  if (!hit || Date.now() - hit.at > 10 * 60_000) {
+    const lines: SummaryLine[] = d.summary ?? [];
+    const contributors: CompactContributor[] = d.numbers?.contributors
+      ?? (await contributorsBetween(problemId, new Date(d.from_at), new Date(d.to_at), weeklyConfig(readProjectConfig(d.slug)).exclude_handles)).people.map(compact);
+    hit = { at: Date.now(), v: { week_end: d.e, label: weekLabel(d.s, d.e), lines, authors: await authorsOf(lines), contributors } };
+    emailWeekCache.set(key, hit);
+  }
+  const handle = userId ? (await one<any>(`SELECT handle FROM users WHERE id = $1`, [userId]))?.handle : null;
+  const you = handle ? hit.v.contributors.find((c) => c.handle.toLowerCase() === String(handle).toLowerCase()) ?? null : null;
+  return { ...hit.v, you };
+}
+/** The email's lines for a week: What moved with each return's author, the names of everyone who helped, and the reader's own week. */
+export function emailWeekText(w: EmailWeek): { lines: string[]; names: string; you: string } {
+  const lines = w.lines.map((l) => withAuthors(l.text, w.authors));
+  const names = w.contributors.length ? `Contributors this week: ${w.contributors.map((c) => c.handle).join(", ")}.` : "";
+  const you = w.you ? `Your week: ${workPhrase(w.you)}${w.you.points > 0 ? `, ${n(w.you.points)} points` : ""}. You are named in the week's post.` : "";
+  return { lines, names, you };
 }
 
 let running = false;

@@ -18,8 +18,9 @@ import { wantsHtml } from "../lib/negotiate.js";
 import { page, esc } from "../lib/page.js";
 import * as roles from "../lib/roles.js";
 import { creditHtml } from "../lib/display-name.js";
-import { isListed } from "../lib/projects.js";
-import { PUBLISHED_SQL, approveWeek, leaseSummary, releaseSummary, saveSummary, summaryWaiting, weekLabel, type SummaryLine } from "../lib/weekly.js";
+import { isListed, readProjectConfig } from "../lib/projects.js";
+import { contributorsBetween, returnAuthors, returnIdsIn, RETURN_REF, type Contributor } from "../lib/contributors.js";
+import { PUBLISHED_SQL, approveWeek, weeklyConfig, leaseSummary, releaseSummary, saveSummary, summaryWaiting, weekLabel, type SummaryLine } from "../lib/weekly.js";
 
 export const weekly = Router({ mergeParams: true });
 
@@ -33,12 +34,17 @@ const day = (d: any) => new Date(d).toISOString().slice(0, 10);
 const ROW = `SELECT d.*, to_char(d.week_start, 'YYYY-MM-DD') AS s, to_char(d.week_end, 'YYYY-MM-DD') AS e FROM weekly_digests d`;
 
 /** The post's own markdown (bold, bullets, links) as HTML; everything else escaped. Template text and checked lines only. */
-function postHtml(md: string, skipTitle: boolean): string {
-  const inline = (s: string) => esc(s).replace(/\*\*([^*]+)\*\*/g, "<b>$1</b>").replace(/\[([^\]]+)\]\((https?:\/\/[^)\s]+)\)/g, (_m, t, u) => `<a href="${u}">${t}</a>`);
-  const out: string[] = []; let list = false;
+/** The post as HTML. On the page every return a line names links to it with its author beside it, also in weeks posted before
+ *  authors were written (#sah-contributor-credit-build), and the post's contributor section gives way to the full table below it. */
+function postHtml(md: string, skipTitle: boolean, opts: { P?: string; authors?: Map<number, { handle: string; display_name: string | null }> } = {}): string {
+  const refs = (h: string) => opts.P && opts.authors ? h.replace(RETURN_REF, (m, id) => { const a = opts.authors!.get(Number(id)); return a ? `return <a href="${opts.P}/return/${id}">${id}</a> by ${creditHtml(a)}` : m; }) : h;
+  const inline = (s: string) => refs(esc(s)).replace(/\*\*([^*]+)\*\*/g, "<b>$1</b>").replace(/\[([^\]]+)\]\((https?:\/\/[^)\s]+)\)/g, (_m, t, u) => `<a href="${u}">${t}</a>`);
+  const out: string[] = []; let list = false, skip = false;
   const lines = md.split("\n"); if (skipTitle) lines.shift();
   for (const raw of lines) {
     const l = raw.trimEnd();
+    if (skip) { if (!l) skip = false; continue; }
+    if (opts.P && /^\*\*(Top contributors|Contributors) this week\*\*/.test(l)) { if (list) { out.push("</ul>"); list = false; } skip = true; continue; }
     if (l.startsWith("Full week: ")) continue;   // the page links to itself; the archive link is at the bottom
     if (l.startsWith("- ")) { if (!list) { out.push("<ul>"); list = true; } out.push(`<li>${inline(l.slice(2))}</li>`); continue; }
     if (list) { out.push("</ul>"); list = false; }
@@ -59,7 +65,27 @@ const STYLE = `<style>
 [data-page="weekly"] .weekly-doc{margin:0 0 1.2em}
 [data-page="weekly"] .weekly-doc p{margin:0 0 .3em}
 @media (max-width:600px){[data-page="weekly"] .document .ret{display:none}}
+[data-page="weekly"] .weekly-contributors td.num,[data-page="weekly"] .weekly-contributors th.num{text-align:right;white-space:nowrap}
+[data-page="weekly"] .weekly-contributors .sub{display:block;font-size:.8em;white-space:nowrap}
+[data-page="weekly"] .weekly-contributors td.c-best{min-width:12em}
+[data-page="weekly"] .weekly-contributors td.c-who .sub{white-space:normal;max-width:16em}
+@media (max-width:600px){[data-page="weekly"] .weekly-contributors .c-rev{display:none}[data-page="weekly"] .weekly-contributors th,[data-page="weekly"] .weekly-contributors td{padding:.7rem .5rem}}
 </style>`;
+
+const rungs = (c: Contributor) => ["proven", "verified", "measured", "heuristic"].filter((g) => c.by_rung[g]).map((g) => `${c.by_rung[g]} ${g}`).join(", ");
+const num = (v: number) => v.toLocaleString("en-US");
+const plural = (v: number, one: string) => `${num(v)} ${one}${v === 1 ? "" : "s"}`;
+/** The week's contributors table (#sah-contributor-credit-build): what each person did, the models their agents ran, their best accepted result. */
+function contributorsHtml(P: string, w: { people: Contributor[]; built_on: Array<{ handle: string; display_name: string | null; points: number }>; excluded: Contributor[] }): string {
+  const row = (c: Contributor) => `<tr><td class="c-who">${creditHtml(c)}${c.models.length ? `<span class="muted sub">${esc(c.models.join(", "))}</span>` : ""}</td><td class="num">${num(c.returns)}</td><td class="num">${num(c.accepted)}${rungs(c) ? `<span class="muted sub">${esc(rungs(c))}</span>` : ""}</td><td class="num">${num(c.triages)}</td><td class="num c-rev">${num(c.reviews)}</td>
+<td class="c-best">${c.best ? `<a href="${P}/return/${c.best.id}">#${c.best.id}</a>${c.best.rung ? ` <span class="muted">${esc(c.best.rung)}</span>` : ""} ${esc(c.best.title)}` : `<span class="muted">${c.pending ? `${num(c.pending)} awaiting review` : c.recorded ? `${num(c.recorded)} recorded` : "none yet"}</span>`}</td><td class="num">${num(c.points)}</td></tr>`;
+  const head = `<thead><tr><th>Who</th><th class="num">Returns</th><th class="num">Accepted</th><th class="num">Triages</th><th class="num c-rev">Reviews</th><th>Best accepted result</th><th class="num">Points</th></tr></thead>`;
+  const own = w.excluded.map((c) => `${creditHtml(c)} (the project's own account): ${esc([c.returns ? plural(c.returns, "return") : "", c.reviews ? plural(c.reviews, "review") : "", c.triages ? plural(c.triages, "triage") : ""].filter(Boolean).join(", "))}`);
+  return `<section class="weekly-contributors" id="contributors"><h2>Contributors this week <span class="muted">(${num(w.people.length)})</span></h2>
+${w.people.length ? `<div class="table-scroll"><table>${head}<tbody>${w.people.map(row).join("")}</tbody></table></div>` : `<p class="muted">Nobody outside the project's own account sent work this week.</p>`}
+${w.built_on.length ? `<p><b>Built on this week:</b> ${w.built_on.map((b) => creditHtml(b)).join(" · ")} <span class="muted">(earlier work of theirs was cited or accepted)</span></p>` : ""}
+${own.length ? `<p class="muted">${own.join("; ")}.</p>` : ""}</section>`;
+}
 
 weekly.get("/weekly", project, async (req: any, res) => {
   const P = `/projects/${req.project.slug}`;
@@ -84,8 +110,10 @@ weekly.get("/weekly/:date", optionalAuth, project, async (req: any, res, next) =
     return;
   }
   const r = d.record ?? { routes: [], documents: [], papers: [], findings_resolved: [] };
-  const top = await q<any>(`SELECT handle, display_name FROM users WHERE handle = ANY($1::text[])`, [(d.numbers?.top ?? []).map((t: any) => t.handle)]);
-  const who = new Map(top.map((u) => [u.handle, u]));
+  // Everyone who helped, counted now for the week's window, so a week posted before this list existed names them too.
+  const cfg = weeklyConfig(readProjectConfig(req.project.slug));
+  const who = await contributorsBetween(Number(req.project.id), new Date(d.from_at), new Date(d.to_at), cfg.exclude_handles);
+  const authors = await returnAuthors(returnIdsIn([d.text_md ?? "", ...lines.map((l) => l.text)]));
   const ownerBox = !published ? `<div class="card"><p><b>Not published.</b> Status: ${esc(d.status)}. ${d.status === "held" ? "This week waits for an owner's approval; nobody else sees this page, and nothing is posted or emailed until then." : ""}</p>${d.status === "held" ? `<form method="post" action="${P}/weekly/${esc(d.e)}/approve"><button type="submit">Approve and post</button></form>` : ""}</div>` : "";
   const rid = (id: number) => `<a href="${P}/return/${id}">#${id}</a>`;
   const routesHtml = r.routes.length ? `<table><thead><tr><th>Route</th><th class="nw">Now</th><th>This week</th><th class="ret">Returns</th></tr></thead><tbody>${r.routes.map((x: any) => `<tr><td><a href="${P}/research-routes/${x.id}">${x.id}</a> ${esc(x.title)}${x.new ? ' <span class="muted">new</span>' : ""}</td><td class="nw">${esc(x.state)}</td><td class="wk">${esc([...new Set(x.outcomes as string[])].join(", "))}</td><td class="ret">${x.return_ids.slice(0, 8).map(rid).join(" ")}${x.return_ids.length > 8 ? ` +${x.return_ids.length - 8}` : ""}</td></tr>`).join("")}</tbody></table>` : `<p class="muted">No route moved.</p>`;
@@ -94,12 +122,12 @@ weekly.get("/weekly/:date", optionalAuth, project, async (req: any, res, next) =
   const dropped = (d.summary_dropped ?? []) as Array<{ text: string; why: string }>;
   const corrections = (d.corrections ?? []) as Array<{ at: string; reason: string }>;
   const body = `${STYLE}${ownerBox}
-<article class="weekly-post">${postHtml(d.text_md, true)}</article>
-${top.length ? `<p class="muted">Top contributors by name: ${(d.numbers.top as any[]).map((t) => who.get(t.handle) ? creditHtml(who.get(t.handle)) : esc(t.handle)).join(" · ")}</p>` : ""}
+<article class="weekly-post">${postHtml(d.text_md, true, { P, authors })}</article>
+${contributorsHtml(P, who)}
 ${corrections.length ? `<h2>Corrections</h2><ul>${corrections.map((c) => `<li>${esc(day(c.at))}: ${esc(c.reason)}</li>`).join("")}</ul>` : ""}
 <h2>How this was made</h2>
 <ul>
-<li><b>Numbers:</b> counted by the server from the records of ${esc(weekLabel(d.s, d.e))} (Monday to Sunday, Copenhagen time). Agents are sessions seen in the week; the top list leaves out the project's own account (${esc((d.numbers?.excluded_handles ?? []).join(", ") || "none")}), whose sessions still count in the totals.</li>
+<li><b>Numbers:</b> counted by the server from the records of ${esc(weekLabel(d.s, d.e))} (Monday to Sunday, Copenhagen time). Agents are sessions seen in the week. The contributors are every person whose agents sent a return, a triage or a review in the week, one row per person however many agents and models they ran; the project's own account (${esc(cfg.exclude_handles.join(", ") || "none")}) is listed apart and its work still counts in the totals. Points are the credit paid in the week, which includes older work accepted now.</li>
 <li><b>What moved:</b> ${lines.length ? `${lines.length} line${lines.length === 1 ? "" : "s"} written by a model${d.summary_model ? ` (${esc(d.summary_model)})` : ""} from the record below and nothing else` : d.summary_status === "none" ? "no lines this week: the post went out with numbers only" : "not written yet"}. Every line must cite a route or return in the record, and every number in it must be in the record; ${dropped.length ? `${dropped.length} line${dropped.length === 1 ? " was" : "s were"} dropped by that check` : "none was dropped"}.</li>
 </ul>
 ${dropped.length ? `<details><summary>Lines the check dropped</summary><ul>${dropped.map((x) => `<li>${esc(x.text)} <span class="muted">(${esc(x.why)})</span></li>`).join("")}</ul></details>` : ""}
