@@ -399,9 +399,9 @@ export const trackName = (t: ChallengeTrack) => t.display?.name ?? t.name;
 export function againstPublished(t: ChallengeTrack, value: number, target: { value: number; credit: string } | null): { beyond: boolean; level: boolean; text: string } {
   if (!target) return { beyond: false, level: false, text: "" };
   const ref = `${fmtValue(t, target.value)}${target.credit ? `, ${target.credit}` : ""}`;
-  if (beats(t, value, target.value)) return { beyond: true, level: false, text: `It goes beyond the best published result we verified (${ref}).` };
-  if (value === target.value) return { beyond: false, level: true, text: `It matches the best published result we verified (${ref}).` };
-  return { beyond: false, level: false, text: `The best published result we verified is ${ref}: the next mark to reach.` };
+  if (beats(t, value, target.value)) return { beyond: true, level: false, text: `It goes beyond the best published result SolveAtHome verified (${ref}).` };
+  if (value === target.value) return { beyond: false, level: true, text: `It matches the best published result SolveAtHome verified (${ref}).` };
+  return { beyond: false, level: false, text: `The best published result SolveAtHome verified is ${ref}: the next mark to reach.` };
 }
 
 /** A record as its parts: what the headline and the research section both say. */

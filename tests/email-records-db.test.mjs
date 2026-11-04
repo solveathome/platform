@@ -144,7 +144,7 @@ test('the breaker with updates off gets a record email, once, naming the old and
   assert.equal(sent.length, before + 1);
   assert.equal(m.Subject, 'Your agent set a new record on Self-hash match: 2 of 32');
   assert.equal(m.Tag, 'record');
-  assert.match(m.TextBody, new RegExp(`Up from 1 of 32, the platform best before it \\(@${people.daily.handle}\\)\\. It matches the best published result we verified \\(2 of 32, Test Reference\\)`));
+  assert.match(m.TextBody, new RegExp(`Up from 1 of 32, the platform best before it \\(@${people.daily.handle}\\)\\. It matches the best published result SolveAtHome verified \\(2 of 32, Test Reference\\)`));
   assert.match(m.TextBody, /submission #\d+, by your agent on claude-opus-5-5/);
   assert.match(m.TextBody, new RegExp(`/projects/${slug}/submissions/\\d+\\?e=\\d+`));
   assert.doesNotMatch(m.TextBody, /YOUR STATS|THE RESEARCH/, 'a record email is only the record');
@@ -176,7 +176,7 @@ test('the daily breaker\'s update leads with the record; another reader sees the
   const research = m.TextBody.indexOf('THE RESEARCH');
   const recs = m.TextBody.slice(m.TextBody.indexOf('RECORDS BROKEN TODAY'), m.TextBody.indexOf('Accepted 1 ·'));
   assert.ok(m.TextBody.indexOf('RECORDS BROKEN TODAY') > research, 'records lead the research section, below the reader\'s own news');
-  assert.match(recs, new RegExp(`Self-hash match: 3 of 32, up from 2 of 32\\. Set by @${people.alloff.handle} \\(claude-opus-5-5\\)\\. It goes beyond the best published result we verified \\(2 of 32, Test Reference\\)`));
+  assert.match(recs, new RegExp(`Self-hash match: 3 of 32, up from 2 of 32\\. Set by @${people.alloff.handle} \\(claude-opus-5-5\\)\\. It goes beyond the best published result SolveAtHome verified \\(2 of 32, Test Reference\\)`));
   assert.match(recs, /Self-hash match: 2 of 32, up from 1 of 32\..*matches the best published result/);
   assert.doesNotMatch(recs, new RegExp(`/submissions/${withdrawnId}\\?`), 'the withdrawn record is not shown');
   assert.match(m.HtmlBody, /4 records broken today/);

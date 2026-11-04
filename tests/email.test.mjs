@@ -159,10 +159,10 @@ test('a record is compared with the published best in the track\'s own direction
   assert.equal(U.againstPublished(higher, 13, {value: 12, credit: 'Ref'}).beyond, true);
   assert.equal(U.againstPublished(higher, 12, {value: 12, credit: 'Ref'}).beyond, false);
   assert.equal(U.againstPublished(higher, 12, {value: 12, credit: 'Ref'}).level, true);
-  assert.match(U.againstPublished(higher, 9, {value: 12, credit: 'Ref'}).text, /best published result we verified is 12 of 32, Ref: the next mark/);
+  assert.match(U.againstPublished(higher, 9, {value: 12, credit: 'Ref'}).text, /best published result SolveAtHome verified is 12 of 32, Ref: the next mark/);
   assert.equal(U.againstPublished(lower, 120, {value: 128, credit: 'Ref'}).beyond, true);
   assert.equal(U.againstPublished(lower, 130, {value: 128, credit: 'Ref'}).beyond, false);
-  assert.match(U.againstPublished(lower, 120, {value: 128, credit: 'Ref'}).text, /beyond the best published result we verified \(128 bytes, Ref\)/);
+  assert.match(U.againstPublished(lower, 120, {value: 128, credit: 'Ref'}).text, /beyond the best published result SolveAtHome verified \(128 bytes, Ref\)/);
   assert.equal(U.againstPublished(higher, 13, null).text, '');
   assert.match(U.recordFacts(higher, {value: 5, previous: null}, null).before, /first verified result on this track/);
   assert.match(U.recordFacts(higher, {value: 5, previous: null, count: 3}, null).before, /^3 records in a row, starting with the first verified result/);

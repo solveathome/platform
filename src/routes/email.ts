@@ -18,6 +18,7 @@ import * as E from "../lib/email.js";
 import { preview } from "../lib/email-update.js";
 import { send } from "../lib/postmark.js";
 import * as tpl from "../lib/email-template.js";
+import { checkMail } from "../lib/mail-lint.js";
 
 export const email = Router();
 const BASE = () => (process.env.BASE_URL ?? "http://localhost:8600").replace(/\/+$/, "");
@@ -212,6 +213,12 @@ email.post("/email/letters", optionalAuth, owner, async (req, res) => {
   res.json(await one(`INSERT INTO email_letters (kind, subject, body_md, created_by) VALUES ($1, $2, $3, $4) RETURNING id, kind, subject, approved_at`, [b.kind, String(b.subject).slice(0, 200), String(b.body_md).slice(0, 20000), req.user!.id]));
 });
 email.post("/email/letters/:id/approve", optionalAuth, owner, async (req, res) => {
+  // The anti-AI mail gate (mba ask 6366, rules #r1 #r63 #r913): a letter goes out in Chris's voice, so it passes the lint and
+  // voice core of mba tools/bin/mail-gate before it is approved. A refused letter stays a draft and the reasons come back.
+  const draft = await one<any>(`SELECT subject, body_md FROM email_letters WHERE id = $1 AND approved_at IS NULL`, [req.params.id]);
+  if (!draft) { res.status(404).json({ error: "no such draft, or already approved" }); return; }
+  const gate = checkMail({ subject: draft.subject, text: draft.body_md, names: ["SolveAtHome", "Solve at Home"] });
+  if (gate.refused.length) { res.status(422).json({ error: `Not approved: the anti-AI mail check refused this letter. ${gate.refused.join(" | ")}`, refused: gate.refused }); return; }
   const r = await one(`UPDATE email_letters SET approved_at = now(), approved_by = $2 WHERE id = $1 AND approved_at IS NULL RETURNING id, kind, subject, approved_at`, [req.params.id, req.user!.id]);
   if (!r) { res.status(404).json({ error: "no such draft, or already approved" }); return; }
   res.json(r);
