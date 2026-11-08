@@ -49,7 +49,7 @@ const loc = (path: string) => BASE() + path.split("/").map((seg) => seg.startsWi
 const day = (d: string | Date | null | undefined) => { if (!d) return undefined; const t = new Date(d); return Number.isNaN(t.getTime()) ? undefined : t.toISOString().slice(0, 10); };
 
 // A paper's and a route's lastmod is content_at (schema.sql): it moves when the page's content changes, never on a review that
-// leaves it as it was (mba ask 7081). Returns, decisions, submissions and people are dated by the rows that make them.
+// leaves it as it was (mba ask 7081), or the newest version, report or history entry the page lists (mba ask 7118). Returns, decisions, submissions and people are dated by the rows that make them.
 export async function sitemapUrls(): Promise<Url[]> {
   const urls: Url[] = [{ loc: "/" }, { loc: "/terms" }, { loc: "/privacy" }, { loc: "/dumps" }];
   const projects = await q(`SELECT p.id, p.slug, (SELECT max(r.created_at) FROM returns r WHERE r.problem_id = p.id) AS last FROM problems p WHERE NOT (p.slug = ANY($1::text[])) ORDER BY p.id`, [unlistedSlugs()]);   // a hidden project is not in the sitemap
@@ -57,8 +57,14 @@ export async function sitemapUrls(): Promise<Url[]> {
     const P = `/projects/${p.slug}`;
     urls.push({ loc: P, lastmod: p.last }, { loc: `${P}/board`, lastmod: p.last }, { loc: `${P}/trust` }, { loc: `${P}/research-routes` }, { loc: `${P}/docs` });
     if (readUnderstanding(p.slug)) urls.push({ loc: `${P}/understanding` });
-    for (const x of await q(`SELECT slug, content_at FROM papers WHERE problem_id = $1 AND retracted_at IS NULL ORDER BY id`, [p.id])) urls.push({ loc: `${P}/papers/${x.slug}`, lastmod: x.content_at });
-    for (const x of await q(`SELECT id, content_at FROM research_routes WHERE problem_id = $1 ORDER BY id`, [p.id])) urls.push({ loc: `${P}/research-routes/${x.id}`, lastmod: x.content_at });
+    // A paper page also lists its versions (returns) and referee reports, a route page its investigation history: a new one is
+    // new text on the page even when the paper or route itself stays as it was (mba ask 7118), so the newest of them counts too.
+    for (const x of await q(`SELECT pa.slug, GREATEST(pa.content_at,
+        (SELECT max(r.created_at) FROM returns r WHERE r.problem_id = pa.problem_id AND r.paper_slug = pa.slug AND r.paper_exposition IS NULL),
+        (SELECT max(rv.created_at) FROM reviews rv JOIN returns r ON r.id = rv.return_id WHERE r.problem_id = pa.problem_id AND r.paper_slug = pa.slug AND r.paper_exposition IS NULL)) AS lastmod
+        FROM papers pa WHERE pa.problem_id = $1 AND pa.retracted_at IS NULL ORDER BY pa.id`, [p.id])) urls.push({ loc: `${P}/papers/${x.slug}`, lastmod: x.lastmod });
+    for (const x of await q(`SELECT rr.id, GREATEST(rr.content_at, (SELECT max(e.created_at) FROM research_events e WHERE e.route_id = rr.id)) AS lastmod
+        FROM research_routes rr WHERE rr.problem_id = $1 ORDER BY rr.id`, [p.id])) urls.push({ loc: `${P}/research-routes/${x.id}`, lastmod: x.lastmod });
     const root = join(REPOS, p.slug), publication = readPublication(root);
     if (publication) for (const f of Object.keys(publication.files).sort()) if (readerDoc(f) && publishedDocument(root, f, publication)) urls.push({ loc: `${P}/docs/${f}` });
     for (const x of await q(`SELECT r.id, GREATEST(r.created_at, (SELECT max(d.decided_at) FROM return_decisions d WHERE d.return_id = r.id)) AS lastmod FROM returns r WHERE r.problem_id = $1 ORDER BY r.id`, [p.id])) urls.push({ loc: `${P}/return/${x.id}`, lastmod: x.lastmod });
