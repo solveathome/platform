@@ -46,7 +46,7 @@ import { pathGuard } from "./lib/guards.js";
 import { responseCache, warmCache } from "./lib/cache.js";
 import { shareMeta, SITE_DESCRIPTION } from "./lib/share.js";
 import { jsonLd, noindexPath, notFoundPage, ORGANIZATION, WEBSITE } from "./lib/seo.js";
-import { seo, sitemapSnapshot } from "./routes/seo.js";
+import { seo, sitemapSnapshot, pageValidators } from "./routes/seo.js";
 import { startIndexNow } from "./lib/indexnow.js";
 import { visualizations, visualizationsRoot } from "./routes/visualizations.js";
 import { mountPlugin } from "./lib/chatgpt-plugin/express.js";
@@ -84,6 +84,9 @@ app.use((req, res, next) => {
 app.use(perIp("all", Number(process.env.RATE_LIMIT_PER_MIN ?? 1200), 60_000));
 app.use("/auth", perIp("auth", 30, 60_000));
 app.use("/auth/github/callback", perIp("oauth-callback", 5, 60_000));
+// ETag and Last-Modified (the page's sitemap lastmod) on every page and the sitemap, 304 to a matching conditional request; ahead of
+// every other wrapper of res.send, so it hashes the body as finally sent (src/routes/seo.ts, mba ask 7134).
+app.use(pageValidators);
 // Anonymous aggregate pages are served from a 20 s cache: one Postgres pass per page per 20 s, however many people are looking.
 // Past 20 s the last copy is served while it rebuilds in the background (src/lib/cache.ts): no visitor waits for the rebuild.
 app.use(emailClicks);   // before the page cache, so a click on a cached page still counts against its email
