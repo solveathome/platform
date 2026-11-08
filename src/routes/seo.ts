@@ -22,7 +22,7 @@ import { PRIVACY_UPDATED } from "../lib/privacy.js";
 import { dumpDays } from "../lib/dump.js";
 import { documentRecords, documentDates } from "../lib/document-record.js";
 import { sha256 as contentHash } from "../lib/document-publication.js";
-import { OVERLAY } from "../lib/revisions.js";
+import { OVERLAY, docsRoot } from "../lib/revisions.js";
 import * as roles from "../lib/roles.js";
 import { wantsHtml } from "../lib/negotiate.js";
 import { etagOf, httpDate, notModified, type Strip } from "../lib/validators.js";
@@ -92,11 +92,14 @@ export async function sitemapUrls(): Promise<Url[]> {
     const records = publication ? await documentRecords(Number(p.id)) : new Map();
     if (publication) for (const f of Object.keys(publication.files).sort()) if (readerDoc(f) && publishedDocument(root, f, publication)) {
       const ov = join(OVERLAY, p.slug, f);
-      const modified = documentDates(publication, f, records.get(f), contentHash(readFileSync(existsSync(ov) ? ov : join(root, f)))).modified_at;
+      const d = documentDates(publication, f, records.get(f), contentHash(readFileSync(existsSync(ov) ? ov : join(root, f))));
+      // No Git or revision date (the page says "Modified: not recorded"): when this version was recorded here, else the public edition it came in.
+      const modified = d.modified_at ?? d.recorded_at ?? d.prepared_at;
       urls.push({ loc: `${P}/docs/${f}`, lastmod: modified });
       docsIndex.lastmod = newest(docsIndex.lastmod, modified);
     }
-    if (publication && !docsIndex.lastmod) docsIndex.lastmod = day(publication.generated_at);
+    // The /docs index of a project without a mirror is served from the project's own folder (docsRoot): its edition's date.
+    if (!docsIndex.lastmod) docsIndex.lastmod = day((publication ?? readPublication(docsRoot(p.slug)))?.generated_at);
     for (const x of await q(`SELECT r.id, GREATEST(r.created_at, (SELECT max(d.decided_at) FROM return_decisions d WHERE d.return_id = r.id)) AS lastmod FROM returns r WHERE r.problem_id = $1 ORDER BY r.id`, [p.id])) urls.push({ loc: `${P}/return/${x.id}`, lastmod: x.lastmod });
     // A record challenge's track pages and the submissions that moved its record (Oct 23 2026, #sah-bing-indexing-look-20261023: Bing
     // had found /tracks/self-match only by a link and left it unindexed). The thousands of other submissions are trial entries and stay out.
