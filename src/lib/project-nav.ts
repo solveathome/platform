@@ -53,7 +53,7 @@ const HEADER = "<header data-site-header></header>";
 /** Mounted on /projects/:slug ahead of the response cache, so a cached page gets the bar on every send as well. */
 export function projectNavBar(req: Request, res: Response, next: NextFunction): void {
   const slug = String((req.params as any).slug ?? ""), rest = req.path;
-  if (req.method !== "GET" || rest === "/" || rest === "" || !readProjectConfig(slug)) { next(); return; }
+  if ((req.method !== "GET" && req.method !== "HEAD") || rest === "/" || rest === "" || !readProjectConfig(slug)) { next(); return; }
   const send = res.send.bind(res);
   res.send = ((body: any) => {
     if (typeof body === "string" && body.includes(HEADER) && !body.includes('class="project-nav"') && /html/.test(String(res.getHeader("content-type") ?? "text/html"))) body = body.replace(HEADER, () => HEADER + projectNavBarHtml(slug, rest));
