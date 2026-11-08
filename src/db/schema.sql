@@ -1967,3 +1967,39 @@ CREATE TABLE IF NOT EXISTS weekly_digests (
   UNIQUE (problem_id, week_start)
 );
 CREATE INDEX IF NOT EXISTS weekly_digests_problem_end_idx ON weekly_digests (problem_id, week_end DESC);
+
+-- The day a paper's or a research route's content last changed: the sitemap's lastmod (mba ask 7081, rule r2374; Chris, 8 Nov:
+-- "we don't show sitemap changes for pages that did not change content where we just validated the content is current").
+-- updated_at keeps moving on every touch (a paper put under review and settled again with the same text, an "unchanged"
+-- integration, a route re-stated by a return); content_at moves only when what the page says changes. Additive: added without
+-- a default and backfilled from updated_at, so no page is re-dated; new rows get now().
+ALTER TABLE papers ADD COLUMN IF NOT EXISTS content_at TIMESTAMPTZ;
+UPDATE papers SET content_at = updated_at WHERE content_at IS NULL;
+ALTER TABLE papers ALTER COLUMN content_at SET DEFAULT now();
+ALTER TABLE research_routes ADD COLUMN IF NOT EXISTS content_at TIMESTAMPTZ;
+UPDATE research_routes SET content_at = updated_at WHERE content_at IS NULL;
+ALTER TABLE research_routes ALTER COLUMN content_at SET DEFAULT now();
+-- A paper's content: its text (current_file_sha), title, summary, grade, kind and path, and its settled status. The trip through
+-- 'under_review' and back is a review in progress, not new content; a review that lands a new text moves current_file_sha.
+CREATE OR REPLACE FUNCTION papers_content_at() RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+  IF (NEW.current_file_sha, NEW.title, NEW.summary, NEW.grade, NEW.kind, NEW.path) IS DISTINCT FROM (OLD.current_file_sha, OLD.title, OLD.summary, OLD.grade, OLD.kind, OLD.path)
+     OR (NEW.status IS DISTINCT FROM OLD.status AND NEW.status <> 'under_review' AND OLD.status <> 'under_review') THEN
+    NEW.content_at := now();
+  END IF;
+  RETURN NEW;
+END $$;
+DROP TRIGGER IF EXISTS papers_content_at ON papers;
+CREATE TRIGGER papers_content_at BEFORE UPDATE ON papers FOR EACH ROW EXECUTE FUNCTION papers_content_at();
+-- A route's content: what its page says (title, the three texts, state, next step, obstacle, parent); revision and last_return_id
+-- move with every return that touches it, also one that leaves all of that as it was.
+CREATE OR REPLACE FUNCTION research_routes_content_at() RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+  IF (NEW.title, NEW.contribution_md, NEW.prior_art_md, NEW.uncertainty_md, NEW.state, NEW.next_step, NEW.obstacle, NEW.parent_route_id)
+     IS DISTINCT FROM (OLD.title, OLD.contribution_md, OLD.prior_art_md, OLD.uncertainty_md, OLD.state, OLD.next_step, OLD.obstacle, OLD.parent_route_id) THEN
+    NEW.content_at := now();
+  END IF;
+  RETURN NEW;
+END $$;
+DROP TRIGGER IF EXISTS research_routes_content_at ON research_routes;
+CREATE TRIGGER research_routes_content_at BEFORE UPDATE ON research_routes FOR EACH ROW EXECUTE FUNCTION research_routes_content_at();
