@@ -152,7 +152,8 @@ const STRIP: Strip = [];
  * sitemap does not list gets the ETag alone. Mounted first, so its send sees the final body after every other wrapper
  * (project nav, page cache, home-path redaction), and a cache hit gets the same headers. */
 export async function pageValidators(req: Request, res: Response, next: NextFunction): Promise<void> {
-  const isMap = req.path === "/sitemap.xml";
+  // The path is read here: inside a router mounted on /projects/:slug, req.path at send time is the router's own remainder.
+  const path = req.path, isMap = path === "/sitemap.xml";
   if ((req.method !== "GET" && req.method !== "HEAD") || !(isMap || wantsHtml(req))) return next();
   let state: SitemapState | null = null;
   try { state = await sitemapState(); } catch (e: any) { console.error("validators:", e?.message ?? e); }
@@ -160,7 +161,7 @@ export async function pageValidators(req: Request, res: Response, next: NextFunc
   res.send = ((body: any) => {
     const type = String(res.get("Content-Type") ?? "");
     if (res.statusCode === 200 && (typeof body === "string" || Buffer.isBuffer(body)) && (isMap ? type.includes("xml") : type.startsWith("text/html"))) {
-      const lastmod = isMap ? state?.newest : state?.byPath.get(req.path);
+      const lastmod = isMap ? state?.newest : state?.byPath.get(path);
       const etag = etagOf(body, STRIP);
       res.setHeader("ETag", etag);
       if (lastmod) res.setHeader("Last-Modified", httpDate(lastmod));
