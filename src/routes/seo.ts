@@ -170,7 +170,7 @@ export async function pageValidators(req: Request, res: Response, next: NextFunc
       if (lastmod) res.setHeader("Last-Modified", httpDate(lastmod));
       // A page and its JSON share one URL, chosen by Accept (a profile fetches location.pathname). With Last-Modified and no
       // Cache-Control, Chrome held the HTML as heuristically fresh and handed it to the page's own JSON fetch, so profiles and
-      // the sequences page showed "temporarily unavailable" (10 Nov, mba ask 7508). Vary keeps the two apart in any cache;
+      // the sequences page showed "temporarily unavailable" (10 Nov 2026). Vary keeps the two apart in any cache;
       // no-cache makes the browser revalidate, which the validators above answer with a 304.
       if (!isMap) { res.vary("Accept"); if (!res.get("Cache-Control")) res.setHeader("Cache-Control", "no-cache"); }
       if (notModified(req.headers, etag, lastmod)) {
