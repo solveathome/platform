@@ -2003,3 +2003,115 @@ BEGIN
 END $$;
 DROP TRIGGER IF EXISTS research_routes_content_at ON research_routes;
 CREATE TRIGGER research_routes_content_at BEFORE UPDATE ON research_routes FOR EACH ROW EXECUTE FUNCTION research_routes_content_at();
+
+-- ==== lastmod guard (#r2532, mba ask 7870) ====
+-- The lastmod guard for a Postgres bot site (Chris, 11 Nov 2026, #r2532, mba ask 7870: "we really really really need to
+-- ensure we stop doing stupid shit like moving 1317 dates at once, wtf how did that happen when everything we do is to
+-- not get google banned?"). On 8 Nov a backfill script re-dated 1,317 of horrorgamestoplay's 2,719 sitemap URLs to
+-- late October in one go; Google demoted the site 8 hours later. Each site copies this file into a migration of its
+-- own and adds one trigger per table below it. The database then holds the rule, whatever code or script writes:
+--
+--   - A date that feeds the sitemap's lastmod moves only in the same UPDATE as the content it dates: the trigger names,
+--     for each date column, the columns whose change is that content (a record's data, a page's shown key). A write
+--     that moves the date alone (a backfill, a migration, a script) is refused: the old date is kept.
+--   - It never moves back, nor to a day more than 2 days ago: a page that really changes is stamped now(), so an older
+--     date is a re-dating of the past. The old date is kept.
+--   - A real change keeps its date however many pages change at once (#r2390; Rensworth, rules question 172). As a
+--     tripwire, more than max(25, 2 % of the table's rows) moves of one column in a clock hour give a WARNING.
+--   - Each statement that had dates kept ends with one WARNING naming how many; lastmod_guard_log counts per hour.
+--   - A first date (NULL before) and a new row are not guarded: adding pages is the growth limit's.
+--
+-- The other columns of a refused row still change. Removing the guard takes a migration of its own (DROP TRIGGER),
+-- never a flag. Usage, one per table, each argument 'date_column=content_column[,content_column...]':
+--   CREATE TRIGGER games_lastmod_guard BEFORE UPDATE ON games FOR EACH ROW
+--     EXECUTE FUNCTION lastmod_guard('content_changed_at=data,status', 'shown_changed_at=shown_key');
+--   CREATE TRIGGER games_lastmod_guard_say AFTER UPDATE ON games FOR EACH STATEMENT EXECUTE FUNCTION lastmod_guard_say();
+CREATE TABLE IF NOT EXISTS lastmod_guard_log (
+  hour timestamptz NOT NULL,
+  tbl text NOT NULL,
+  col text NOT NULL,
+  moved integer NOT NULL DEFAULT 0,
+  held integer NOT NULL DEFAULT 0,
+  PRIMARY KEY (hour, tbl, col)
+);
+
+CREATE OR REPLACE FUNCTION lastmod_guard() RETURNS trigger LANGUAGE plpgsql AS $$
+DECLARE
+  arg text;
+  c text;
+  e text;
+  o timestamptz;
+  n timestamptz;
+  oj jsonb := to_jsonb(OLD);
+  nj jsonb := to_jsonb(NEW);
+  h timestamptz := date_trunc('hour', clock_timestamp());
+  content boolean;
+  cap integer;
+  used integer;
+  why text;
+BEGIN
+  FOREACH arg IN ARRAY TG_ARGV LOOP
+    c := split_part(arg, '=', 1);
+    o := (oj ->> c)::timestamptz;
+    n := (nj ->> c)::timestamptz;
+    CONTINUE WHEN o IS NULL OR n IS NOT DISTINCT FROM o;
+    content := false;
+    FOREACH e IN ARRAY string_to_array(split_part(arg, '=', 2), ',') LOOP
+      IF (oj -> e) IS DISTINCT FROM (nj -> e) THEN content := true; END IF;
+    END LOOP;
+    why := NULL;
+    IF n IS NOT NULL AND (n < o OR n < clock_timestamp() - interval '2 days') THEN why := 'back-dated';
+    ELSIF NOT content THEN why := 'moved without a content change';
+    END IF;
+    INSERT INTO lastmod_guard_log (hour, tbl, col) VALUES (h, TG_TABLE_NAME, c) ON CONFLICT DO NOTHING;
+    IF why IS NULL THEN
+      UPDATE lastmod_guard_log SET moved = moved + 1 WHERE hour = h AND tbl = TG_TABLE_NAME AND col = c RETURNING moved INTO used;
+      SELECT greatest(25, ceil(greatest(reltuples, 0) * 0.02))::integer INTO cap FROM pg_class WHERE oid = TG_RELID;
+      IF used = cap + 1 THEN
+        PERFORM set_config('lastmod_guard.trip', TG_TABLE_NAME || '.' || c || ': more than ' || cap || ' dates moved this hour', true);
+      END IF;
+    ELSE
+      NEW := jsonb_populate_record(NEW, jsonb_build_object(c, oj -> c));
+      UPDATE lastmod_guard_log SET held = held + 1 WHERE hour = h AND tbl = TG_TABLE_NAME AND col = c;
+      PERFORM set_config('lastmod_guard.held', (coalesce(nullif(current_setting('lastmod_guard.held', true), ''), '0')::integer + 1)::text, true);
+      PERFORM set_config('lastmod_guard.why', TG_TABLE_NAME || '.' || c || ' ' || why, true);
+    END IF;
+  END LOOP;
+  RETURN NEW;
+END $$;
+
+-- one WARNING per statement, so a script sees what the guard did
+CREATE OR REPLACE FUNCTION lastmod_guard_say() RETURNS trigger LANGUAGE plpgsql AS $$
+DECLARE
+  k integer := coalesce(nullif(current_setting('lastmod_guard.held', true), ''), '0')::integer;
+  t text := coalesce(current_setting('lastmod_guard.trip', true), '');
+BEGIN
+  IF k > 0 THEN
+    RAISE WARNING 'lastmod guard (#r2532): % sitemap date(s) kept as they were, last: %. A backfill or a date set without its content never moves lastmod; a page moves when it really changes.', k, current_setting('lastmod_guard.why', true);
+    PERFORM set_config('lastmod_guard.held', '0', true);
+  END IF;
+  IF t <> '' THEN
+    RAISE WARNING 'lastmod tripwire (#r2532): %. Real changes keep their dates; check this is not a bulk re-dating.', t;
+    PERFORM set_config('lastmod_guard.trip', '', true);
+  END IF;
+  RETURN NULL;
+END $$;
+
+-- solveathome: the two stored sitemap dates that an UPDATE can move are papers.content_at and research_routes.content_at; the
+-- triggers above (papers_content_at, research_routes_content_at) stamp them now() in the same UPDATE as the content they date,
+-- and they fire before these guards (BEFORE triggers run in name order: "_content_at" < "_lastmod_guard"). Content columns: a
+-- paper's text sha, title, summary, grade, kind, path and status; a route's title, three texts, state, next step, obstacle and
+-- parent. The other sitemap dates (returns, reviews, return_decisions, research_events created_at/decided_at, submissions'
+-- received_at) are set when their row is inserted and are not guarded here. Exceptions kept: none (rules searched 11 Nov:
+-- "solveathome exception"); the guard caps no real change.
+DROP TRIGGER IF EXISTS papers_lastmod_guard ON papers;
+CREATE TRIGGER papers_lastmod_guard BEFORE UPDATE ON papers FOR EACH ROW
+  EXECUTE FUNCTION lastmod_guard('content_at=current_file_sha,title,summary,grade,kind,path,status');
+DROP TRIGGER IF EXISTS papers_lastmod_guard_say ON papers;
+CREATE TRIGGER papers_lastmod_guard_say AFTER UPDATE ON papers FOR EACH STATEMENT EXECUTE FUNCTION lastmod_guard_say();
+DROP TRIGGER IF EXISTS research_routes_lastmod_guard ON research_routes;
+CREATE TRIGGER research_routes_lastmod_guard BEFORE UPDATE ON research_routes FOR EACH ROW
+  EXECUTE FUNCTION lastmod_guard('content_at=title,contribution_md,prior_art_md,uncertainty_md,state,next_step,obstacle,parent_route_id');
+DROP TRIGGER IF EXISTS research_routes_lastmod_guard_say ON research_routes;
+CREATE TRIGGER research_routes_lastmod_guard_say AFTER UPDATE ON research_routes FOR EACH STATEMENT EXECUTE FUNCTION lastmod_guard_say();
+-- ==== end lastmod guard ====
