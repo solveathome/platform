@@ -18,6 +18,16 @@ const { Pool } = pg;
 // even on a project with no queued job; without JIT it runs in tens of milliseconds. Nothing here scans enough rows to gain from it.
 export const pool = new Pool({ connectionString: process.env.DATABASE_URL, max: Number(process.env.PG_POOL_MAX ?? 20), idleTimeoutMillis: 30_000, statement_timeout: 15_000, query_timeout: 20_000, options: "-c jit=off" });
 pool.on("error", (e) => console.error("pg idle client error:", e.message));
+// A client checked out of the pool (transaction(), migrate(), flushFileEffects()) has no pool listener while it is out, so a cut
+// then (the DB restarting mid-transaction) would throw its 'error' and crash the process (mba ask 8245). Each new client gets a
+// listener of its own: the query in flight fails by itself, and release() drops a client that has errored (pg-pool drops any
+// client that is no longer queryable).
+const checkedOut = new WeakSet<pg.PoolClient>();
+pool.on("acquire", (client) => { checkedOut.add(client); });
+pool.on("release", (_err, client) => { checkedOut.delete(client); });
+pool.on("connect", (client) => client.on("error", (e) => {
+  if (checkedOut.has(client)) console.error("pg checked-out client error, its query fails and release() drops it:", e.message);
+}));
 
 const transactions = new AsyncLocalStorage<pg.PoolClient>();
 export function inTransaction(): boolean { return !!transactions.getStore(); }
@@ -25,6 +35,7 @@ export function inTransaction(): boolean { return !!transactions.getStore(); }
 export async function transaction<T>(work: () => Promise<T>): Promise<T> {
   if (inTransaction()) return work();
   const client = await pool.connect();
+  let failed: Error | undefined;   // a client whose transaction failed is released with the error, so the pool drops it rather than hand a dying connection to the next caller
   try {
     await client.query("BEGIN");
     const result = await transactions.run(client, work);
@@ -32,8 +43,8 @@ export async function transaction<T>(work: () => Promise<T>): Promise<T> {
     // Publication must follow the DB commit. A crash leaves a durable action to replay.
     try { await flushFileEffects(client); } catch (error) { console.error("pending publication will retry:", error); }
     return result;
-  } catch (error) { await client.query("ROLLBACK"); throw error; }
-  finally { client.release(); }
+  } catch (error) { failed = error as Error; await client.query("ROLLBACK"); throw error; }
+  finally { client.release(failed); }
 }
 
 export function projectTransaction<T>(problemId: number | string, work: () => Promise<T>): Promise<T> {
@@ -53,6 +64,7 @@ export async function pendingFileText(path: string): Promise<{ content: string |
 /** Inert file writes/deletions only; no submitted code is executed. Replay is idempotent and ordered. */
 export async function flushFileEffects(existingClient?: pg.PoolClient): Promise<void> {
   const client = existingClient ?? await pool.connect();
+  let failed: Error | undefined;
   try {
     await client.query("BEGIN");
     await client.query(`SELECT pg_advisory_xact_lock(hashtextextended('publication-files', 0))`);
@@ -67,8 +79,8 @@ export async function flushFileEffects(existingClient?: pg.PoolClient): Promise<
       await client.query(`DELETE FROM pending_file_effects WHERE id = $1`, [row.id]);
     }
     await client.query("COMMIT");
-  } catch (error) { await client.query("ROLLBACK"); throw error; }
-  finally { if (!existingClient) client.release(); }
+  } catch (error) { failed = error as Error; await client.query("ROLLBACK"); throw error; }
+  finally { if (!existingClient) client.release(failed); }
 }
 
 /** Lock-order fix for the boot schema (Oct 13 2026, #sah-boot-schema-deadlocks). schema.sql runs as one transaction at every start,
